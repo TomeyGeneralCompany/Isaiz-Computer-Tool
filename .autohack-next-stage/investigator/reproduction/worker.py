@@ -3,7 +3,7 @@
 No remote testing, generated exploits, or automatic vulnerability assertions.
 """
 import hashlib, json, os, pathlib, shutil, subprocess, tempfile, time, datetime
-ROOT = pathlib.Path.home() / 'isaiz-bugbounty/autohack/.autohack-next-stage/investigator'
+ROOT = pathlib.Path(__file__).resolve().parents[1]
 BASE = ROOT / 'reproduction'
 INPUT = ROOT / 'verification/results'
 RESULTS = BASE / 'results'
