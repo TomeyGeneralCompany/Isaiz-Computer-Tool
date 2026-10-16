@@ -1,0 +1,32 @@
+name: AutoHack static checks
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  python-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile Python sources without running workers
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import ast
+          roots = [Path("scripts"), Path(".autohack-next-stage")]
+          paths = [p for root in roots for p in root.rglob("*.py")
+                   if "repos" not in p.parts and "__pycache__" not in p.parts]
+          for path in paths:
+              ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+          print(f"Validated {len(paths)} Python files")
+          PY
+  typescript:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npx tsc --noEmit --project tsconfig.json
