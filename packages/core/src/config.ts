@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 
@@ -91,9 +91,15 @@ function readFileOverrides(): Partial<Config> {
   }
   try {
     const raw = readFileSync(OVERRIDES_FILE, "utf-8");
-    const data = JSON.parse(raw);
-    _fileOverridesCache = { data, readAt: now };
-    return data;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("Runtime overrides must be a JSON object");
+    }
+    // Reject unknown keys and invalid values rather than trusting a stale or
+    // hand-edited JSON file to bypass configuration safety defaults.
+    const validated = configSchema.partial().strict().parse(parsed);
+    _fileOverridesCache = { data: validated, readAt: now };
+    return validated;
   } catch {
     _fileOverridesCache = { data: {}, readAt: now };
     return {};
@@ -122,7 +128,11 @@ export function setRuntimeOverride<K extends keyof Config>(
   // Persist to shared file for cross-process visibility
   const merged = { ...readFileOverrides(), [key]: value };
   try {
-    writeFileSync(OVERRIDES_FILE, JSON.stringify(merged, null, 2));
+    const validated = configSchema.partial().strict().parse(merged);
+    mkdirSync(join(process.env.PROJECT_ROOT || process.cwd(), "data"), { recursive: true });
+    const tempFile = OVERRIDES_FILE + "." + process.pid + ".tmp";
+    writeFileSync(tempFile, JSON.stringify(validated, null, 2), { mode: 0o600 });
+    renameSync(tempFile, OVERRIDES_FILE);
     _fileOverridesCache = { data: merged, readAt: Date.now() };
   } catch {}
 }
