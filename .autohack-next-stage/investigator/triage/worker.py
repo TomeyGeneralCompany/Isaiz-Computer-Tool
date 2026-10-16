@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import signal
+import subprocess
 import sqlite3
 import time
 import urllib.request
@@ -61,10 +62,13 @@ def context_for(repo,sha,lead):
     path=(root/rel).resolve()
     if not path.is_relative_to(root.resolve()) or path.is_symlink() or not path.is_file(): return None
     if path.stat().st_size>350000: return None
-    # Ensure source checkout still matches the report's commit; avoid analyzing stale/mismatched source.
-    head=root/'.git'/'HEAD'
-    if not head.exists(): return None
-    # Repo can update during reading; report is only a lead, not verified evidence.
+    # Match the exact reported commit; the checkout may change between cycles.
+    try:
+        head=subprocess.run(['git','-c','core.hooksPath=/dev/null','rev-parse','HEAD'],
+            cwd=root,capture_output=True,text=True,timeout=6,check=False)
+        if head.returncode != 0 or head.stdout.strip() != sha: return None
+    except (OSError,subprocess.TimeoutExpired): return None
+    # Repo can still update during reading; this is triage, not verified evidence.
     lines=path.read_text(errors='replace').splitlines()
     lo=max(0,line-9); hi=min(len(lines),line+8)
     return '\n'.join(f'{i+1}: {lines[i][:400]}' for i in range(lo,hi))[:MAX_SOURCE]
