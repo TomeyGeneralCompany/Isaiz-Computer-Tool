@@ -1,0 +1,9 @@
+[Unit]
+Description=Retry AutoHack review backlog after reboot and hourly
+[Timer]
+OnBootSec=8min
+OnUnitInactiveSec=1h
+Persistent=true
+Unit=autohack-review-backlog.service
+[Install]
+WantedBy=timers.target

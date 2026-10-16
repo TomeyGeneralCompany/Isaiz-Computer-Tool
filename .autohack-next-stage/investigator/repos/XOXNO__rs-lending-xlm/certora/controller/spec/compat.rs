@@ -1,0 +1,255 @@
+use crate::types::{HubAssetKey, Payment, PositionMode, SeizeMode, StrategySwap};
+use controller_interface::ControllerInterface;
+use cvlr::nondet::nondet;
+use cvlr_soroban::nondet_address;
+use soroban_sdk::{vec, Address, Env, Vec};
+
+fn primary_hub(asset: Address) -> HubAssetKey {
+    HubAssetKey {
+        hub_id: crate::spec::fixture::HUB_ID,
+        asset,
+    }
+}
+
+pub fn supply_single(
+    env: Env,
+    caller: Address,
+    account_id: u64,
+    asset: Address,
+    amount: i128,
+) -> u64 {
+    crate::Controller::supply(
+        env.clone(),
+        caller,
+        account_id,
+        crate::spec::fixture::SPOKE_ID,
+        vec![&env, (primary_hub(asset), amount)],
+    )
+}
+
+pub fn borrow_single(env: Env, caller: Address, account_id: u64, asset: Address, amount: i128) {
+    let to: Option<Address> = if nondet() {
+        Some(nondet_address())
+    } else {
+        None
+    };
+    crate::Controller::borrow(
+        env.clone(),
+        caller,
+        account_id,
+        vec![&env, (primary_hub(asset), amount)],
+        to,
+    );
+}
+
+pub fn withdraw_single(env: Env, caller: Address, account_id: u64, asset: Address, amount: i128) {
+    let to: Option<Address> = if nondet() {
+        Some(nondet_address())
+    } else {
+        None
+    };
+    crate::Controller::withdraw(
+        env.clone(),
+        caller,
+        account_id,
+        vec![&env, (primary_hub(asset), amount)],
+        to,
+    );
+}
+
+pub fn repay_single(env: Env, caller: Address, account_id: u64, asset: Address, amount: i128) {
+    crate::Controller::repay(
+        env.clone(),
+        caller,
+        account_id,
+        vec![&env, (primary_hub(asset), amount)],
+    );
+}
+
+pub fn multiply(
+    env: Env,
+    caller: Address,
+    spoke_id: u32,
+    collateral_token: Address,
+    debt_to_flash_loan: i128,
+    debt_token: Address,
+    mode: u32,
+    steps: StrategySwap,
+) -> u64 {
+    let mode = match mode {
+        0 => PositionMode::Normal,
+        1 => PositionMode::Multiply,
+        2 => PositionMode::Long,
+        3 => PositionMode::Short,
+        _ => panic!("invalid strategy mode for certora compat"),
+    };
+
+    let account_id: u64 = nondet();
+
+    let take_initial: bool = nondet();
+    let initial_payment: Option<(HubAssetKey, i128)> = if take_initial {
+        let initial_amount: i128 = nondet();
+        Some((primary_hub(nondet_address()), initial_amount))
+    } else {
+        None
+    };
+    let take_convert: bool = nondet();
+    let convert_steps: Option<StrategySwap> = if take_convert {
+        Some(steps.clone())
+    } else {
+        None
+    };
+
+    crate::Controller::multiply(
+        env,
+        caller,
+        account_id,
+        spoke_id,
+        primary_hub(collateral_token),
+        debt_to_flash_loan,
+        primary_hub(debt_token),
+        mode,
+        steps,
+        initial_payment,
+        convert_steps,
+    )
+}
+
+pub fn multiply_minimal(
+    env: Env,
+    caller: Address,
+    spoke_id: u32,
+    collateral_token: Address,
+    debt_to_flash_loan: i128,
+    debt_token: Address,
+    mode: u32,
+    steps: StrategySwap,
+) -> u64 {
+    let mode = match mode {
+        0 => PositionMode::Normal,
+        1 => PositionMode::Multiply,
+        2 => PositionMode::Long,
+        3 => PositionMode::Short,
+        _ => panic!("invalid strategy mode for certora compat"),
+    };
+
+    crate::Controller::multiply(
+        env,
+        caller,
+        0,
+        spoke_id,
+        primary_hub(collateral_token),
+        debt_to_flash_loan,
+        primary_hub(debt_token),
+        mode,
+        steps,
+        None,
+        None,
+    )
+}
+
+pub fn flash_position_minimal(
+    env: Env,
+    caller: Address,
+    account_id: u64,
+    spoke_id: u32,
+    mode: u32,
+    debt_token: Address,
+    amount: i128,
+    receiver: Address,
+    collateral_token: Address,
+    min_amount: i128,
+) -> u64 {
+    let mode = match mode {
+        0 => PositionMode::Normal,
+        1 => PositionMode::Multiply,
+        2 => PositionMode::Long,
+        3 => PositionMode::Short,
+        _ => panic!("invalid strategy mode for certora compat"),
+    };
+    let mut collaterals: Vec<(HubAssetKey, i128)> = Vec::new(&env);
+    collaterals.push_back((primary_hub(collateral_token), min_amount));
+    let data = soroban_sdk::Bytes::new(&env);
+    let refunds = Vec::new(&env);
+    crate::Controller::flash_position(
+        env,
+        caller,
+        account_id,
+        spoke_id,
+        mode,
+        primary_hub(debt_token),
+        amount,
+        receiver,
+        data,
+        collaterals,
+        refunds,
+    )
+}
+
+pub fn repay_debt_with_collateral_minimal(
+    env: Env,
+    caller: Address,
+    account_id: u64,
+    collateral_token: Address,
+    collateral_amount: i128,
+    debt_token: Address,
+    steps: StrategySwap,
+) {
+    crate::Controller::repay_debt_with_collateral(
+        env,
+        caller,
+        account_id,
+        primary_hub(collateral_token),
+        collateral_amount,
+        primary_hub(debt_token),
+        steps,
+        false,
+    );
+}
+
+pub fn repay_debt_with_collateral_close(
+    env: Env,
+    caller: Address,
+    account_id: u64,
+    collateral_token: Address,
+    collateral_amount: i128,
+    debt_token: Address,
+    steps: StrategySwap,
+) {
+    crate::Controller::repay_debt_with_collateral(
+        env,
+        caller,
+        account_id,
+        primary_hub(collateral_token),
+        collateral_amount,
+        primary_hub(debt_token),
+        steps,
+        true,
+    );
+}
+
+pub fn liquidate(env: Env, liquidator: Address, account_id: u64, debt_payments: Vec<Payment>) {
+    liquidate_with_mode(
+        env,
+        liquidator,
+        account_id,
+        debt_payments,
+        SeizeMode::Transfer,
+    );
+}
+
+/// `liquidate` with an explicit seize mode, returning the receiving account id (`0` for
+/// `Transfer`).
+pub fn liquidate_with_mode(
+    env: Env,
+    liquidator: Address,
+    account_id: u64,
+    debt_payments: Vec<Payment>,
+    seize_mode: SeizeMode,
+) -> u64 {
+    let mut hub_payments: Vec<(HubAssetKey, i128)> = Vec::new(&env);
+    for (asset, amount) in debt_payments.iter() {
+        hub_payments.push_back((primary_hub(asset), amount));
+    }
+    crate::Controller::liquidate(env, liquidator, account_id, hub_payments, seize_mode)
+}

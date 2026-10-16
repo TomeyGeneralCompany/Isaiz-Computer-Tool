@@ -1,0 +1,39 @@
+{
+  "checks": {
+    "has_reproduction_test": false,
+    "in_scope_at_processing": true,
+    "source_commit_matches": true,
+    "triage_requires_review": false
+  },
+  "commit": "1717bdd8e6b75a1fa82abb99dbdc29e08b013c59",
+  "lead": {
+    "file": "scripts/update-docs-branch.js",
+    "fingerprint": "e1638b943dc61eddae07",
+    "guidance": "Review command construction and input provenance",
+    "line": 5,
+    "rule": "JS_CHILD_EXEC"
+  },
+  "note": "Automated offline evidence preparation only. No project-specific reproduction or verified security impact.",
+  "processed_at": "2026-10-15T09:39:30.921251+00:00",
+  "repository": "OpenZeppelin/openzeppelin-contracts-upgradeable",
+  "scope_urls": [
+    "https://immunefi.com/bug-bounty/openzeppelin/scope/"
+  ],
+  "source_check": {
+    "commit": "1717bdd8e6b75a1fa82abb99dbdc29e08b013c59",
+    "excerpt": "    1: import proc from 'child_process';\n    2: import fs from 'fs';\n    3: import path from 'path';\n    4: \n    5: const read = cmd => proc.execSync(cmd, { encoding: 'utf8' }).trim();\n    6: const run = cmd => {\n    7:   proc.execSync(cmd, { stdio: 'inherit' });\n    8: };\n    9: const tryRead = cmd => {\n   10:   try {\n   11:     return read(cmd);\n   12:   } catch {\n   13:     return undefined;\n   14:   }\n   15: };\n   16: \n   17: const releaseBranchRegex = /^release-v(?<version>(?<major>\\d+)\\.(?<minor>\\d+)(?:\\.(?<patch>\\d+))?)$/;",
+    "file": "scripts/update-docs-branch.js",
+    "file_sha256": "b8eaa19b98d576625e1c7e5014b40e2dae8e682b6a18ed0a68a74b16270429ad",
+    "line": 5,
+    "status": "source_matched"
+  },
+  "source_fingerprint": "47f2ae9c8bd5ca3c08135f224c1a1a54d59aaed315293e2d2336ea2dfb68046a",
+  "status": "needs_project_specific_reproduction",
+  "triage": {
+    "classification": "likely_false_positive",
+    "evidence": "The code is part of a bug-bounty system and is used for command execution. There is no indication of a vulnerability or exploitable code.",
+    "follow_up": "If you have more details about the specific issue, please provide them to help further review.",
+    "rationale": "The code snippet appears to be part of a bug-bounty system, but the specific issue is not clear. The code is written in JavaScript and uses 'child_process' and 'fs' modules, which are standard practices. There is no indication of a vulnerability or exploitable code. The 'JS_CHILD_EXEC' rule is not directly triggered here."
+  },
+  "verified_vulnerability": false
+}

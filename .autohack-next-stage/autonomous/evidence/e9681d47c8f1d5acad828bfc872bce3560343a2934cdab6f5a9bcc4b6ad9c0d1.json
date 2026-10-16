@@ -1,0 +1,39 @@
+{
+  "checks": {
+    "has_reproduction_test": false,
+    "in_scope_at_processing": true,
+    "source_commit_matches": true,
+    "triage_requires_review": false
+  },
+  "commit": "8891f73d17887e272a5317065961269aee94f7cd",
+  "lead": {
+    "file": "scripts/verify/lib/tokenUsage.ts",
+    "fingerprint": "e5b7c0fd1b67e079bef6",
+    "guidance": "Review command construction and input provenance",
+    "line": 138,
+    "rule": "JS_CHILD_EXEC"
+  },
+  "note": "Automated offline evidence preparation only. No project-specific reproduction or verified security impact.",
+  "processed_at": "2026-10-15T00:09:27.991833+00:00",
+  "repository": "Instadapp/inst-governance",
+  "scope_urls": [
+    "https://immunefi.com/bug-bounty/instadapp/scope/"
+  ],
+  "source_check": {
+    "commit": "8891f73d17887e272a5317065961269aee94f7cd",
+    "excerpt": "  127:     }\n  128:   }\n  129:   return priced;\n  130: }\n  131: \n  132: export function detectTokensUsedFromSource(src: string): TokenUsageResult {\n  133:   const stripped = stripCommentsStringsAndMarkerBlock(src);\n  134: \n  135:   const ADDRESS_IDENT = /\\b([A-Za-z_][A-Za-z0-9_]*_ADDRESS)\\b/g;\n  136:   const allRefs = new Set<string>();\n  137:   let match: RegExpExecArray | null;\n  138:   while ((match = ADDRESS_IDENT.exec(stripped)) !== null) {\n  139:     allRefs.add(match[1]!);\n  140:   }\n  141: \n  142:   const pricedIds = detectPricedAddressConstants(stripped);\n  143: \n  144:   const used: TokenEntry[] = [];\n  145:   const unknown: string[] = [];\n  146:   for (const ident of pricedIds) {\n  147:     if (NON_PRICED_EXEMPT.has(ident)) continue;\n  148:     const entry = tokenByConstantName(ident);\n  149:     if (entry) used.push(entry);\n  150:     else unknown.push(ident);",
+    "file": "scripts/verify/lib/tokenUsage.ts",
+    "file_sha256": "0dee25a8a15bccc173bd4e33a3bca6739536c1d40b2b03c4a70d2b6c9a67f3bd",
+    "line": 138,
+    "status": "source_matched"
+  },
+  "source_fingerprint": "7b02674cb4342614dade83d4d98d662bc89265072b350312098b527d1086932e",
+  "status": "needs_project_specific_reproduction",
+  "triage": {
+    "classification": "likely_false_positive",
+    "evidence": "The code is incomplete and lacks proper validation of the input, which could lead to incorrect results.",
+    "follow_up": "If the input is properly validated, this code could be used to verify token usage. However, it is important to ensure that the input is clean and follows the expected format before using this code.",
+    "rationale": "The code is attempting to verify token usage from a source file but does not properly handle cases where the input may contain invalid or untrusted data. The logic is incomplete and lacks proper validation of the input, which could lead to incorrect results."
+  },
+  "verified_vulnerability": false
+}

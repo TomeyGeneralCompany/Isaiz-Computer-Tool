@@ -1,0 +1,39 @@
+{
+  "checks": {
+    "has_reproduction_test": false,
+    "in_scope_at_processing": true,
+    "source_commit_matches": true,
+    "triage_requires_review": true
+  },
+  "commit": "8891f73d17887e272a5317065961269aee94f7cd",
+  "lead": {
+    "file": "contracts/TokenDelegator.sol",
+    "fingerprint": "97c0d20d2b7b96327768",
+    "guidance": "Review delegatecall target and access control",
+    "line": 66,
+    "rule": "SOL_DELEGATECALL"
+  },
+  "note": "Automated offline evidence preparation only. No project-specific reproduction or verified security impact.",
+  "processed_at": "2026-10-15T00:09:26.108007+00:00",
+  "repository": "Instadapp/inst-governance",
+  "scope_urls": [
+    "https://immunefi.com/bug-bounty/instadapp/scope/"
+  ],
+  "source_check": {
+    "commit": "8891f73d17887e272a5317065961269aee94f7cd",
+    "excerpt": "   55:             }\n   56:         }\n   57:     }\n   58: \n   59:     /**\n   60:      * @dev Delegates execution to an implementation contract.\n   61:      * It returns to the external caller whatever the implementation returns\n   62:      * or forwards reverts.\n   63:      */\n   64:     fallback () external payable {\n   65:         // delegate all other functions to current implementation\n   66:         (bool success, ) = implementation.delegatecall(msg.data);\n   67: \n   68:         assembly {\n   69:             let free_mem_ptr := mload(0x40)\n   70:             returndatacopy(free_mem_ptr, 0, returndatasize())\n   71: \n   72:             switch success\n   73:             case 0 { revert(free_mem_ptr, returndatasize()) }\n   74:             default { return(free_mem_ptr, returndatasize()) }\n   75:         }\n   76:     }\n   77: }",
+    "file": "contracts/TokenDelegator.sol",
+    "file_sha256": "4ff3c4f0b19fa2858925b0dda3cdd5dbd7206e61e3a7a5788b441fc9cab90952",
+    "line": 66,
+    "status": "source_matched"
+  },
+  "source_fingerprint": "584a0ad64d5a691c4e6681a99794c8970106593630bdbe8b052d91fcaeb8bc2c",
+  "status": "needs_project_specific_reproduction",
+  "triage": {
+    "classification": "needs_review",
+    "evidence": "insufficient_context",
+    "follow_up": "If the rule is relevant, provide more information about the delegatecall function or its implementation. If it's a false positive, explain why and suggest improvements.",
+    "rationale": "The rule is about reviewing delegatecall targets and access control, but the evidence provided is incomplete and lacks context about the specific implementation or potential issues with the delegatecall function. There is insufficient information to determine if this rule is relevant or if there are false positives."
+  },
+  "verified_vulnerability": false
+}

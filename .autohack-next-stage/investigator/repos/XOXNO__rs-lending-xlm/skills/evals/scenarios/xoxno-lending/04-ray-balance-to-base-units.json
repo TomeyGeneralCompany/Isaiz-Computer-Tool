@@ -1,0 +1,17 @@
+{
+  "skills": [
+    "xoxno-lending"
+  ],
+  "query": "I fetched v1 XOXNO wallet positions. How do I render supplied USDC and convert a user input of 100 USDC for a supply transaction?",
+  "expected_behavior": [
+    "Render amount directly as decimal token text. amountRaw is already an integer base-unit string.",
+    "Preserve null amounts, prices, APYs, and USD values. Do not infer zero.",
+    "Use parseStellarTokenAmount(input, decimals) from @xoxno/sdk-js/stellar-lending. Do not require a custom decimal parser.",
+    "Select token decimals from the exact v1 asset market. Reject missing decimals before building.",
+    "Keep transaction amounts as integer strings. Raw contract scaled_amount shares are a separate RAY domain."
+  ],
+  "machine_checkable": [
+    "Generated TypeScript passes tsc --noEmit against @xoxno/sdk-js@1.0.228.",
+    "parseStellarTokenAmount(\"100\", 7) returns \"1000000000\"."
+  ]
+}

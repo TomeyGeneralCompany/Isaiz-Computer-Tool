@@ -1,0 +1,39 @@
+{
+  "checks": {
+    "has_reproduction_test": false,
+    "in_scope_at_processing": true,
+    "source_commit_matches": true,
+    "triage_requires_review": false
+  },
+  "commit": "d2a86ece964247d8313c20fbfeb0c7199d9bff5a",
+  "lead": {
+    "file": "scripts/update_translations.js",
+    "fingerprint": "1c5cf5c9a371ff6c862f",
+    "guidance": "Review command construction and input provenance",
+    "line": 91,
+    "rule": "JS_CHILD_EXEC"
+  },
+  "note": "Automated offline evidence preparation only. No project-specific reproduction or verified security impact.",
+  "processed_at": "2026-10-15T00:09:27.807154+00:00",
+  "repository": "HathorNetwork/hathor-wallet-mobile",
+  "scope_urls": [
+    "https://immunefi.com/bug-bounty/hathornetwork/scope/"
+  ],
+  "source_check": {
+    "commit": "d2a86ece964247d8313c20fbfeb0c7199d9bff5a",
+    "excerpt": "   80:   console.log(`⏳ Checking if pot file is outdated...`);\n   81: \n   82:   let isPotOutdated = false;\n   83:   const myTmpDir = fs.mkdtempSync(path.join(tmpdir(), 'check_pot-'));\n   84:   temporaryDirs.push(myTmpDir); // Cleanup will be done on process.exit()\n   85:   try {\n   86:     // Extract the strings from the source code\n   87:     execSync(`npx ttag extract -o ${myTmpDir}/pot ./src/`, { stdio: 'inherit' });\n   88:     // Generate the `.po` files\n   89:     execSync(`msgen -o ${myTmpDir}/po ${myTmpDir}/pot`, { stdio: 'inherit' });\n   90:     // Check if the `.pot` file is outdated\n   91:     execSync(`msgcmp ${myTmpDir}/po ./locale/texts.pot`, { stdio: 'inherit' });\n   92:   } catch (error) {\n   93:     isPotOutdated = true;\n   94:     console.error('❌ Error checking pot file, or pot file outdated:', error);\n   95:   }\n   96: \n   97:   return isPotOutdated;\n   98: }\n   99: \n  100: /**\n  101:  * Merges the `.pot` file with the translations in the `.po` files in each of the `locale` folders.\n  102:  * Creates subfolders and their translation files if they do not exist.\n  103:  */",
+    "file": "scripts/update_translations.js",
+    "file_sha256": "5b7a433427ae4630a64aeeb32af18a70e63b9d04894feaddb579d8d164e7b22a",
+    "line": 91,
+    "status": "source_matched"
+  },
+  "source_fingerprint": "610332833da0dcee3c8a20d512e68ae2ef4b1fd8b17f35dec92b0e237e7558e6",
+  "status": "needs_project_specific_reproduction",
+  "triage": {
+    "classification": "likely_false_positive",
+    "evidence": "The code does not include logic to check for outdated `.pot` files, which is a critical part of the process.",
+    "follow_up": "If the code is missing this check, it may lead to incorrect results. Please review the code for completeness.",
+    "rationale": "The code is not checking for outdated `.pot` files, which is a common issue in translation tools. The logic appears to be incomplete and may not address the problem correctly."
+  },
+  "verified_vulnerability": false
+}

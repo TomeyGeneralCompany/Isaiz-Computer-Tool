@@ -1,0 +1,39 @@
+{
+  "checks": {
+    "has_reproduction_test": false,
+    "in_scope_at_processing": true,
+    "source_commit_matches": true,
+    "triage_requires_review": false
+  },
+  "commit": "d2a86ece964247d8313c20fbfeb0c7199d9bff5a",
+  "lead": {
+    "file": "src/screens/SendConfirmScreen.js",
+    "fingerprint": "95dcaed1579a5133bd18",
+    "guidance": "Review command construction and input provenance",
+    "line": 108,
+    "rule": "JS_CHILD_EXEC"
+  },
+  "note": "Automated offline evidence preparation only. No project-specific reproduction or verified security impact.",
+  "processed_at": "2026-10-15T00:09:28.087406+00:00",
+  "repository": "HathorNetwork/hathor-wallet-mobile",
+  "scope_urls": [
+    "https://immunefi.com/bug-bounty/hathornetwork/scope/"
+  ],
+  "source_check": {
+    "commit": "d2a86ece964247d8313c20fbfeb0c7199d9bff5a",
+    "excerpt": "   97:   if (shieldedCopy) {\n   98:     return shieldedCopy;\n   99:   }\n  100:   const msg = err?.message || '';\n  101:   const htrUid = hathorLib.constants.NATIVE_TOKEN_UID;\n  102:   if (msg.includes(`No UTXOs available for the token ${htrUid}`)) {\n  103:     return t`Insufficient HTR to cover the network fee.`;\n  104:   }\n  105:   if (msg.includes('No UTXOs available for the token')) {\n  106:     return t`Insufficient balance to send this transaction.`;\n  107:   }\n  108:   const insufficientTokens = INSUFFICIENT_TOKENS_ERROR.exec(msg);\n  109:   if (insufficientTokens) {\n  110:     // HTR pays the fees: for HTR, they count with the amount.\n  111:     return insufficientTokens[1] === htrUid\n  112:       ? t`Insufficient HTR to cover this transaction and its fees.`\n  113:       : t`Insufficient balance to send this transaction.`;\n  114:   }\n  115:   if (INPUT_LIMIT_ERROR.test(msg)) {\n  116:     return t`This amount needs more inputs than a transaction can hold. Try sending a smaller amount.`;\n  117:   }\n  118:   return msg || t`Failed to process transaction.`;\n  119: }\n  120: ",
+    "file": "src/screens/SendConfirmScreen.js",
+    "file_sha256": "a96575ec2e1a1c8f2b60c083e22e81d5e9067150fc9abd302ca51e57c86b3a42",
+    "line": 108,
+    "status": "source_matched"
+  },
+  "source_fingerprint": "eb7ab695971c18aeccf1dc9da39ab84aaa22e58b4c21af89cee3b56459ecce38",
+  "status": "needs_project_specific_reproduction",
+  "triage": {
+    "classification": "likely_false_positive",
+    "evidence": "The code checks for specific error messages but does not validate the input or ensure proper handling of the input limit error.",
+    "follow_up": "If the input limit is properly validated, this could be a false positive. However, if the input limit is not properly validated, this could be a false positive.",
+    "rationale": "The code checks for specific error messages but does not validate the input or ensure proper handling of the input limit error. This could lead to false positives if the input limit is not properly validated."
+  },
+  "verified_vulnerability": false
+}

@@ -1,0 +1,31 @@
+{
+  "repository": "HathorNetwork/hathor-wallet-mobile",
+  "commit": "d2a86ece964247d8313c20fbfeb0c7199d9bff5a",
+  "scope_sources": [
+    {
+      "asset_type": "websites_and_applications",
+      "asset_url": "https://github.com/HathorNetwork/hathor-wallet-mobile",
+      "program": "hathornetwork",
+      "scope_url": "https://immunefi.com/bug-bounty/hathornetwork/scope/"
+    }
+  ],
+  "original_report": "HathorNetwork__hathor-wallet-mobile-d2a86ece9642.json",
+  "lead": {
+    "rule": "JS_CHILD_EXEC",
+    "file": "scripts/update_translations.js",
+    "line": 87,
+    "guidance": "Review command construction and input provenance",
+    "fingerprint": "59376cc645ae456ce118"
+  },
+  "source_excerpt": "79: function checkPotOutdated() {\n80:   console.log(`\u23f3 Checking if pot file is outdated...`);\n81: \n82:   let isPotOutdated = false;\n83:   const myTmpDir = fs.mkdtempSync(path.join(tmpdir(), 'check_pot-'));\n84:   temporaryDirs.push(myTmpDir); // Cleanup will be done on process.exit()\n85:   try {\n86:     // Extract the strings from the source code\n87:     execSync(`npx ttag extract -o ${myTmpDir}/pot ./src/`, { stdio: 'inherit' });\n88:     // Generate the `.po` files\n89:     execSync(`msgen -o ${myTmpDir}/po ${myTmpDir}/pot`, { stdio: 'inherit' });\n90:     // Check if the `.pot` file is outdated\n91:     execSync(`msgcmp ${myTmpDir}/po ./locale/texts.pot`, { stdio: 'inherit' });\n92:   } catch (error) {\n93:     isPotOutdated = true;\n94:     console.error('\u274c Error checking pot file, or pot file outdated:', error);\n95:   }",
+  "triage": {
+    "classification": "likely_false_positive",
+    "rationale": "The code is not checking for outdated pot files, but rather attempting to extract and compare files from the source code. This is a general-purpose utility and not a vulnerability.",
+    "evidence": "The code is not checking for outdated pot files, but rather attempting to extract and compare files from the source code.",
+    "follow_up": "If you have more details, please provide the specific code or context to help further analyze."
+  },
+  "status": "unverified_draft",
+  "verified_vulnerability": false,
+  "generated_at": "2026-10-14T23:34:12.970091+00:00",
+  "note": "Automated static triage only. No exploitability, eligibility, or bounty award established."
+}

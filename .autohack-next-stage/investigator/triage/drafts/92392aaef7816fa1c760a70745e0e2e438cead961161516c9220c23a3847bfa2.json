@@ -1,0 +1,31 @@
+{
+  "repository": "Instadapp/inst-governance",
+  "commit": "8891f73d17887e272a5317065961269aee94f7cd",
+  "scope_sources": [
+    {
+      "asset_type": "smart_contract",
+      "asset_url": "https://github.com/Instadapp/inst-governance",
+      "program": "instadapp",
+      "scope_url": "https://immunefi.com/bug-bounty/instadapp/scope/"
+    }
+  ],
+  "original_report": "Instadapp__inst-governance-8891f73d1788.json",
+  "lead": {
+    "rule": "JS_CHILD_EXEC",
+    "file": "scripts/verify/lib/tokenUsage.ts",
+    "line": 124,
+    "guidance": "Review command construction and input provenance",
+    "fingerprint": "ba60876f54c73f04ba1a"
+  },
+  "source_excerpt": "116:  * (`VaultConfig`, `DexConfig`, `SupplyProtocolConfig`, `BorrowProtocolConfig`)\n117:  * which helpers convert through `getRawAmount`.\n118:  */\n119: export function detectPricedAddressConstants(stripped: string): Set<string> {\n120:   const priced = new Set<string>();\n121:   for (const re of [PRICED_CONFIG_FIELD, PRICED_USD_HELPER_ARG]) {\n122:     let match: RegExpExecArray | null;\n123:     re.lastIndex = 0;\n124:     while ((match = re.exec(stripped)) !== null) {\n125:       const ident = match[1]!;\n126:       if (ident !== \"address\") priced.add(ident);\n127:     }\n128:   }\n129:   return priced;\n130: }\n131: \n132: export function detectTokensUsedFromSource(src: string): TokenUsageResult {",
+  "triage": {
+    "classification": "likely_false_positive",
+    "rationale": "The code is not checking for the presence of specific fields or arguments in the input string, which is a common practice in command construction. This could lead to potential issues with the implementation, but it's not a false positive.",
+    "evidence": "The code is not checking for the presence of specific fields or arguments in the input string, which is a common practice in command construction.",
+    "follow_up": "If you have more information, please provide it to help with further analysis."
+  },
+  "status": "unverified_draft",
+  "verified_vulnerability": false,
+  "generated_at": "2026-10-14T23:51:05.726044+00:00",
+  "note": "Automated static triage only. No exploitability, eligibility, or bounty award established."
+}

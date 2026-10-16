@@ -1,0 +1,41 @@
+# SPDX-FileCopyrightText: Hathor Labs
+# SPDX-License-Identifier: Apache-2.0
+
+# Re-export from hathorlib for backward compatibility
+from hathorlib.nanocontracts.nc_types import *  # noqa: F401,F403
+from hathorlib.nanocontracts.nc_types import (  # noqa: F401
+    ARG_TYPE_TO_NC_TYPE_MAP,
+    DEFAULT_TYPE_ALIAS_MAP,
+    ESSENTIAL_TYPE_ALIAS_MAP,
+    FIELD_TYPE_TO_NC_TYPE_MAP,
+    RETURN_TYPE_TO_NC_TYPE_MAP,
+    AddressNCType,
+    BoolNCType,
+    Bytes32NCType,
+    BytesLikeNCType,
+    BytesNCType,
+    CallerIdNCType,
+    DataclassNCType,
+    DequeNCType,
+    DictNCType,
+    FrozenSetNCType,
+    Int32NCType,
+    ListNCType,
+    NamedTupleNCType,
+    NCType,
+    NullNCType,
+    OptionalNCType,
+    SetNCType,
+    SignedDataNCType,
+    StrNCType,
+    TupleNCType,
+    TypeAliasMap,
+    TypeToNCTypeMap,
+    Uint32NCType,
+    VarInt32NCType,
+    VarUint32NCType,
+    make_nc_type_for_arg_type,
+    make_nc_type_for_field_type,
+    make_nc_type_for_return_type,
+)
+from hathorlib.nanocontracts.nc_types.token_uid_nc_type import TokenUidNCType  # noqa: F401

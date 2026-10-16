@@ -1,0 +1,65 @@
+=== SERVICES ===
+autohack-native.service: active
+Result=success
+NRestarts=0
+autohack-review-backlog.timer: active
+Result=success
+autohack-research-engine.service: active
+Result=success
+NRestarts=0
+autohack-extended-research.service: inactive
+Result=success
+NRestarts=0
+=== NODE ===
+/home/izy/.nvm/versions/node/v22.23.3/bin/node
+v22.23.3
+=== PODMAN ===
+true
+=== WORKER STATUS ===
+research-engine {
+  "checked_at": "2026-10-16T00:13:58.123827+00:00",
+  "container_engine": null,
+  "counts": {
+    "adapter_not_available": 51,
+    "commit_mismatch": 2,
+    "out_of_scope": 19
+  },
+  "foundry_image_available": false,
+  "scope_repositories": 155,
+  "submission_enabled": false
+}
+extended-research no status file
+=== RECENT SERVICE ERRORS ===
+--- autohack-native.service ---
+Oct 15 20:14:06 izy-Latitude-5290-2-in-1 node[267329]:     platform: "yeswehack"
+Oct 15 20:14:06 izy-Latitude-5290-2-in-1 node[267329]:     total: 55
+Oct 15 20:14:06 izy-Latitude-5290-2-in-1 node[267329]:     withSourceCode: 2
+Oct 15 20:14:06 izy-Latitude-5290-2-in-1 node[267329]: [20:14:06.722] WARN (267329): Failed to fetch aggregator data for platform
+Oct 15 20:14:06 izy-Latitude-5290-2-in-1 node[267329]:     module: "aggregator-client"
+Oct 15 20:14:06 izy-Latitude-5290-2-in-1 node[267329]:     platform: "federacy"
+Oct 15 20:14:06 izy-Latitude-5290-2-in-1 node[267329]:     err: {
+Oct 15 20:14:06 izy-Latitude-5290-2-in-1 node[267329]:       "type": "Error",
+Oct 15 20:14:06 izy-Latitude-5290-2-in-1 node[267329]:       "message": "Aggregator fetch federacy 404",
+Oct 15 20:14:06 izy-Latitude-5290-2-in-1 node[267329]:       "stack":
+Oct 15 20:14:06 izy-Latitude-5290-2-in-1 node[267329]:           Error: Aggregator fetch federacy 404
+Oct 15 20:14:06 izy-Latitude-5290-2-in-1 node[267329]:               at fetchPlatformData (/home/izy/isaiz-bugbounty/autohack/packages/security-discovery/src/aggregator-client.ts:61:11)
+Oct 15 20:14:06 izy-Latitude-5290-2-in-1 node[267329]:               at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+Oct 15 20:14:06 izy-Latitude-5290-2-in-1 node[267329]:               at async fetchAggregatorPrograms (/home/izy/isaiz-bugbounty/autohack/packages/security-discovery/src/aggregator-client.ts:45:24)
+Oct 15 20:14:06 izy-Latitude-5290-2-in-1 node[267329]:               at async pollAggregator (/home/izy/isaiz-bugbounty/autohack/packages/security-discovery/src/poller.ts:610:20)
+Oct 15 20:14:06 izy-Latitude-5290-2-in-1 node[267329]:     }
+Oct 15 20:14:06 izy-Latitude-5290-2-in-1 node[267329]: [20:14:06.731] INFO (267329): Aggregator fetch complete
+Oct 15 20:14:06 izy-Latitude-5290-2-in-1 node[267329]:     module: "aggregator-client"
+Oct 15 20:14:06 izy-Latitude-5290-2-in-1 node[267329]:     total: 27
+Oct 15 20:14:06 izy-Latitude-5290-2-in-1 node[267329]:     sourceCodeOnly: true
+Oct 15 20:14:06 izy-Latitude-5290-2-in-1 node[267329]: [20:14:06.828] INFO (267329): Aggregator poll complete
+Oct 15 20:14:06 izy-Latitude-5290-2-in-1 node[267329]:     module: "security-poller"
+Oct 15 20:14:06 izy-Latitude-5290-2-in-1 node[267329]:     newCount: 0
+Oct 15 20:14:06 izy-Latitude-5290-2-in-1 node[267329]:     total: 27
+--- autohack-research-engine.service ---
+Oct 15 20:13:57 izy-Latitude-5290-2-in-1 systemd[1097]: Stopping autohack-research-engine.service - AutoHack autonomous isolated security research engine...
+Oct 15 20:13:57 izy-Latitude-5290-2-in-1 systemd[1097]: Stopped autohack-research-engine.service - AutoHack autonomous isolated security research engine.
+Oct 15 20:13:57 izy-Latitude-5290-2-in-1 systemd[1097]: autohack-research-engine.service: Consumed 1.057s CPU time, 22.7M memory peak, 0B memory swap peak.
+Oct 15 20:13:57 izy-Latitude-5290-2-in-1 systemd[1097]: Started autohack-research-engine.service - AutoHack autonomous isolated security research engine.
+Oct 15 20:13:57 izy-Latitude-5290-2-in-1 python3[267320]: AutoHack offline research engine started. No automatic submission or live tests.
+--- autohack-extended-research.service ---
+-- No entries --

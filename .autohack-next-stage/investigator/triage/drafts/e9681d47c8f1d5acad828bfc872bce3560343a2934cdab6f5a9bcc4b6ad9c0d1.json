@@ -1,0 +1,31 @@
+{
+  "repository": "Instadapp/inst-governance",
+  "commit": "8891f73d17887e272a5317065961269aee94f7cd",
+  "scope_sources": [
+    {
+      "asset_type": "smart_contract",
+      "asset_url": "https://github.com/Instadapp/inst-governance",
+      "program": "instadapp",
+      "scope_url": "https://immunefi.com/bug-bounty/instadapp/scope/"
+    }
+  ],
+  "original_report": "Instadapp__inst-governance-8891f73d1788.json",
+  "lead": {
+    "rule": "JS_CHILD_EXEC",
+    "file": "scripts/verify/lib/tokenUsage.ts",
+    "line": 138,
+    "guidance": "Review command construction and input provenance",
+    "fingerprint": "e5b7c0fd1b67e079bef6"
+  },
+  "source_excerpt": "130: }\n131: \n132: export function detectTokensUsedFromSource(src: string): TokenUsageResult {\n133:   const stripped = stripCommentsStringsAndMarkerBlock(src);\n134: \n135:   const ADDRESS_IDENT = /\\b([A-Za-z_][A-Za-z0-9_]*_ADDRESS)\\b/g;\n136:   const allRefs = new Set<string>();\n137:   let match: RegExpExecArray | null;\n138:   while ((match = ADDRESS_IDENT.exec(stripped)) !== null) {\n139:     allRefs.add(match[1]!);\n140:   }\n141: \n142:   const pricedIds = detectPricedAddressConstants(stripped);\n143: \n144:   const used: TokenEntry[] = [];\n145:   const unknown: string[] = [];\n146:   for (const ident of pricedIds) {",
+  "triage": {
+    "classification": "likely_false_positive",
+    "rationale": "The code is attempting to verify token usage from a source file but does not properly handle cases where the input may contain invalid or untrusted data. The logic is incomplete and lacks proper validation of the input, which could lead to incorrect results.",
+    "evidence": "The code is incomplete and lacks proper validation of the input, which could lead to incorrect results.",
+    "follow_up": "If the input is properly validated, this code could be used to verify token usage. However, it is important to ensure that the input is clean and follows the expected format before using this code."
+  },
+  "status": "unverified_draft",
+  "verified_vulnerability": false,
+  "generated_at": "2026-10-14T23:51:17.249585+00:00",
+  "note": "Automated static triage only. No exploitability, eligibility, or bounty award established."
+}

@@ -1,0 +1,13 @@
+{
+  "commit": "cde2abf753cdfbb67e8129b8c0672d5c15444aa1",
+  "processed_at": "2026-10-14T23:59:32.360657+00:00",
+  "repository": "AcalaNetwork/Acala",
+  "source_record": "/home/izy/isaiz-bugbounty/autohack/.autohack-next-stage/investigator/verification/results/648bb099af3b0c4795e42cf3f3eeed914931557927a67ab781e8d97bcb5a92d8.json",
+  "source_sha256": "00002477c72cc0480b66d89094fd7d6631a77d1cc6560bb45530041971e8c0f1",
+  "status": "awaiting_reproduction_case",
+  "test_result": {
+    "case_manifest": "/home/izy/isaiz-bugbounty/autohack/.autohack-next-stage/investigator/reproduction/cases/648bb099af3b0c4795e42cf3f3eeed914931557927a67ab781e8d97bcb5a92d8.json",
+    "reason": "No explicit local regression case supplied"
+  },
+  "verified_vulnerability": false
+}

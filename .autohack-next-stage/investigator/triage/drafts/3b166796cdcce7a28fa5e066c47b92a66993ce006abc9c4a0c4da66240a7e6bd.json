@@ -1,0 +1,31 @@
+{
+  "repository": "Instadapp/inst-governance",
+  "commit": "8891f73d17887e272a5317065961269aee94f7cd",
+  "scope_sources": [
+    {
+      "asset_type": "smart_contract",
+      "asset_url": "https://github.com/Instadapp/inst-governance",
+      "program": "instadapp",
+      "scope_url": "https://immunefi.com/bug-bounty/instadapp/scope/"
+    }
+  ],
+  "original_report": "Instadapp__inst-governance-8891f73d1788.json",
+  "lead": {
+    "rule": "SOL_DELEGATECALL",
+    "file": "contracts/GovernorBravoDelegator.sol",
+    "line": 72,
+    "guidance": "Review delegatecall target and access control",
+    "fingerprint": "60f79b17d51ddff8b564"
+  },
+  "source_excerpt": "64: \n65:     /**\n66:      * @dev Delegates execution to an implementation contract.\n67:      * It returns to the external caller whatever the implementation returns\n68:      * or forwards reverts.\n69:      */\n70:     fallback () external payable {\n71:         // delegate all other functions to current implementation\n72:         (bool success, ) = implementation.delegatecall(msg.data);\n73: \n74:         assembly {\n75:             let free_mem_ptr := mload(0x40)\n76:             returndatacopy(free_mem_ptr, 0, returndatasize())\n77: \n78:             switch success\n79:             case 0 { revert(free_mem_ptr, returndatasize()) }\n80:             default { return(free_mem_ptr, returndatasize()) }",
+  "triage": {
+    "classification": "needs_review",
+    "rationale": "The code appears to implement a fallback function that delegates execution to an implementation contract, but there is no evidence of access control or proper delegation logic in place. This could lead to potential vulnerabilities, but insufficient context is provided to confirm the classification.",
+    "evidence": "Insufficient context to determine the classification.",
+    "follow_up": "If the code is a placeholder or has no access control, it may be a false positive. However, without further context, it's difficult to determine the actual classification."
+  },
+  "status": "unverified_draft",
+  "verified_vulnerability": false,
+  "generated_at": "2026-10-14T23:47:27.664766+00:00",
+  "note": "Automated static triage only. No exploitability, eligibility, or bounty award established."
+}

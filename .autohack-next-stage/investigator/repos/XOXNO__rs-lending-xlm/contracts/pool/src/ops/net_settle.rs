@@ -1,0 +1,61 @@
+//! Net settlement: offsets a user's supply against their debt on the same market.
+//!
+//! Burns matched scaled supply and debt with no cash movement or token transfer.
+//! The controller uses it to repay debt from collateral in the same market.
+
+use common::errors::GenericError;
+use common::math::fp::Ray;
+use common::types::{
+    MarketStateSnapshot, PoolNetSettleEntry, PoolNetSettleResult, ScaledPositionRaw,
+};
+use common::validation::require_nonneg_amount;
+
+use soroban_sdk::{assert_with_error, Env};
+
+use crate::{guards, ops};
+
+/// Settles up to `entry.amount` of debt against the user's supply position
+/// on the same market. Burns are sized from the conservative overlap of
+/// floored supply and ceiled debt, so a side closes fully only when that
+/// overlap exhausts it; a positive settle that would burn zero shares on
+/// either side panics. Returns the residual positions, market indexes, and
+/// settled asset amount, plus a snapshot for the caller to emit.
+pub(crate) fn apply(
+    env: &Env,
+    entry: &PoolNetSettleEntry,
+) -> (PoolNetSettleResult, MarketStateSnapshot) {
+    require_nonneg_amount(env, entry.amount);
+    // A negative scaled position from the controller would invert the burns.
+    require_nonneg_amount(env, entry.supply_position.scaled_amount);
+    require_nonneg_amount(env, entry.debt_position.scaled_amount);
+    let mut cache = ops::synced_market(env, &entry.hub_asset);
+
+    let supply_position = Ray::from(entry.supply_position.scaled_amount);
+    let debt_position = Ray::from(entry.debt_position.scaled_amount);
+
+    let (burned_supply, burned_debt, gross_amount) =
+        cache.resolve_net_settle(entry.amount, supply_position, debt_position);
+    assert_with_error!(
+        env,
+        gross_amount == 0 || (burned_supply.raw() > 0 && burned_debt.raw() > 0),
+        GenericError::NetSettleRoundsToZeroShares
+    );
+
+    cache.burn_supply(burned_supply);
+    cache.burn_debt(burned_debt);
+
+    guards::require_supply_for_debt(env, &cache);
+
+    let snapshot = cache.commit();
+    let result = PoolNetSettleResult {
+        supply_position: ScaledPositionRaw {
+            scaled_amount: supply_position.checked_sub(env, burned_supply).raw(),
+        },
+        debt_position: ScaledPositionRaw {
+            scaled_amount: debt_position.checked_sub(env, burned_debt).raw(),
+        },
+        market_index: cache.market_index(),
+        settled_amount: gross_amount,
+    };
+    (result, snapshot)
+}

@@ -1,0 +1,1217 @@
+/**
+ * Copyright (c) Hathor Labs and its affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */
+
+/* eslint-disable max-classes-per-file -- AddressPathMap is a private helper tightly coupled to SendTransactionWalletService */
+import { EventEmitter } from 'events';
+import { shuffle } from 'lodash';
+import tokensUtils from '../utils/tokens';
+import transactionUtils from '../utils/transaction';
+import walletApi from './api/walletApi';
+import MineTransaction from './mineTransaction';
+import HathorWalletServiceWallet from './wallet';
+import helpers from '../utils/helpers';
+import P2PKH from '../models/p2pkh';
+import P2SH from '../models/p2sh';
+import Transaction from '../models/transaction';
+import Output from '../models/output';
+import Input from '../models/input';
+import Address from '../models/address';
+import { DEFAULT_NATIVE_TOKEN_CONFIG, FEE_PER_OUTPUT, NATIVE_TOKEN_UID } from '../constants';
+import { SendTxError, UtxoError, WalletError, WalletRequestError } from '../errors';
+import {
+  OutputSendTransaction,
+  InputRequestObj,
+  TokenMap,
+  ISendTransaction,
+  MineTxSuccessData,
+  OutputType,
+  Utxo,
+} from './types';
+import { IDataInput, IDataOutputWithToken, IDataTx, TokenVersion } from '../types';
+import { FeeHeader, Header } from '../headers';
+import SendTransaction, { ISendOutput } from '../new/sendTransaction';
+import { ChangeOutputMode, ShieldedOutputMode } from '../shielded/types';
+import { WalletServiceSendStorage } from './walletServiceSendStorage';
+
+type optionsType = {
+  outputs?: OutputSendTransaction[];
+  inputs?: InputRequestObj[];
+  changeAddress?: string | null;
+  transaction?: Transaction | null;
+  pin?: string | null;
+  changeShieldedMode?: ChangeOutputMode | null;
+};
+
+/**
+ * Check that external signing signed every input of a transaction whose inputs are ALL the
+ * wallet's own (the facade's send, token, authority and nano paths). The storage proxy skips an
+ * input whose spent transaction it couldn't fetch, so without this check a transient fullnode
+ * failure would produce a tx that only fails at push, with an unclear script error. Not for the
+ * public signTx, which legitimately leaves a counterparty's inputs unsigned.
+ *
+ * @throws {SendTxError} naming the first unsigned input
+ */
+export function assertAllInputsSigned(tx: Transaction): void {
+  const unsigned = tx.inputs.findIndex(input => !input.data || input.data.length === 0);
+  if (unsigned !== -1) {
+    const { hash, index } = tx.inputs[unsigned];
+    throw new SendTxError(`Could not sign input ${unsigned} (${hash}:${index}). Please try again.`);
+  }
+}
+
+/**
+ * Check that external signing produced the nano contract caller signature of a transaction whose
+ * caller is the wallet (the facade's nano paths). The signer returns it as `ncCallerSignature` and
+ * signTransaction copies it into every nano header's script as-is, so a signer that returns none
+ * yields a tx that only fails at push. Nano calls can have no inputs, where assertAllInputsSigned
+ * checks nothing.
+ *
+ * @throws {SendTxError} when a nano header has no caller signature
+ */
+export function assertNanoCallerSigned(tx: Transaction): void {
+  if (!tx.isNanoContract()) {
+    return;
+  }
+  if (tx.getNanoHeaders().some(header => !header.script || header.script.length === 0)) {
+    throw new SendTxError('Could not sign the nano contract caller. Please try again.');
+  }
+}
+
+/**
+ * Maps a transaction input (identified by its txId + index) to its
+ * BIP-44 address path. Thin wrapper around {@link Map} that centralizes
+ * the key format so the read and write sides cannot drift out of sync.
+ *
+ * Re-setting the same `{txId, index}` pair overwrites the previous path:
+ * duplicate inputs collapse to a single entry. This is fine because
+ * duplicate inputs would be rejected later as a double-spend; the map
+ * deliberately does not try to detect or signal duplicates.
+ *
+ * @internal Exported only so unit tests can use the real class instead
+ *   of a duck-typed stand-in. Not part of the public API of this module.
+ */
+export class AddressPathMap {
+  private readonly map = new Map<string, string>();
+
+  private static key(input: { txId: string; index: number }): string {
+    return `${input.txId}:${input.index}`;
+  }
+
+  set(input: { txId: string; index: number }, path: string): void {
+    this.map.set(AddressPathMap.key(input), path);
+  }
+
+  get(input: { txId: string; index: number }): string | undefined {
+    return this.map.get(AddressPathMap.key(input));
+  }
+}
+
+class SendTransactionWalletService extends EventEmitter implements ISendTransaction {
+  // Wallet that is sending the transaction
+  private wallet: HathorWalletServiceWallet;
+
+  /**
+   * Get token details from the wallet and throw an error if the token is not found.
+   * For the native token (HTR), returns static token info without making an API call.
+   *
+   * @param token - The token UID to get details for
+   * @returns The token info object
+   * @throws {SendTxError} If the token is not found
+   */
+  private async getTokenDetails(token: string) {
+    if (token === NATIVE_TOKEN_UID) {
+      return {
+        id: NATIVE_TOKEN_UID,
+        ...DEFAULT_NATIVE_TOKEN_CONFIG,
+      };
+    }
+    const { tokenInfo } = await this.wallet.getTokenDetails(token);
+    if (!tokenInfo) {
+      throw new SendTxError(`Token ${token} not found.`);
+    }
+    return tokenInfo;
+  }
+
+  // Outputs to prepare the transaction
+  private outputs: OutputSendTransaction[];
+
+  // Optional inputs to prepare the transaction
+  private inputs: InputRequestObj[];
+
+  // Optional change address to prepare the transaction
+  private changeAddress: string | null;
+
+  // Transaction object to be used after it's already prepared
+  public transaction: Transaction | null;
+
+  // MineTransaction object
+  private mineTransaction: MineTransaction | null;
+
+  // PIN to load the seed from memory
+  private pin: string | null;
+
+  // Change-output mode for the shared send engine (wallets with shielded keys)
+  private changeShieldedMode: ChangeOutputMode | null;
+
+  // Data for the transaction after it's prepared
+  public fullTxData: IDataTx | null;
+
+  // Address paths for the inputs, to be used when signing
+  public utxosAddressPath: string[];
+
+  // Fee amount to prepare the transaction
+  private _feeAmount: bigint;
+
+  private _currentStep: 'idle' | 'prepared' | 'signed' = 'idle';
+
+  constructor(wallet: HathorWalletServiceWallet, options: optionsType = {}) {
+    super();
+
+    const newOptions: optionsType = {
+      outputs: [],
+      inputs: [],
+      changeAddress: null,
+      transaction: null,
+      changeShieldedMode: null,
+      ...options,
+    };
+
+    this.wallet = wallet;
+    this.outputs = newOptions.outputs!;
+    this.inputs = newOptions.inputs!;
+    this.changeAddress = newOptions.changeAddress!;
+    this.transaction = newOptions.transaction!;
+    this.mineTransaction = null;
+    this.pin = newOptions.pin!;
+    this.changeShieldedMode = newOptions.changeShieldedMode ?? null;
+    this.fullTxData = null;
+    this.utxosAddressPath = [];
+    this._feeAmount = 0n;
+  }
+
+  /**
+   * Prepare transaction data from inputs and outputs.
+   *
+   * This method provides more flexibility than `prepareTx` by allowing for mixed-input scenarios,
+   * where some inputs are provided by the user and others are automatically selected from the wallet.
+   * It processes both user-defined and automatically selected inputs, creates change outputs when
+   * necessary, and constructs the final transaction object.
+   *
+   * The process is as follows:
+   * 1. Calculate the total amount for each token from the outputs, including the cost of data outputs.
+   * 2. Validate any user-provided inputs to ensure they are available and sufficient.
+   * 3. For tokens where no inputs were provided, automatically select UTXOs from the wallet to cover the required amounts.
+   * 4. Create change outputs for any tokens where the input value exceeds the output value.
+   * 5. Construct the final transaction object with all inputs, outputs, and tokens.
+   *
+   * @returns {Promise<IDataTx>} A promise that resolves with the prepared transaction data.
+   */
+  async prepareTxData(): Promise<IDataTx> {
+    if (
+      this.outputs.some(output => !!output.shielded) ||
+      isShieldedChangeMode(this.changeShieldedMode)
+    ) {
+      // This builder makes transparent outputs only: refuse rather than send
+      // a requested shielded output or change in the clear
+      throw new SendTxError(
+        'prepareTxData builds no shielded outputs; use prepareTx for a send with shielded outputs or a shielded change.'
+      );
+    }
+    // 1. Calculate total output amount for each token
+    const tokenAmountMap: TokenMap = {};
+    for (const output of this.outputs) {
+      const token = output.type === OutputType.DATA ? NATIVE_TOKEN_UID : output.token;
+      const value =
+        output.type === OutputType.DATA ? tokensUtils.getDataScriptOutputFee() : output.value;
+      if (token in tokenAmountMap) {
+        tokenAmountMap[token].amount += value;
+      } else {
+        const tokenInfo = await this.getTokenDetails(token);
+        tokenAmountMap[token] = {
+          version: tokenInfo.version,
+          amount: value,
+        };
+      }
+      if (tokenAmountMap[token].version === TokenVersion.FEE) {
+        this._feeAmount += FEE_PER_OUTPUT;
+      }
+    }
+
+    const utxosAddressPath: string[] = [];
+    const finalInputs: InputRequestObj[] = [...this.inputs];
+    const finalOutputs: OutputSendTransaction[] = [...this.outputs];
+
+    // Map of token uid to a flag indicating if we need to select inputs for it
+    const tokenNeedsInputs = new Map<string, boolean>();
+    for (const token of Object.keys(tokenAmountMap)) {
+      tokenNeedsInputs.set(token, true);
+    }
+
+    // Cache UTXO data to avoid fetching the same data multiple times
+    const utxoDataMap = new Map<string, Utxo>();
+
+    // 2. Process pre-selected inputs
+    const userInputAmountMap: TokenMap = {};
+    if (this.inputs.length > 0) {
+      for (const input of this.inputs) {
+        const utxo = await this.wallet.getUtxoFromId(input.txId, input.index);
+        if (utxo === null) {
+          throw new UtxoError(
+            `Invalid input selection. Input ${input.txId} at index ${input.index}.`
+          );
+        }
+
+        if (!(utxo.tokenId in tokenAmountMap)) {
+          throw new SendTxError(
+            `Invalid input selection. Input ${input.txId} at index ${input.index} has token ${utxo.tokenId} that is not on the outputs.`
+          );
+        }
+
+        utxosAddressPath.push(utxo.addressPath);
+
+        // Cache UTXO data for later use
+        const utxoKey = `${input.txId}:${input.index}`;
+        utxoDataMap.set(utxoKey, utxo);
+
+        if (utxo.tokenId in userInputAmountMap) {
+          userInputAmountMap[utxo.tokenId].amount += utxo.value;
+        } else {
+          userInputAmountMap[utxo.tokenId] = {
+            version: tokenAmountMap[utxo.tokenId].version,
+            amount: utxo.value,
+          };
+        }
+      }
+    }
+
+    // 2.5. Mark tokens with pre-selected inputs as not needing automatic UTXO selection
+    for (const token of Object.keys(userInputAmountMap)) {
+      tokenNeedsInputs.set(token, false);
+    }
+
+    // 2.6. Validate pre-selected inputs for CUSTOM TOKENS and create change outputs
+    // This must happen BEFORE calculating HTR requirements because fee-based token
+    // change outputs increment _feeAmount
+    for (const [token, userInputData] of Object.entries(userInputAmountMap)) {
+      // Skip native token - it will be validated after we know the final fee
+      if (token === NATIVE_TOKEN_UID) {
+        continue;
+      }
+
+      this.validatePreSelectedInputs(
+        token,
+        userInputData.amount,
+        tokenAmountMap[token].amount,
+        tokenAmountMap[token].version,
+        finalOutputs
+      );
+    }
+
+    // 3. Select UTXOs for custom (non-native) tokens first
+    // This must happen BEFORE selecting NATIVE TOKEN UTXOs because:
+    // - Selecting UTXOs may create change outputs for fee-based tokens
+    // - Each fee-based token change output increments _feeAmount
+    // - We need the final _feeAmount to know how much NATIVE TOKEN is needed
+    const customTokens = Array.from(tokenNeedsInputs.keys()).filter(
+      token => token !== NATIVE_TOKEN_UID
+    );
+    await this.selectUtxosForTokens(
+      customTokens,
+      tokenAmountMap,
+      tokenNeedsInputs,
+      finalInputs,
+      utxosAddressPath,
+      utxoDataMap,
+      finalOutputs
+    );
+
+    // 3.5. Add the calculated fee to HTR requirements
+    if (this._feeAmount > 0n) {
+      if (NATIVE_TOKEN_UID in tokenAmountMap) {
+        tokenAmountMap[NATIVE_TOKEN_UID].amount += this._feeAmount;
+      } else {
+        tokenAmountMap[NATIVE_TOKEN_UID] = {
+          version: TokenVersion.NATIVE,
+          amount: this._feeAmount,
+        };
+        tokenNeedsInputs.set(NATIVE_TOKEN_UID, true);
+      }
+    }
+
+    // 3.6. Handle HTR: either validate pre-selected inputs OR auto-select UTXOs
+    // These are mutually exclusive - if user provided HTR inputs, we validate them;
+    // otherwise, we auto-select UTXOs to cover outputs + fees
+    if (NATIVE_TOKEN_UID in userInputAmountMap) {
+      // User provided HTR inputs - validate they cover outputs + fees
+      const userHtrData = userInputAmountMap[NATIVE_TOKEN_UID];
+      const requiredHtr = tokenAmountMap[NATIVE_TOKEN_UID]?.amount ?? 0n;
+
+      this.validatePreSelectedInputs(
+        NATIVE_TOKEN_UID,
+        userHtrData.amount,
+        requiredHtr,
+        TokenVersion.NATIVE,
+        finalOutputs
+      );
+    } else {
+      // No HTR inputs provided - auto-select UTXOs if needed
+      await this.selectUtxosForTokens(
+        [NATIVE_TOKEN_UID],
+        tokenAmountMap,
+        tokenNeedsInputs,
+        finalInputs,
+        utxosAddressPath,
+        utxoDataMap,
+        finalOutputs
+      );
+    }
+
+    // 5. Update instance properties and shuffle outputs if change was added.
+    this.inputs = finalInputs;
+    // Check if outputs changed to decide on shuffling.
+    if (finalOutputs.length > this.outputs.length) {
+      this.outputs = shuffle(finalOutputs);
+    } else {
+      this.outputs = finalOutputs;
+    }
+
+    // 6. Create transaction data object
+    const dataInputs: IDataInput[] = [];
+    for (const input of this.inputs) {
+      const utxoKey = `${input.txId}:${input.index}`;
+      const utxo = utxoDataMap.get(utxoKey);
+      if (!utxo) {
+        // Should not happen as we cached them before
+        throw new UtxoError(
+          `Could not retrieve utxo details for input ${input.txId}:${input.index}`
+        );
+      }
+      dataInputs.push({
+        txId: input.txId,
+        index: input.index,
+        value: utxo.value,
+        token: utxo.tokenId,
+        address: utxo.address,
+        authorities: utxo.authorities,
+      });
+    }
+
+    const dataOutputs: IDataOutputWithToken[] = [];
+    for (const output of this.outputs) {
+      if (output.type === OutputType.DATA) {
+        dataOutputs.push({
+          type: OutputType.DATA,
+          data: Buffer.from(output.data!).toString('hex'),
+          value: tokensUtils.getDataScriptOutputFee(),
+          authorities: 0n,
+          token: NATIVE_TOKEN_UID,
+        });
+      } else {
+        if (!output.address || !output.token) {
+          // This should not happen for a regular output
+          throw new WalletError('Output is missing address or token.');
+        }
+        const outputType = helpers.getOutputTypeFromAddress(output.address, this.wallet.network) as
+          | 'p2pkh'
+          | 'p2sh';
+        dataOutputs.push({
+          type: outputType,
+          value: output.value,
+          token: output.token,
+          address: output.address,
+          timelock: output.timelock || null,
+          authorities: 0n,
+        });
+      }
+    }
+
+    const tokens = Object.keys(tokenAmountMap);
+    // Remove HTR from tokens array since it doesn't need to be included in transaction tokens
+    const htrIndex = tokens.indexOf(NATIVE_TOKEN_UID);
+    if (htrIndex > -1) {
+      tokens.splice(htrIndex, 1);
+    }
+
+    // Add fee header if there's a fee to pay
+    const headers: Header[] = [];
+    if (this._feeAmount > 0n) {
+      headers.push(new FeeHeader([{ tokenIndex: 0, amount: this._feeAmount }]));
+    }
+
+    const txData: IDataTx = {
+      inputs: dataInputs,
+      outputs: dataOutputs,
+      tokens,
+      headers,
+    };
+
+    this.utxosAddressPath = utxosAddressPath;
+    this.fullTxData = txData;
+
+    return txData;
+  }
+
+  /**
+   * Prepare transaction data to send
+   * Get utxos from wallet service, creates change outpus and returns a Transaction object
+   *
+   * @memberof SendTransactionWalletService
+   * @inner
+   */
+  async prepareTx(): Promise<Transaction> {
+    this.emit('prepare-tx-start');
+    if (this.usesSharedEngine()) {
+      return this.prepareTxWithSharedEngine();
+    }
+    // We get the full outputs amount for each token
+    // This is useful for (i) getting the utxos for each one
+    // in case it's not sent and (ii) create the token array of the tx
+    const tokenAmountMap: TokenMap = {};
+
+    for (const output of this.outputs) {
+      if (output.token in tokenAmountMap) {
+        tokenAmountMap[output.token].amount += output.value;
+      } else {
+        const tokenInfo = await this.getTokenDetails(output.token);
+        tokenAmountMap[output.token] = {
+          version: tokenInfo.version,
+          amount: output.value,
+        };
+      }
+      if (tokenAmountMap[output.token].version === TokenVersion.FEE) {
+        this._feeAmount += FEE_PER_OUTPUT;
+      }
+    }
+
+    // We need this array to get the addressPath for each input used and be able to sign the input data
+    let utxosAddressPath: string[];
+    const tokensWithoutHtr = { ...tokenAmountMap };
+    delete tokensWithoutHtr[NATIVE_TOKEN_UID];
+    if (this.inputs.length === 0) {
+      // Need to get utxos
+      // We already know the full amount for each token, except for HTR
+      // to know the HTR amount we need to calculate the fee and then select the UTXOS for HTR
+      // Now we can get the utxos and (if needed) change amount for each token
+      utxosAddressPath = await this.selectUtxosToUse(tokensWithoutHtr);
+
+      // Only select HTR UTXOs if we actually need HTR (for outputs or fees)
+      const htrAmount = (tokenAmountMap[NATIVE_TOKEN_UID]?.amount ?? 0n) + this._feeAmount;
+      if (htrAmount > 0n) {
+        const htrTokenAmount = {
+          [NATIVE_TOKEN_UID]: {
+            version: TokenVersion.NATIVE,
+            amount: htrAmount,
+          },
+        };
+        try {
+          const htrAddressPath = await this.selectUtxosToUse(htrTokenAmount);
+          utxosAddressPath.push(...htrAddressPath);
+        } catch (err) {
+          // Convert UtxoError to SendTxError for better error messaging
+          if (err instanceof UtxoError) {
+            throw new SendTxError(`No UTXOs available for the token ${NATIVE_TOKEN_UID}.`);
+          }
+          throw err;
+        }
+      }
+    } else {
+      // If the user selected the inputs, we must validate that
+      // all utxos are valid and the sum is enought to fill the outputs
+      // We use an addressPathMap to collect paths keyed by input identity,
+      // then rebuild in this.inputs order. This is necessary because the
+      // two-pass validation (tokens first, HTR second) would otherwise
+      // produce paths in token-processing order rather than input order.
+      const addressPathMap = new AddressPathMap();
+
+      // ignoreNative=true: HTR inputs will be validated separately below
+      await this.validateUtxos(tokensWithoutHtr, addressPathMap, { ignoreNative: true });
+
+      // here we should know the fee amount (in case of any fee-based token change output was added)
+      const htrAmount = (tokenAmountMap[NATIVE_TOKEN_UID]?.amount ?? 0n) + this._feeAmount;
+      if (htrAmount > 0n) {
+        const htrTokenAmount = {
+          [NATIVE_TOKEN_UID]: {
+            version: TokenVersion.NATIVE,
+            amount: htrAmount,
+          },
+        };
+        await this.validateUtxos(htrTokenAmount, addressPathMap, { onlyNative: true });
+      }
+
+      // Rebuild utxosAddressPath in this.inputs order.
+      //
+      // The only way to reach the guard below today is an HTR input provided
+      // when htrAmount === 0n: `ignoreNative: true` skipped it, the second
+      // pass was elided, and nothing populated the map for it. The hint in
+      // the error message reflects that single root cause. If a third pass
+      // is ever added (or the `ignoreNative`/`onlyNative` filtering changes)
+      // this hint will silently drift out of date — see the test
+      // "should show a helpful error when HTR input is unneeded via prepareTx
+      // path" in __tests__/wallet/sendTransactionWalletService.test.ts which
+      // pins the message and exercises the only path that reaches it.
+      utxosAddressPath = this.inputs.map(input => {
+        const path = addressPathMap.get(input);
+        if (!path) {
+          throw new SendTxError(
+            `Input ${input.txId}:${input.index} was not processed by any validation pass. ` +
+              'This usually means an HTR input was provided but no HTR is required ' +
+              '(no HTR outputs and no fee-token fees).'
+          );
+        }
+        return path;
+      });
+    }
+    const tokens = Object.keys(tokenAmountMap);
+    const htrIndex = tokens.indexOf(NATIVE_TOKEN_UID);
+    if (htrIndex > -1) {
+      tokens.splice(htrIndex, 1);
+    }
+
+    // Transform input data in Input model object
+    const inputsObj: Input[] = [];
+    for (const i of this.inputs) {
+      inputsObj.push(this.inputDataToModel(i));
+    }
+
+    // Transform output data in Output model object
+    const outputsObj: Output[] = [];
+    for (const o of this.outputs) {
+      outputsObj.push(this.outputDataToModel(o, tokens));
+    }
+
+    // Create the transaction object, add weight and timestamp
+    this.transaction = new Transaction(inputsObj, outputsObj);
+    this.transaction.tokens = tokens;
+
+    // Add fee header if needed
+    if (this._feeAmount > 0n) {
+      this.transaction.headers.push(new FeeHeader([{ tokenIndex: 0, amount: this._feeAmount }]));
+    }
+
+    this.utxosAddressPath = utxosAddressPath;
+    this._currentStep = 'prepared';
+    this.emit('prepare-tx-end', this.transaction);
+    return this.transaction;
+  }
+
+  /**
+   * Whether this send is built by the fullnode facade's send engine: every
+   * send of a wallet with shielded keys, and a send of any wallet that asks
+   * for shielded outputs or a shielded change, as in the fullnode facade. A
+   * wallet without shielded keys can send shielded outputs; the engine
+   * refuses a shielded change it has no address for.
+   */
+  private usesSharedEngine(): boolean {
+    return (
+      this.wallet.isShieldedEnabled() ||
+      this.outputs.some(output => !!output.shielded) ||
+      isShieldedChangeMode(this.changeShieldedMode)
+    );
+  }
+
+  /**
+   * Prepare the transaction with the fullnode facade's send engine, reading
+   * the wallet through a wallet-service storage adapter. Wallets with shielded
+   * keys use it for every send, so they get the shielded selection and change
+   * rules and can send to and spend shielded outputs.
+   */
+  private async prepareTxWithSharedEngine(): Promise<Transaction> {
+    // Preparing needs no PIN: shielded utxos open with the scan key the
+    // wallet keeps in memory from start(). The PIN is needed only to sign.
+    const adapter = new WalletServiceSendStorage(this.wallet);
+    const sendTransaction = new SendTransaction({
+      storage: adapter.createProxy(),
+      outputs: this.outputs.map(toEngineOutput),
+      inputs: this.inputs,
+      changeAddress: this.changeAddress,
+      changeShieldedMode: this.changeShieldedMode,
+      pin: this.pin,
+    });
+    let transaction: Transaction;
+    try {
+      transaction = await sendTransaction.prepareTx();
+    } finally {
+      adapter.release();
+    }
+
+    this.utxosAddressPath = transaction.inputs.map(input => {
+      const path = adapter.getAddressPath(input.hash, input.index);
+      if (!path) {
+        throw new SendTxError(`Unknown derivation path for input ${input.hash}:${input.index}.`);
+      }
+      return path;
+    });
+    this.fullTxData = sendTransaction.fullTxData;
+    if (this.fullTxData) {
+      adapter.markChangeAddressesUsed(this.fullTxData);
+    }
+    this.transaction = transaction;
+    this._currentStep = 'prepared';
+    this.emit('prepare-tx-end', this.transaction);
+    return this.transaction;
+  }
+
+  /**
+   * Map input data to an input object
+   *
+   * @memberof SendTransactionWalletService
+   * @inner
+   */
+  // eslint-disable-next-line class-methods-use-this -- XXX: This method should be made static
+  inputDataToModel(input: InputRequestObj): Input {
+    return new Input(input.txId, input.index);
+  }
+
+  /**
+   * Map output data to an output object
+   *
+   * @memberof SendTransactionWalletService
+   * @inner
+   */
+  outputDataToModel(output: OutputSendTransaction, tokens: string[]): Output {
+    if (output.type === OutputType.DATA) {
+      return helpers.createDataScriptOutput(output.data!);
+    }
+
+    const address = new Address(output.address!, { network: this.wallet.network });
+    if (!address.isValid()) {
+      throw new SendTxError(`Address ${output.address!} is not valid.`);
+    }
+    const tokenData = tokens.indexOf(output.token) > -1 ? tokens.indexOf(output.token) + 1 : 0;
+    const outputOptions = { tokenData };
+
+    // Create the appropriate script based on address type (P2PKH or P2SH)
+    const addressType = address.getType();
+    let script: Buffer;
+    if (addressType === 'p2pkh') {
+      const p2pkh = new P2PKH(address, { timelock: output.timelock || null });
+      script = p2pkh.createScript();
+    } else {
+      const p2sh = new P2SH(address, { timelock: output.timelock || null });
+      script = p2sh.createScript();
+    }
+
+    return new Output(output.value, script, outputOptions);
+  }
+
+  /**
+   * Check if the utxos selected are valid and the sum is enough to
+   * fill the outputs. If needed, create change output
+   *
+   * @memberof SendTransactionWalletService
+   * @inner
+   */
+  async validateUtxos(
+    tokenAmountMap: TokenMap,
+    addressPathMap: AddressPathMap,
+    options: {
+      ignoreNative?: boolean;
+      onlyNative?: boolean;
+    } = {}
+  ): Promise<void> {
+    const { ignoreNative = false, onlyNative = false } = options;
+    const amountInputMap = {};
+    for (const input of this.inputs) {
+      const utxo = await this.wallet.getUtxoFromId(input.txId, input.index);
+      if (utxo === null) {
+        throw new UtxoError(
+          `Invalid input selection. Input ${input.txId} at index ${input.index}.`
+        );
+      }
+
+      // Skip native token (HTR) inputs when ignoreNative is true
+      // They will be validated in a separate call
+      if (ignoreNative && utxo.tokenId === NATIVE_TOKEN_UID) {
+        continue;
+      }
+
+      // Skip non-native token inputs when onlyNative is true
+      // Custom tokens were already validated in a previous call
+      if (onlyNative && utxo.tokenId !== NATIVE_TOKEN_UID) {
+        continue;
+      }
+
+      if (!(utxo.tokenId in tokenAmountMap)) {
+        throw new SendTxError(
+          `Invalid input selection. Input ${input.txId} at index ${input.index} has token ${utxo.tokenId} that is not on the outputs.`
+        );
+      }
+
+      addressPathMap.set(input, utxo.addressPath);
+
+      if (utxo.tokenId in amountInputMap) {
+        amountInputMap[utxo.tokenId] += utxo.value;
+      } else {
+        amountInputMap[utxo.tokenId] = utxo.value;
+      }
+    }
+
+    for (const t in tokenAmountMap) {
+      if (!(t in amountInputMap)) {
+        throw new SendTxError(
+          `Invalid input selection. Token ${t} is in the outputs but there are no inputs for it.`
+        );
+      }
+
+      if (amountInputMap[t] < tokenAmountMap[t].amount) {
+        throw new SendTxError(
+          `Invalid input selection. Sum of inputs for token ${t} is smaller than the sum of outputs.`
+        );
+      }
+
+      // this condition also cover the case where the user provided the fee header entries
+      if (amountInputMap[t] > tokenAmountMap[t].amount) {
+        const changeAmount = amountInputMap[t] - tokenAmountMap[t].amount;
+        const changeAddress =
+          this.changeAddress || this.wallet.getCurrentAddress({ markAsUsed: true }).address;
+        this.outputs.push({
+          address: changeAddress,
+          value: changeAmount,
+          token: t,
+          type: helpers.getOutputTypeFromAddress(changeAddress, this.wallet.network),
+        });
+
+        if (tokenAmountMap[t].version === TokenVersion.FEE) {
+          this._feeAmount += FEE_PER_OUTPUT;
+        }
+        // If we add a change output, then we must shuffle it
+        this.outputs = shuffle(this.outputs);
+      }
+    }
+  }
+
+  /**
+   * Select UTXOs for specific tokens that need automatic input selection.
+   * This method processes only the specified tokens, selecting UTXOs and creating
+   * change outputs as needed. It also tracks fee increases from fee-based token changes.
+   *
+   * @param tokensToProcess - Array of token UIDs to process
+   * @param tokenAmountMap - Map of token amounts needed
+   * @param tokenNeedsInputs - Map tracking which tokens need input selection
+   * @param finalInputs - Array to push selected inputs into
+   * @param utxosAddressPath - Array to push UTXO address paths into
+   * @param utxoDataMap - Map to cache UTXO data
+   * @param finalOutputs - Array to push change outputs into
+   */
+  private async selectUtxosForTokens(
+    tokensToProcess: string[],
+    tokenAmountMap: TokenMap,
+    tokenNeedsInputs: Map<string, boolean>,
+    finalInputs: InputRequestObj[],
+    utxosAddressPath: string[],
+    utxoDataMap: Map<string, Utxo>,
+    finalOutputs: OutputSendTransaction[]
+  ): Promise<void> {
+    for (const token of tokensToProcess) {
+      const needsInputs = tokenNeedsInputs.get(token);
+      if (!needsInputs) {
+        continue;
+      }
+
+      const { utxos, changeAmount } = await this.wallet.getUtxosForAmount(
+        tokenAmountMap[token].amount,
+        { token }
+      );
+
+      if (utxos.length === 0) {
+        throw new UtxoError(
+          `No utxos available to fill the request. Token: ${token} - Amount: ${tokenAmountMap[token].amount}.`
+        );
+      }
+
+      for (const utxo of utxos) {
+        finalInputs.push({ txId: utxo.txId, index: utxo.index });
+        utxosAddressPath.push(utxo.addressPath);
+
+        const utxoKey = `${utxo.txId}:${utxo.index}`;
+        utxoDataMap.set(utxoKey, utxo);
+      }
+
+      if (changeAmount) {
+        const changeAddress =
+          this.changeAddress || this.wallet.getCurrentAddress({ markAsUsed: true }).address;
+        finalOutputs.push({
+          address: changeAddress,
+          value: changeAmount,
+          token,
+          type: helpers.getOutputTypeFromAddress(changeAddress, this.wallet.network),
+        });
+
+        // If this is a fee-based token, the change output also incurs a fee
+        if (tokenAmountMap[token].version === TokenVersion.FEE) {
+          this._feeAmount += FEE_PER_OUTPUT;
+        }
+      }
+
+      tokenNeedsInputs.set(token, false);
+    }
+  }
+
+  /**
+   * Validates pre-selected inputs for a specific token and creates change output if needed.
+   * This method checks if the pre-selected input amount is sufficient to cover the required
+   * amount and creates a change output for any excess.
+   *
+   * @param token - The token UID to validate
+   * @param userInputAmount - The total amount of pre-selected inputs for this token
+   * @param requiredAmount - The total amount required (outputs + fees if applicable)
+   * @param tokenVersion - The version of the token (used to determine if fee applies to change)
+   * @param finalOutputs - Array to push change outputs into
+   * @throws {SendTxError} If pre-selected inputs are insufficient
+   */
+  private validatePreSelectedInputs(
+    token: string,
+    userInputAmount: bigint,
+    requiredAmount: bigint,
+    tokenVersion: TokenVersion,
+    finalOutputs: OutputSendTransaction[]
+  ): void {
+    if (userInputAmount < requiredAmount) {
+      throw new SendTxError(
+        `Invalid input selection. Sum of inputs for token ${token} is smaller than the sum of outputs.`
+      );
+    }
+
+    if (userInputAmount > requiredAmount) {
+      const changeAmount = userInputAmount - requiredAmount;
+      const changeAddress =
+        this.changeAddress || this.wallet.getCurrentAddress({ markAsUsed: true }).address;
+      finalOutputs.push({
+        address: changeAddress,
+        value: changeAmount,
+        token,
+        type: helpers.getOutputTypeFromAddress(changeAddress, this.wallet.network),
+      });
+
+      // If this is a fee-based token, the change output also incurs a fee
+      if (tokenVersion === TokenVersion.FEE) {
+        this._feeAmount += FEE_PER_OUTPUT;
+      }
+    }
+  }
+
+  /**
+   * Select utxos to be used in the transaction
+   * Get utxos from wallet service and creates change output if needed
+   *
+   * @memberof SendTransactionWalletService
+   * @inner
+   */
+  async selectUtxosToUse(tokenAmountMap: TokenMap): Promise<string[]> {
+    const utxosAddressPath: string[] = [];
+
+    for (const token in tokenAmountMap) {
+      const { utxos, changeAmount } = await this.wallet.getUtxosForAmount(
+        tokenAmountMap[token].amount,
+        {
+          token,
+        }
+      );
+      if (utxos.length === 0) {
+        throw new UtxoError(
+          `No utxos available to fill the request. Token: ${token} - Amount: ${tokenAmountMap[token].amount}.`
+        );
+      }
+
+      for (const utxo of utxos) {
+        this.inputs.push({ txId: utxo.txId, index: utxo.index });
+        utxosAddressPath.push(utxo.addressPath);
+      }
+
+      if (changeAmount) {
+        const changeAddress =
+          this.changeAddress || this.wallet.getCurrentAddress({ markAsUsed: true }).address;
+        this.outputs.push({
+          address: changeAddress,
+          value: changeAmount,
+          token,
+          type: helpers.getOutputTypeFromAddress(changeAddress, this.wallet.network),
+        });
+
+        if (tokenAmountMap[token].version === TokenVersion.FEE) {
+          this._feeAmount += FEE_PER_OUTPUT;
+        }
+        // If we add a change output, then we must shuffle it
+        this.outputs = shuffle(this.outputs);
+      }
+    }
+
+    return utxosAddressPath;
+  }
+
+  /**
+   * Signs the inputs of a transaction
+   *
+   * @memberof SendTransactionWalletService
+   * @inner
+   */
+  async signTx(pin?: string | null): Promise<Transaction> {
+    if (this.transaction === null) {
+      throw new WalletError("Can't sign transaction if it's null.");
+    }
+    if (this.wallet.storage.hasTxSignatureMethod()) {
+      // External tx-signing method (e.g. a passkey signer): no pin and no stored key. The wallet
+      // signs through its storage proxy, which hands the proxy to the signer and resolves each
+      // input's address from the spent output, then prepares the tx to be sent.
+      this.emit('sign-tx-start');
+      await this.wallet.signTx(this.transaction, { pinCode: pin ?? this.pin });
+      assertAllInputsSigned(this.transaction);
+      this._currentStep = 'signed';
+      this.emit('sign-tx-end', this.transaction);
+      return this.transaction;
+    }
+    const pinToUse = pin ?? this.pin ?? '';
+    if (!pinToUse) {
+      throw new SendTxError('Pin is not set.');
+    }
+    if (this.utxosAddressPath.length !== this.transaction.inputs.length) {
+      throw new SendTxError(
+        'utxosAddressPath length does not match transaction inputs. Call prepareTx() first.'
+      );
+    }
+    this.emit('sign-tx-start');
+    // Each input is signed by the key of its path: the spend key for the
+    // shielded spend chain, the legacy key otherwise
+    await this.wallet.signInputsByPath(this.transaction, pinToUse, this.utxosAddressPath);
+
+    // Now that the tx is completed with the data of the input
+    // we can add the timestamp and calculate the weight
+    this.transaction.prepareToSend(
+      transactionUtils.getWeightConstantsFromStorage(this.wallet.storage)
+    );
+
+    this._currentStep = 'signed';
+    this.emit('sign-tx-end', this.transaction);
+    return this.transaction;
+  }
+
+  /**
+   * Mine the transaction
+   * Expects this.transaction to be prepared and signed
+   * Emits MineTransaction events while the process is ongoing
+   *
+   * @memberof SendTransactionWalletService
+   * @inner
+   */
+  mineTx(options = {}): Promise<MineTxSuccessData> {
+    if (this.transaction === null) {
+      throw new WalletError("Can't mine transaction if it's null.");
+    }
+    type mineOptionsType = {
+      startMiningTx: boolean;
+      maxTxMiningRetries: number;
+    };
+    const newOptions: mineOptionsType = {
+      startMiningTx: true,
+      maxTxMiningRetries: 3,
+      ...options,
+    };
+
+    this.mineTransaction = new MineTransaction(this.transaction, {
+      maxTxMiningRetries: newOptions.maxTxMiningRetries,
+    });
+
+    this.mineTransaction.on('mining-started', () => {
+      this.emit('mine-tx-started');
+    });
+
+    this.mineTransaction.on('estimation-updated', data => {
+      this.emit('estimation-updated', data);
+    });
+
+    this.mineTransaction.on('job-submitted', data => {
+      this.emit('job-submitted', data);
+    });
+
+    this.mineTransaction.on('job-done', data => {
+      this.emit('job-done', data);
+    });
+
+    this.mineTransaction.on('error', message => {
+      this.emit('send-error', message);
+    });
+
+    this.mineTransaction.on('unexpected-error', message => {
+      this.emit('send-error', message);
+    });
+
+    this.mineTransaction.on('success', data => {
+      this.emit('mine-tx-ended', data);
+    });
+
+    if (newOptions.startMiningTx) {
+      this.mineTransaction.start();
+    }
+
+    return this.mineTransaction.promise;
+  }
+
+  /**
+   * Create and send a tx proposal to wallet service
+   * Expects this.transaction to be prepared, signed and mined
+   *
+   * @memberof SendTransactionWalletService
+   * @inner
+   */
+  async handleSendTxProposal() {
+    if (this.transaction === null) {
+      throw new WalletError("Can't push transaction if it's null.");
+    }
+    this.emit('send-tx-start', this.transaction);
+    const txHex = this.transaction.toHex();
+
+    try {
+      const responseData = await walletApi.createTxProposal(this.wallet, txHex);
+      const { txProposalId } = responseData;
+      await walletApi.updateTxProposal(this.wallet, txProposalId, txHex);
+      this.transaction.updateHash();
+      this.emit('send-tx-success', this.transaction);
+      return this.transaction;
+    } catch (err) {
+      if (err instanceof WalletRequestError) {
+        const errMessage = txProposalErrorMessage(err);
+        this.emit('send-error', errMessage);
+        const sendError = new SendTxError(errMessage);
+        (sendError as SendTxError & { cause?: unknown }).cause = err;
+        throw sendError;
+      } else {
+        throw err;
+      }
+    }
+  }
+
+  /**
+   * Run sendTransaction from mining, i.e. expects this.transaction to be prepared and signed
+   * then it will mine and handle tx proposal
+   *
+   * 'until' parameter can be 'mine-tx', in order to only mine the transaction without propagating
+   *
+   * @memberof SendTransactionWalletService
+   * @inner
+   */
+  async runFromMining(until: 'mine-tx' | null = null): Promise<Transaction> {
+    try {
+      // This will await until mine tx is fully completed
+      // mineTx method returns a promise that resolves when
+      // mining succeeds or rejects when there is an error
+      const mineData = await this.mineTx();
+      this.transaction!.parents = mineData.parents;
+      this.transaction!.timestamp = mineData.timestamp;
+      this.transaction!.nonce = mineData.nonce;
+      this.transaction!.weight = mineData.weight;
+
+      if (until === 'mine-tx') {
+        return this.transaction!;
+      }
+
+      const tx = await this.handleSendTxProposal();
+      return tx;
+    } catch (err) {
+      if (err instanceof WalletError) {
+        this.emit('send-error', err.message);
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Release all UTXOs that were marked as selected for this transaction.
+   * No-op: wallet-service manages UTXO state server-side.
+   *
+   * @memberof SendTransactionWalletService
+   * @inner
+   */
+  // eslint-disable-next-line class-methods-use-this
+  async releaseUtxos(): Promise<void> {
+    // No-op: wallet-service manages UTXO state server-side
+  }
+
+  /**
+   * Run sendTransaction from preparing, i.e. prepare, sign, mine and send the tx
+   *
+   * 'until' parameter can be 'prepare-tx' (it will stop before signing the tx), 'sign-tx' (it will stop before mining the tx),
+   * or 'mine-tx' (it will stop before send tx proposal, i.e. propagating the tx)
+   *
+   * @memberof SendTransactionWalletService
+   * @inner
+   */
+  async run(
+    until: 'prepare-tx' | 'sign-tx' | 'mine-tx' | null = null,
+    pin: string | null = null
+  ): Promise<Transaction> {
+    try {
+      if (this._currentStep === 'idle') {
+        await this.prepareTx();
+      }
+
+      if (until === 'prepare-tx') {
+        return this.transaction!;
+      }
+
+      if (this._currentStep === 'prepared') {
+        await this.signTx(pin);
+      }
+
+      if (until === 'sign-tx') {
+        return this.transaction!;
+      }
+
+      const tx = await this.runFromMining(until);
+      return tx;
+    } catch (err) {
+      if (err instanceof WalletError) {
+        this.emit('send-error', err.message);
+      }
+      throw err;
+    }
+  }
+}
+
+/**
+ * Messages for the tx proposal refusals a caller can act on.
+ */
+const TX_PROPOSAL_ERROR_MESSAGES: Record<string, string> = {
+  'inputs-shielded-unsupported':
+    'The wallet-service does not accept shielded inputs yet, so shielded utxos cannot be spent.',
+  'inputs-already-used': 'Some inputs are already used by another transaction proposal. Try again.',
+  'inputs-not-found': 'Some inputs are not unspent outputs of this wallet.',
+  'inputs-not-in-wallet': 'Some inputs do not belong to this wallet.',
+};
+
+function txProposalErrorMessage(err: WalletRequestError): string {
+  const { cause } = err;
+  const code =
+    cause && 'data' in cause ? (cause.data as { error?: unknown } | undefined)?.error : undefined;
+  if (typeof code === 'string' && code in TX_PROPOSAL_ERROR_MESSAGES) {
+    return TX_PROPOSAL_ERROR_MESSAGES[code];
+  }
+  return 'Error sending tx proposal.';
+}
+
+function isShieldedChangeMode(mode: ChangeOutputMode | null): boolean {
+  return mode === ShieldedOutputMode.AMOUNT_SHIELDED || mode === ShieldedOutputMode.FULLY_SHIELDED;
+}
+
+/**
+ * The send engine's output for a wallet-service output request. The facade's
+ * pre-computed `type` is not passed on: the engine derives it from the address
+ * (and a 71-byte address has no transparent type).
+ */
+function toEngineOutput(output: OutputSendTransaction): ISendOutput {
+  if (output.type === OutputType.DATA) {
+    return { type: OutputType.DATA, data: output.data! };
+  }
+  return {
+    address: output.address!,
+    value: output.value,
+    token: output.token,
+    ...(output.timelock != null ? { timelock: output.timelock } : {}),
+    ...(output.shielded ? { shieldedMode: output.shielded } : {}),
+  };
+}
+
+export default SendTransactionWalletService;

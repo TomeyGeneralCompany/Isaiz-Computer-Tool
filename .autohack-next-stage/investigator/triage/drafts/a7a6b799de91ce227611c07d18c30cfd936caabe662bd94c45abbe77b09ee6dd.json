@@ -1,0 +1,31 @@
+{
+  "repository": "Instadapp/inst-governance",
+  "commit": "8891f73d17887e272a5317065961269aee94f7cd",
+  "scope_sources": [
+    {
+      "asset_type": "smart_contract",
+      "asset_url": "https://github.com/Instadapp/inst-governance",
+      "program": "instadapp",
+      "scope_url": "https://immunefi.com/bug-bounty/instadapp/scope/"
+    }
+  ],
+  "original_report": "Instadapp__inst-governance-8891f73d1788.json",
+  "lead": {
+    "rule": "SOL_DELEGATECALL",
+    "file": "contracts/Timelock.sol",
+    "line": 125,
+    "guidance": "Review delegatecall target and access control",
+    "fingerprint": "63a36ecf22a95884e254"
+  },
+  "source_excerpt": "117: \n118:         if (bytes(signature).length == 0) {\n119:             callData = data;\n120:         } else {\n121:             callData = abi.encodePacked(bytes4(keccak256(bytes(signature))), data);\n122:         }\n123: \n124:         // solium-disable-next-line security/no-call-value\n125:         (bool success, bytes memory returnData) = target.delegatecall(callData);\n126:         require(success, \"Timelock::executePayload: Transaction execution reverted.\");\n127: \n128:         return returnData;\n129:     }\n130: \n131:     function getBlockTimestamp() internal view returns (uint) {\n132:         // solium-disable-next-line security/no-block-members\n133:         return block.timestamp;",
+  "triage": {
+    "classification": "needs_review",
+    "rationale": "The code appears to be using a delegatecall with a potential issue where the signature length is not checked, which could lead to invalid delegate calls. However, there is insufficient context to determine if this is a false positive or a likely issue.",
+    "evidence": "The code includes a check for signature length and uses solium-disable-next-line for security, but no further analysis is provided.",
+    "follow_up": "If you have more context or a different rule, please provide it for further review."
+  },
+  "status": "unverified_draft",
+  "verified_vulnerability": false,
+  "generated_at": "2026-10-14T23:47:36.141068+00:00",
+  "note": "Automated static triage only. No exploitability, eligibility, or bounty award established."
+}

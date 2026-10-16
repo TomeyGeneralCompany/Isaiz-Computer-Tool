@@ -1,0 +1,36 @@
+
+
+services:
+  lending-exporter-testnet:
+    build: .
+    image: xoxno/lending-exporter:latest
+    container_name: lending-exporter-testnet
+    restart: unless-stopped
+    environment:
+      EXPORTER_CONFIG: /etc/lending-exporter/testnet.yaml
+      RUST_LOG: info
+    networks: [monitoring]
+
+  # Mainnet stays behind a profile so `docker compose up` does not start it by
+  # accident; run it with `--profile mainnet`. The deployed addresses are in
+  # config/mainnet.yaml; only EXPORTER_CONFIG must be set.
+  lending-exporter-mainnet:
+    build: .
+    image: xoxno/lending-exporter:latest
+    container_name: lending-exporter-mainnet
+    restart: unless-stopped
+    profiles: [mainnet]
+    environment:
+      EXPORTER_CONFIG: /etc/lending-exporter/mainnet.yaml
+      # Only needed to point at a different controller than the committed one;
+      # an empty value is ignored and config/mainnet.yaml wins.
+      EXPORTER_CONTROLLER: ${MAINNET_LENDING_CONTROLLER:-}
+      RUST_LOG: info
+    networks: [monitoring]
+
+
+
+
+networks:
+  monitoring:
+    external: true

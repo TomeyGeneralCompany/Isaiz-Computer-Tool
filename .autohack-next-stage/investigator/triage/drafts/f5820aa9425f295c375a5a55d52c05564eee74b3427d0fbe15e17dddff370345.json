@@ -1,0 +1,31 @@
+{
+  "repository": "Instadapp/avocado-contracts-public",
+  "commit": "0bc1dd9c49203dd45f48f0046abc4e95a50d06da",
+  "scope_sources": [
+    {
+      "asset_type": "smart_contract",
+      "asset_url": "https://github.com/Instadapp/avocado-contracts-public",
+      "program": "instadapp",
+      "scope_url": "https://immunefi.com/bug-bounty/instadapp/scope/"
+    }
+  ],
+  "original_report": "Instadapp__avocado-contracts-public-0bc1dd9c4920.json",
+  "lead": {
+    "rule": "SOL_DELEGATECALL",
+    "file": "contracts/AvocadoMultisig/AvocadoMultisigSecondary.sol",
+    "line": 799,
+    "guidance": "Review delegatecall target and access control",
+    "fingerprint": "1d8a740dbc9094a6db7c"
+  },
+  "source_excerpt": "791:                 (success_, result_) = action_.target.call{ value: action_.value }(action_.data);\n792: \n793:                 // handle action failure right after external call to better detect out of gas errors\n794:                 if (!success_) {\n795:                     _simulateHandleActionFailure(actionMinGasLeft_, i, result_);\n796:                 }\n797:             } else if (action_.operation == 1 && isDelegateCallId_) {\n798:                 // delegatecall (operation = 1 & id = mixed(1 / 21))\n799:                 (success_, result_) = action_.target.delegatecall(action_.data);\n800: \n801:                 // handle action failure right after external call to better detect out of gas errors\n802:                 if (!success_) {\n803:                     _simulateHandleActionFailure(actionMinGasLeft_, i, result_);\n804:                 }\n805: \n806:                 // reset _transientAllowHash to make sure it can not be set up in any way for reentrancy\n807:                 _resetTransientStorage();",
+  "triage": {
+    "classification": "needs_review",
+    "rationale": "The code appears to be part of a bug bounty lead, but the details provided are incomplete. The rule is about delegatecall handling, but the file and line number are not clear on the actual implementation. There is insufficient context to determine if this is a false positive or a valid review.",
+    "evidence": "Incomplete file details and lack of implementation context.",
+    "follow_up": "If the file is properly reviewed, it could be a potential bug. However, without more information, it's best to proceed with a review of the rule and file."
+  },
+  "status": "unverified_draft",
+  "verified_vulnerability": false,
+  "generated_at": "2026-10-14T23:41:46.745972+00:00",
+  "note": "Automated static triage only. No exploitability, eligibility, or bounty award established."
+}

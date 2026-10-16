@@ -1,0 +1,52 @@
+{
+  "source_draft": "/home/izy/isaiz-bugbounty/autohack/.autohack-next-stage/investigator/triage/drafts/648bb099af3b0c4795e42cf3f3eeed914931557927a67ab781e8d97bcb5a92d8.json",
+  "input_fingerprint": "809b1ee18abfca156fc8c62a6774cd5074b6a9b1f2de754470e3c94c63994d17",
+  "checked_at": "2026-10-14T23:47:05.506450+00:00",
+  "status": "ready_for_isolated_reproduction",
+  "verified_vulnerability": false,
+  "tests_executed": 0,
+  "checks": [
+    {
+      "name": "has_repository_and_commit",
+      "passed": true
+    },
+    {
+      "name": "has_program_scope_reference",
+      "passed": true
+    },
+    {
+      "name": "has_code_excerpt",
+      "passed": true
+    },
+    {
+      "name": "has_source_location",
+      "passed": true
+    },
+    {
+      "name": "has_ai_triage",
+      "passed": true
+    }
+  ],
+  "limitations": [
+    "This is offline evidence validation, not exploit reproduction.",
+    "No project code or generated test cases are executed.",
+    "A valid excerpt or parseable code does not prove vulnerability."
+  ],
+  "repository": "AcalaNetwork/Acala",
+  "commit": "cde2abf753cdfbb67e8129b8c0672d5c15444aa1",
+  "scope_sources": [
+    {
+      "asset_type": "blockchain_dlt",
+      "asset_url": "https://github.com/AcalaNetwork/Acala",
+      "program": "acala",
+      "scope_url": "https://immunefi.com/bug-bounty/acala/scope/"
+    }
+  ],
+  "lead_location": {
+    "path": "ts-tests/contracts/TestCalls.sol",
+    "line": 27
+  },
+  "triage_present": true,
+  "missing_evidence": [],
+  "next_step": "Create a non-destructive, isolated regression test tailored to the alleged flaw and run it in a sandbox; do not label verified until a reproducible security impact is demonstrated."
+}

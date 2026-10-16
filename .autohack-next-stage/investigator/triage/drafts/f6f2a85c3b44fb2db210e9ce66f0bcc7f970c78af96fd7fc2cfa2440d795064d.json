@@ -1,0 +1,31 @@
+{
+  "repository": "HathorNetwork/hathor-core",
+  "commit": "0738c7c981e506c582d83fa5456fe1b84eeccedc",
+  "scope_sources": [
+    {
+      "asset_type": "blockchain_dlt",
+      "asset_url": "https://github.com/HathorNetwork/hathor-core",
+      "program": "hathornetwork",
+      "scope_url": "https://immunefi.com/bug-bounty/hathornetwork/scope/"
+    }
+  ],
+  "original_report": "HathorNetwork__hathor-core-0738c7c981e5.json",
+  "lead": {
+    "rule": "PY_EVAL",
+    "file": "hathorlib/hathorlib/nanocontracts/metered_exec.py",
+    "line": 93,
+    "guidance": "Review dynamic execution and input provenance",
+    "fingerprint": "817cbe3bdb9cbf94842d"
+  },
+  "source_excerpt": "85:             mode='exec',\n86:             flags=0,\n87:             dont_inherit=True,\n88:             optimize=0,\n89:             _feature_version=PYTHON_CODE_COMPAT_VERSION[1],\n90:         )\n91: \n92:         try:\n93:             exec(code, env)\n94:         except NCFail:\n95:             raise\n96:         except BaseException as e:\n97:             # Convert any other exception to NCFail.\n98:             raise NCFail from e\n99: \n100:         return cast(_T, env['__result__'])",
+  "triage": {
+    "classification": "likely_false_positive",
+    "rationale": "The code snippet is part of a static analysis rule for dynamic execution and input provenance, but the implementation is incomplete and lacks proper handling of exceptions. The code is not properly validated or tested for potential issues, making it a likely false positive.",
+    "evidence": "The code snippet is part of a static analysis rule for dynamic execution and input provenance, but the implementation is incomplete and lacks proper handling of exceptions.",
+    "follow_up": "If you have more information or context, please provide it to help us refine our analysis."
+  },
+  "status": "unverified_draft",
+  "verified_vulnerability": false,
+  "generated_at": "2026-10-14T23:33:18.444457+00:00",
+  "note": "Automated static triage only. No exploitability, eligibility, or bounty award established."
+}

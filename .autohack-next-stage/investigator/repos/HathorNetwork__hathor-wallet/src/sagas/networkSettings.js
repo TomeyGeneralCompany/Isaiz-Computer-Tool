@@ -1,0 +1,184 @@
+import { FEATURE_TOGGLE_DEFAULTS, NETWORK_SETTINGS_STATUS } from '../constants';
+import {
+  types,
+  isVersionAllowedUpdate,
+  selectToken,
+  setFeatureToggles,
+  setNetworkSettingsStatus,
+  serverInfoUpdated,
+  unleashContextUpdated,
+} from '../actions';
+import { all, call, fork, join, put, select, take, takeEvery } from 'redux-saga/effects';
+import hathorLib from '@hathor/wallet-lib';
+import { getGlobalWallet } from '../modules/wallet';
+import helpers from '../utils/helpers';
+import walletUtils from '../utils/wallet';
+import { updateUnleashClientContext } from './featureToggle';
+import { t } from 'ttag';
+
+/**
+ * Change network settings with new data
+ * @param {Object} action with request payload.
+ * @param {string} action.data.node
+ * @param {string} action.data.txMining
+ * @param {string} action.data.explorer
+ * @param {string} action.data.explorerService
+ * @param {string} action.data.walletService
+ * @param {string} action.data.walletServiceWS
+ * @param {string} action.pin
+ */
+export function* changeNetworkSettings({ data, pin }) {
+  yield put(setNetworkSettingsStatus({ status: NETWORK_SETTINGS_STATUS.LOADING }));
+  const useWalletService = yield select((state) => state.useWalletService);
+  const wallet = getGlobalWallet();
+  const currentServer = useWalletService ?
+    hathorLib.config.getWalletServiceBaseUrl() :
+    hathorLib.config.getServerUrl();
+
+  const currentWsServer = useWalletService ?
+    hathorLib.config.getWalletServiceBaseWsUrl() :
+    '';
+
+  // Update new server in storage and in the config singleton
+  yield call([wallet, wallet.changeServer], data.node);
+
+  // We only have a different websocket server on the wallet-service facade, so update the config singleton
+  if (useWalletService) {
+    yield call([wallet, wallet.changeWsServer], newWsServer);
+  }
+
+  let versionData;
+  try {
+    const versionUrl = new URL('version', data.node).toString();
+    /*
+     * Using fetch instead of the wallet-lib axios instance to bypass
+     * the axios interceptor that is used to check for network errors.
+     * If this request fails, we don't want the network error modal to be shown.
+     */
+    const response = yield call(fetch, versionUrl);
+    if (!response.ok) {
+      throw new Error(`Network response was not ok: ${response.status}`);
+    }
+    versionData = yield call([response, response.json]);
+  } catch (e) {
+    // Invalid node, so go back to the previous server and return
+    yield call([wallet, wallet.changeServer], currentServer);
+    if (useWalletService) {
+      yield call([wallet, wallet.changeWsServer], currentWsServer);
+    }
+    yield put(setNetworkSettingsStatus({ status: NETWORK_SETTINGS_STATUS.ERROR, error: t`Invalid node.` }));
+    return;
+  }
+
+  const newGenesisHash = versionData.genesis_block_hash || null;
+
+  if (versionData.network === 'mainnet') {
+    yield executeNetworkSettingsUpdate({ ...data, network: versionData.network, fullNetwork: versionData.network, genesisHash: newGenesisHash }, pin);
+    return;
+  }
+
+  // We must get user confirmation because the new network is a testnet or privatenet
+  // This new status will open a modal for the user to confirm that wants to connect to a testnet/privatenet
+  const newNetwork = hathorLib.helpersUtils.getNetworkFromFullNodeNetwork(versionData.network);
+  yield put(setNetworkSettingsStatus({ status: NETWORK_SETTINGS_STATUS.WAITING_NETWORK_CONFIRMATION, newNetwork }));
+
+  // Wait until network settings status changes
+  // If user confirms the network, the status will change to NETWORK_CONFIRMED
+  // otherwise it will change to READY, if user closes the modal without confirming
+  yield take(types.NETWORKSETTINGS_SET_STATUS);
+
+  const networkSettingsStatus = yield select((state) => state.networkSettings.status);
+  if (networkSettingsStatus !== NETWORK_SETTINGS_STATUS.NETWORK_CONFIRMED) {
+    // User cancelled the operation, so we change the old server back and return
+    yield call([wallet, wallet.changeServer], currentServer);
+    if (useWalletService) {
+      yield call([wallet, wallet.changeWsServer], currentWsServer);
+    }
+    return;
+  }
+
+  yield executeNetworkSettingsUpdate({ ...data, network: newNetwork, fullNetwork: versionData.network, genesisHash: newGenesisHash }, pin);
+}
+
+/**
+ * This method returns when an UNLEASH_CONTEXT_UPDATED event arrives.
+ *
+ * UNLEASH_CONTEXT_UPDATED is dispatched by onNetworkSettingsUpdateSuccess after
+ * updateUnleashClientContext finishes, so waiting for it implicitly waits for
+ * both the NETWORKSETTINGS_UPDATE_SUCCESS dispatch and the Unleash refresh —
+ * giving us synchronous ordering before the wallet restart.
+ */
+function* waitForUnleashContextUpdated() {
+  yield take(types.UNLEASH_CONTEXT_UPDATED);
+}
+
+/**
+ * Single reaction point for network changes: refreshes the Unleash context and
+ * emits UNLEASH_CONTEXT_UPDATED when done. Both the regular network-change flow
+ * and the wallet-reset flow reach this listener through helpers.updateNetworkSettings.
+ *
+ * On Unleash failure we write FEATURE_TOGGLE_DEFAULTS so consumers don't keep
+ * reading the previous network's values. UNLEASH_CONTEXT_UPDATED is always
+ * emitted (success or failure) so callers waiting on it never hang.
+ */
+export function* onNetworkSettingsUpdateSuccess() {
+  try {
+    yield call(updateUnleashClientContext);
+  } catch (e) {
+    console.error('Failed to refresh unleash context after network change', e);
+    yield put(setFeatureToggles(FEATURE_TOGGLE_DEFAULTS));
+  }
+  yield put(unleashContextUpdated());
+}
+
+/**
+ * Helper method that executes the network settings update.
+ *
+ * It persists on storage, redux and update the wallet lib.
+ *
+ * @param {Object} networkSettings with the data
+ * @param {string} networkSettings.node
+ * @param {string} networkSettings.network
+ * @param {string} networkSettings.fullNetwork
+ * @param {string} networkSettings.txMining
+ * @param {string} networkSettings.explorer
+ * @param {string} networkSettings.explorerService
+ * @param {string} networkSettings.walletService
+ * @param {string} networkSettings.walletServiceWS
+ * @param {string} pin
+ */
+function* executeNetworkSettingsUpdate(networkSettings, pin) {
+  const wallet = getGlobalWallet();
+  const networkSettingsRedux = yield select((state) => state.networkSettings);
+  const networkSettingsBackup = { ...networkSettingsRedux };
+  try {
+    // Fork before the dispatch: updateNetworkSettings dispatches synchronously,
+    // so a `take` placed after it would miss the action.
+    const waitTask = yield fork(waitForUnleashContextUpdated);
+    helpers.updateNetworkSettings(networkSettings);
+    // Block until the Unleash refresh finishes. The wallet restart below reads
+    // state.featureToggles via checkForFeatureFlag, which must reflect the new network.
+    yield join(waitTask);
+    // Forces the re-validation of the allowed version after server change
+    yield put(isVersionAllowedUpdate({ allowed: undefined }));
+    yield put(selectToken(hathorLib.constants.NATIVE_TOKEN_UID));
+    yield call(walletUtils.changeServer, wallet, pin, true);
+    // Notify that server info was updated
+    yield put(serverInfoUpdated());
+  } catch (e) {
+    console.error(e);
+    // Restores storage and states as it was before. The listener will refresh
+    // Unleash for the restored network asynchronously; we don't await it here
+    // because the saga is exiting on error.
+    helpers.updateNetworkSettings(networkSettingsBackup);
+    yield put(setNetworkSettingsStatus({ status: NETWORK_SETTINGS_STATUS.ERROR, error: t`Error updating network settings.` }));
+  }
+  yield put(setNetworkSettingsStatus({ status: NETWORK_SETTINGS_STATUS.SUCCESS }));
+}
+
+export function* saga() {
+  yield all([
+    takeEvery(types.NETWORKSETTINGS_UPDATE_REQUESTED, changeNetworkSettings),
+    takeEvery(types.NETWORKSETTINGS_UPDATE_SUCCESS, onNetworkSettingsUpdateSuccess),
+  ]);
+}

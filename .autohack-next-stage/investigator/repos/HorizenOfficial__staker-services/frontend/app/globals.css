@@ -1,0 +1,890 @@
+:root {
+  /* Official Horizen palette */
+  --hl-deep-blue: #030e24; /* page background */
+  --hl-panel: #091d3e; /* card surfaces (deep-blue-2) */
+  --hl-panel-2: #091d3e;
+  --hl-grey-light: #1a325b; /* inner surfaces — inputs, tabs bg, pos cells (deep-blue-3) */
+  --hl-bright-blue: #1038bb; /* secondary highlights, selected states */
+  --hl-sunrise: #fecb17; /* primary actions, important information */
+  --hl-sunrise-light: #fff5ce; /* links, secondary yellow accents */
+  --hl-navy: #f4f4f4; /* headings + primary text */
+  --hl-navy-hover: #ffffff;
+  --hl-yellow: var(--hl-sunrise-light); /* link/accent text colour */
+  --hl-yellow-hover: #ffffff;
+  --hl-gold: var(--hl-sunrise); /* reward-emphasis accent */
+  --hl-gold-bright: var(--hl-sunrise);
+  --hl-gold-soft: transparent;
+  --hl-grey: rgba(244, 244, 244, 0.08); /* hairline */
+  --hl-grey-text: rgba(244, 244, 244, 0.62); /* faint / soft secondary text */
+
+  --hl-success: #4ade80;
+  --hl-error: #f87171;
+  --hl-warning: #fbbf24;
+
+  /* Card surface + radius */
+  --hl-radius: 14px;
+  --hl-radius-sm: 10px;
+
+  /* Spacing */
+  --hl-space-2: 8px;
+  --hl-space-3: 10px;
+  --hl-space-4: 14px;
+  --hl-space-5: 16px;
+  --hl-space-6: 20px;
+  --hl-space-8: 25px;
+  --hl-space-10: 30px;
+  --hl-space-12: 50px;
+
+  --hl-transition-fast: 150ms ease;
+  --hl-transition-base: 200ms ease;
+
+  --font-display: "Funnel Display", sans-serif;
+  --font-sans: "Proxima Nova", "Montserrat", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  /* guard against any element pushing the page wider than the viewport */
+  overflow-x: hidden;
+}
+
+body {
+  font-family: var(--font-sans);
+  color: var(--hl-navy);
+  background: var(--hl-deep-blue);
+  font-size: 15px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  position: relative;
+}
+
+/* Faint blueprint grid, fading out toward the bottom of the viewport.
+   Negative z-index keeps it behind normal content without needing every
+   sibling to opt into its own stacking context. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background-image: linear-gradient(rgba(244, 244, 244, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(244, 244, 244, 0.035) 1px, transparent 1px);
+  background-size: 72px 72px;
+  -webkit-mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.9), rgba(0, 0, 0, 0.25) 60%, transparent);
+  mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.9), rgba(0, 0, 0, 0.25) 60%, transparent);
+  pointer-events: none;
+  z-index: -1;
+}
+
+h1,
+h2,
+h3 {
+  color: var(--hl-navy-hover);
+  margin: 0;
+  font-family: var(--font-display), sans-serif;
+  font-weight: 500;
+  line-height: 1.12;
+  letter-spacing: -0.02em;
+}
+
+.hl-mono {
+  font-family: var(--font-mono), monospace;
+}
+
+/* ---- Buttons ---- */
+.hl-btn {
+  display: inline-block;
+  text-align: center;
+  text-decoration: none;
+  font-family: var(--font-sans), sans-serif;
+  font-weight: 700;
+  font-size: 14px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 11px 22px;
+  cursor: pointer;
+  transition: filter var(--hl-transition-fast), background var(--hl-transition-base),
+    color var(--hl-transition-base), border-color var(--hl-transition-base);
+}
+.hl-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.hl-btn-primary,
+.hl-btn-gold {
+  background: var(--hl-sunrise);
+  color: var(--hl-deep-blue);
+}
+.hl-btn-primary:not(:disabled):hover,
+.hl-btn-gold:not(:disabled):hover {
+  filter: brightness(1.06);
+}
+.hl-btn-ghost {
+  background: transparent;
+  color: var(--hl-navy-hover);
+  border-color: rgba(244, 244, 244, 0.4);
+  font-weight: 600;
+}
+.hl-btn-ghost:not(:disabled):hover {
+  border-color: rgba(244, 244, 244, 0.8);
+  background: rgba(244, 244, 244, 0.05);
+}
+.hl-btn-sm {
+  padding: 11px 18px;
+  font-size: 13.5px;
+}
+
+:focus-visible {
+  outline: 2px solid var(--hl-sunrise);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* ---- Cards ---- */
+.hl-card {
+  background: var(--hl-panel);
+  border-radius: var(--hl-radius);
+  padding: var(--hl-space-10);
+}
+
+/* ---- Inputs ---- */
+.hl-input {
+  width: 100%;
+  font-family: var(--font-sans), sans-serif;
+  font-size: 20px;
+  color: var(--hl-navy);
+  background: var(--hl-grey-light);
+  border: 1px solid var(--hl-grey);
+  border-radius: var(--hl-radius-sm);
+  padding: var(--hl-space-5);
+}
+.hl-input:focus {
+  outline: none;
+  border-color: var(--hl-bright-blue);
+}
+
+/* ---- Amount input row + claim display (inline stake/withdraw/claim tabs) ---- */
+.hl-amount-box {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  background: var(--hl-grey-light);
+  border: 1px solid transparent;
+  border-radius: var(--hl-radius-sm);
+  padding: 16px 18px;
+}
+.hl-amount-box:focus-within {
+  border-color: var(--hl-bright-blue);
+}
+.hl-amount-box input {
+  background: transparent;
+  border: none;
+  outline: none;
+  font-family: var(--font-sans), sans-serif;
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--hl-navy);
+  width: 100%;
+}
+.hl-amount-box input::placeholder {
+  color: var(--hl-grey-text);
+  font-weight: 500;
+}
+.hl-max-btn {
+  font-family: var(--font-sans), sans-serif;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--hl-navy-hover);
+  background: var(--hl-bright-blue);
+  border: none;
+  border-radius: 6px;
+  padding: 7px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: filter var(--hl-transition-fast);
+}
+.hl-max-btn:hover {
+  filter: brightness(1.15);
+}
+.hl-claim-box {
+  text-align: center;
+  background: var(--hl-grey-light);
+  border-radius: var(--hl-radius-sm);
+  padding: 28px 18px;
+}
+.hl-claim-amount {
+  font-family: var(--font-sans), sans-serif;
+  font-size: 42px;
+  font-weight: 700;
+  color: var(--hl-gold-bright);
+  line-height: 1;
+}
+
+/* ---- Tabs (Stake / Withdraw / Claim) ---- */
+.hl-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  background: var(--hl-grey-light);
+  border-radius: var(--hl-radius-sm);
+  padding: 4px;
+  gap: 4px;
+}
+.hl-tab {
+  font-family: var(--font-sans), sans-serif;
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--hl-grey-text);
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  padding: 11px 0;
+  cursor: pointer;
+  transition: background var(--hl-transition-fast), color var(--hl-transition-fast);
+}
+.hl-tab:hover {
+  color: var(--hl-navy-hover);
+}
+.hl-tab.active {
+  background: var(--hl-bright-blue);
+  color: var(--hl-navy-hover);
+}
+
+/* ---- Labels / meta ---- */
+.hl-label {
+  font-family: var(--font-sans), sans-serif;
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--hl-grey-text);
+}
+
+/* Section-header variant of .hl-label — display font, wider letter-spacing,
+   uppercase (e.g. "How rewards are accrued", "Official contracts and network"). */
+.hl-section-label {
+  font-family: var(--font-display), sans-serif;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--hl-grey-text);
+}
+
+.hl-address {
+  font-family: var(--font-mono), monospace;
+  font-size: 13px;
+  letter-spacing: 0.01em;
+}
+
+/* ---- Alerts (left-border) ---- */
+.hl-alert {
+  border-left: 4px solid var(--hl-grey);
+  padding: var(--hl-space-4) var(--hl-space-5);
+  font-size: 14px;
+}
+.hl-alert-error {
+  border-left-color: var(--hl-error);
+  background: rgba(248, 113, 113, 0.1);
+  color: var(--hl-error);
+}
+.hl-alert-success {
+  border-left-color: var(--hl-success);
+  background: rgba(74, 222, 128, 0.1);
+  color: var(--hl-success);
+}
+.hl-alert-warning {
+  border-left-color: var(--hl-warning);
+  background: rgba(251, 191, 36, 0.1);
+  color: var(--hl-warning);
+}
+
+.hl-nav-link {
+  font-family: var(--font-sans), sans-serif;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--hl-grey-text);
+  text-decoration: none;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 8px 16px;
+  border-radius: 999px;
+  transition: color 0.15s, background 0.15s;
+  display: inline-block;
+}
+.hl-nav-link:hover {
+  color: var(--hl-navy-hover);
+}
+.hl-nav-link.active {
+  color: var(--hl-navy-hover);
+  background: var(--hl-bright-blue);
+}
+
+/* ---- Header / responsive nav ----
+   Desktop shows the inline nav + wallet controls; below the mobile breakpoint
+   these collapse into a hamburger-triggered dropdown so the bar never overflows. */
+.hl-nav-desktop {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.hl-wallet-desktop {
+  display: flex;
+  align-items: center;
+  gap: var(--hl-space-4);
+}
+.hl-hamburger {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid var(--hl-grey);
+  border-radius: var(--hl-radius-sm);
+  color: var(--hl-navy);
+  cursor: pointer;
+}
+.hl-hamburger:hover {
+  border-color: var(--hl-sunrise-light);
+}
+.hl-mobile-menu {
+  display: none;
+  position: absolute;
+  top: 80px;
+  left: 0;
+  right: 0;
+  flex-direction: column;
+  gap: var(--hl-space-6);
+  padding: var(--hl-space-8) clamp(20px, 4vw, 28px);
+  background: var(--hl-panel);
+  border-bottom: 1px solid var(--hl-grey);
+  z-index: 50;
+}
+.hl-mobile-menu.open {
+  display: flex;
+}
+
+@media (max-width: 768px) {
+  .hl-nav-desktop,
+  .hl-wallet-desktop {
+    display: none;
+  }
+  .hl-hamburger {
+    display: flex;
+  }
+  /* shrink the brand wordmark so "HORIZEN / staking" doesn't crowd the
+     hamburger button on phones */
+  .hl-brand-label {
+    font-size: 11px !important;
+  }
+}
+
+/* ---- Responsive tables ----
+   Four columns can't fit a phone width, so below the breakpoint the table
+   collapses into a stacked list: each row becomes a card and each cell shows
+   its column name (from data-label) beside the value. No horizontal scroll. */
+@media (max-width: 640px) {
+  .hl-history-table {
+    min-width: 0 !important;
+  }
+  .hl-history-table thead {
+    display: none;
+  }
+  .hl-history-table,
+  .hl-history-table tbody,
+  .hl-history-table tr,
+  .hl-history-table td {
+    display: block;
+    width: 100%;
+  }
+  .hl-history-table tr {
+    padding: var(--hl-space-3) 0;
+  }
+  .hl-history-table td {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--hl-space-5);
+    text-align: right !important;
+    padding: var(--hl-space-2) var(--hl-space-5) !important;
+  }
+  .hl-history-table td::before {
+    content: attr(data-label);
+    flex: none;
+    font-family: var(--font-sans), sans-serif;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--hl-grey-text);
+    text-align: left;
+  }
+}
+
+/* ---- Contract/network reference rows (How it works) ----
+   Full addresses are too wide for a phone and are set nowrap, so they overflow.
+   Below the breakpoint, stack the value under its label and let it wrap. */
+@media (max-width: 640px) {
+  .hl-ref-row {
+    flex-direction: column;
+    align-items: flex-start !important;
+    gap: var(--hl-space-2) !important;
+  }
+  .hl-ref-value {
+    white-space: normal !important;
+    word-break: break-all;
+  }
+}
+
+/* ---- Hero (landing + dashboard header block) ---- */
+.hl-hero {
+  display: grid;
+  grid-template-columns: 1.15fr 0.85fr;
+  gap: 56px;
+  align-items: start;
+  padding: 72px 0 56px;
+}
+/* Grid items default to min-width:auto (their content's min-content size),
+   which can force a track wider than its fr-share and push the whole page
+   into horizontal overflow on narrow viewports. Reset so long words/labels
+   wrap instead of blowing out the layout. */
+.hl-hero > * {
+  min-width: 0;
+}
+.hl-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: var(--hl-space-5);
+}
+.hl-hero h1 {
+  font-weight: 500;
+  font-size: clamp(46px, 6vw, 72px);
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+  margin-bottom: 26px;
+}
+/* Any <em> inside an h1 gets the emphasis treatment — hero title, page titles
+   ("How it <em>works</em>.", "Your <em>history</em>.") alike. */
+h1 em {
+  font-style: normal;
+  font-weight: 800;
+}
+.hl-hero p strong {
+  color: var(--hl-navy-hover);
+  font-weight: 700;
+}
+.hl-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.hl-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--hl-grey-text);
+  background: var(--hl-panel);
+  border-radius: 999px;
+  padding: 9px 16px;
+}
+.hl-chip .hl-plus {
+  color: var(--hl-sunrise);
+  font-weight: 700;
+  font-size: 14px;
+  line-height: 1;
+}
+/* ASCII-inspired accent, Horizen visual language */
+.hl-ascii-accent {
+  font-family: var(--font-mono), monospace;
+  font-size: 12px;
+  letter-spacing: 0.5em;
+  line-height: 2;
+  color: rgba(244, 244, 244, 0.14);
+  margin-top: 34px;
+  user-select: none;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.hl-setup .hl-label {
+  display: block;
+  margin-bottom: var(--hl-space-5);
+}
+.hl-wallet-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: var(--hl-space-5);
+}
+.hl-steps {
+  list-style: none;
+  counter-reset: hl-step;
+  margin: 0 0 var(--hl-space-5);
+  padding: 0;
+}
+.hl-steps li {
+  counter-increment: hl-step;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 13px 0;
+  border-top: 1px solid var(--hl-grey);
+}
+.hl-steps li::before {
+  content: counter(hl-step);
+  font-family: var(--font-sans), sans-serif;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--hl-navy-hover);
+  background: var(--hl-grey-light);
+  width: 28px;
+  height: 28px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  transition: color var(--hl-transition-fast), border-color var(--hl-transition-fast);
+}
+.hl-steps li.done::before {
+  content: "✓";
+  color: var(--hl-success);
+  border-color: var(--hl-success);
+}
+/* Onboarding step completed — number swaps for a checkmark, circle lights up
+   to signal done instead of pending. */
+.hl-steps li.done::before {
+  content: "✓";
+  background: var(--hl-bright-blue);
+}
+.hl-steps li a,
+.hl-steps li span {
+  color: var(--hl-navy-hover);
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 14.5px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+}
+.hl-steps li a:hover {
+  color: var(--hl-sunrise-light);
+}
+.hl-steps li a .hl-ext,
+.hl-steps li span .hl-ext {
+  color: var(--hl-grey-text);
+  transition: color var(--hl-transition-fast);
+}
+.hl-steps li a:hover .hl-ext {
+  color: var(--hl-sunrise-light);
+}
+.hl-contract-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-top: 1px solid var(--hl-grey);
+  padding-top: var(--hl-space-5);
+  font-size: 13px;
+  color: var(--hl-grey-text);
+  font-weight: 600;
+}
+/* .hl-setup .hl-label sets margin-bottom for the card's section-heading
+   label; it also matches this row's label since the row lives inside
+   .hl-setup, which threw off align-items:center. Reset it here. */
+.hl-contract-line .hl-label {
+  margin-bottom: 0;
+}
+.hl-contract-link {
+  color: var(--hl-sunrise-light);
+  text-decoration: none;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.hl-contract-link:hover {
+  text-decoration: underline;
+}
+
+/* ---- Unified stat band (protocol headline numbers, open — no container) ---- */
+.hl-stat-band {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 28px;
+  padding: 34px 0 10px;
+}
+.hl-stat-cell {
+  padding: 0;
+  border-left: none;
+}
+.hl-stat-value {
+  font-family: var(--font-sans), sans-serif;
+  font-size: 32px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  margin: 12px 0 8px;
+  color: var(--hl-navy-hover);
+}
+.hl-stat-value.gold {
+  color: var(--hl-gold-bright);
+}
+.hl-stat-unit {
+  font-family: var(--font-sans), sans-serif;
+  font-size: 12.5px;
+  color: var(--hl-grey-text);
+  font-weight: 500;
+}
+.hl-info {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  border: 1px solid var(--hl-grey-text);
+  color: var(--hl-grey-text);
+  font-size: 9.5px;
+  font-family: var(--font-sans), sans-serif;
+  font-weight: 700;
+  cursor: help;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.hl-tooltip {
+  position: relative;
+  display: inline-flex;
+  vertical-align: middle;
+}
+.hl-tooltip:focus-visible {
+  outline: none;
+}
+.hl-tooltip:focus-visible .hl-info {
+  border-color: var(--hl-sunrise);
+  color: var(--hl-sunrise);
+}
+.hl-tooltip-bubble {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%) translateY(4px);
+  width: max-content;
+  max-width: 240px;
+  background: var(--hl-grey-light);
+  border-radius: var(--hl-radius-sm);
+  padding: 10px 12px;
+  font-family: var(--font-sans), sans-serif;
+  font-size: 12.5px;
+  font-weight: 400;
+  line-height: 1.5;
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--hl-navy);
+  box-shadow: 0 16px 32px rgba(3, 8, 18, 0.55);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity var(--hl-transition-fast), transform var(--hl-transition-fast);
+  z-index: 20;
+}
+.hl-tooltip-bubble::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 6px solid transparent;
+  border-top-color: var(--hl-grey-light);
+}
+.hl-tooltip:hover .hl-tooltip-bubble,
+.hl-tooltip:focus-within .hl-tooltip-bubble {
+  opacity: 1;
+  visibility: visible;
+  transform: translateX(-50%) translateY(0);
+}
+
+/* ---- Card title (display, matches page h1 treatment) ---- */
+.hl-card-title {
+  font-family: var(--font-display), sans-serif;
+  font-weight: 600;
+  font-size: 24px;
+  letter-spacing: -0.01em;
+}
+.hl-addr-pill {
+  font-family: var(--font-mono), monospace;
+  font-size: 12px;
+  color: var(--hl-navy);
+  background: var(--hl-grey-light);
+  border-radius: 999px;
+  padding: 7px 14px;
+}
+
+/* ---- Position + reward-sources side-by-side layout ---- */
+.hl-lower {
+  display: grid;
+  grid-template-columns: 1.5fr 1fr;
+  gap: 26px;
+  align-items: start;
+}
+.hl-lower > * {
+  min-width: 0;
+}
+
+/* ---- Reward sources card ---- */
+.hl-sources {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.hl-sources li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 13px 0;
+  border-top: 1px solid var(--hl-grey);
+  font-size: 14.5px;
+  color: var(--hl-navy);
+}
+.hl-sources li:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+.hl-sources li span {
+  font-family: var(--font-sans), sans-serif;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--hl-grey-text);
+  white-space: nowrap;
+}
+.hl-sources li span.live {
+  color: #7c9aff;
+}
+.hl-sources-note {
+  font-size: 13px;
+  color: var(--hl-grey-text);
+  margin-top: var(--hl-space-5);
+  padding-top: var(--hl-space-5);
+  border-top: 1px solid var(--hl-grey);
+}
+.hl-sources-note a {
+  color: var(--hl-sunrise-light);
+  text-decoration: none;
+}
+.hl-sources-note a:hover {
+  text-decoration: underline;
+}
+
+/* ---- Shared content wrap ----
+   Matches the mockup's .wrap: max-width includes its own horizontal
+   padding (border-box), so the content column tops out at 1180 - 2*28 =
+   1124px wide, not 1180px. Applied by Header, each page and the footer so
+   they all share the exact same gutter/content width. */
+.hl-wrap {
+  max-width: 1180px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 0 clamp(20px, 4vw, 28px);
+}
+
+/* ---- Shared page header (How it works / History) ---- */
+.hl-page-head {
+  padding: 56px 0 8px;
+  width: 100%;
+}
+.hl-page-head h1 {
+  margin-bottom: 10px;
+  font-size: clamp(38px, 5vw, 54px);
+}
+.hl-page-sub {
+  color: var(--hl-grey-text);
+  font-size: 16px;
+  margin-bottom: 34px;
+}
+
+/* Body-copy paragraphs on How it works — capped at 78ch so long lines don't
+   stretch across the full card width. */
+.hl-intro {
+  color: var(--hl-grey-text);
+  font-size: 15.5px;
+  max-width: 78ch;
+  margin: 0 0 28px;
+  line-height: 1.6;
+}
+
+/* ---- Footer ---- */
+.hl-footer {
+  max-width: 1180px;
+  width: 100%;
+  border-top: 1px solid var(--hl-grey);
+  padding: 26px clamp(20px, 4vw, 28px) 24px;
+  margin-top: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  color: var(--hl-grey-text);
+  font-size: 13px;
+}
+.hl-footer-links {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.hl-footer a {
+  color: var(--hl-sunrise-light);
+  text-decoration: none;
+}
+.hl-footer a:hover {
+  text-decoration: underline;
+}
+
+@media (max-width: 900px) {
+  .hl-lower {
+    grid-template-columns: 1fr;
+  }
+  .hl-hero {
+    grid-template-columns: 1fr;
+    gap: 36px;
+    padding-top: 44px;
+  }
+  .hl-stat-band {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+@media (max-width: 560px) {
+  .hl-stat-band {
+    grid-template-columns: 1fr;
+  }
+}
+@media (max-width: 600px) {
+  .hl-wrap {
+    padding: 0 18px;
+  }
+  .hl-footer {
+    padding-left: 18px;
+    padding-right: 18px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition-duration: 0.01ms !important;
+  }
+}

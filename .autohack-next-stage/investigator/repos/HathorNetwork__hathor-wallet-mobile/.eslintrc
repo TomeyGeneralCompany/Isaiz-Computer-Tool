@@ -1,0 +1,74 @@
+{
+  "env": {
+    "es2020": true
+  },
+  "extends": "airbnb",
+  "parser": "@babel/eslint-parser",
+  "ignorePatterns": ["lockdown.umd.js"],
+  "plugins": [
+  	"react"
+  ],
+  "globals": {
+    "__DEV__": "readonly"
+  },
+  "rules": {
+    "arrow-parens": ["error", "always"],
+    "import/no-named-as-default": 0,
+    "import/prefer-default-export": 0,
+    "jsx-quotes": ["error", "prefer-single"],
+    "react/prop-types": 0,
+    "react/destructuring-assignment": 0,
+    "react/require-default-props": 0,
+    "react/jsx-one-expression-per-line": 0,
+    "react/jsx-filename-extension": ["error", { "extensions": [".js", ".jsx"] }],
+    "react/jsx-closing-tag-location": 0,
+    "react/jsx-no-bind": 0, // Obsolete
+    "react/function-component-definition": 0, // Will be reactivated in future refactors
+    "react/react-in-jsx-scope": "off", // Not necessary since React v17
+    "react/sort-comp": 0,
+    "quotes": ["error", "single", { "avoidEscape": true, "allowTemplateLiterals": true }],
+    "comma-dangle": 0,
+    "object-curly-newline": ["error", {"ObjectPattern": { "multiline": true }}],
+    "eqeqeq": [1, "allow-null"],
+    "no-continue": 0,
+    "no-cond-assign": 1,
+    "no-constant-condition": 0,
+    "no-control-regex": 1,
+    "no-debugger": 1,
+    "no-dupe-keys": 1,
+    "no-ex-assign": 1,
+    "no-extra-boolean-cast": 1,
+    "no-func-assign": 1,
+    "no-regex-spaces": 1,
+    "no-unreachable": 1,
+    "no-fallthrough": 1,
+    "no-lone-blocks": 1,
+    "no-delete-var": 1,
+    "no-shadow": 1,
+    "no-shadow-restricted-names": 1,
+    "no-undef": 2,
+    "no-undef-init": 1,
+    "no-use-before-define": 0,
+    "no-unused-vars": [1, {"vars": "all", "args": "none"}],
+    "no-underscore-dangle": 0,
+    "no-restricted-syntax": ["error", "ForInStatement", "LabeledStatement", "WithStatement"],
+    "no-console": 0,
+
+    // Rules that should be reactivated asap, but require a large refactor
+    "semi": 0,
+
+    // Rules that can be reactivated in future improvement refactors
+    "class-methods-use-this": 0,
+    "react/no-unstable-nested-components": 0,
+    "react/jsx-props-no-spreading": 0,
+    "default-param-last": 0,
+    "react/no-this-in-sfc": 0,
+
+    // Rules that will require refactor on class components
+    "react/no-arrow-function-lifecycle": 0,
+    "react/static-property-placement": 0,
+    "react/state-in-constructor": 0,
+    "max-classes-per-file": 0,
+    "react/no-unused-class-component-methods": 0
+  }
+}

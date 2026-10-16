@@ -1,0 +1,39 @@
+{
+  "checks": {
+    "has_reproduction_test": false,
+    "in_scope_at_processing": true,
+    "source_commit_matches": true,
+    "triage_requires_review": false
+  },
+  "commit": "d2a86ece964247d8313c20fbfeb0c7199d9bff5a",
+  "lead": {
+    "file": "scripts/update_translations.js",
+    "fingerprint": "59376cc645ae456ce118",
+    "guidance": "Review command construction and input provenance",
+    "line": 87,
+    "rule": "JS_CHILD_EXEC"
+  },
+  "note": "Automated offline evidence preparation only. No project-specific reproduction or verified security impact.",
+  "processed_at": "2026-10-15T00:09:26.186085+00:00",
+  "repository": "HathorNetwork/hathor-wallet-mobile",
+  "scope_urls": [
+    "https://immunefi.com/bug-bounty/hathornetwork/scope/"
+  ],
+  "source_check": {
+    "commit": "d2a86ece964247d8313c20fbfeb0c7199d9bff5a",
+    "excerpt": "   76:  * Checks whether the root `.pot` file is outdated.\n   77:  * @returns {boolean} True if the `.pot` file is outdated\n   78:  */\n   79: function checkPotOutdated() {\n   80:   console.log(`⏳ Checking if pot file is outdated...`);\n   81: \n   82:   let isPotOutdated = false;\n   83:   const myTmpDir = fs.mkdtempSync(path.join(tmpdir(), 'check_pot-'));\n   84:   temporaryDirs.push(myTmpDir); // Cleanup will be done on process.exit()\n   85:   try {\n   86:     // Extract the strings from the source code\n   87:     execSync(`npx ttag extract -o ${myTmpDir}/pot ./src/`, { stdio: 'inherit' });\n   88:     // Generate the `.po` files\n   89:     execSync(`msgen -o ${myTmpDir}/po ${myTmpDir}/pot`, { stdio: 'inherit' });\n   90:     // Check if the `.pot` file is outdated\n   91:     execSync(`msgcmp ${myTmpDir}/po ./locale/texts.pot`, { stdio: 'inherit' });\n   92:   } catch (error) {\n   93:     isPotOutdated = true;\n   94:     console.error('❌ Error checking pot file, or pot file outdated:', error);\n   95:   }\n   96: \n   97:   return isPotOutdated;\n   98: }\n   99: ",
+    "file": "scripts/update_translations.js",
+    "file_sha256": "5b7a433427ae4630a64aeeb32af18a70e63b9d04894feaddb579d8d164e7b22a",
+    "line": 87,
+    "status": "source_matched"
+  },
+  "source_fingerprint": "13e125b545a90e62e88f4ace9edad5e14e3baade01b0846515d5f7bb310b70a5",
+  "status": "needs_project_specific_reproduction",
+  "triage": {
+    "classification": "likely_false_positive",
+    "evidence": "The code is not checking for outdated pot files, but rather attempting to extract and compare files from the source code.",
+    "follow_up": "If you have more details, please provide the specific code or context to help further analyze.",
+    "rationale": "The code is not checking for outdated pot files, but rather attempting to extract and compare files from the source code. This is a general-purpose utility and not a vulnerability."
+  },
+  "verified_vulnerability": false
+}

@@ -1,0 +1,39 @@
+{
+  "checks": {
+    "has_reproduction_test": false,
+    "in_scope_at_processing": true,
+    "source_commit_matches": true,
+    "triage_requires_review": true
+  },
+  "commit": "0bc1dd9c49203dd45f48f0046abc4e95a50d06da",
+  "lead": {
+    "file": "contracts/AvocadoMultisig/AvocadoMultisigCore.sol",
+    "fingerprint": "2b7f64002114ebcc64ee",
+    "guidance": "Review delegatecall target and access control",
+    "line": 691,
+    "rule": "SOL_DELEGATECALL"
+  },
+  "note": "Automated offline evidence preparation only. No project-specific reproduction or verified security impact.",
+  "processed_at": "2026-10-15T00:09:27.393928+00:00",
+  "repository": "Instadapp/avocado-contracts-public",
+  "scope_urls": [
+    "https://immunefi.com/bug-bounty/instadapp/scope/"
+  ],
+  "source_check": {
+    "commit": "0bc1dd9c49203dd45f48f0046abc4e95a50d06da",
+    "excerpt": "  680:                 if (!success_) {\n  681:                     _handleActionFailure(actionMinGasLeft_, i, result_);\n  682:                 }\n  683:             } else if (action_.operation == 1 && isDelegateCallId_) {\n  684:                 // delegatecall (operation = 1 & id = mixed(1 / 21))\n  685:                 unchecked {\n  686:                     // store amount of gas that stays with caller, according to EIP150 to detect out of gas errors\n  687:                     // -> as close as possible to actual call\n  688:                     actionMinGasLeft_ = gasleft() / 64;\n  689:                 }\n  690: \n  691:                 (success_, result_) = action_.target.delegatecall(action_.data);\n  692: \n  693:                 // handle action failure right after external call to better detect out of gas errors\n  694:                 if (!success_) {\n  695:                     _handleActionFailure(actionMinGasLeft_, i, result_);\n  696:                 }\n  697: \n  698:                 // reset _transientAllowHash to make sure it can not be set up in any way for reentrancy\n  699:                 _resetTransientStorage();\n  700: \n  701:                 // for delegatecall, make sure storage was not modified. After every action, to also defend reentrancy\n  702:                 uint256 storageSlot0_;\n  703:                 uint256 storageSlot1_;",
+    "file": "contracts/AvocadoMultisig/AvocadoMultisigCore.sol",
+    "file_sha256": "d0cc2d19a51b1521a1c4cf46ac158437ce00ecc81cd7bb07f5ab543c7b9f20ed",
+    "line": 691,
+    "status": "source_matched"
+  },
+  "source_fingerprint": "11bf2348b7124a23492723a1be9801ff2c8041eba32aa02cddb6099b0ab8af06",
+  "status": "needs_project_specific_reproduction",
+  "triage": {
+    "classification": "needs_review",
+    "evidence": "The code snippet is part of a Solidity contract, but the line numbers and context are unclear.",
+    "follow_up": "If you have more context or details, please provide them to help further review.",
+    "rationale": "The code snippet appears to be part of a Solidity contract for a multisig, but the line number and context are unclear. The presence of 'SOL_DELEGATECALL' and the use of 'isDelegateCallId_' suggest potential issues with delegate call handling, but the exact nature of the problem is unclear. There is insufficient context to determine if this is a false positive or a valid review."
+  },
+  "verified_vulnerability": false
+}

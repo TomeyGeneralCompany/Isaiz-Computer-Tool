@@ -1,0 +1,31 @@
+{
+  "repository": "HathorNetwork/hathor-wallet-mobile",
+  "commit": "d2a86ece964247d8313c20fbfeb0c7199d9bff5a",
+  "scope_sources": [
+    {
+      "asset_type": "websites_and_applications",
+      "asset_url": "https://github.com/HathorNetwork/hathor-wallet-mobile",
+      "program": "hathornetwork",
+      "scope_url": "https://immunefi.com/bug-bounty/hathornetwork/scope/"
+    }
+  ],
+  "original_report": "HathorNetwork__hathor-wallet-mobile-d2a86ece9642.json",
+  "lead": {
+    "rule": "JS_CHILD_EXEC",
+    "file": "scripts/update_translations.js",
+    "line": 235,
+    "guidance": "Review command construction and input provenance",
+    "fingerprint": "4d0fe01d72f988560b2d"
+  },
+  "source_excerpt": "227:     const jsonFile = path.join(outputDir, locale, 'texts.po.json');\n228:     const jsonDir = path.dirname(jsonFile);\n229: \n230:     if (!fs.existsSync(jsonDir)) {\n231:       fs.mkdirSync(jsonDir, { recursive: true });\n232:     }\n233: \n234:     try {\n235:       execSync(`npx ttag po2json ${poFile} > ${jsonFile}`, { stdio: 'inherit' });\n236:     } catch (error) {\n237:       console.error(`\u274c Error compiling JSON translations for ${locale}:`, error);\n238:     }\n239:   });\n240: }\n241: \n242: /**\n243:  * Cleanup function, removing any temporary files or folders created during the execution",
+  "triage": {
+    "classification": "likely_false_positive",
+    "rationale": "The code is not checking for the existence of the JSON directory before attempting to create it, which could lead to errors. However, the rule is about command construction and input provenance, and the code is not directly related to the rule's focus. There is insufficient context to determine the actual issue.",
+    "evidence": "The code checks if the directory exists before creating it, which is a good practice, but the rule is about command construction and input provenance, not directory creation.",
+    "follow_up": "If you have more details about the issue, please provide them to help us identify the root cause."
+  },
+  "status": "unverified_draft",
+  "verified_vulnerability": false,
+  "generated_at": "2026-10-14T23:37:55.026960+00:00",
+  "note": "Automated static triage only. No exploitability, eligibility, or bounty award established."
+}

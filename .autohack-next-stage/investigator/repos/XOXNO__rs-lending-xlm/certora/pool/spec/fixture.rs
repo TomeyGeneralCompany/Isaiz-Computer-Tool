@@ -1,0 +1,156 @@
+#![allow(dead_code)]
+
+use cvlr::cvlr_assume;
+use cvlr::nondet::nondet;
+
+use common::constants::{BPS, MAX_ASSET_DECIMALS, MIN_ASSET_DECIMALS, RAY};
+use common::math::fp::Ray;
+use common::math::fp_core;
+use common::types::{
+    HubAssetKey, MarketParamsRaw, PoolAction, PoolKey, PoolStateRaw, ScaledPositionRaw,
+};
+use soroban_sdk::{Address, Env};
+
+pub const ASSET_DECIMALS: u32 = 7;
+pub const ONE_TOKEN: i128 = 10_000_000;
+pub const MAX_FLOW_AMOUNT: i128 = 100 * ONE_TOKEN;
+
+pub fn hub(asset: Address) -> HubAssetKey {
+    HubAssetKey { hub_id: 0, asset }
+}
+
+pub fn params(asset: Address, flashloan_fee: u32, is_flashloanable: bool) -> MarketParamsRaw {
+    params_with_decimals(asset, flashloan_fee, is_flashloanable, ASSET_DECIMALS)
+}
+
+pub fn params_with_decimals(
+    asset: Address,
+    flashloan_fee: u32,
+    is_flashloanable: bool,
+    asset_decimals: u32,
+) -> MarketParamsRaw {
+    MarketParamsRaw {
+        base_borrow_rate: RAY / 100,
+        slope1: RAY / 10,
+        slope2: RAY / 5,
+        slope3: RAY / 2,
+        mid_utilization: RAY / 2,
+        optimal_utilization: RAY * 8 / 10,
+        max_borrow_rate: 2 * RAY,
+
+        max_utilization: RAY,
+        reserve_factor: 1_000,
+        is_flashloanable,
+        flashloan_fee,
+        asset_id: asset,
+        asset_decimals,
+    }
+}
+
+/// [`params_with_decimals`] with the reserve factor chosen by the caller too.
+///
+/// `params` pins the two market-configuration fields production validates as a
+/// *range* to one mainnet-shaped value (`ASSET_DECIMALS = 7`,
+/// `reserve_factor = 1_000`). Rules that are about accounting rather than about
+/// one market's shape draw them instead:
+/// `asset_decimals` in `MIN_ASSET_DECIMALS..=MAX_ASSET_DECIMALS`
+/// (`contracts/governance/src/validate/asset.rs`, plus
+/// `MarketParamsRaw::verify`'s `<= WAD_DECIMALS`), and `reserve_factor` below
+/// `BPS` (`InterestRateModel::verify`). The rate curve stays fixed; see the
+/// "Fixture domain" section of `certora/pool/spec/README.md`.
+pub fn params_with_decimals_and_reserve(
+    asset: Address,
+    asset_decimals: u32,
+    reserve_factor: u32,
+) -> MarketParamsRaw {
+    MarketParamsRaw {
+        reserve_factor,
+        ..params_with_decimals(asset, 0, false, asset_decimals)
+    }
+}
+
+/// Draws a market configuration over the two fields production validates as a
+/// range, with the fixed rate curve of [`params_with_decimals`].
+pub fn nondet_params(asset: Address) -> MarketParamsRaw {
+    let asset_decimals: u32 = nondet();
+    let reserve_factor: u32 = nondet();
+    cvlr_assume!((MIN_ASSET_DECIMALS..=MAX_ASSET_DECIMALS).contains(&asset_decimals));
+    cvlr_assume!(i128::from(reserve_factor) < BPS);
+    params_with_decimals_and_reserve(asset, asset_decimals, reserve_factor)
+}
+
+pub fn params_with_max_util(asset: Address, max_utilization: i128) -> MarketParamsRaw {
+    MarketParamsRaw {
+        max_utilization,
+        ..params(asset, 0, false)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn state(
+    supplied: i128,
+    borrowed: i128,
+    revenue: i128,
+    borrow_index: i128,
+    supply_index: i128,
+    cash: i128,
+    timestamp_seconds: u64,
+) -> PoolStateRaw {
+    PoolStateRaw {
+        supplied,
+        borrowed,
+        revenue,
+        borrow_index,
+        supply_index,
+        last_timestamp: timestamp_seconds * 1_000,
+        cash,
+    }
+}
+
+pub fn seed(
+    env: &Env,
+    admin: Address,
+    asset: Address,
+    params: MarketParamsRaw,
+    state: PoolStateRaw,
+) {
+    crate::LiquidityPool::__constructor(env.clone(), admin);
+    write_market(env, asset, params, state);
+}
+
+/// Overwrites a market's params and state without re-running the constructor.
+///
+/// Lets one rule replay the same starting market twice — once for a split
+/// sequence, once for the equivalent single call — inside a single proof,
+/// without a second `set_owner`.
+pub fn write_market(env: &Env, asset: Address, params: MarketParamsRaw, state: PoolStateRaw) {
+    let key = hub(asset);
+    env.storage()
+        .persistent()
+        .set(&PoolKey::Params(key.clone()), &params);
+    env.storage().persistent().set(&PoolKey::State(key), &state);
+}
+
+pub fn read_state(env: &Env, asset: &Address) -> PoolStateRaw {
+    env.storage()
+        .persistent()
+        .get(&PoolKey::State(hub(asset.clone())))
+        .unwrap()
+}
+
+pub fn position(scaled_amount: i128) -> ScaledPositionRaw {
+    ScaledPositionRaw { scaled_amount }
+}
+
+pub fn action(asset: Address, scaled_amount: i128, amount: i128) -> PoolAction {
+    PoolAction {
+        position: position(scaled_amount),
+        amount,
+        hub_asset: hub(asset),
+    }
+}
+
+pub fn expected_protocol_fee_shares(env: &Env, fee: Ray, supply_index: Ray, supplied: Ray) -> Ray {
+    let raw = fp_core::mul_div_floor_saturating(env, fee.raw(), RAY, supply_index.raw());
+    Ray::from(raw.min(i128::MAX - supplied.raw()))
+}

@@ -1,0 +1,14 @@
+{
+  "commit": "0738c7c981e506c582d83fa5456fe1b84eeccedc",
+  "detail": {
+    "language": ".py",
+    "note": "Solidity Foundry adapter only in this release"
+  },
+  "input_hash": "3c5e9709334d0241d5e55169d6d6b47d39c9e864a73711d07673c9a2f1743321",
+  "processed_at": "2026-10-15T00:50:50.163874+00:00",
+  "repository": "HathorNetwork/hathor-core",
+  "source_draft": "/home/izy/isaiz-bugbounty/autohack/.autohack-next-stage/investigator/triage/drafts/7d6e0fb92dcab80da35d47ad0c370d754173ea0cb88e1653bb53dea5799a5768.json",
+  "status": "adapter_not_available",
+  "submitted": false,
+  "verified_vulnerability": false
+}

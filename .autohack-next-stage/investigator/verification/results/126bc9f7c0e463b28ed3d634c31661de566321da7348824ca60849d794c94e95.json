@@ -1,0 +1,57 @@
+{
+  "source_draft": "/home/izy/isaiz-bugbounty/autohack/.autohack-next-stage/investigator/triage/drafts/126bc9f7c0e463b28ed3d634c31661de566321da7348824ca60849d794c94e95.json",
+  "input_fingerprint": "af67db09aa5eef8a88781ecee897f7fb5403bb0119d6dc4a07ca3cdc698db6a2",
+  "checked_at": "2026-10-14T23:47:05.503095+00:00",
+  "status": "ready_for_isolated_reproduction",
+  "verified_vulnerability": false,
+  "tests_executed": 0,
+  "checks": [
+    {
+      "name": "has_repository_and_commit",
+      "passed": true
+    },
+    {
+      "name": "has_program_scope_reference",
+      "passed": true
+    },
+    {
+      "name": "has_code_excerpt",
+      "passed": true
+    },
+    {
+      "name": "has_source_location",
+      "passed": true
+    },
+    {
+      "name": "javascript_excerpt_syntax",
+      "passed": null,
+      "note": "Partial snippet: no execution or syntax claim"
+    },
+    {
+      "name": "has_ai_triage",
+      "passed": true
+    }
+  ],
+  "limitations": [
+    "This is offline evidence validation, not exploit reproduction.",
+    "No project code or generated test cases are executed.",
+    "A valid excerpt or parseable code does not prove vulnerability."
+  ],
+  "repository": "HathorNetwork/hathor-wallet-mobile",
+  "commit": "d2a86ece964247d8313c20fbfeb0c7199d9bff5a",
+  "scope_sources": [
+    {
+      "asset_type": "websites_and_applications",
+      "asset_url": "https://github.com/HathorNetwork/hathor-wallet-mobile",
+      "program": "hathornetwork",
+      "scope_url": "https://immunefi.com/bug-bounty/hathornetwork/scope/"
+    }
+  ],
+  "lead_location": {
+    "path": "scripts/update_translations.js",
+    "line": 68
+  },
+  "triage_present": true,
+  "missing_evidence": [],
+  "next_step": "Create a non-destructive, isolated regression test tailored to the alleged flaw and run it in a sandbox; do not label verified until a reproducible security impact is demonstrated."
+}

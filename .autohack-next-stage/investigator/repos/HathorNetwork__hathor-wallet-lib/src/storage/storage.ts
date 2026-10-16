@@ -1,0 +1,1571 @@
+/**
+ * Copyright (c) Hathor Labs and its affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */
+
+import { HDPublicKey } from 'bitcore-lib';
+import Input from '../models/input';
+import {
+  ApiVersion,
+  IStorage,
+  IAddressInfo,
+  IAddressMetadata,
+  ITokenData,
+  ITokenMetadata,
+  IHistoryTx,
+  IUtxo,
+  IWalletAccessData,
+  IStore,
+  IUtxoFilterOptions,
+  IWalletData,
+  WalletType,
+  WALLET_FLAGS,
+  IUtxoId,
+  IDataTx,
+  IDataInput,
+  IDataOutput,
+  IFillTxOptions,
+  IBalance,
+  AddressScanPolicy,
+  AddressScanPolicyData,
+  IIndexLimitAddressScanPolicy,
+  SCANNING_POLICY,
+  INcData,
+  EcdsaTxSign,
+  PrivateKeyProvider,
+  ITxSignatureData,
+  OutputValueType,
+  ILogger,
+  getDefaultLogger,
+  AuthorityType,
+  TokenVersion,
+  IAddressChainOptions,
+} from '../types';
+import type { IShieldedCryptoProvider } from '../shielded/types';
+import { ShieldedViewState } from '../shielded/view';
+import transactionUtils from '../utils/transaction';
+import {
+  processHistory as processHistoryUtil,
+  processSingleTx as processSingleTxUtil,
+  processUtxoUnlock,
+} from '../utils/storage';
+import config, { Config } from '../config';
+import { decryptData, checkPassword } from '../utils/crypto';
+import FullNodeConnection from '../new/connection';
+import { getAddressType } from '../utils/address';
+import walletUtils from '../utils/wallet';
+import { refuseMultisigShieldedKeys } from '../utils/shieldedChain';
+import {
+  NATIVE_TOKEN_UID,
+  MAX_INPUTS,
+  MAX_OUTPUTS,
+  TOKEN_DEPOSIT_PERCENTAGE,
+  TOKEN_DEPOSIT_PERCENTAGE_DENOMINATOR,
+  TOKEN_DEPOSIT_PERCENTAGE_NUMERATOR,
+  DECIMAL_PLACES,
+  DEFAULT_NATIVE_TOKEN_CONFIG,
+} from '../constants';
+import { UninitializedWalletError } from '../errors';
+import Transaction from '../models/transaction';
+
+/**
+ * Build a fresh address-metadata object.
+ *
+ * The `balance` Map MUST be a new instance per call. The previous
+ * `export const DEFAULT_ADDRESS_META` created ONE Map at module load, and every
+ * `{ ...DEFAULT_ADDRESS_META }` shallow-spread copied that same Map REFERENCE
+ * into each address's metadata — so a `balance.set(...)` for one address mutated
+ * a Map shared by every address AND every wallet instance in the process,
+ * leaking balances across addresses and surviving wallet reloads.
+ */
+export function getDefaultAddressMeta(): IAddressMetadata {
+  return {
+    numTransactions: 0,
+    balance: new Map<string, IBalance>(),
+  };
+}
+
+/**
+ * Addresses `loadAddresses` derived for one BIP32 index: the legacy address,
+ * and the shielded pair (the shielded address and its on-chain spend P2PKH).
+ */
+export interface IDerivedIndexAddresses {
+  legacy?: IAddressInfo;
+  shielded?: { shieldedAddress: IAddressInfo; spendAddress: IAddressInfo };
+}
+
+/**
+ * The addresses `loadAddresses` derived, by storage object, together with the
+ * key they were derived under.
+ *
+ * `reloadStorage` wipes the stored addresses on every reconnect and loads the
+ * same windows again. `loadAddresses` reads this cache before deriving, so the
+ * reload saves the cached records instead of deriving them again. The cache
+ * lives in memory only and holds public data. Keying it by the storage object,
+ * instead of adding a member to `Storage`, makes it work for any `IStorage`
+ * and keeps it out of anything that serializes the storage.
+ */
+const derivedAddressCaches = new WeakMap<
+  IStorage,
+  { key: string; byIndex: Map<number, IDerivedIndexAddresses> }
+>();
+
+/**
+ * Get the addresses `loadAddresses` derived for `storage`, by BIP32 index.
+ *
+ * A derived address depends on the network, the wallet type, the legacy xpub or
+ * the multisig configuration, and the shielded xpubs. When any of them differs
+ * from what the cached addresses were derived from (a migration, a key import,
+ * another wallet or another network on the same storage), every entry is
+ * dropped.
+ *
+ * @param storage The wallet storage
+ * @param accessData The access data the addresses are derived from
+ * @param networkName The network the addresses are encoded for
+ * @returns The cached addresses, or null for a storage without access data
+ */
+export function getDerivedAddressCache(
+  storage: IStorage,
+  accessData: IWalletAccessData | null,
+  networkName: string
+): Map<number, IDerivedIndexAddresses> | null {
+  if (!accessData) {
+    return null;
+  }
+  const key = JSON.stringify([
+    networkName,
+    accessData.walletType,
+    accessData.xpubkey,
+    accessData.multisigData?.numSignatures ?? null,
+    accessData.multisigData?.pubkeys ?? null,
+    accessData.scanXpubkey ?? null,
+    accessData.spendXpubkey ?? null,
+  ]);
+  let cache = derivedAddressCaches.get(storage);
+  if (!cache || cache.key !== key) {
+    cache = { key, byIndex: new Map() };
+    derivedAddressCaches.set(storage, cache);
+  }
+  return cache.byIndex;
+}
+
+/**
+ * Drop every address cached for `storage` by `loadAddresses`.
+ *
+ * @param storage The wallet storage
+ */
+export function clearDerivedAddressCache(storage: IStorage): void {
+  derivedAddressCaches.delete(storage);
+}
+
+/**
+ * The txs being processed on each storage object (decoded and credited, see
+ * `processNewTx` in the storage utils), which Storage.handleStop waits for
+ * before it cleans the storage.
+ */
+const txsInProcessing = new WeakMap<IStorage, Set<Promise<unknown>>>();
+
+/**
+ * Keep `processing`, the processing of one tx on `storage`, in the set that
+ * Storage.handleStop waits for, until it settles.
+ *
+ * @param storage The wallet storage
+ * @param processing The processing of the tx
+ * @returns `processing`
+ */
+export function trackTxProcessing<T>(storage: IStorage, processing: Promise<T>): Promise<T> {
+  let running = txsInProcessing.get(storage);
+  if (!running) {
+    running = new Set();
+    txsInProcessing.set(storage, running);
+  }
+  const txs = running;
+  txs.add(processing);
+  const settled = () => {
+    txs.delete(processing);
+  };
+  processing.then(settled, settled);
+  return processing;
+}
+
+/**
+ * Wait until no tx is being processed on `storage`, counting the txs whose
+ * processing starts while it waits. Their failures belong to their own callers.
+ */
+async function txProcessingSettled(storage: IStorage): Promise<void> {
+  const running = txsInProcessing.get(storage);
+  while (running && running.size > 0) {
+    await Promise.allSettled([...running]);
+  }
+}
+
+export class Storage implements IStorage {
+  store: IStore;
+
+  utxosSelectedAsInput: Map<string, boolean>;
+
+  /**
+   * The pending ttl timer of each utxo marked as selected. Re-marking or releasing a utxo cancels
+   * its timer, so a stale timer can't clear a later selection of the same utxo.
+   */
+  private utxoSelectionTimers: Map<string, ReturnType<typeof setTimeout>>;
+
+  config: Config;
+
+  version: ApiVersion | null;
+
+  txSignFunc: EcdsaTxSign | null;
+
+  getPrivKeyFunc: PrivateKeyProvider | null;
+
+  shieldedCryptoProvider?: IShieldedCryptoProvider;
+
+  // See IStorage.shieldedDecodeSkippedTxIds — the "partial history" flag set by
+  // processHistory when some owned shielded txs could not be decoded.
+  shieldedDecodeSkippedTxIds?: string[] | null;
+
+  // See IStorage.scanXPrivKey: the scan private key, in plain text, from
+  // start() until stop(). The constructor defines it as not enumerable.
+  scanXPrivKey!: string | null;
+
+  // See IStorage.shieldedView.
+  shieldedView: ShieldedViewState;
+
+  /**
+   * This promise is used to chain the calls to process unlocked utxos.
+   * This way we can avoid concurrent calls.
+   * The best way to do this would be an async queue or a mutex, but to avoid adding
+   * more dependencies we are using this simpler method.
+   *
+   * We can change this implementation to use a mutex or async queue in the future.
+   */
+  utxoUnlockWait: Promise<void>;
+
+  logger: ILogger;
+
+  constructor(store: IStore) {
+    this.store = store;
+    this.utxosSelectedAsInput = new Map<string, boolean>();
+    this.utxoSelectionTimers = new Map<string, ReturnType<typeof setTimeout>>();
+    this.config = config;
+    this.version = null;
+    this.utxoUnlockWait = Promise.resolve();
+    this.txSignFunc = null;
+    this.getPrivKeyFunc = null;
+    this.shieldedCryptoProvider = undefined;
+    this.shieldedDecodeSkippedTxIds = null;
+    // Not enumerable, so logging or serializing the storage never prints the
+    // key. A data property, so proxies that forward reads to the storage
+    // (WalletServiceStorageProxy) still read it.
+    Object.defineProperty(this, 'scanXPrivKey', { value: null, writable: true, enumerable: false });
+    this.shieldedView = new ShieldedViewState();
+    this.logger = getDefaultLogger();
+  }
+
+  /**
+   * Set the fullnode api version data.
+   * @param {ApiVersion} version Fullnode api version data
+   */
+  setApiVersion(version: ApiVersion): void {
+    this.version = version;
+  }
+
+  /**
+   * Get the decimal places.
+   * If not configured, will return the default DECIMAL_PLACES (2)
+   * @returns {number}
+   */
+  getDecimalPlaces(): number {
+    return this.version?.decimal_places ?? DECIMAL_PLACES;
+  }
+
+  /**
+   * Set the native token config on the store
+   */
+  async saveNativeToken(): Promise<void> {
+    await this.addToken(this.getNativeTokenData());
+  }
+
+  /**
+   * Adds a new token to the storage.
+   */
+  async addToken(data: ITokenData): Promise<void> {
+    if ((await this.store.getToken(data.uid)) === null) {
+      await this.store.saveToken(data);
+    }
+  }
+
+  /**
+   * Gets the native token config
+   *
+   * @return {ITokenData} The native token config
+   */
+  getNativeTokenData(): ITokenData {
+    const nativeToken = this.version?.native_token ?? DEFAULT_NATIVE_TOKEN_CONFIG;
+    return { version: TokenVersion.NATIVE, ...nativeToken, uid: NATIVE_TOKEN_UID };
+  }
+
+  /**
+   * Set the logger instance to use.
+   */
+  setLogger(logger: ILogger) {
+    this.logger = logger;
+  }
+
+  /**
+   * Check if the tx signing method is set
+   * @returns {boolean}
+   */
+  hasTxSignatureMethod(): boolean {
+    return !!this.txSignFunc;
+  }
+
+  /**
+   * Set the tx signing function
+   *
+   * Setting or clearing it also clears the declaration that the signer signs
+   * shielded spend inputs (see `HathorWallet.setExternalTxSigningMethod`): a
+   * declaration belongs to the signer it was made with.
+   *
+   * @param txSign The signing function, or a null value to clear it
+   */
+  setTxSignatureMethod(txSign: EcdsaTxSign | null): void {
+    this.txSignFunc = txSign;
+    this.shieldedView.spendSigner = false;
+  }
+
+  /**
+   * Get the registered tx signing function, if any.
+   * Lets wrappers (e.g. the wallet-service storage proxy) call the external signer with
+   * themselves as the storage argument, which `getTxSignatures` can't do (it passes `this`).
+   * @returns {EcdsaTxSign | null}
+   */
+  getTxSignatureMethod(): EcdsaTxSign | null {
+    return this.txSignFunc;
+  }
+
+  /**
+   * Whether an external private-key provider is registered.
+   * @returns {boolean}
+   */
+  hasPrivateKeyMethod(): boolean {
+    return !!this.getPrivKeyFunc;
+  }
+
+  /**
+   * Set the external private-key provider, or a null value to clear it.
+   * @param getPrivKey The provider function, or null
+   */
+  setPrivateKeyMethod(getPrivKey: PrivateKeyProvider | null): void {
+    this.getPrivKeyFunc = getPrivKey;
+  }
+
+  /**
+   * Get the private key for an address index from the registered external provider.
+   * @param addressIndex The address' derivation index
+   * @param options Options forwarded to the provider (e.g. pinCode, usually ignored)
+   * @returns {Promise<unknown>} A bitcore PrivateKey
+   */
+  async getExternalPrivateKey(
+    addressIndex: number,
+    options: { pinCode?: string } = {}
+  ): Promise<unknown> {
+    if (!this.getPrivKeyFunc) {
+      throw new Error('No external private key method set.');
+    }
+    return this.getPrivKeyFunc(addressIndex, this, options);
+  }
+
+  /**
+   * Set the shielded crypto provider for confidential transaction support.
+   * @param provider The crypto provider, or undefined to clear it
+   */
+  setShieldedCryptoProvider(provider?: IShieldedCryptoProvider): void {
+    this.shieldedCryptoProvider = provider;
+  }
+
+  /**
+   * Get the shielded crypto provider, or throw if it has not been configured.
+   * Confidential-transaction code paths require the provider; a missing one is a
+   * setup error and must fail loudly rather than silently degrade.
+   */
+  getShieldedCryptoProvider(): IShieldedCryptoProvider {
+    if (!this.shieldedCryptoProvider) {
+      throw new Error(
+        'Shielded crypto provider is not set. It is required for confidential ' +
+          'transaction operations; configure it via setShieldedCryptoProvider().'
+      );
+    }
+    return this.shieldedCryptoProvider;
+  }
+
+  /**
+   * Sign the transaction
+   * @param {Transaction} tx The transaction to sign
+   * @param {string} pinCode The pin code
+   * @returns {Promise<ITxSignatureData>} The signatures
+   */
+  async getTxSignatures(tx: Transaction, pinCode: string): Promise<ITxSignatureData> {
+    if (this.txSignFunc) {
+      return this.txSignFunc(tx, this, pinCode);
+    }
+    return transactionUtils.getSignatureForTx(tx, this, pinCode);
+  }
+
+  /**
+   * Return the deposit percentage as a float, for display purposes (wallet UI).
+   * Deposit/withdraw amounts use {@link getTokenDepositPercentageFraction} for exact integer math.
+   *
+   * @returns {number}
+   */
+  getTokenDepositPercentage(): number {
+    /**
+     *  When using wallet-service facade we do not update the version constants
+     *  Since this data is important for the wallets UI we will return the default value here.
+     */
+    return this.version?.token_deposit_percentage ?? TOKEN_DEPOSIT_PERCENTAGE;
+  }
+
+  /**
+   * Return the deposit percentage as an integer fraction (numerator/denominator).
+   *
+   * Prefers the `token_deposit_percentage_numerator`/`token_deposit_percentage_denominator`
+   * fields returned by the fullnode `/version` endpoint. When they're absent (older fullnodes
+   * that predate these fields), it falls back to deriving the numerator from the deprecated
+   * float percentage, keeping the standard 1e9 denominator, and ultimately to the defaults.
+   *
+   * @returns {{ numerator: bigint; denominator: bigint }}
+   */
+  getTokenDepositPercentageFraction(): { numerator: bigint; denominator: bigint } {
+    const numerator = this.version?.token_deposit_percentage_numerator;
+    const denominator = this.version?.token_deposit_percentage_denominator;
+    if (numerator != null && denominator != null) {
+      return { numerator: BigInt(numerator), denominator: BigInt(denominator) };
+    }
+
+    // Older fullnodes: derive the numerator from the deprecated float percentage.
+    const percentage = this.version?.token_deposit_percentage;
+    if (percentage == null) {
+      return {
+        numerator: TOKEN_DEPOSIT_PERCENTAGE_NUMERATOR,
+        denominator: TOKEN_DEPOSIT_PERCENTAGE_DENOMINATOR,
+      };
+    }
+    return {
+      numerator: BigInt(Math.round(percentage * Number(TOKEN_DEPOSIT_PERCENTAGE_DENOMINATOR))),
+      denominator: TOKEN_DEPOSIT_PERCENTAGE_DENOMINATOR,
+    };
+  }
+
+  /**
+   * Fetch all addresses from storage for one chain.
+   *
+   * `opts.legacy` defaults to `true`; pass `legacy: false` to
+   * enumerate the wallet's user-facing shielded receive addresses
+   * (the 71-byte encoded form) in BIP32-index order. See
+   * `IStore.addressIter` for the chain-selection semantics.
+   *
+   * @async
+   * @generator
+   * @param {IAddressChainOptions} [opts]
+   * @yields {Promise<IAddressInfo & Partial<IAddressMetadata>>} The addresses in store.
+   */
+  async *getAllAddresses(
+    opts?: IAddressChainOptions
+  ): AsyncGenerator<IAddressInfo & IAddressMetadata> {
+    for await (const address of this.store.addressIter(opts)) {
+      const meta = await this.store.getAddressMeta(address.base58);
+      yield { ...address, ...getDefaultAddressMeta(), ...meta };
+    }
+  }
+
+  /**
+   * Get the address info from store
+   *
+   * @param {string} base58 The base58 address to fetch
+   * @async
+   * @returns {Promise<(IAddressInfo & Partial<IAddressMetadata> & { seqnum: number })|null>} The address info or null if not found
+   */
+  async getAddressInfo(
+    base58: string
+  ): Promise<(IAddressInfo & IAddressMetadata & { seqnum: number }) | null> {
+    const address = await this.store.getAddress(base58);
+    if (address === null) {
+      return null;
+    }
+    const meta = await this.store.getAddressMeta(base58);
+    const seqnum = (await this.store.getSeqnumMeta(base58)) ?? -1;
+    return { ...address, ...getDefaultAddressMeta(), ...meta, seqnum };
+  }
+
+  /**
+   * Get the address at the given index
+   *
+   * @param {number} index
+   * @async
+   * @returns {Promise<IAddressInfo|null>} The address info or null if not found
+   */
+  async getAddressAtIndex(
+    index: number,
+    opts?: IAddressChainOptions
+  ): Promise<IAddressInfo | null> {
+    return this.store.getAddressAtIndex(index, opts);
+  }
+
+  /**
+   * Get the address public key, if not available derive from xpub
+   * @param {number} index
+   * @async
+   * @returns {Promise<string>} The public key DER encoded in hex
+   */
+  async getAddressPubkey(index: number): Promise<string> {
+    const addressInfo = await this.store.getAddressAtIndex(index);
+    if (addressInfo?.publicKey) {
+      // public key already cached on address info
+      return addressInfo.publicKey;
+    }
+
+    // derive public key from xpub
+    const accessData = await this._getValidAccessData();
+    const hdpubkey = new HDPublicKey(accessData.xpubkey);
+    const key: HDPublicKey = hdpubkey.deriveChild(index);
+    return key.publicKey.toString('hex');
+  }
+
+  /**
+   * Check if the address is from our wallet.
+   * @param {string} base58 The address encoded as base58
+   * @returns {Promise<boolean>} If the address is known by the storage
+   */
+  async isAddressMine(base58: string): Promise<boolean> {
+    return this.store.addressExists(base58);
+  }
+
+  /**
+   * Save address info on storage
+   * @param {IAddressInfo} info Address info to save on storage
+   * @returns {Promise<void>}
+   */
+  async saveAddress(info: IAddressInfo): Promise<void> {
+    await this.store.saveAddress(info);
+  }
+
+  /**
+   * Get the current address.
+   *
+   * @param {boolean|undefined} markAsUsed If we should set the next address as current
+   * @returns {Promise<string>} The address in base58 encoding
+   */
+  async getCurrentAddress(markAsUsed?: boolean, opts?: IAddressChainOptions): Promise<string> {
+    return this.store.getCurrentAddress(markAsUsed, opts);
+  }
+
+  /**
+   * Get a change address to use, if one is provided we need to check if we own it
+   * If not provided, the current address will be used instead.
+   *
+   * @param {Object} [options={}]
+   * @param {string|null|undefined} [options.changeAddress=undefined] User provided change address to use
+   * @returns {Promise<string>} The change address to use
+   */
+  async getChangeAddress({
+    changeAddress,
+  }: { changeAddress?: string | null | undefined } = {}): Promise<string> {
+    if (changeAddress) {
+      if (!(await this.isAddressMine(changeAddress))) {
+        throw new Error('Change address is not from the wallet');
+      }
+      // Return the resolved change address as-is, including a 71-byte shielded
+      // address. The shielded -> spend-derived-P2PKH rule for output scripts is
+      // owned by the transaction layer (createOutputScript /
+      // createOutputScriptFromAddress), which resolves every output address
+      // uniformly at script-building time. getChangeAddress is a storage-layer
+      // resolver and deliberately does not duplicate that send-side rule.
+      return changeAddress;
+    }
+
+    return this.getCurrentAddress();
+  }
+
+  /**
+   * Iterate on the history of transactions.
+   * @returns {AsyncGenerator<IHistoryTx>}
+   */
+  async *txHistory(): AsyncGenerator<IHistoryTx> {
+    for await (const tx of this.store.historyIter()) {
+      yield tx;
+    }
+  }
+
+  /**
+   * Iterate on the history of transactions that include the given token.
+   *
+   * @param {string|undefined} [tokenUid='00'] Token to fetch, defaults to HTR
+   * @returns {AsyncGenerator<IHistoryTx>}
+   */
+  async *tokenHistory(tokenUid?: string): AsyncGenerator<IHistoryTx> {
+    for await (const tx of this.store.historyIter(tokenUid || NATIVE_TOKEN_UID)) {
+      yield tx;
+    }
+  }
+
+  /**
+   * Fetch a transaction on the storage by it's id.
+   *
+   * @param {string} txId The transaction id to fetch
+   * @returns {Promise<IHistoryTx | null>} The transaction or null if not on storage
+   */
+  async getTx(txId: string): Promise<IHistoryTx | null> {
+    return this.store.getTx(txId);
+  }
+
+  /**
+   * Get the transactions being spent by the given inputs if they belong in our wallet.
+   *
+   * @param {Input[]} inputs A list of inputs
+   * @returns {AsyncGenerator<{tx: IHistoryTx, input: Input, index: number}>}
+   */
+  async *getSpentTxs(
+    inputs: Input[]
+  ): AsyncGenerator<{ tx: IHistoryTx; input: Input; index: number }> {
+    for await (const [index, input] of inputs.entries()) {
+      const tx = await this.getTx(input.hash);
+      // Ignore unknown transactions
+      if (tx === null) continue;
+      yield { tx, input, index };
+    }
+  }
+
+  /**
+   * Add a transaction on storage.
+   *
+   * @param {IHistoryTx} tx The transaction
+   * @returns {Promise<void>}
+   */
+  async addTx(tx: IHistoryTx): Promise<void> {
+    // Normalize: convert base64-encoded confidential fields to hex in
+    // tx.shielded_outputs[] (the fullnode delivers the transparent/shielded
+    // split; this does not move or extract entries).
+    transactionUtils.normalizeShieldedOutputs(tx);
+    // Preserve the wallet's own decoded shielded data across a re-save. The
+    // fullnode never re-sends it, so a wire-sourced overwrite (WS re-delivery,
+    // gap-limit history reload, stream re-sync) would otherwise erase the
+    // decoded balance of an already-processed tx. This is the single choke
+    // point every save passes through.
+    const storedTx = await this.store.getTx(tx.tx_id);
+    if (storedTx) {
+      transactionUtils.restoreStoredShieldedData(tx, storedTx);
+    }
+    await this.store.saveTx(tx);
+  }
+
+  /**
+   * Process the transaction history to calculate the metadata.
+   * @param pinCode The PIN that unlocks the scan key, once for the whole
+   *   history, to decode the wallet's shielded outputs while no scan key is in
+   *   memory (`scanXPrivKey`). The key in memory is used when there is one.
+   * @returns {Promise<void>}
+   */
+  async processHistory(pinCode?: string): Promise<void> {
+    await this.store.preProcessHistory();
+    await processHistoryUtil(this, {
+      rewardLock: this.version?.reward_spend_min_blocks,
+      pinCode,
+    });
+  }
+
+  /**
+   * Process the transaction history to calculate the metadata.
+   * @param tx The transaction to process
+   * @param pinCode The PIN that unlocks the scan key to decode the wallet's
+   *   shielded outputs of `tx` while no scan key is in memory (`scanXPrivKey`).
+   *   The key in memory is used when there is one.
+   * @returns {Promise<void>}
+   */
+  async processNewTx(tx: IHistoryTx, pinCode?: string): Promise<void> {
+    // Keep tx-timestamp index sorted
+    await this.store.preProcessHistory();
+    // Process the single tx we received
+    await processSingleTxUtil(this, tx, {
+      rewardLock: this.version?.reward_spend_min_blocks,
+      pinCode,
+    });
+  }
+
+  /**
+   * Iterate on all tokens on the storage.
+   *
+   * @returns {AsyncGenerator<ITokenData & Partial<ITokenMetadata>>}
+   */
+  async *getAllTokens(): AsyncGenerator<ITokenData & Partial<ITokenMetadata>> {
+    for await (const token of this.store.tokenIter()) {
+      yield token;
+    }
+  }
+
+  /**
+   * Iterate on all registered tokens of the wallet.
+   *
+   * @returns {AsyncGenerator<ITokenData & Partial<ITokenMetadata>>}
+   */
+  async *getRegisteredTokens(): AsyncGenerator<ITokenData & Partial<ITokenMetadata>> {
+    for await (const token of this.store.registeredTokenIter()) {
+      yield token;
+    }
+  }
+
+  /**
+   * Get a token from storage along with the metadata of the wallet transactions.
+   *
+   * @param {string} token Token uid to fetch
+   * @returns {Promise<(ITokenData & Partial<ITokenMetadata>)|null>}
+   */
+  async getToken(token: string): Promise<(ITokenData & Partial<ITokenMetadata>) | null> {
+    return this.store.getToken(token);
+  }
+
+  /**
+   * Regsiter a token.
+   * @param {ITokenData} token Token data to register
+   * @returns {Promise<void>}
+   */
+  async registerToken(token: ITokenData): Promise<void> {
+    await this.store.registerToken(token);
+  }
+
+  /**
+   * Unregister a token from the wallet.
+   * @param {Promise<void>} tokenUid Token uid to unregister.
+   * @returns {Promise<void>}
+   */
+  async unregisterToken(tokenUid: string): Promise<void> {
+    await this.store.unregisterToken(tokenUid);
+  }
+
+  /**
+   * Return if a token is registered.
+   * @param tokenUid - Token id.
+   * @returns {Promise<boolean>}
+   */
+  async isTokenRegistered(tokenUid: string): Promise<boolean> {
+    return this.store.isTokenRegistered(tokenUid);
+  }
+
+  /**
+   * Process the locked utxos to unlock them if the lock has expired.
+   * Will process both timelocked and heightlocked utxos.
+   *
+   * We will wait for any previous execution to finish before starting the next one.
+   *
+   * @param {number} height The network height to use as reference to unlock utxos
+   * @returns {Promise<void>}
+   */
+  async unlockUtxos(height: number): Promise<void> {
+    // Will wait for the previous execution to finish before starting the next one
+    // This is to prevent multiple calls to this method to run in parallel and "double unlock" utxos
+    this.utxoUnlockWait = this.utxoUnlockWait.then(() => this.processLockedUtxos(height));
+  }
+
+  /**
+   * Iterate on all utxos of the wallet.
+   * @returns {AsyncGenerator<IUtxo, any, unknown>}
+   */
+  async *getAllUtxos(): AsyncGenerator<IUtxo, void, void> {
+    for await (const utxo of this.store.utxoIter()) {
+      yield utxo;
+    }
+  }
+
+  /**
+   * Select utxos matching the request and do not select any utxos marked for inputs.
+   *
+   * @param {Omit<IUtxoFilterOptions, 'reward_lock'>} [options={}] Options to filter utxos and stop when the target is found.
+   * @returns {AsyncGenerator<IUtxo, any, unknown>}
+   */
+  /**
+   * Look up a specific UTXO by txId and index.
+   */
+  async getUtxo(utxoId: IUtxoId): Promise<IUtxo | null> {
+    return this.store.getUtxo(utxoId);
+  }
+
+  async *selectUtxos(
+    options: Omit<IUtxoFilterOptions, 'reward_lock'> = {}
+  ): AsyncGenerator<IUtxo, void, void> {
+    const filterSelected = (utxo: IUtxo): boolean => {
+      const utxoId = `${utxo.txId}:${utxo.index}`;
+      return !this.utxosSelectedAsInput.has(utxoId);
+    };
+    const newFilter = (utxo: IUtxo): boolean => {
+      const optionsFilter = options.filter_method ? options.filter_method(utxo) : true;
+      const selectedFilter = filterSelected(utxo);
+      if (options.only_available_utxos) {
+        // We need to check if the utxo is selected as an input since we only want available utxos.
+        return selectedFilter && optionsFilter;
+      }
+      // Only check the filter method if we don't care about available utxos.
+      return optionsFilter;
+    };
+
+    const newOptions: IUtxoFilterOptions = {
+      ...options,
+      filter_method: newFilter,
+    };
+    if (this.version?.reward_spend_min_blocks) {
+      newOptions.reward_lock = this.version.reward_spend_min_blocks;
+    }
+    for await (const utxo of this.store.selectUtxos(newOptions)) {
+      yield utxo;
+    }
+  }
+
+  /**
+   * Match the selected balance for the given authority and token.
+   *
+   * @param {OutputValueType} singleBalance The balance we want to match
+   * @param {string} token The token uid
+   * @param {OutputValueType} authorities The authorities we want to match
+   * @param {string} changeAddress change address to use
+   * @param {boolean} chooseInputs If we can add new inputs to the transaction
+   * @returns {Promise<{inputs: IDataInput[], outputs: IDataOutput[]}>} The inputs and outputs that match the balance
+   * @internal
+   */
+  async matchBalanceSelection(
+    singleBalance: OutputValueType,
+    token: string,
+    authorities: OutputValueType,
+    changeAddress: string,
+    chooseInputs: boolean
+  ): Promise<{ inputs: IDataInput[]; outputs: IDataOutput[] }> {
+    const newInputs: IDataInput[] = [];
+    const newOutputs: IDataOutput[] = [];
+
+    const options: Omit<IUtxoFilterOptions, 'reward_lock'> = {
+      authorities,
+      token,
+      only_available_utxos: true,
+    };
+    const isAuthority = authorities > 0;
+    if (isAuthority) {
+      options.max_utxos = Number(singleBalance);
+    } else {
+      options.target_amount = singleBalance;
+    }
+
+    if (singleBalance > 0) {
+      if (!chooseInputs) {
+        // We cannot choose inputs, so we fail
+        throw new Error(
+          `Insufficient funds in the given inputs for ${token}, missing ${singleBalance} more tokens.`
+        );
+      }
+      // We have a surplus of this token on the outputs, so we need to find utxos to match
+      let foundAmount = 0n;
+      for await (const utxo of this.selectUtxos(options)) {
+        if (isAuthority) {
+          foundAmount += 1n;
+        } else {
+          foundAmount += utxo.value;
+        }
+        newInputs.push({
+          txId: utxo.txId,
+          index: utxo.index,
+          token: utxo.token,
+          address: utxo.address,
+          value: utxo.value,
+          authorities: utxo.authorities,
+          ...(utxo.shielded ? { shielded: true } : {}),
+        });
+      }
+      if (foundAmount < singleBalance) {
+        // XXX: Insufficient funds
+        throw new Error(`Insufficient funds, found ${foundAmount} but requested ${singleBalance}`);
+      } else if (foundAmount > singleBalance) {
+        if (isAuthority) {
+          // Since we use max_utxos for authorities we should stop before we select more utxos than
+          // required, so there should be no need to add an authority change
+          throw new Error('This should never happen, authorities should be exact');
+        } else {
+          // Add change output
+          newOutputs.push({
+            type: getAddressType(changeAddress, this.config.getNetwork()),
+            token,
+            authorities: 0n,
+            value: foundAmount - singleBalance,
+            address: changeAddress,
+            timelock: null,
+          });
+        }
+      }
+    } else if (singleBalance < 0) {
+      // We have a surplus of this token on the inputs, so we need to add a change output
+      if (isAuthority) {
+        for (let i = 0; i < -singleBalance; i++) {
+          newOutputs.push({
+            type: getAddressType(changeAddress, this.config.getNetwork()),
+            token,
+            authorities,
+            value: authorities,
+            address: changeAddress,
+            timelock: null,
+          });
+        }
+      } else {
+        newOutputs.push({
+          type: getAddressType(changeAddress, this.config.getNetwork()),
+          token,
+          authorities: 0n,
+          value: -singleBalance,
+          address: changeAddress,
+          timelock: null,
+        });
+      }
+    }
+
+    return { inputs: newInputs, outputs: newOutputs };
+  }
+
+  /**
+   * Generate inputs and outputs so that the transaction balance is filled.
+   *
+   * @param {string} token Token uid
+   * @param {Record<'funds'|'mint'|'melt', number>} balance Balance of funds and authorities for a token on the transaction
+   * @param {IFillTxOptions} [options={}]
+   * @param {string} options.changeAddress Address to send change to
+   * @param {boolean} [options.skipAuthorities=false] If we should fill authorities or only funds
+   * @param {boolean} [options.chooseInputs=true] If we can choose inputs when needed or not
+   * @returns {Promise<{inputs: IDataInput[], outputs: IDataOutput[]}>} The inputs and outputs to fill the transaction
+   * @internal
+   */
+  async matchTokenBalance(
+    token: string,
+    balance: Record<'funds' | AuthorityType, OutputValueType>,
+    { changeAddress, skipAuthorities = true, chooseInputs = true }: IFillTxOptions = {}
+  ): Promise<{ inputs: IDataInput[]; outputs: IDataOutput[] }> {
+    const addressForChange = changeAddress || (await this.getCurrentAddress());
+    // balance holds the balance of all tokens on the transaction
+    const newInputs: IDataInput[] = [];
+    const newOutputs: IDataOutput[] = [];
+    // match funds
+    const { inputs: fundsInputs, outputs: fundsOutputs } = await this.matchBalanceSelection(
+      balance.funds,
+      token,
+      0n,
+      addressForChange,
+      chooseInputs
+    );
+    newInputs.push(...fundsInputs);
+    newOutputs.push(...fundsOutputs);
+
+    if (!(skipAuthorities || token === NATIVE_TOKEN_UID)) {
+      // Match authority balance (only possible for custom tokens)
+      // match mint
+      const { inputs: mintInputs, outputs: mintOutputs } = await this.matchBalanceSelection(
+        balance.mint,
+        token,
+        1n,
+        addressForChange,
+        chooseInputs
+      );
+      // match melt
+      const { inputs: meltInputs, outputs: meltOutputs } = await this.matchBalanceSelection(
+        balance.melt,
+        token,
+        2n,
+        addressForChange,
+        chooseInputs
+      );
+
+      newInputs.push(...mintInputs, ...meltInputs);
+      newOutputs.push(...mintOutputs, ...meltOutputs);
+    }
+
+    return {
+      inputs: newInputs,
+      outputs: newOutputs,
+    };
+  }
+
+  /**
+   * Check the balance of the transaction and add inputs and outputs to match the funds and authorities.
+   * It will fail if we do not have enough funds or authorities and it will fail if we try to add too many inputs or outputs.
+   *
+   * @param tx The incomplete transaction we need to fill
+   * @param {IFillTxOptions} [options={}] options to use a change address.
+   *
+   * @async
+   * @returns {Promise<void>}
+   */
+  async fillTx(
+    token: string,
+    tx: IDataTx,
+    options: IFillTxOptions = {}
+  ): Promise<{ inputs: IDataInput[]; outputs: IDataOutput[] }> {
+    const tokenBalance = await transactionUtils.calculateTxBalanceToFillTx(token, tx);
+    const { inputs: newInputs, outputs: newOutputs } = await this.matchTokenBalance(
+      token,
+      tokenBalance,
+      options
+    );
+
+    // Validate if we will add too many inputs/outputs
+    const max_inputs = this.version?.max_number_inputs || MAX_INPUTS;
+    const max_outputs = this.version?.max_number_outputs || MAX_OUTPUTS;
+    if (
+      tx.inputs.length + newInputs.length > max_inputs ||
+      tx.outputs.length + newOutputs.length > max_outputs
+    ) {
+      // we have more inputs/outputs than what can be sent on the transaction
+      throw new Error('When over the maximum amount of inputs/outputs');
+    }
+
+    return { inputs: newInputs, outputs: newOutputs };
+  }
+
+  /**
+   * Mark an utxo as selected as input
+   *
+   * @param {IUtxoId} utxo The Data to identify the utxo
+   * @param {boolean} markAs Mark the utxo as this value
+   * @param {number|undefined} ttl Unmark the utxo after this amount os ms passed
+   *
+   * @async
+   * @returns {Promise<void>}
+   */
+  async utxoSelectAsInput(utxo: IUtxoId, markAs: boolean, ttl?: number): Promise<void> {
+    const tx = await this.getTx(utxo.txId);
+    if (!tx) {
+      return;
+    }
+    // Resolve the actual output the UTXO record refers to via the
+    // SEPARATED-model resolver. A shielded UTXO has on-chain index
+    // outputs.length + s, so a positional `tx.outputs[utxo.index]` would read
+    // the wrong (or no) entry — the `.spent_by` check below would then consult
+    // the wrong entry's flag.
+    const resolved = transactionUtils.resolveSpentOutput(tx, utxo.index);
+    if (!resolved) {
+      return;
+    }
+
+    // Both transparent (`string | null`) and shielded (`string | null |
+    // undefined`) outputs carry spent_by; treat undefined as unspent.
+    const spentBy = resolved.output.spent_by ?? null;
+    if (markAs && spentBy !== null) {
+      // Already spent, no need to mark as selected_as_input
+      return;
+    }
+
+    const utxoId = `${utxo.txId}:${utxo.index}`;
+    // A previous selection's timer must not clear this one (or a later one): e.g. a send that
+    // failed and released its inputs, then an immediate retry that marks them again.
+    const previousTimer = this.utxoSelectionTimers.get(utxoId);
+    if (previousTimer !== undefined) {
+      clearTimeout(previousTimer);
+      this.utxoSelectionTimers.delete(utxoId);
+    }
+    if (markAs) {
+      this.utxosSelectedAsInput.set(utxoId, markAs);
+      // if a ttl is given, we should reverse
+      if (ttl) {
+        const timer = setTimeout(() => {
+          this.utxoSelectionTimers.delete(utxoId);
+          this.utxosSelectedAsInput.delete(utxoId);
+        }, ttl);
+        this.utxoSelectionTimers.set(utxoId, timer);
+      }
+    } else {
+      this.utxosSelectedAsInput.delete(utxoId);
+    }
+  }
+
+  /**
+   * Iterate over all locked utxos and unlock them if needed
+   * When a utxo is unlocked, the balances and metadatas are updated
+   * and the utxo is removed from the locked utxos.
+   *
+   * @param {number} height The new height of the best chain
+   */
+  async processLockedUtxos(height: number): Promise<void> {
+    const nowTs = Math.floor(Date.now() / 1000);
+    for await (const lockedUtxo of this.store.iterateLockedUtxos()) {
+      await processUtxoUnlock(this, lockedUtxo, {
+        nowTs,
+        rewardLock: this.version?.reward_spend_min_blocks || 0,
+        currentHeight: height,
+      });
+    }
+  }
+
+  /**
+   * Check if an utxo is selected as input.
+   *
+   * @param {IUtxoId} utxo The utxo we want to check if it is selected as input
+   * @returns {Promise<boolean>}
+   * @example
+   * const isSelected = await isUtxoSelectedAsInput({ txId: 'tx1', index: 0 });
+   */
+  async isUtxoSelectedAsInput(utxo: IUtxoId): Promise<boolean> {
+    const utxoId = `${utxo.txId}:${utxo.index}`;
+    return this.utxosSelectedAsInput.has(utxoId);
+  }
+
+  /**
+   * Iterate on all locked utxos.
+   * Used to check if the utxos are still locked.
+   *
+   * @returns {AsyncGenerator<IUtxoId>}
+   */
+  async *utxoSelectedAsInputIter(): AsyncGenerator<IUtxoId> {
+    for (const [utxoStr, isSelected] of this.utxosSelectedAsInput.entries()) {
+      if (isSelected) {
+        const [txId, index] = utxoStr.split(':');
+        yield {
+          txId,
+          index: parseInt(index, 10),
+        };
+      }
+    }
+  }
+
+  /**
+   * Helper to check if the access data exists before returning it.
+   * Having the accessData as null means the wallet is not initialized so we should throw an error.
+   *
+   * @returns {Promise<IWalletAccessData>} The access data.
+   * @internal
+   */
+  async _getValidAccessData(): Promise<IWalletAccessData> {
+    const accessData = await this.getAccessData();
+    if (!accessData) {
+      throw new UninitializedWalletError();
+    }
+    return accessData;
+  }
+
+  /**
+   * Get the wallet's access data if the wallet is initialized.
+   *
+   * @returns {Promise<IWalletAccessData | null>}
+   */
+  async getAccessData(): Promise<IWalletAccessData | null> {
+    return this.store.getAccessData();
+  }
+
+  /**
+   * Save the access data, initializing the wallet.
+   *
+   * @param {IWalletAccessData} data The wallet access data
+   * @returns {Promise<void>}
+   */
+  async saveAccessData(data: IWalletAccessData): Promise<void> {
+    return this.store.saveAccessData(data);
+  }
+
+  /**
+   * Get the wallet's metadata.
+   *
+   * @returns {Promise<IWalletData>}
+   */
+  async getWalletData(): Promise<IWalletData> {
+    return this.store.getWalletData();
+  }
+
+  /**
+   * Get the wallet type, i.e. P2PKH or MultiSig.
+   *
+   * @returns {Promise<WalletType>}
+   */
+  async getWalletType(): Promise<WalletType> {
+    const accessData = await this._getValidAccessData();
+    return accessData.walletType;
+  }
+
+  /**
+   * Set the current height
+   * @param {number} height The current height
+   * @returns {Promise<void>} The current height of the network
+   */
+  async setCurrentHeight(height: number): Promise<void> {
+    await this.store.setCurrentHeight(height);
+  }
+
+  /**
+   * Get the current height
+   * @returns {Promise<number>} The current height
+   */
+  async getCurrentHeight(): Promise<number> {
+    return this.store.getCurrentHeight();
+  }
+
+  /**
+   * Return wheather the wallet is readonly, i.e. was started without the private key.
+   * @returns {Promise<boolean>}
+   */
+  async isReadonly(): Promise<boolean> {
+    const accessData = await this._getValidAccessData();
+    return (accessData.walletFlags & WALLET_FLAGS.READONLY) > 0;
+  }
+
+  /**
+   * Decrypt and return the main private key of the wallet.
+   *
+   * @param {string} pinCode Pin to unlock the private key
+   * @returns {Promise<string>} The HDPrivateKey in string format.
+   */
+  async getMainXPrivKey(pinCode: string): Promise<string> {
+    const accessData = await this._getValidAccessData();
+    if (accessData.mainKey === undefined) {
+      throw new Error('Private key is not present on this wallet.');
+    }
+
+    // decryptData handles pin validation
+    return decryptData(accessData.mainKey, pinCode);
+  }
+
+  /**
+   * Get account path xprivkey if available.
+   *
+   * @param {string} pinCode
+   * @returns {Promise<string>}
+   */
+  async getAcctPathXPrivKey(pinCode: string): Promise<string> {
+    const accessData = await this._getValidAccessData();
+    if (!accessData.acctPathKey) {
+      throw new Error('Private key is not present on this wallet.');
+    }
+
+    // decryptData handles pin validation
+    return decryptData(accessData.acctPathKey, pinCode);
+  }
+
+  /**
+   * Get the scan chain xprivkey for shielded ECDH.
+   * Uses account 1' (m/44'/280'/1'/0), separate from legacy (account 0').
+   *
+   * @throws {ShieldedKeyError} `shielded-multisig` for a multisig wallet, which
+   *   has no shielded keys
+   */
+  async getScanXPrivKey(pinCode: string): Promise<string> {
+    const accessData = await this._getValidAccessData();
+    refuseMultisigShieldedKeys(accessData);
+    if (!accessData.scanMainKey) {
+      throw new Error('Scan private key is not present on this wallet.');
+    }
+    return decryptData(accessData.scanMainKey, pinCode);
+  }
+
+  /**
+   * Get the spend chain xprivkey for shielded UTXO signing.
+   * Uses account 2' (m/44'/280'/2'/0).
+   *
+   * @throws {ShieldedKeyError} `shielded-multisig` for a multisig wallet, which
+   *   has no shielded keys
+   */
+  async getSpendXPrivKey(pinCode: string): Promise<string> {
+    const accessData = await this._getValidAccessData();
+    refuseMultisigShieldedKeys(accessData);
+    if (!accessData.spendMainKey) {
+      throw new Error('Spend private key is not present on this wallet.');
+    }
+    return decryptData(accessData.spendMainKey, pinCode);
+  }
+
+  /**
+   * Get the scan chain xpubkey for shielded address derivation.
+   * Uses account 1' (m/44'/280'/1'/0).
+   * Returns undefined if wallet was created before shielded feature.
+   *
+   * @throws {ShieldedKeyError} `shielded-multisig` for a multisig wallet, which
+   *   has no shielded keys
+   */
+  async getScanXPubKey(): Promise<string | undefined> {
+    const accessData = await this._getValidAccessData();
+    refuseMultisigShieldedKeys(accessData);
+    return accessData.scanXpubkey;
+  }
+
+  /**
+   * Get the spend chain xpubkey for shielded address derivation.
+   * Uses account 2' (m/44'/280'/2'/0).
+   * Returns undefined if wallet was created before shielded feature.
+   *
+   * @throws {ShieldedKeyError} `shielded-multisig` for a multisig wallet, which
+   *   has no shielded keys
+   */
+  async getSpendXPubKey(): Promise<string | undefined> {
+    const accessData = await this._getValidAccessData();
+    refuseMultisigShieldedKeys(accessData);
+    return accessData.spendXpubkey;
+  }
+
+  /**
+   * Decrypt and return the auth private key of the wallet.
+   *
+   * @param {string} pinCode Pin to unlock the private key
+   * @returns {Promise<string>} The Auth HDPrivateKey in string format.
+   */
+  async getAuthPrivKey(pinCode: string): Promise<string> {
+    const accessData = await this._getValidAccessData();
+    if (accessData.authKey === undefined) {
+      throw new Error('Private key is not present on this wallet.');
+    }
+
+    // decryptData handles pin validation
+    return decryptData(accessData.authKey, pinCode);
+  }
+
+  /**
+   * Handle storage operations for a wallet being stopped.
+   * @param {{
+   *   connection?: FullNodeConnection;
+   *   cleanStorage?: boolean;
+   *   cleanAddresses?: boolean;
+   *   cleanTokens?: boolean;
+   * }} Options to handle stop
+   * @returns {Promise<void>}
+   */
+  async handleStop({
+    connection,
+    cleanStorage = false,
+    cleanAddresses = false,
+    cleanTokens = false,
+  }: {
+    connection?: FullNodeConnection;
+    cleanStorage?: boolean;
+    cleanAddresses?: boolean;
+    cleanTokens?: boolean;
+  } = {}): Promise<void> {
+    // The addresses loadAddresses derived belong to this wallet session. Drop
+    // them before anything that can throw.
+    clearDerivedAddressCache(this);
+    // The scan key in memory and the shielded view end with the wallet, whatever
+    // the options, before any step below can throw or await.
+    this.scanXPrivKey = null;
+    this.shieldedView.started = false;
+    this.shieldedView.reset();
+    if (connection) {
+      for await (const addressInfo of this.getAllAddresses()) {
+        connection.unsubscribeAddress(addressInfo.base58);
+      }
+      connection.removeMetricsHandlers();
+    }
+    this.version = null;
+    if (cleanStorage || cleanAddresses || cleanTokens) {
+      // A tx still being credited when the wallet stopped is waited for, so
+      // the clean removes what it writes.
+      await txProcessingSettled(this);
+      await this.cleanStorage(cleanStorage, cleanAddresses, cleanTokens);
+    }
+  }
+
+  /**
+   * Clean the storage data.
+   *
+   * @param {boolean} [cleanHistory=false] If we should clean the history data
+   * @param {boolean} [cleanAddresses=false] If we should clean the address data
+   * @param {boolean} [cleanTokens=false] If we should clean the registered tokens
+   * @returns {Promise<void>}
+   */
+  async cleanStorage(
+    cleanHistory: boolean = false,
+    cleanAddresses: boolean = false,
+    cleanTokens: boolean = false
+  ): Promise<void> {
+    return this.store.cleanStorage(cleanHistory, cleanAddresses, cleanTokens);
+  }
+
+  /**
+   * Check if the pin is correct
+   *
+   * @param {string} pinCode - Pin to check
+   * @returns {Promise<boolean>}
+   * @throws {Error} if the wallet is not initialized
+   * @throws {Error} if the wallet does not have the private key
+   */
+  async checkPin(pinCode: string): Promise<boolean> {
+    const accessData = await this._getValidAccessData();
+    if (!accessData.mainKey) {
+      throw new Error('Cannot check pin without the private key.');
+    }
+
+    return checkPassword(accessData.mainKey, pinCode);
+  }
+
+  /**
+   * Check if the password is correct
+   *
+   * @param {string} password - Password to check
+   * @returns {Promise<boolean>}
+   * @throws {Error} if the wallet is not initialized
+   * @throws {Error} if the wallet does not have the private key
+   */
+  async checkPassword(password: string): Promise<boolean> {
+    const accessData = await this._getValidAccessData();
+    if (!accessData.words) {
+      throw new Error('Cannot check password without the words.');
+    }
+
+    return checkPassword(accessData.words, password);
+  }
+
+  /**
+   * Change the wallet pin.
+   * @param {string} oldPin Old pin to unlock data.
+   * @param {string} newPin New pin to lock data.
+   * @returns {Promise<void>}
+   */
+  async changePin(oldPin: string, newPin: string): Promise<void> {
+    const accessData = await this._getValidAccessData();
+
+    const newAccessData = walletUtils.changeEncryptionPin(accessData, oldPin, newPin);
+
+    // Save the changes made
+    await this.saveAccessData(newAccessData);
+  }
+
+  /**
+   * Change the wallet password.
+   *
+   * @param {string} oldPassword Old password
+   * @param {string} newPassword New password
+   * @returns {Promise<void>}
+   */
+  async changePassword(oldPassword: string, newPassword: string): Promise<void> {
+    const accessData = await this._getValidAccessData();
+
+    const newAccessData = walletUtils.changeEncryptionPassword(
+      accessData,
+      oldPassword,
+      newPassword
+    );
+
+    // Save the changes made
+    await this.saveAccessData(newAccessData);
+  }
+
+  /**
+   * Set the wallet gap limit.
+   * @param {number} value New gap limit to use.
+   * @returns {Promise<void>}
+   */
+  async setGapLimit(value: number): Promise<void> {
+    return this.store.setGapLimit(value);
+  }
+
+  /**
+   * Get the wallet gap limit.
+   * @returns {Promise<number>}
+   */
+  async getGapLimit(): Promise<number> {
+    if ((await this.getScanningPolicy()) !== SCANNING_POLICY.GAP_LIMIT) {
+      throw new Error('Wallet is not configured to use gap limit');
+    }
+    return this.store.getGapLimit();
+  }
+
+  /**
+   * Get the index limit.
+   * @returns {Promise<Omit<IIndexLimitAddressScanPolicy, 'policy'>>}
+   */
+  async getIndexLimit(): Promise<Omit<IIndexLimitAddressScanPolicy, 'policy'> | null> {
+    return this.store.getIndexLimit();
+  }
+
+  /**
+   * Get the scanning policy.
+   * @returns {Promise<AddressScanPolicy>}
+   */
+  async getScanningPolicy(): Promise<AddressScanPolicy> {
+    return this.store.getScanningPolicy();
+  }
+
+  /**
+   * Set the scanning policy data.
+   * @param {AddressScanPolicyData | null} data
+   * @returns {Promise<void>}
+   */
+  async setScanningPolicyData(data: AddressScanPolicyData | null): Promise<void> {
+    if (!data) return;
+    await this.store.setScanningPolicyData(data);
+  }
+
+  /**
+   * Get the scanning policy data.
+   * @returns {Promise<AddressScanPolicyData>}
+   */
+  async getScanningPolicyData(): Promise<AddressScanPolicyData> {
+    return this.store.getScanningPolicyData();
+  }
+
+  /**
+   * Return if the loaded wallet was started from a hardware wallet.
+   * @returns {Promise<boolean>}
+   */
+  async isHardwareWallet(): Promise<boolean> {
+    const accessData = await this._getValidAccessData();
+    return (accessData.walletFlags & WALLET_FLAGS.HARDWARE) > 0;
+  }
+
+  /**
+   * Return if the nano contract is registered for the given address based on ncId.
+   * @param ncId Nano Contract ID.
+   * @returns `true` if registered and `false` otherwise.
+   * @async
+   */
+  async isNanoContractRegistered(ncId: string): Promise<boolean> {
+    return this.store.isNanoContractRegistered(ncId);
+  }
+
+  /**
+   * Iterate on all registered nano contracts of the wallet.
+   *
+   * @async
+   * @generator
+   * @returns {AsyncGenerator<INcData>}
+   */
+  async *getRegisteredNanoContracts(): AsyncGenerator<INcData> {
+    for await (const ncData of this.store.registeredNanoContractsIter()) {
+      yield ncData;
+    }
+  }
+
+  /**
+   * Get nano contract data.
+   * @param ncId Nano Contract ID.
+   * @returns An instance of Nano Contract data.
+   */
+  async getNanoContract(ncId: string): Promise<INcData | null> {
+    return this.store.getNanoContract(ncId);
+  }
+
+  /**
+   * Register nano contract data instance.
+   * @param ncId Nano Contract ID.
+   * @param ncValue Nano Contract basic information.
+   */
+  async registerNanoContract(ncId: string, ncValue: INcData): Promise<void> {
+    return this.store.registerNanoContract(ncId, ncValue);
+  }
+
+  /**
+   * Unregister nano contract.
+   * @param ncId Nano Contract ID.
+   */
+  async unregisterNanoContract(ncId: string): Promise<void> {
+    return this.store.unregisterNanoContract(ncId);
+  }
+
+  /**
+   * Update nano contract registered address
+   * @param ncId Nano Contract ID.
+   * @param address New registered address
+   */
+  async updateNanoContractRegisteredAddress(ncId: string, address: string): Promise<void> {
+    if (!(await this.isAddressMine(address))) {
+      throw new Error('Registered address must belong to the wallet.');
+    }
+    return this.store.updateNanoContractRegisteredAddress(ncId, address);
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "commit": "d2a86ece964247d8313c20fbfeb0c7199d9bff5a",
+  "detail": {
+    "language": ".js",
+    "note": "Solidity Foundry adapter only in this release"
+  },
+  "input_hash": "b1b2aaed2bbaf4656307cdb40d1dd301e9736647a005118721318f5b752761ee",
+  "processed_at": "2026-10-15T00:50:50.455947+00:00",
+  "repository": "HathorNetwork/hathor-wallet-mobile",
+  "source_draft": "/home/izy/isaiz-bugbounty/autohack/.autohack-next-stage/investigator/triage/drafts/f4afe916492b0b610b02fb24f100ce3efb35e9c94a832ab8673a46b35f4385b3.json",
+  "status": "adapter_not_available",
+  "submitted": false,
+  "verified_vulnerability": false
+}

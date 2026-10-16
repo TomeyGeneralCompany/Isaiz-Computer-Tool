@@ -1,0 +1,305 @@
+use super::*;
+
+#[test]
+fn test_swap_debt_refund_only_uses_strategy_excess() {
+    let mut t = LendingTest::new().three_asset_usdc_eth_wbtc().build();
+
+    t.supply(ALICE, "USDC", 10_000.0);
+    t.borrow(ALICE, "ETH", 0.5);
+
+    let eth_market = t.resolve_market("ETH");
+    let eth_client = token::Client::new(&t.env, &eth_market.asset);
+    eth_market
+        .token_admin
+        .mint(&t.controller_address(), &50_0000000i128);
+
+    t.fund_router("ETH", 1.0);
+
+    let steps = build_aggregator_swap(&t, "WBTC", "ETH", apply_flash_fee(50_000), 1_0000000);
+
+    let alice_eth_before = t.token_balance(ALICE, "ETH");
+    t.swap_debt(ALICE, "ETH", 0.005, "WBTC", &steps);
+    let alice_eth_after = t.token_balance(ALICE, "ETH");
+    let controller_eth_after = eth_client.balance(&t.controller_address());
+
+    assert!(
+        (alice_eth_after - alice_eth_before - 0.5).abs() < 0.01,
+        "caller should only receive the 0.5 ETH overpayment, before={}, after={}",
+        alice_eth_before,
+        alice_eth_after
+    );
+    assert_eq!(
+        controller_eth_after, 50_0000000i128,
+        "unrelated controller ETH balance must not be swept to the caller"
+    );
+}
+
+#[test]
+fn test_swap_debt_health_factor_guard_after_swap() {
+    let mut t = LendingTest::new().three_asset_usdc_eth_wbtc().build();
+
+    let usdc = t.resolve_asset("USDC");
+    t.env.as_contract(&t.controller_address(), || {
+        let key = ControllerKey::SpokeAsset(1, hub_asset(usdc.clone()));
+        let mut config: SpokeAssetConfig = t
+            .env
+            .storage()
+            .persistent()
+            .get(&key)
+            .expect("USDC spoke listing should exist");
+        config.loan_to_value = 9000;
+        config.liquidation_threshold = 5000;
+        t.env.storage().persistent().set(&key, &config);
+    });
+
+    t.supply(ALICE, "USDC", 100_000.0);
+    t.borrow(ALICE, "ETH", 5.0);
+
+    t.fund_router("ETH", 5.0);
+
+    let steps = build_aggregator_swap(&t, "WBTC", "ETH", apply_flash_fee(10_000_000), 5_0000000);
+    let result = t.try_swap_debt(ALICE, "ETH", 1.0, "WBTC", &steps);
+
+    assert_contract_error(result, errors::INSUFFICIENT_COLLATERAL);
+}
+
+#[test]
+fn test_swap_debt_empty_swap_payload_rolls_back_new_debt() {
+    let mut t = LendingTest::new().three_asset_usdc_eth_wbtc().build();
+
+    t.supply(ALICE, "USDC", 100_000.0);
+    t.borrow(ALICE, "ETH", 1.0);
+
+    let eth_debt_before = t.borrow_balance_raw(ALICE, "ETH");
+    let wbtc_debt_before = t.borrow_balance_raw(ALICE, "WBTC");
+    let empty_steps = Bytes::new(&t.env);
+
+    let result = t.try_swap_debt(ALICE, "ETH", 0.005, "WBTC", &empty_steps);
+    assert_contract_error(result, errors::INVALID_PAYMENTS);
+
+    assert_eq!(
+        t.borrow_balance_raw(ALICE, "ETH"),
+        eth_debt_before,
+        "existing ETH debt must roll back unchanged after an invalid route"
+    );
+    assert_eq!(
+        t.borrow_balance_raw(ALICE, "WBTC"),
+        wbtc_debt_before,
+        "flash-opened WBTC debt must not survive empty route rejection"
+    );
+}
+
+#[test]
+fn test_swap_debt_closes_existing_debt_even_if_existing_asset_disabled() {
+    let mut t = LendingTest::new().three_asset_usdc_eth_wbtc().build();
+
+    t.supply(ALICE, "USDC", 100_000.0);
+    t.borrow(ALICE, "ETH", 1.0);
+
+    let eth = t.resolve_asset("ETH");
+    t.env.as_contract(&t.controller_address(), || {
+        let key = ControllerKey::SpokeAsset(1, hub_asset(eth.clone()));
+        let mut config: SpokeAssetConfig = t
+            .env
+            .storage()
+            .persistent()
+            .get(&key)
+            .expect("ETH spoke listing should exist");
+        config.is_borrowable = false;
+        t.env.storage().persistent().set(&key, &config);
+    });
+
+    t.fund_router("ETH", 1.0);
+    let steps = build_aggregator_swap(&t, "WBTC", "ETH", apply_flash_fee(50_000), 1_0000000);
+    t.swap_debt(ALICE, "ETH", 0.005, "WBTC", &steps);
+
+    assert_eq!(
+        t.borrow_balance_raw(ALICE, "ETH"),
+        0,
+        "swap_debt should fully close the disabled existing debt asset"
+    );
+    assert!(
+        t.borrow_balance_raw(ALICE, "WBTC") > 0,
+        "new WBTC debt should remain after the rotation"
+    );
+}
+
+#[test]
+fn test_swap_debt_rejects_when_paused() {
+    let mut t = LendingTest::new().three_asset_usdc_eth_wbtc().build();
+
+    t.supply(ALICE, "USDC", 100_000.0);
+    t.borrow(ALICE, "ETH", 1.0);
+
+    t.pause();
+
+    let steps = build_aggregator_swap(&t, "WBTC", "ETH", 0, 1_0000000);
+    let result = t.try_swap_debt(ALICE, "ETH", 1.0, "WBTC", &steps);
+    assert_contract_error(result, errors::CONTRACT_PAUSED);
+}
+
+#[test]
+fn test_swap_debt_rejects_during_flash_loan() {
+    let mut t = LendingTest::new().three_asset_usdc_eth_wbtc().build();
+
+    t.supply(ALICE, "USDC", 100_000.0);
+    t.borrow(ALICE, "ETH", 1.0);
+
+    t.set_flash_loan_ongoing(true);
+
+    let steps = build_aggregator_swap(&t, "WBTC", "ETH", 0, 1_0000000);
+    let result = t.try_swap_debt(ALICE, "ETH", 1.0, "WBTC", &steps);
+    assert_contract_error(result, errors::FLASH_LOAN_ONGOING);
+}
+
+#[test]
+fn test_swap_collateral_applies_spoke_params_to_destination_position() {
+    let mut t = LendingTest::new().stablecoin_spoke_two_asset().build();
+
+    let account_id = t.create_spoke_account(ALICE, 2);
+    t.supply_to(ALICE, account_id, "USDC", 5_000.0);
+
+    t.fund_router("USDT", 1_000.0);
+
+    let steps = build_aggregator_swap(&t, "USDC", "USDT", 10_000_000_000, 10_000_000_000);
+    t.swap_collateral(ALICE, "USDC", 1_000.0, "USDT", &steps);
+
+    let (ltv, threshold) = supply_position_params(&t, account_id, "USDT");
+    assert_eq!(ltv, 9700, "destination collateral should use spoke LTV");
+    assert_eq!(
+        threshold, 9800,
+        "destination collateral should use spoke liquidation threshold"
+    );
+}
+
+#[test]
+fn test_swap_collateral_merges_existing_destination_and_removes_source() {
+    let mut t = LendingTest::new().standard_two_asset().build();
+
+    t.supply(ALICE, "USDC", 1_000.0);
+    t.supply(ALICE, "ETH", 2.0);
+
+    let eth_supply_before = t.supply_balance_raw(ALICE, "ETH");
+    t.fund_router("ETH", 5.0);
+    let steps = build_aggregator_swap(&t, "USDC", "ETH", 10_000_000_000, 5_0000000);
+
+    t.swap_collateral(ALICE, "USDC", 1_000.0, "ETH", &steps);
+
+    assert_eq!(
+        t.supply_balance_raw(ALICE, "USDC"),
+        0,
+        "full source collateral swap should remove the old USDC position"
+    );
+    assert_eq!(
+        t.supply_balance_raw(ALICE, "ETH"),
+        eth_supply_before + 5_0000000,
+        "destination ETH collateral should merge with the existing position"
+    );
+}
+
+#[test]
+fn test_swap_debt_non_borrowable_new_debt() {
+    let mut t = LendingTest::new()
+        .three_asset_usdc_eth_wbtc()
+        .with_market_config("WBTC", |c| {
+            c.is_borrowable = false;
+        })
+        .build();
+
+    t.supply(ALICE, "USDC", 100_000.0);
+    t.borrow(ALICE, "ETH", 1.0);
+
+    let steps = build_aggregator_swap(&t, "WBTC", "ETH", 0, 1_0000000);
+    let result = t.try_swap_debt(ALICE, "ETH", 1.0, "WBTC", &steps);
+    assert_contract_error(result, errors::ASSET_NOT_BORROWABLE);
+}
+
+#[test]
+fn test_swap_debt_spoke_wrong_category() {
+    let mut t = LendingTest::new()
+        .with_market(usdc_preset())
+        .with_market(usdt_stable_preset())
+        .with_market(eth_preset())
+        .with_spoke(2, STABLECOIN_SPOKE)
+        .with_spoke_asset(2, "USDC", true, true)
+        .with_spoke_asset(2, "USDT", true, true)
+        .build();
+
+    t.create_spoke_account(ALICE, 2);
+    t.supply(ALICE, "USDC", 10_000.0);
+    t.borrow(ALICE, "USDT", 5_000.0);
+
+    let steps = build_aggregator_swap(&t, "ETH", "USDT", 0, 5000_0000000);
+    let result = t.try_swap_debt(ALICE, "USDT", 5_000.0, "ETH", &steps);
+    assert_contract_error(result, errors::ASSET_NOT_IN_SPOKE);
+}
+
+#[test]
+fn test_swap_collateral_rejects_when_paused() {
+    let mut t = LendingTest::new().standard_two_asset().build();
+
+    t.supply(ALICE, "USDC", 100_000.0);
+    t.borrow(ALICE, "ETH", 1.0);
+
+    t.pause();
+
+    let steps = build_aggregator_swap(&t, "USDC", "ETH", 0, 5_0000000);
+    let result = t.try_swap_collateral(ALICE, "USDC", 1000.0, "ETH", &steps);
+    assert_contract_error(result, errors::CONTRACT_PAUSED);
+}
+
+#[test]
+fn test_swap_collateral_rejects_during_flash_loan() {
+    let mut t = LendingTest::new().standard_two_asset().build();
+
+    t.supply(ALICE, "USDC", 100_000.0);
+    t.borrow(ALICE, "ETH", 1.0);
+
+    t.set_flash_loan_ongoing(true);
+
+    let steps = build_aggregator_swap(&t, "USDC", "ETH", 0, 5_0000000);
+    let result = t.try_swap_collateral(ALICE, "USDC", 1000.0, "ETH", &steps);
+    assert_contract_error(result, errors::FLASH_LOAN_ONGOING);
+}
+
+#[test]
+fn test_swap_collateral_non_collateralizable() {
+    let mut t = LendingTest::new()
+        .three_asset_usdc_eth_wbtc()
+        .with_market_config("WBTC", |c| {
+            c.is_collateralizable = false;
+        })
+        .build();
+
+    t.supply(ALICE, "USDC", 100_000.0);
+    t.borrow(ALICE, "ETH", 1.0);
+
+    let steps = build_aggregator_swap(&t, "USDC", "WBTC", 0, 1_00000000);
+    let result = t.try_swap_collateral(ALICE, "USDC", 1000.0, "WBTC", &steps);
+    assert_contract_error(result, errors::NOT_COLLATERAL);
+}
+
+#[test]
+fn test_swap_collateral_rejects_frozen_destination() {
+    let mut t = LendingTest::new().three_asset_usdc_eth_wbtc().build();
+
+    t.supply(ALICE, "USDC", 100_000.0);
+    t.borrow(ALICE, "ETH", 1.0);
+
+    let wbtc = t.resolve_asset("WBTC");
+    t.env.as_contract(&t.controller_address(), || {
+        let key = ControllerKey::SpokeAsset(1, hub_asset(wbtc.clone()));
+        let mut config: SpokeAssetConfig = t
+            .env
+            .storage()
+            .persistent()
+            .get(&key)
+            .expect("WBTC spoke listing should exist");
+        config.frozen = true;
+        t.env.storage().persistent().set(&key, &config);
+    });
+
+    let steps = build_aggregator_swap(&t, "USDC", "WBTC", 0, 1_00000000);
+    let result = t.try_swap_collateral(ALICE, "USDC", 1000.0, "WBTC", &steps);
+    assert_contract_error(result, errors::SPOKE_ASSET_FROZEN);
+}

@@ -1,0 +1,474 @@
+use crate::shared::{flash_fee, flash_guard_cleared, raw_units, receiver_data, strict_flash_loan};
+use flash_loan_receiver::FlashLoanMode;
+use soroban_sdk::testutils::Address as _;
+use soroban_sdk::{token, Address, Bytes};
+use test_harness::{
+    assert_contract_error, days, errors, hub_asset, usdc_preset, LendingTest, ALICE, BOB,
+};
+
+fn pool_reserves(t: &LendingTest, asset_name: &str) -> i128 {
+    let asset = t.resolve_asset(asset_name);
+    t.pool_client(asset_name).get_reserves(&hub_asset(asset))
+}
+
+fn prefund_receiver_fee(t: &LendingTest, receiver: &Address, asset: &Address, fee: i128) {
+    token::StellarAssetClient::new(&t.env, asset).mint(receiver, &fee);
+}
+
+#[test]
+fn test_flash_loan_success_under_non_root_auth() {
+    let mut t = LendingTest::new().standard_two_asset().build();
+
+    t.supply(ALICE, "USDC", 100_000.0);
+    t.borrow(ALICE, "ETH", 1.0);
+
+    t.advance_and_sync(days(30));
+
+    let receiver = t.deploy_flash_loan_receiver();
+    let result = t.try_flash_loan(BOB, "USDC", 10_000.0, &receiver);
+
+    assert!(
+        result.is_ok(),
+        "flash loan with good receiver must succeed under non-root auth mock: {:?}",
+        result
+    );
+    assert!(
+        flash_guard_cleared(&t),
+        "flash-loan guard must clear after a successful flash loan"
+    );
+}
+#[test]
+fn test_flash_loan_rejects_bad_repayment() {
+    let mut t = LendingTest::new().with_market(usdc_preset()).build();
+
+    t.supply(ALICE, "USDC", 100_000.0);
+
+    let reserves_before = pool_reserves(&t, "USDC");
+    let bad_receiver = t.deploy_bad_flash_loan_receiver();
+    let result = t.try_flash_loan(BOB, "USDC", 10_000.0, &bad_receiver);
+
+    assert!(
+        result.is_err(),
+        "flash loan should fail when receiver doesn't repay"
+    );
+
+    assert!(flash_guard_cleared(&t), "flash-loan guard must roll back");
+    assert_eq!(pool_reserves(&t, "USDC"), reserves_before);
+}
+#[test]
+fn test_flash_loan_rejects_disabled() {
+    let mut t = LendingTest::new().with_market(usdc_preset()).build();
+
+    t.supply(ALICE, "USDC", 100_000.0);
+
+    t.edit_asset_config("USDC", |cfg| {
+        cfg.is_flashloanable = false;
+    });
+
+    let receiver = t.deploy_flash_loan_receiver();
+    let result = t.try_flash_loan(BOB, "USDC", 10_000.0, &receiver);
+    assert_contract_error(result, errors::FLASHLOAN_NOT_ENABLED);
+}
+#[test]
+fn test_flash_loan_rejects_zero_amount() {
+    let mut t = LendingTest::new().with_market(usdc_preset()).build();
+
+    t.supply(ALICE, "USDC", 100_000.0);
+
+    let receiver = t.deploy_flash_loan_receiver();
+    let result = t.try_flash_loan(BOB, "USDC", 0.0, &receiver);
+
+    assert_contract_error(result, errors::AMOUNT_MUST_BE_POSITIVE);
+}
+#[test]
+fn test_flash_loan_reentrancy_blocks_supply() {
+    let mut t = LendingTest::new().with_market(usdc_preset()).build();
+
+    t.supply(ALICE, "USDC", 10_000.0);
+    t.set_flash_loan_ongoing(true);
+
+    let result = t.try_supply(BOB, "USDC", 1_000.0);
+    assert_contract_error(result, errors::FLASH_LOAN_ONGOING);
+
+    t.set_flash_loan_ongoing(false);
+}
+#[test]
+fn test_flash_loan_reentrancy_blocks_borrow() {
+    let mut t = LendingTest::new().standard_two_asset().build();
+
+    t.supply(ALICE, "USDC", 100_000.0);
+    t.set_flash_loan_ongoing(true);
+
+    let result = t.try_borrow(ALICE, "ETH", 1.0);
+    assert_contract_error(result, errors::FLASH_LOAN_ONGOING);
+
+    t.set_flash_loan_ongoing(false);
+}
+#[test]
+fn test_flash_loan_reentrancy_blocks_withdraw() {
+    let mut t = LendingTest::new().with_market(usdc_preset()).build();
+
+    t.supply(ALICE, "USDC", 10_000.0);
+    t.set_flash_loan_ongoing(true);
+
+    let result = t.try_withdraw(ALICE, "USDC", 1_000.0);
+    assert_contract_error(result, errors::FLASH_LOAN_ONGOING);
+
+    t.set_flash_loan_ongoing(false);
+}
+#[test]
+fn test_flash_loan_reentrancy_blocks_repay() {
+    let mut t = LendingTest::new().standard_two_asset().build();
+
+    t.supply(ALICE, "USDC", 100_000.0);
+    t.borrow(ALICE, "ETH", 1.0);
+    t.set_flash_loan_ongoing(true);
+
+    let result = t.try_repay(ALICE, "ETH", 0.5);
+    assert_contract_error(result, errors::FLASH_LOAN_ONGOING);
+
+    t.set_flash_loan_ongoing(false);
+}
+#[test]
+fn test_flash_loan_reentrancy_blocks_liquidation() {
+    let mut t = LendingTest::new().standard_two_asset().build();
+
+    t.supply(ALICE, "USDC", 10_000.0);
+    t.borrow(ALICE, "ETH", 3.0);
+    t.set_price("USDC", test_harness::usd_cents(50));
+    t.assert_liquidatable(ALICE);
+
+    t.set_flash_loan_ongoing(true);
+
+    let result = t.try_liquidate(BOB, ALICE, "ETH", 1.0);
+    assert_contract_error(result, errors::FLASH_LOAN_ONGOING);
+
+    t.set_flash_loan_ongoing(false);
+}
+#[test]
+fn test_flash_loan_fee_config_matches_default_preset() {
+    let t = LendingTest::new().with_market(usdc_preset()).build();
+
+    let config = t.get_asset_config("USDC");
+    assert_eq!(
+        config.flashloan_fee, 9,
+        "USDC preset flash-loan fee must be 9 BPS (0.09%)"
+    );
+    assert!(
+        config.is_flashloanable,
+        "USDC preset must have is_flashloanable = true"
+    );
+}
+#[test]
+fn test_flash_loan_tiny_amount_charges_min_fee_when_bps_positive() {
+    let mut t = LendingTest::new().with_market(usdc_preset()).build();
+
+    t.supply(ALICE, "USDC", 100.0);
+
+    let receiver = t.deploy_adversarial_flash_loan_receiver();
+    let data = receiver_data(&t, FlashLoanMode::Success);
+
+    let amount = 1i128;
+    let fee = flash_fee(&t, "USDC", amount);
+    let asset = t.resolve_asset("USDC");
+    prefund_receiver_fee(&t, &receiver, &asset, fee);
+
+    let reserves_before = pool_reserves(&t, "USDC");
+    let caller = t.get_or_create_user(BOB);
+
+    t.env.set_auths(&[]);
+    let result = strict_flash_loan(
+        &t,
+        &caller,
+        &hub_asset(asset.clone()),
+        amount,
+        &receiver,
+        &data,
+    );
+
+    assert!(
+        result.is_ok(),
+        "tiny flash loan should succeed: {:?}",
+        result
+    );
+    assert_eq!(fee, 1, "positive flashloan_fee must charge at least 1");
+    assert_eq!(pool_reserves(&t, "USDC"), reserves_before + fee);
+}
+#[test]
+fn test_flash_loan_allows_zero_fee_when_configured_zero() {
+    let mut t = LendingTest::new()
+        .with_market(usdc_preset())
+        .with_market_config("USDC", |config| config.flashloan_fee = 0)
+        .build();
+
+    t.supply(ALICE, "USDC", 100.0);
+
+    let receiver = t.deploy_adversarial_flash_loan_receiver();
+    let data = receiver_data(&t, FlashLoanMode::Success);
+
+    let amount = 1i128;
+    let fee = flash_fee(&t, "USDC", amount);
+    let asset = t.resolve_asset("USDC");
+    let reserves_before = pool_reserves(&t, "USDC");
+    let caller = t.get_or_create_user(BOB);
+
+    t.env.set_auths(&[]);
+    let result = strict_flash_loan(
+        &t,
+        &caller,
+        &hub_asset(asset.clone()),
+        amount,
+        &receiver,
+        &data,
+    );
+
+    assert!(result.is_ok(), "zero-fee market should remain explicit");
+    assert_eq!(fee, 0);
+    assert_eq!(pool_reserves(&t, "USDC"), reserves_before);
+}
+#[test]
+fn test_flash_loan_strict_receiver_success_with_preauthorized_repayment() {
+    let mut t = LendingTest::new().with_market(usdc_preset()).build();
+
+    t.supply(ALICE, "USDC", 100_000.0);
+
+    let receiver = t.deploy_adversarial_flash_loan_receiver();
+    let data = receiver_data(&t, FlashLoanMode::Success);
+
+    let amount = raw_units(&t, "USDC", 10_000);
+    let fee = flash_fee(&t, "USDC", amount);
+    let asset = t.resolve_asset("USDC");
+    prefund_receiver_fee(&t, &receiver, &asset, fee);
+
+    let reserves_before = pool_reserves(&t, "USDC");
+    let caller = t.get_or_create_user(BOB);
+
+    t.env.set_auths(&[]);
+    let result = strict_flash_loan(
+        &t,
+        &caller,
+        &hub_asset(asset.clone()),
+        amount,
+        &receiver,
+        &data,
+    );
+
+    assert!(
+        result.is_ok(),
+        "strict receiver must approve amount + fee for the pool: {:?}",
+        result
+    );
+    assert!(flash_guard_cleared(&t), "flash-loan guard must clear");
+    assert_eq!(pool_reserves(&t, "USDC"), reserves_before + fee);
+}
+#[test]
+fn test_flash_loan_strict_receiver_rejects_success_without_fee_prefund() {
+    let mut t = LendingTest::new().with_market(usdc_preset()).build();
+
+    t.supply(ALICE, "USDC", 100_000.0);
+
+    let receiver = t.deploy_adversarial_flash_loan_receiver();
+    let data = receiver_data(&t, FlashLoanMode::Success);
+
+    let amount = raw_units(&t, "USDC", 10_000);
+    let asset = t.resolve_asset("USDC");
+    let reserves_before = pool_reserves(&t, "USDC");
+    let caller = t.get_or_create_user(BOB);
+
+    t.env.set_auths(&[]);
+    let result = strict_flash_loan(
+        &t,
+        &caller,
+        &hub_asset(asset.clone()),
+        amount,
+        &receiver,
+        &data,
+    );
+
+    assert!(
+        result.is_err(),
+        "receiver cannot repay fee it was not prefunded with"
+    );
+
+    assert!(flash_guard_cleared(&t), "flash-loan guard must roll back");
+    assert_eq!(pool_reserves(&t, "USDC"), reserves_before);
+}
+#[test]
+fn test_flash_loan_adversarial_receiver_no_repay_rejects() {
+    let mut t = LendingTest::new().with_market(usdc_preset()).build();
+
+    t.supply(ALICE, "USDC", 100_000.0);
+
+    let receiver = t.deploy_adversarial_flash_loan_receiver();
+    let data = receiver_data(&t, FlashLoanMode::NoRepay);
+
+    let amount = raw_units(&t, "USDC", 10_000);
+    let reserves_before = pool_reserves(&t, "USDC");
+
+    let result = t.try_flash_loan_with_data(BOB, "USDC", amount, &receiver, &data);
+    assert_contract_error(result, errors::INVALID_FLASHLOAN_REPAY);
+    assert!(flash_guard_cleared(&t), "flash-loan guard must roll back");
+    assert_eq!(pool_reserves(&t, "USDC"), reserves_before);
+}
+#[test]
+fn test_flash_loan_adversarial_receiver_under_repay_rejects() {
+    let mut t = LendingTest::new().with_market(usdc_preset()).build();
+
+    t.supply(ALICE, "USDC", 100_000.0);
+
+    let receiver = t.deploy_adversarial_flash_loan_receiver();
+    let data = receiver_data(&t, FlashLoanMode::UnderRepay);
+
+    let amount = raw_units(&t, "USDC", 10_000);
+    let fee = flash_fee(&t, "USDC", amount);
+    let asset = t.resolve_asset("USDC");
+    prefund_receiver_fee(&t, &receiver, &asset, fee);
+
+    let reserves_before = pool_reserves(&t, "USDC");
+
+    let result = t.try_flash_loan_with_data(BOB, "USDC", amount, &receiver, &data);
+    assert_contract_error(result, errors::INVALID_FLASHLOAN_REPAY);
+    assert!(flash_guard_cleared(&t), "flash-loan guard must roll back");
+    assert_eq!(pool_reserves(&t, "USDC"), reserves_before);
+}
+#[test]
+fn test_flash_loan_adversarial_receiver_reenter_pool_flash_loan_rejects() {
+    let mut t = LendingTest::new().with_market(usdc_preset()).build();
+
+    t.supply(ALICE, "USDC", 100_000.0);
+
+    let receiver = t.deploy_adversarial_flash_loan_receiver();
+    let data = receiver_data(&t, FlashLoanMode::ReenterPoolFlashLoan);
+
+    let amount = raw_units(&t, "USDC", 10_000);
+    let fee = flash_fee(&t, "USDC", amount);
+    let asset = t.resolve_asset("USDC");
+    prefund_receiver_fee(&t, &receiver, &asset, fee);
+
+    let reserves_before = pool_reserves(&t, "USDC");
+    let caller = t.get_or_create_user(BOB);
+
+    t.env.set_auths(&[]);
+    let result = strict_flash_loan(
+        &t,
+        &caller,
+        &hub_asset(asset.clone()),
+        amount,
+        &receiver,
+        &data,
+    );
+
+    assert!(result.is_err(), "receiver pool reentry must fail");
+
+    assert!(flash_guard_cleared(&t), "flash-loan guard must roll back");
+    assert_eq!(pool_reserves(&t, "USDC"), reserves_before);
+}
+#[test]
+fn test_flash_loan_adversarial_receiver_callback_panic_rolls_back() {
+    let mut t = LendingTest::new().with_market(usdc_preset()).build();
+
+    t.supply(ALICE, "USDC", 100_000.0);
+
+    let receiver = t.deploy_adversarial_flash_loan_receiver();
+    let data = receiver_data(&t, FlashLoanMode::Panic);
+
+    let amount = raw_units(&t, "USDC", 10_000);
+    let asset = t.resolve_asset("USDC");
+    let reserves_before = pool_reserves(&t, "USDC");
+    let caller = t.get_or_create_user(BOB);
+
+    t.env.set_auths(&[]);
+    let result = strict_flash_loan(
+        &t,
+        &caller,
+        &hub_asset(asset.clone()),
+        amount,
+        &receiver,
+        &data,
+    );
+
+    assert!(result.is_err(), "callback panic must fail");
+
+    assert!(flash_guard_cleared(&t), "flash-loan guard must roll back");
+    assert_eq!(pool_reserves(&t, "USDC"), reserves_before);
+}
+#[test]
+fn test_flash_loan_non_contract_receiver_rejects_and_rolls_back() {
+    let mut t = LendingTest::new().with_market(usdc_preset()).build();
+
+    t.supply(ALICE, "USDC", 100_000.0);
+
+    let amount = raw_units(&t, "USDC", 10_000);
+    let non_contract_receiver = Address::generate(&t.env);
+    let reserves_before = pool_reserves(&t, "USDC");
+    let data = receiver_data(&t, FlashLoanMode::Success);
+
+    let result = t.try_flash_loan_with_data(BOB, "USDC", amount, &non_contract_receiver, &data);
+    assert_contract_error(result, errors::INVALID_FLASHLOAN_RECEIVER);
+    assert!(flash_guard_cleared(&t), "flash-loan guard must roll back");
+    assert_eq!(pool_reserves(&t, "USDC"), reserves_before);
+}
+#[test]
+fn test_flash_loan_adversarial_receiver_rejects_invalid_data() {
+    let mut t = LendingTest::new().with_market(usdc_preset()).build();
+
+    t.supply(ALICE, "USDC", 100_000.0);
+
+    let receiver = t.deploy_adversarial_flash_loan_receiver();
+    let amount = raw_units(&t, "USDC", 10_000);
+    let asset = t.resolve_asset("USDC");
+    let reserves_before = pool_reserves(&t, "USDC");
+    let caller = t.get_or_create_user(BOB);
+    let malformed_data = Bytes::new(&t.env);
+
+    t.env.set_auths(&[]);
+    let result = strict_flash_loan(
+        &t,
+        &caller,
+        &hub_asset(asset.clone()),
+        amount,
+        &receiver,
+        &malformed_data,
+    );
+
+    assert!(result.is_err(), "malformed receiver data must fail");
+
+    assert!(flash_guard_cleared(&t), "flash-loan guard must roll back");
+    assert_eq!(pool_reserves(&t, "USDC"), reserves_before);
+}
+
+#[test]
+fn test_flash_loan_adversarial_receiver_reenter_controller_supply_rejects() {
+    let mut t = LendingTest::new().with_market(usdc_preset()).build();
+
+    t.supply(ALICE, "USDC", 100_000.0);
+
+    let receiver = t.deploy_adversarial_flash_loan_receiver();
+    let data = receiver_data(&t, FlashLoanMode::ReenterControllerSupply);
+
+    let amount = raw_units(&t, "USDC", 10_000);
+    let fee = flash_fee(&t, "USDC", amount);
+    let asset = t.resolve_asset("USDC");
+    prefund_receiver_fee(&t, &receiver, &asset, fee);
+
+    let reserves_before = pool_reserves(&t, "USDC");
+    let caller = t.get_or_create_user(BOB);
+
+    t.env.set_auths(&[]);
+    let result = strict_flash_loan(
+        &t,
+        &caller,
+        &hub_asset(asset.clone()),
+        amount,
+        &receiver,
+        &data,
+    );
+
+    assert!(
+        result.is_err(),
+        "receiver controller-reentry must fail under flash-loan guard"
+    );
+
+    assert!(flash_guard_cleared(&t), "flash-loan guard must roll back");
+    assert_eq!(pool_reserves(&t, "USDC"), reserves_before);
+}

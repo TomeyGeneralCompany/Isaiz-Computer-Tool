@@ -1,0 +1,31 @@
+{
+  "repository": "Instadapp/inst-governance",
+  "commit": "8891f73d17887e272a5317065961269aee94f7cd",
+  "scope_sources": [
+    {
+      "asset_type": "smart_contract",
+      "asset_url": "https://github.com/Instadapp/inst-governance",
+      "program": "instadapp",
+      "scope_url": "https://immunefi.com/bug-bounty/instadapp/scope/"
+    }
+  ],
+  "original_report": "Instadapp__inst-governance-8891f73d1788.json",
+  "lead": {
+    "rule": "JS_CHILD_EXEC",
+    "file": "scripts/verify/lib/actionExtractor.ts",
+    "line": 58,
+    "guidance": "Review command construction and input provenance",
+    "fingerprint": "1dcd06f85287dbcb3b98"
+  },
+  "source_excerpt": "50: ): ExtractedAction[] {\n51:   const result: ExtractedAction[] = [];\n52: \n53:   // Find every function-declaration keyword. The preamble (visibility,\n54:   // modifier, return clause) is captured up to the first `{` past it.\n55:   const FN_START = /\\bfunction\\s+(action(\\d+))\\s*\\(/g;\n56: \n57:   let m: RegExpExecArray | null;\n58:   while ((m = FN_START.exec(src)) !== null) {\n59:     const fullName = m[1]!;\n60:     const index = Number(m[2]!);\n61: \n62:     // Find the body open-brace at or after the signature, skipping over\n63:     // comments / strings which cannot legitimately contain a `{` in this\n64:     // context but which we still respect for correctness.\n65:     const openBrace = findNextUnquoted(src, FN_START.lastIndex, \"{\");\n66:     if (openBrace === -1) continue;",
+  "triage": {
+    "classification": "likely_false_positive",
+    "rationale": "The code snippet appears to be part of a static analysis tool for a bug bounty, but the logic for extracting function declarations and handling command construction is not clearly validated. The code is incomplete and lacks proper context for determining whether the extracted actions are valid or incorrect. There is insufficient evidence to classify this as an actual vulnerability or false positive.",
+    "evidence": "Incomplete logic for handling command construction and input provenance, lack of context for determining validity.",
+    "follow_up": "If you have more context or a verified vulnerability, please provide it here for further analysis."
+  },
+  "status": "unverified_draft",
+  "verified_vulnerability": false,
+  "generated_at": "2026-10-14T23:48:18.904507+00:00",
+  "note": "Automated static triage only. No exploitability, eligibility, or bounty award established."
+}

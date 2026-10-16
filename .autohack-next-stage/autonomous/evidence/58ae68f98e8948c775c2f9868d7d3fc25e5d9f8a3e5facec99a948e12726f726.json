@@ -1,0 +1,39 @@
+{
+  "checks": {
+    "has_reproduction_test": false,
+    "in_scope_at_processing": true,
+    "source_commit_matches": true,
+    "triage_requires_review": false
+  },
+  "commit": "116a8658d60fb9be25d01847be2a9671ccbf81bf",
+  "lead": {
+    "file": "scripts/update_translations.js",
+    "fingerprint": "04540ffa68e29e2f436e",
+    "guidance": "Review command construction and input provenance",
+    "line": 211,
+    "rule": "JS_CHILD_EXEC"
+  },
+  "note": "Automated offline evidence preparation only. No project-specific reproduction or verified security impact.",
+  "processed_at": "2026-10-15T01:15:39.120369+00:00",
+  "repository": "HathorNetwork/hathor-wallet-mobile",
+  "scope_urls": [
+    "https://immunefi.com/bug-bounty/hathornetwork/scope/"
+  ],
+  "source_check": {
+    "commit": "116a8658d60fb9be25d01847be2a9671ccbf81bf",
+    "excerpt": "  200:   try {\n  201:     statusResult = execSync('git status --porcelain', { encoding: 'utf-8' });\n  202:     hasChanges = statusResult.trim().length > 0;\n  203:   } catch (error) {\n  204:     console.error('❌ Error checking for changes:', error);\n  205:     return true;\n  206:   }\n  207: \n  208:   if (hasChanges) {\n  209:     // Print the full diff to the console\n  210:     console.warn(`❗ Changes found in the translation files. Please review them.`);\n  211:     execSync('git  --no-pager diff', { stdio: 'inherit' });\n  212:   }\n  213:   return hasChanges;\n  214: }\n  215: \n  216: /**\n  217:  * Compiles the translations by generating JSON files from the `.po` files.\n  218:  */\n  219: function generateJsonFromPos() {\n  220:   console.log(`⏳ Compiling translations into JSON files...`);\n  221: \n  222:   const localeDir = 'locale';\n  223:   const outputDir = 'src/locale';",
+    "file": "scripts/update_translations.js",
+    "file_sha256": "5b7a433427ae4630a64aeeb32af18a70e63b9d04894feaddb579d8d164e7b22a",
+    "line": 211,
+    "status": "source_matched"
+  },
+  "source_fingerprint": "46096e665f2bc9486d607838f42f66cf4a850b56b81e3b5119eb0328440b8e06",
+  "status": "needs_project_specific_reproduction",
+  "triage": {
+    "classification": "likely_false_positive",
+    "evidence": "No false positive or vulnerability claims made, and the code is not verified for exploitability.",
+    "follow_up": "If you have more context or a specific issue, please provide it, and I will review it further.",
+    "rationale": "The code is not checking for changes in the repository, and the source excerpt does not provide evidence of a false positive or a vulnerability. The code is likely a placeholder or a test case, and there is insufficient context to determine its actual purpose or potential issues."
+  },
+  "verified_vulnerability": false
+}

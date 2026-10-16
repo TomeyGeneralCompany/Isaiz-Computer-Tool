@@ -1,0 +1,53 @@
+network: testnet
+rpc:
+  url: https://stellar-testnet-gateway.xoxno.com
+  passphrase: "Test SDF Network ; September 2015"
+  timeout_seconds: 30
+contracts:
+  # The testnet deployment in configs/networks.json. Markets are every entry in
+  # configs/testnet/markets.json.
+  controller: CCXRWJ6SIU2WPFEGLFGJVITPL57QAYIMIO6OAM2NBGNDQSSCK2FFV3F3
+  pool_wasm_hash: 0be54b45afe46f40b82e66d8569074f421e872d0304c7c540db8dd14df528965
+  markets:
+    - { hub_id: 1, asset: CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA } # USDC
+    - { hub_id: 1, asset: CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC } # XLM
+    - { hub_id: 1, asset: CCUUDM434BMZMYWYDITHFXHDMIVTGGD6T2I5UKNX5BSLXLW7HVR4MCGZ } # EURC
+    - { hub_id: 1, asset: CBK3FNAM3C54674OSOCQLDNW4EXMNUY6ZO3C3ZI5S5DGBIIPX4GJ7WHW } # BTC
+    - { hub_id: 1, asset: CBFNIHC2B7WMAH2CKNKQJOB3CWBUXXNNRQXYISJ7VZONM77YBMHCOULJ } # ETH
+    - { hub_id: 2, asset: CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA } # USDC
+    - { hub_id: 3, asset: CDEUHPEUQAQNLCHFVBX3ZOSIR2FUWD2COYTSHUPQPJWK2BCLLQCW66FY } # XLMUSDC_LP
+    - { hub_id: 4, asset: CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA } # USDC_LIQVID
+    - { hub_id: 4, asset: CCUUDM434BMZMYWYDITHFXHDMIVTGGD6T2I5UKNX5BSLXLW7HVR4MCGZ } # EURC_LIQVID
+    - { hub_id: 4, asset: CAH7FDDP6IDC76VTXNPN6MF5TWVZMM2N3PCU5C7TXRLTCKBSG6BGUGEA } # LIQVID1039
+    - { hub_id: 4, asset: CDCS4Y5BZY62YS2ABQHZSQXWGFHNQXID64CYDCBSQDNDKEG6T2OE2HWC } # LIQVID1037
+  market_assets: []
+  flash_loan_receiver: CANI3S22VAOTL3EH3JCTMJKTZ3OW5BRLDYQ75FLFUQMCAD4HFYQDQ2X7
+  governance: CDS33JDOYH3F3FL4QUQ6DV4WKHML2AKHF4LADTZ57FRUAEBTE7NMY5FQ
+  xoxno_oracle_adapter: CDYX4ZEO556YZDYDJLUE5XQUE2DLWVFJDTBJJGF7HYQP5HK5NICNTQ6F
+  price_aggregator: CBMARXSYE56NPDLX42TTICM5GS5XQCYRD5VMCJME624TS6C2S53VETYU
+  redstone_adapter: CBIHT4HVRIT5OMVLSXZ44J2ZAXYBDDGOSCN3LTN2DOC6SWHDS5IP6BK3
+  swap_router: CDNTWMWW2WGYTKIZTJYNGNVQQZI4KTC5BQRZ3275KESRX5T4O3AYECL5
+  extra_instances: []
+  blend_pools:
+    - CCEBVDYM32YNYCVNRXQKDFFPISJJCV557CDZEIRBEE4NCV4KHPQ44HGF # TestnetV2
+  position_managers: []
+keyvault:
+  url: https://unused.vault.azure.net
+  secret_name: unused
+signer:
+  derivation_path: "m/44'/148'/0'"
+fees:
+  base_fee_stroops: 100
+  resource_fee_multiplier: 1.20
+schedule:
+  ttl_tick_seconds: 21600
+  index_tick_seconds: 3600
+  ttl_safety_margin_days: 14
+  asset_chunk: 20
+  max_txs_per_tick: 50
+  enable_index_refresh: false
+metrics:
+  bind: 0.0.0.0:9090
+log:
+  level: info
+  format: json

@@ -1,0 +1,13 @@
+{
+  "commit": "0bc1dd9c49203dd45f48f0046abc4e95a50d06da",
+  "processed_at": "2026-10-14T23:59:32.358422+00:00",
+  "repository": "Instadapp/avocado-contracts-public",
+  "source_record": "/home/izy/isaiz-bugbounty/autohack/.autohack-next-stage/investigator/verification/results/571144088b6377c5647b7999fdaba00657df39f8ff0923abb339451309500dc8.json",
+  "source_sha256": "956bd58c98752f7f50a473fc8a3b02a5620722e2f0f158a450f52bcb45262524",
+  "status": "awaiting_reproduction_case",
+  "test_result": {
+    "case_manifest": "/home/izy/isaiz-bugbounty/autohack/.autohack-next-stage/investigator/reproduction/cases/571144088b6377c5647b7999fdaba00657df39f8ff0923abb339451309500dc8.json",
+    "reason": "No explicit local regression case supplied"
+  },
+  "verified_vulnerability": false
+}

@@ -1,0 +1,39 @@
+{
+  "checks": {
+    "has_reproduction_test": false,
+    "in_scope_at_processing": true,
+    "source_commit_matches": true,
+    "triage_requires_review": true
+  },
+  "commit": "8891f73d17887e272a5317065961269aee94f7cd",
+  "lead": {
+    "file": "contracts/GovernorBravoDelegator.sol",
+    "fingerprint": "60f79b17d51ddff8b564",
+    "guidance": "Review delegatecall target and access control",
+    "line": 72,
+    "rule": "SOL_DELEGATECALL"
+  },
+  "note": "Automated offline evidence preparation only. No project-specific reproduction or verified security impact.",
+  "processed_at": "2026-10-15T00:09:25.991157+00:00",
+  "repository": "Instadapp/inst-governance",
+  "scope_urls": [
+    "https://immunefi.com/bug-bounty/instadapp/scope/"
+  ],
+  "source_check": {
+    "commit": "8891f73d17887e272a5317065961269aee94f7cd",
+    "excerpt": "   61:             }\n   62:         }\n   63:     }\n   64: \n   65:     /**\n   66:      * @dev Delegates execution to an implementation contract.\n   67:      * It returns to the external caller whatever the implementation returns\n   68:      * or forwards reverts.\n   69:      */\n   70:     fallback () external payable {\n   71:         // delegate all other functions to current implementation\n   72:         (bool success, ) = implementation.delegatecall(msg.data);\n   73: \n   74:         assembly {\n   75:             let free_mem_ptr := mload(0x40)\n   76:             returndatacopy(free_mem_ptr, 0, returndatasize())\n   77: \n   78:             switch success\n   79:             case 0 { revert(free_mem_ptr, returndatasize()) }\n   80:             default { return(free_mem_ptr, returndatasize()) }\n   81:         }\n   82:     }\n   83: }",
+    "file": "contracts/GovernorBravoDelegator.sol",
+    "file_sha256": "407308bd40f9b1fe7fcde681dcb168e9a2943d868e1a69bf244c2294ea5a26c9",
+    "line": 72,
+    "status": "source_matched"
+  },
+  "source_fingerprint": "ed0acd724cad3bb2a17bb0da02f2807bcb30bcbca9b12af27a5d1988e2e6f8b0",
+  "status": "needs_project_specific_reproduction",
+  "triage": {
+    "classification": "needs_review",
+    "evidence": "Insufficient context to determine the classification.",
+    "follow_up": "If the code is a placeholder or has no access control, it may be a false positive. However, without further context, it's difficult to determine the actual classification.",
+    "rationale": "The code appears to implement a fallback function that delegates execution to an implementation contract, but there is no evidence of access control or proper delegation logic in place. This could lead to potential vulnerabilities, but insufficient context is provided to confirm the classification."
+  },
+  "verified_vulnerability": false
+}

@@ -1,0 +1,39 @@
+{
+  "checks": {
+    "has_reproduction_test": false,
+    "in_scope_at_processing": true,
+    "source_commit_matches": true,
+    "triage_requires_review": false
+  },
+  "commit": "d2a86ece964247d8313c20fbfeb0c7199d9bff5a",
+  "lead": {
+    "file": "scripts/update_translations.js",
+    "fingerprint": "24be76a10f540722d788",
+    "guidance": "Review command construction and input provenance",
+    "line": 68,
+    "rule": "JS_CHILD_EXEC"
+  },
+  "note": "Automated offline evidence preparation only. No project-specific reproduction or verified security impact.",
+  "processed_at": "2026-10-15T00:09:25.487909+00:00",
+  "repository": "HathorNetwork/hathor-wallet-mobile",
+  "scope_urls": [
+    "https://immunefi.com/bug-bounty/hathornetwork/scope/"
+  ],
+  "source_check": {
+    "commit": "d2a86ece964247d8313c20fbfeb0c7199d9bff5a",
+    "excerpt": "   57:  */\n   58: function runLocaleUpdatePot() {\n   59:   console.log('⏳ Updating pot file...');\n   60:   try {\n   61:     // Check if the pot file exists. If not, create it.\n   62:     if (!fs.existsSync('./locale/texts.pot')) {\n   63:       fs.mkdirSync('./locale', { recursive: true });\n   64:       fs.writeFileSync('./locale/texts.pot', '');\n   65:     }\n   66: \n   67:     // Extract the strings from the source code\n   68:     execSync('npx ttag extract -o ./locale/texts.pot ./src/', { stdio: 'inherit' });\n   69:   } catch (error) {\n   70:     console.error('❌ Error updating pot file:', error);\n   71:     process.exit(1);\n   72:   }\n   73: }\n   74: \n   75: /**\n   76:  * Checks whether the root `.pot` file is outdated.\n   77:  * @returns {boolean} True if the `.pot` file is outdated\n   78:  */\n   79: function checkPotOutdated() {\n   80:   console.log(`⏳ Checking if pot file is outdated...`);",
+    "file": "scripts/update_translations.js",
+    "file_sha256": "5b7a433427ae4630a64aeeb32af18a70e63b9d04894feaddb579d8d164e7b22a",
+    "line": 68,
+    "status": "source_matched"
+  },
+  "source_fingerprint": "75173d4aa1ebb703cff829527b5c78060f158f1f37ab24ead25d7e059a8b43cd",
+  "status": "needs_project_specific_reproduction",
+  "triage": {
+    "classification": "likely_false_positive",
+    "evidence": "The code checks for the existence of the `.pot` file but does not verify its current state or ensure it's up-to-date.",
+    "follow_up": "If the `.pot` file is outdated, it may need to be checked for its current state and contents. This could involve verifying its contents or checking its timestamp.",
+    "rationale": "The code checks for the existence of a file and creates it if it doesn't, but the logic is not sufficient to determine if the pot file is outdated. The code is not checking for the presence of the `.pot` file in the correct location or format, which could lead to incorrect assumptions about its state."
+  },
+  "verified_vulnerability": false
+}

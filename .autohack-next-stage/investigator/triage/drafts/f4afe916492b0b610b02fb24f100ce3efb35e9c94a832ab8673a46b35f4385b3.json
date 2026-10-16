@@ -1,0 +1,31 @@
+{
+  "repository": "HathorNetwork/hathor-wallet-mobile",
+  "commit": "d2a86ece964247d8313c20fbfeb0c7199d9bff5a",
+  "scope_sources": [
+    {
+      "asset_type": "websites_and_applications",
+      "asset_url": "https://github.com/HathorNetwork/hathor-wallet-mobile",
+      "program": "hathornetwork",
+      "scope_url": "https://immunefi.com/bug-bounty/hathornetwork/scope/"
+    }
+  ],
+  "original_report": "HathorNetwork__hathor-wallet-mobile-d2a86ece9642.json",
+  "lead": {
+    "rule": "JS_CHILD_EXEC",
+    "file": "src/screens/SendConfirmScreen.js",
+    "line": 108,
+    "guidance": "Review command construction and input provenance",
+    "fingerprint": "95dcaed1579a5133bd18"
+  },
+  "source_excerpt": "100:   const msg = err?.message || '';\n101:   const htrUid = hathorLib.constants.NATIVE_TOKEN_UID;\n102:   if (msg.includes(`No UTXOs available for the token ${htrUid}`)) {\n103:     return t`Insufficient HTR to cover the network fee.`;\n104:   }\n105:   if (msg.includes('No UTXOs available for the token')) {\n106:     return t`Insufficient balance to send this transaction.`;\n107:   }\n108:   const insufficientTokens = INSUFFICIENT_TOKENS_ERROR.exec(msg);\n109:   if (insufficientTokens) {\n110:     // HTR pays the fees: for HTR, they count with the amount.\n111:     return insufficientTokens[1] === htrUid\n112:       ? t`Insufficient HTR to cover this transaction and its fees.`\n113:       : t`Insufficient balance to send this transaction.`;\n114:   }\n115:   if (INPUT_LIMIT_ERROR.test(msg)) {\n116:     return t`This amount needs more inputs than a transaction can hold. Try sending a smaller amount.`;",
+  "triage": {
+    "classification": "likely_false_positive",
+    "rationale": "The code checks for specific error messages but does not validate the input or ensure proper handling of the input limit error. This could lead to false positives if the input limit is not properly validated.",
+    "evidence": "The code checks for specific error messages but does not validate the input or ensure proper handling of the input limit error.",
+    "follow_up": "If the input limit is properly validated, this could be a false positive. However, if the input limit is not properly validated, this could be a false positive."
+  },
+  "status": "unverified_draft",
+  "verified_vulnerability": false,
+  "generated_at": "2026-10-14T23:38:09.013559+00:00",
+  "note": "Automated static triage only. No exploitability, eligibility, or bounty award established."
+}

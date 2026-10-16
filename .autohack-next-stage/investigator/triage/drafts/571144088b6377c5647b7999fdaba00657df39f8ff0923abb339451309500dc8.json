@@ -1,0 +1,31 @@
+{
+  "repository": "Instadapp/avocado-contracts-public",
+  "commit": "0bc1dd9c49203dd45f48f0046abc4e95a50d06da",
+  "scope_sources": [
+    {
+      "asset_type": "smart_contract",
+      "asset_url": "https://github.com/Instadapp/avocado-contracts-public",
+      "program": "instadapp",
+      "scope_url": "https://immunefi.com/bug-bounty/instadapp/scope/"
+    }
+  ],
+  "original_report": "Instadapp__avocado-contracts-public-0bc1dd9c4920.json",
+  "lead": {
+    "rule": "SOL_TX_ORIGIN",
+    "file": "contracts/interfaces/IAvocadoMultisigV1.sol",
+    "line": 113,
+    "guidance": "Review authorization based on tx.origin",
+    "fingerprint": "2def630320426fffd86c"
+  },
+  "source_excerpt": "105:         CastForwardParams calldata forwardParams_,\n106:         SignatureParams[] calldata signaturesParams_\n107:     ) external payable returns (bool success, string memory revertReason);\n108: \n109:     /// @notice                   Simulates a `cast()` call with exact same params and execution logic except for:\n110:     ///                           - any `gasleft()` use removed to remove potential problems when estimating gas.\n111:     ///                           - reverts on param validations removed (verify validity with `verify` instead).\n112:     ///                           - signature validation is skipped (must be manually added to gas estimations).\n113:     /// @dev                      tx.origin must be dead address, msg.sender must be AvoForwarder.\n114:     /// @dev                      - set `signaturesParams_` to empty to automatically simulate with required signers length.\n115:     ///                           - if `signaturesParams_` first element signature is not set, or if first signer is set to\n116:     ///                             0xFFfFfFffFFfffFFfFFfFFFFFffFFFffffFfFFFfF, then gas usage burn is simulated\n117:     ///                             for verify signature functionality. DO NOT set signature to non-empty for subsequent\n118:     ///                             elements then; set all signatures to empty!\n119:     ///                           - if `signaturesParams_` is set normally, signatures are verified as in actual execute\n120:     ///                           - buffer amounts for mock smart contract signers signature verification must be added\n121:     ///                             off-chain as this varies on a case per case basis.",
+  "triage": {
+    "classification": "likely_false_positive",
+    "rationale": "The code snippet does not implement proper authorization checks for the tx.origin parameter, which is required for the contract's functionality. The provided code snippet is incomplete and lacks the necessary logic to validate the origin of the transaction.",
+    "evidence": "The code snippet does not include any authorization checks for the tx.origin parameter, which is required for the contract's functionality.",
+    "follow_up": "Please review the code for proper authorization checks and ensure that all required logic is implemented."
+  },
+  "status": "unverified_draft",
+  "verified_vulnerability": false,
+  "generated_at": "2026-10-14T23:44:06.946015+00:00",
+  "note": "Automated static triage only. No exploitability, eligibility, or bounty award established."
+}

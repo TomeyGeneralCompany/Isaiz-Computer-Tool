@@ -1,0 +1,208 @@
+name: Certora Local Prover
+
+# Runs the Certora Sunbeam prover on the self-hosted runner as a regression
+# smoke, not a substitute for the hosted prover. Rules run in parallel batches
+# (10 JVMs, each -Xmx8g, on the 128 GB runner) with a per-rule cap of 15
+# minutes by default; dispatch can raise the cap.
+# A proved violation, a vacuous proof, a loop-unwind failure, an empty or
+# missing rule log, a log with no prover verdict (a prover, CLI or JVM error),
+# a runner that stops before the provers, a dispatch rule the conf does not
+# list, or a missing conf fails the job. A prover-reported timeout or solver
+# unknown and a wrapper kill are warnings: the rule can still prove on the
+# hosted prover (certora-verification.yml, certora-fastRules.yml).
+
+on:
+  workflow_dispatch:
+    inputs:
+      confs:
+        description: "Confs to prove locally: space-separated paths under certora/ without .conf (e.g. common/confs/math), or all; empty = default set"
+        required: false
+        type: string
+        default: ""
+      rules:
+        description: "Optional per-rule override (space-separated); runs each listed rule in each conf, and every conf must list every rule"
+        required: false
+        type: string
+        default: ""
+      rule_timeout:
+        description: "Seconds per rule (default 900 = the 15-minute smoke cap)"
+        required: false
+        type: string
+        default: "900"
+      job_timeout_minutes:
+        description: "Job wall-clock cap in minutes (default 720 = 12h; 10080 = 7 days)"
+        required: false
+        type: string
+        default: "720"
+  pull_request:
+    paths:
+      - "certora/**"
+      - "common/src/**"
+      - "contracts/**/src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  STELLAR_VERSION: "28.0.0"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    name: Build focused WASM artifacts
+    runs-on: self-hosted
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check the local verdict classifier
+        run: bash certora/scripts/test-run-local-ci.sh
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+        with:
+          toolchain: "1.95"
+          targets: wasm32v1-none
+          components: rustfmt
+
+      - name: Cache cargo registry and build
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-certora-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-certora-
+
+      - name: Install stellar-cli
+        run: bash .github/scripts/install-stellar-cli.sh
+
+      - name: Build fresh Certora WASM artifacts
+        run: make certora-wasm
+
+      - name: Verify WASM hashes and source provenance
+        run: python3 certora/scripts/check_wasm_artifacts.py
+
+      - name: Upload Certora WASM artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: certora-wasm-local-${{ github.sha }}
+          path: artifacts/wasm
+          if-no-files-found: error
+          retention-days: 1
+
+  local-prove:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    name: Prover regression smoke
+    needs: build
+    runs-on: self-hosted
+    # Dispatch can raise this; PR runs keep the 12h smoke window.
+    timeout-minutes: ${{ fromJSON(inputs.job_timeout_minutes || '720') }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install Java 21
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install Certora CLI
+        run: pip install --require-hashes -r certora/requirements-cli.txt
+
+      - name: Download focused WASM artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: certora-wasm-local-${{ github.sha }}
+          path: artifacts/wasm
+
+      - name: Recheck artifact hashes after transfer
+        run: python3 certora/scripts/check_wasm_artifacts.py
+
+      # `self-hosted` matches more than one runner and only some of them carry
+      # the prover CLI. A missing CLI is a tooling gap, not a proved violation:
+      # the step warns and skips the proof instead of failing the pull request.
+      - name: Ensure local prover CLI root is provisioned
+        id: prover_root
+        run: |
+          ROOT="$HOME/certora-install"
+          missing=""
+          for f in emv.jar certoraSorobanProver.py certora_jars z3; do
+            [ -e "$ROOT/$f" ] || missing="$missing $f"
+          done
+          if [ -n "$missing" ]; then
+            echo "provisioned=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Local prover CLI root incomplete on runner '$RUNNER_NAME' at $ROOT — missing:$missing. Rules were NOT proved on this run."
+            {
+              echo "### Certora local prover skipped"
+              echo
+              echo "Runner \`$RUNNER_NAME\` is missing:\`$missing\` under \`$ROOT\`."
+              echo
+              echo "Provision it once (HOME persists):"
+              echo '```'
+              echo "scp -r dev-machine:~/certora-install/. $ROOT/   # minus .venv"
+              echo "# then add the engine's z3 SMT-solver binary as $ROOT/z3"
+              echo '```'
+              echo "The EMV engine spawns \`z3\` via PATH; without it every rule fails"
+              echo "with \`Cannot run program z3\`."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "provisioned=true" >> "$GITHUB_OUTPUT"
+          echo "local prover CLI root present on '$RUNNER_NAME': $(du -sh "$ROOT" | cut -f1), emv.jar $(wc -c < "$ROOT/emv.jar") bytes, z3 $("$ROOT/z3" -version 2>/dev/null | head -1)"
+          # The prover races every solver it finds on PATH. With z3 alone the
+          # local race is narrower than the hosted one (z3, cvc5, yices,
+          # bitwuzla), so nonlinear rules that cvc5 closes stay open here.
+          for solver in cvc5 yices-smt2 bitwuzla; do
+            if [ -x "$ROOT/$solver" ]; then
+              echo "solver $solver: $("$ROOT/$solver" --version 2>/dev/null | head -1)"
+            else
+              echo "::warning::solver $solver is not installed under $ROOT; the local race runs without it"
+            fi
+          done
+
+      - name: Prove rules locally (parallel, cap from input)
+        id: prove
+        if: steps.prover_root.outputs.provisioned == 'true'
+        env:
+          PROVE_CONFS: ${{ inputs.confs }}
+          PROVE_RULES: ${{ inputs.rules }}
+          CERTORA_RULE_TIMEOUT: ${{ inputs.rule_timeout || '900' }}
+          CERTORA_LOCAL_JOBS: "10"
+        run: |
+          CERTORA_PYTHON="$(command -v python3)"
+          export CERTORA_PYTHON
+          export CERTORA_INSTALL="$HOME/certora-install"
+          bash certora/scripts/run-local-ci.sh "$PROVE_CONFS" "$PROVE_RULES"
+
+      # A VIOLATED verdict is only actionable with its counterexample, and the
+      # call trace (with the `clog!`-ed inputs) lives in the prover's working
+      # directory, which run-rules-local.sh keeps under target/certora-local-logs/runs/
+      # for every rule the prover failed. Ship that whole directory on failure.
+      - name: Upload prover logs and counterexample traces
+        if: always() && steps.prove.outcome == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: certora-local-prover-logs-${{ github.sha }}
+          path: target/certora-local-logs
+          if-no-files-found: warn
+          retention-days: 7

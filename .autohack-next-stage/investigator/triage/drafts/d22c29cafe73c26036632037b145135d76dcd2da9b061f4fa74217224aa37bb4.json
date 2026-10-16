@@ -1,0 +1,31 @@
+{
+  "repository": "Instadapp/fluid-contracts-public",
+  "commit": "9496626f71a761fc296dc3b2efbfd54c504e18f0",
+  "scope_sources": [
+    {
+      "asset_type": "smart_contract",
+      "asset_url": "https://github.com/Instadapp/fluid-contracts-public",
+      "program": "instadapp",
+      "scope_url": "https://immunefi.com/bug-bounty/instadapp/scope/"
+    }
+  ],
+  "original_report": "Instadapp__fluid-contracts-public-9496626f71a7.json",
+  "lead": {
+    "rule": "SOL_DELEGATECALL",
+    "file": "contracts/protocols/vault/factory/main.sol",
+    "line": 335,
+    "guidance": "Review delegatecall target and access control",
+    "fingerprint": "b4b65c41271f1ba8b0a5"
+  },
+  "source_excerpt": "327:     function deployVault(\n328:         address vaultDeploymentLogic_,\n329:         bytes calldata vaultDeploymentData_\n330:     ) public virtual returns (address vault_) {\n331:         uint256 vaultId_;\n332:         (vault_, vaultId_) = _deployVaultStart(vaultDeploymentLogic_);\n333: \n334:         // deploy the vault using vault deployment logic by making .delegatecall\n335:         (bool success_, bytes memory data_) = vaultDeploymentLogic_.delegatecall(vaultDeploymentData_);\n336: \n337:         _deployVaultFinalize(vault_, vaultId_, success_, data_);\n338:     }\n339: }\n340: \n341: abstract contract VaultFactoryERC721 is VaultFactoryCore, VaultFactoryDeploymentCore {\n342:     /// @notice                   Mints a new ERC721 token for a specific vault (`vaultId_`) to a specified user (`user_`).\n343:     ///                           Only the corresponding vault is authorized to mint a token.",
+  "triage": {
+    "classification": "likely_false_positive",
+    "rationale": "The code snippet appears to be part of a contract implementation for a VaultFactory, but there is no indication of a false positive or a known vulnerability. The code is likely a placeholder or incomplete implementation, and there is insufficient context to determine its actual functionality or potential issues.",
+    "evidence": "No known vulnerabilities or exploitable features identified in the code snippet.",
+    "follow_up": "If you have more context or details about the specific implementation, please provide them, and I will review further."
+  },
+  "status": "unverified_draft",
+  "verified_vulnerability": false,
+  "generated_at": "2026-10-14T23:45:04.380546+00:00",
+  "note": "Automated static triage only. No exploitability, eligibility, or bounty award established."
+}

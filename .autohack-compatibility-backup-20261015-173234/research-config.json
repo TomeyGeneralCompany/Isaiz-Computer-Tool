@@ -1,0 +1,5 @@
+{
+  "model": "qwen3:0.6b",
+  "foundry_image": "ghcr.io/foundry-rs/foundry:stable",
+  "note": "Preload the Foundry container image separately; this worker never pulls images or sends bounty submissions."
+}

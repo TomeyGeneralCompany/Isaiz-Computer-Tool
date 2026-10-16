@@ -1,0 +1,31 @@
+{
+  "repository": "HathorNetwork/hathor-wallet-mobile",
+  "commit": "d2a86ece964247d8313c20fbfeb0c7199d9bff5a",
+  "scope_sources": [
+    {
+      "asset_type": "websites_and_applications",
+      "asset_url": "https://github.com/HathorNetwork/hathor-wallet-mobile",
+      "program": "hathornetwork",
+      "scope_url": "https://immunefi.com/bug-bounty/hathornetwork/scope/"
+    }
+  ],
+  "original_report": "HathorNetwork__hathor-wallet-mobile-d2a86ece9642.json",
+  "lead": {
+    "rule": "JS_CHILD_EXEC",
+    "file": "scripts/update_translations.js",
+    "line": 149,
+    "guidance": "Review command construction and input provenance",
+    "fingerprint": "58074b206ca25b0295ac"
+  },
+  "source_excerpt": "141:   subfolders.forEach((subfolder) => {\n142:     const poFile = path.join(localeDir, subfolder, 'texts.po');\n143:     const isStrictLanguage = strictLanguages.includes(subfolder);\n144:     const cmd = isStrictLanguage\n145:       ? `msgcmp ${poFile} ${potFile}`\n146:       : `msgcmp --use-untranslated ${poFile} ${potFile}`;\n147:     try {\n148:       // If there are any differences, the command will throw an error\n149:       execSync(cmd, { stdio: 'inherit' });\n150:     } catch (error) {\n151:       console.error(`Error checking ${poFile}:`, error);\n152:       errorHappened = true;\n153:     }\n154:   });\n155: \n156:   if (errorHappened) {\n157:     console.warn('\u274c Some translations are missing. Please review the changes.');",
+  "triage": {
+    "classification": "likely_false_positive",
+    "rationale": "The code checks for strict languages and constructs a command based on that, but there's no indication of potential issues with the command itself. The logic is correct, but insufficient context is provided to confirm the command's correctness.",
+    "evidence": "No known vulnerabilities or exploitable logic in the command construction.",
+    "follow_up": "If you have more context or a different rule, please provide it for further analysis."
+  },
+  "status": "unverified_draft",
+  "verified_vulnerability": false,
+  "generated_at": "2026-10-14T23:37:15.311897+00:00",
+  "note": "Automated static triage only. No exploitability, eligibility, or bounty award established."
+}

@@ -1,0 +1,39 @@
+{
+  "checks": {
+    "has_reproduction_test": false,
+    "in_scope_at_processing": true,
+    "source_commit_matches": true,
+    "triage_requires_review": false
+  },
+  "commit": "116a8658d60fb9be25d01847be2a9671ccbf81bf",
+  "lead": {
+    "file": "src/screens/SendConfirmScreen.js",
+    "fingerprint": "95dcaed1579a5133bd18",
+    "guidance": "Review command construction and input provenance",
+    "line": 112,
+    "rule": "JS_CHILD_EXEC"
+  },
+  "note": "Automated offline evidence preparation only. No project-specific reproduction or verified security impact.",
+  "processed_at": "2026-10-15T01:24:40.896219+00:00",
+  "repository": "HathorNetwork/hathor-wallet-mobile",
+  "scope_urls": [
+    "https://immunefi.com/bug-bounty/hathornetwork/scope/"
+  ],
+  "source_check": {
+    "commit": "116a8658d60fb9be25d01847be2a9671ccbf81bf",
+    "excerpt": "  101:   if (shieldedCopy) {\n  102:     return shieldedCopy;\n  103:   }\n  104:   const msg = err?.message || '';\n  105:   const htrUid = hathorLib.constants.NATIVE_TOKEN_UID;\n  106:   if (msg.includes(`No UTXOs available for the token ${htrUid}`)) {\n  107:     return t`Insufficient HTR to cover the network fee.`;\n  108:   }\n  109:   if (msg.includes('No UTXOs available for the token')) {\n  110:     return t`Insufficient balance to send this transaction.`;\n  111:   }\n  112:   const insufficientTokens = INSUFFICIENT_TOKENS_ERROR.exec(msg);\n  113:   if (insufficientTokens) {\n  114:     // HTR pays the fees: for HTR, they count with the amount.\n  115:     return insufficientTokens[1] === htrUid\n  116:       ? t`Insufficient HTR to cover this transaction and its fees.`\n  117:       : t`Insufficient balance to send this transaction.`;\n  118:   }\n  119:   if (INPUT_LIMIT_ERROR.test(msg)) {\n  120:     return t`This amount needs more inputs than a transaction can hold. Try sending a smaller amount.`;\n  121:   }\n  122:   return msg || t`Failed to process transaction.`;\n  123: }\n  124: ",
+    "file": "src/screens/SendConfirmScreen.js",
+    "file_sha256": "b36cf9486f69230a6394393489a1f07bf63325e201b14cd0a8dd88e6b53432b1",
+    "line": 112,
+    "status": "source_matched"
+  },
+  "source_fingerprint": "9d7709d3644a55f083229074131c1429605192890f5fa28121d5a17346af4759",
+  "status": "needs_project_specific_reproduction",
+  "triage": {
+    "classification": "likely_false_positive",
+    "evidence": "The code checks for specific error messages but does not validate the input or ensure proper handling of the HTR token. The logic is incomplete and may not cover all edge cases.",
+    "follow_up": "If you have more details, I can help analyze further.",
+    "rationale": "The code checks for specific error messages but does not validate the input or ensure proper handling of the HTR token. The logic is incomplete and may not cover all edge cases."
+  },
+  "verified_vulnerability": false
+}

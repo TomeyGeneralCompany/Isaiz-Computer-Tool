@@ -1,0 +1,31 @@
+{
+  "repository": "Instadapp/inst-governance",
+  "commit": "8891f73d17887e272a5317065961269aee94f7cd",
+  "scope_sources": [
+    {
+      "asset_type": "smart_contract",
+      "asset_url": "https://github.com/Instadapp/inst-governance",
+      "program": "instadapp",
+      "scope_url": "https://immunefi.com/bug-bounty/instadapp/scope/"
+    }
+  ],
+  "original_report": "Instadapp__inst-governance-8891f73d1788.json",
+  "lead": {
+    "rule": "SOL_DELEGATECALL",
+    "file": "contracts/TokenDelegator.sol",
+    "line": 51,
+    "guidance": "Review delegatecall target and access control",
+    "fingerprint": "2bfe674005d5eb207fba"
+  },
+  "source_excerpt": "43: \n44:     /**\n45:      * @notice Internal method to delegate execution to another contract\n46:      * @dev It returns to the external caller whatever the implementation returns or forwards reverts\n47:      * @param callee The contract to delegatecall\n48:      * @param data The raw data to delegatecall\n49:      */\n50:     function delegateTo(address callee, bytes memory data) internal {\n51:         (bool success, bytes memory returnData) = callee.delegatecall(data);\n52:         assembly {\n53:             if eq(success, 0) {\n54:                 revert(add(returnData, 0x20), returndatasize())\n55:             }\n56:         }\n57:     }\n58: \n59:     /**",
+  "triage": {
+    "classification": "needs_review",
+    "rationale": "The rule is about delegatecall in a token-delegation contract, but the implementation is incomplete and lacks proper handling of delegatecall parameters. There is insufficient context to determine if the implementation is secure or not.",
+    "evidence": "Insufficient context on the delegatecall implementation details.",
+    "follow_up": "If the implementation is incomplete, further analysis is needed to determine if it's secure or not."
+  },
+  "status": "unverified_draft",
+  "verified_vulnerability": false,
+  "generated_at": "2026-10-14T23:47:47.943435+00:00",
+  "note": "Automated static triage only. No exploitability, eligibility, or bounty award established."
+}

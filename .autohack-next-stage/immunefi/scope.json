@@ -1,0 +1,1260 @@
+{
+  "permission": "passive_github_metadata_only",
+  "repositories": {
+    "AcalaNetwork/Acala": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/AcalaNetwork/Acala",
+        "program": "acala",
+        "scope_url": "https://immunefi.com/bug-bounty/acala/scope/"
+      }
+    ],
+    "CosmWasm/cosmwasm": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/CosmWasm/cosmwasm",
+        "program": "cosmos",
+        "scope_url": "https://immunefi.com/bug-bounty/cosmos/scope/"
+      }
+    ],
+    "CosmWasm/cw-storage-plus": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/CosmWasm/cw-storage-plus",
+        "program": "cosmos",
+        "scope_url": "https://immunefi.com/bug-bounty/cosmos/scope/"
+      }
+    ],
+    "CosmWasm/cw-utils": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/CosmWasm/cw-utils",
+        "program": "cosmos",
+        "scope_url": "https://immunefi.com/bug-bounty/cosmos/scope/"
+      }
+    ],
+    "CosmWasm/rust-optimizer": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/CosmWasm/rust-optimizer",
+        "program": "cosmos",
+        "scope_url": "https://immunefi.com/bug-bounty/cosmos/scope/"
+      }
+    ],
+    "CosmWasm/serde-json-wasm": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/CosmWasm/serde-json-wasm",
+        "program": "cosmos",
+        "scope_url": "https://immunefi.com/bug-bounty/cosmos/scope/"
+      }
+    ],
+    "CosmWasm/wasmd": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/CosmWasm/wasmd",
+        "program": "cosmos",
+        "scope_url": "https://immunefi.com/bug-bounty/cosmos/scope/"
+      }
+    ],
+    "CosmWasm/wasmvm": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/CosmWasm/wasmvm",
+        "program": "cosmos",
+        "scope_url": "https://immunefi.com/bug-bounty/cosmos/scope/"
+      }
+    ],
+    "HathorNetwork/hathor-core": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/HathorNetwork/hathor-core",
+        "program": "hathornetwork",
+        "scope_url": "https://immunefi.com/bug-bounty/hathornetwork/scope/"
+      }
+    ],
+    "HathorNetwork/hathor-wallet": [
+      {
+        "asset_type": "websites_and_applications",
+        "asset_url": "https://github.com/HathorNetwork/hathor-wallet",
+        "program": "hathornetwork",
+        "scope_url": "https://immunefi.com/bug-bounty/hathornetwork/scope/"
+      }
+    ],
+    "HathorNetwork/hathor-wallet-headless": [
+      {
+        "asset_type": "websites_and_applications",
+        "asset_url": "https://github.com/HathorNetwork/hathor-wallet-headless",
+        "program": "hathornetwork",
+        "scope_url": "https://immunefi.com/bug-bounty/hathornetwork/scope/"
+      }
+    ],
+    "HathorNetwork/hathor-wallet-lib": [
+      {
+        "asset_type": "websites_and_applications",
+        "asset_url": "https://github.com/HathorNetwork/hathor-wallet-lib",
+        "program": "hathornetwork",
+        "scope_url": "https://immunefi.com/bug-bounty/hathornetwork/scope/"
+      }
+    ],
+    "HathorNetwork/hathor-wallet-mobile": [
+      {
+        "asset_type": "websites_and_applications",
+        "asset_url": "https://github.com/HathorNetwork/hathor-wallet-mobile",
+        "program": "hathornetwork",
+        "scope_url": "https://immunefi.com/bug-bounty/hathornetwork/scope/"
+      }
+    ],
+    "HorizenOfficial/staker-services": [
+      {
+        "asset_type": "websites_and_applications",
+        "asset_url": "https://github.com/HorizenOfficial/staker-services",
+        "program": "horizen",
+        "scope_url": "https://immunefi.com/bug-bounty/horizen/scope/"
+      }
+    ],
+    "Instadapp/avocado-contracts-public": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/Instadapp/avocado-contracts-public",
+        "program": "instadapp",
+        "scope_url": "https://immunefi.com/bug-bounty/instadapp/scope/"
+      }
+    ],
+    "Instadapp/dsa-contracts": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/Instadapp/dsa-contracts",
+        "program": "instadapp",
+        "scope_url": "https://immunefi.com/bug-bounty/instadapp/scope/"
+      }
+    ],
+    "Instadapp/fluid-contracts-public": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/Instadapp/fluid-contracts-public",
+        "program": "instadapp",
+        "scope_url": "https://immunefi.com/bug-bounty/instadapp/scope/"
+      }
+    ],
+    "Instadapp/inst-governance": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/Instadapp/inst-governance",
+        "program": "instadapp",
+        "scope_url": "https://immunefi.com/bug-bounty/instadapp/scope/"
+      }
+    ],
+    "OpenZeppelin/openzeppelin-contracts": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/OpenZeppelin/openzeppelin-contracts",
+        "program": "openzeppelin",
+        "scope_url": "https://immunefi.com/bug-bounty/openzeppelin/scope/"
+      }
+    ],
+    "OpenZeppelin/openzeppelin-contracts-upgradeable": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/OpenZeppelin/openzeppelin-contracts-upgradeable",
+        "program": "openzeppelin",
+        "scope_url": "https://immunefi.com/bug-bounty/openzeppelin/scope/"
+      }
+    ],
+    "OpenZeppelin/uniswap-hooks": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/OpenZeppelin/uniswap-hooks",
+        "program": "openzeppelin",
+        "scope_url": "https://immunefi.com/bug-bounty/openzeppelin/scope/"
+      }
+    ],
+    "TruFin-io/smart-contracts-solana-public": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/TruFin-io/smart-contracts-solana-public",
+        "program": "trufin",
+        "scope_url": "https://immunefi.com/bug-bounty/trufin/scope/"
+      }
+    ],
+    "XOXNO/rs-lending-xlm": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/XOXNO/rs-lending-xlm",
+        "program": "xoxno",
+        "scope_url": "https://immunefi.com/bug-bounty/xoxno/scope/"
+      }
+    ],
+    "ava-labs/Avalanche-Wallet-SDK": [
+      {
+        "asset_type": "websites_and_applications",
+        "asset_url": "https://github.com/ava-labs/Avalanche-Wallet-SDK",
+        "program": "avalabs",
+        "scope_url": "https://immunefi.com/bug-bounty/avalabs/scope/"
+      }
+    ],
+    "ava-labs/AvalancheJS": [
+      {
+        "asset_type": "websites_and_applications",
+        "asset_url": "https://github.com/ava-labs/AvalancheJS",
+        "program": "avalabs",
+        "scope_url": "https://immunefi.com/bug-bounty/avalabs/scope/"
+      }
+    ],
+    "ava-labs/avalanchego": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/ava-labs/avalanchego",
+        "program": "avalanche",
+        "scope_url": "https://immunefi.com/bug-bounty/avalanche/scope/"
+      }
+    ],
+    "ava-labs/libevm": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/ava-labs/libevm",
+        "program": "avalanche",
+        "scope_url": "https://immunefi.com/bug-bounty/avalanche/scope/"
+      }
+    ],
+    "availproject/contracts": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/availproject/contracts",
+        "program": "avail",
+        "scope_url": "https://immunefi.com/bug-bounty/avail/scope/"
+      }
+    ],
+    "axelarnetwork/axelar-cgp-solidity": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/axelarnetwork/axelar-cgp-solidity",
+        "program": "axelarnetwork",
+        "scope_url": "https://immunefi.com/bug-bounty/axelarnetwork/scope/"
+      }
+    ],
+    "axelarnetwork/axelar-core": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/axelarnetwork/axelar-core",
+        "program": "axelarnetwork",
+        "scope_url": "https://immunefi.com/bug-bounty/axelarnetwork/scope/"
+      }
+    ],
+    "axelarnetwork/axelar-gmp-sdk-solidity": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/axelarnetwork/axelar-gmp-sdk-solidity",
+        "program": "axelarnetwork",
+        "scope_url": "https://immunefi.com/bug-bounty/axelarnetwork/scope/"
+      }
+    ],
+    "axelarnetwork/interchain-token-service": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/axelarnetwork/interchain-token-service",
+        "program": "axelarnetwork",
+        "scope_url": "https://immunefi.com/bug-bounty/axelarnetwork/scope/"
+      }
+    ],
+    "axelarnetwork/tofnd": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/axelarnetwork/tofnd",
+        "program": "axelarnetwork",
+        "scope_url": "https://immunefi.com/bug-bounty/axelarnetwork/scope/"
+      }
+    ],
+    "babylonlabs-io/babylon": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/babylonlabs-io/babylon",
+        "program": "babylon-labs",
+        "scope_url": "https://immunefi.com/bug-bounty/babylon-labs/scope/"
+      }
+    ],
+    "berachain/airdrop-contracts": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/berachain/airdrop-contracts",
+        "program": "berachain",
+        "scope_url": "https://immunefi.com/bug-bounty/berachain/scope/"
+      }
+    ],
+    "berachain/beacon-kit": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/berachain/beacon-kit",
+        "program": "berachain",
+        "scope_url": "https://immunefi.com/bug-bounty/berachain/scope/"
+      }
+    ],
+    "berachain/bera-reth": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/berachain/bera-reth",
+        "program": "berachain",
+        "scope_url": "https://immunefi.com/bug-bounty/berachain/scope/"
+      }
+    ],
+    "berachain/contracts": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/berachain/contracts",
+        "program": "berachain",
+        "scope_url": "https://immunefi.com/bug-bounty/berachain/scope/"
+      }
+    ],
+    "byteball/city-aa": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/byteball/city-aa",
+        "program": "obyte",
+        "scope_url": "https://immunefi.com/bug-bounty/obyte/scope/"
+      }
+    ],
+    "byteball/coop-aa": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/byteball/coop-aa",
+        "program": "obyte",
+        "scope_url": "https://immunefi.com/bug-bounty/obyte/scope/"
+      }
+    ],
+    "byteball/counterstake-bridge": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/byteball/counterstake-bridge",
+        "program": "obyte",
+        "scope_url": "https://immunefi.com/bug-bounty/obyte/scope/"
+      }
+    ],
+    "byteball/friend-aa": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/byteball/friend-aa",
+        "program": "obyte",
+        "scope_url": "https://immunefi.com/bug-bounty/obyte/scope/"
+      }
+    ],
+    "byteball/obyte-cascading-donations": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/byteball/obyte-cascading-donations",
+        "program": "obyte",
+        "scope_url": "https://immunefi.com/bug-bounty/obyte/scope/"
+      }
+    ],
+    "byteball/obyte-gui-wallet": [
+      {
+        "asset_type": "websites_and_applications",
+        "asset_url": "https://github.com/byteball/obyte-gui-wallet",
+        "program": "obyte",
+        "scope_url": "https://immunefi.com/bug-bounty/obyte/scope/"
+      }
+    ],
+    "byteball/ocore": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/byteball/ocore",
+        "program": "obyte",
+        "scope_url": "https://immunefi.com/bug-bounty/obyte/scope/"
+      }
+    ],
+    "byteball/oswap-token-aa": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/byteball/oswap-token-aa",
+        "program": "obyte",
+        "scope_url": "https://immunefi.com/bug-bounty/obyte/scope/"
+      }
+    ],
+    "byteball/perpetual-aa": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/byteball/perpetual-aa",
+        "program": "obyte",
+        "scope_url": "https://immunefi.com/bug-bounty/obyte/scope/"
+      }
+    ],
+    "byteball/prediction-markets-aa": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/byteball/prediction-markets-aa",
+        "program": "obyte",
+        "scope_url": "https://immunefi.com/bug-bounty/obyte/scope/"
+      }
+    ],
+    "byteball/token-registry-aa": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/byteball/token-registry-aa",
+        "program": "obyte",
+        "scope_url": "https://immunefi.com/bug-bounty/obyte/scope/"
+      }
+    ],
+    "cometbft/cometbft": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/cometbft/cometbft",
+        "program": "cosmos",
+        "scope_url": "https://immunefi.com/bug-bounty/cosmos/scope/"
+      }
+    ],
+    "cosmos/cosmos-sdk": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/cosmos/cosmos-sdk",
+        "program": "cosmos",
+        "scope_url": "https://immunefi.com/bug-bounty/cosmos/scope/"
+      }
+    ],
+    "cosmos/evm": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/cosmos/evm",
+        "program": "cosmos",
+        "scope_url": "https://immunefi.com/bug-bounty/cosmos/scope/"
+      }
+    ],
+    "cosmos/gaia": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/cosmos/gaia",
+        "program": "cosmos",
+        "scope_url": "https://immunefi.com/bug-bounty/cosmos/scope/"
+      }
+    ],
+    "cosmos/iavl": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/cosmos/iavl",
+        "program": "cosmos",
+        "scope_url": "https://immunefi.com/bug-bounty/cosmos/scope/"
+      }
+    ],
+    "cosmos/ibc-go": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/cosmos/ibc-go",
+        "program": "cosmos",
+        "scope_url": "https://immunefi.com/bug-bounty/cosmos/scope/"
+      }
+    ],
+    "cosmos/ics23": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/cosmos/ics23",
+        "program": "cosmos",
+        "scope_url": "https://immunefi.com/bug-bounty/cosmos/scope/"
+      }
+    ],
+    "cosmos/ledger-cosmos": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/cosmos/ledger-cosmos",
+        "program": "cosmos",
+        "scope_url": "https://immunefi.com/bug-bounty/cosmos/scope/"
+      },
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/cosmos/ledger-cosmos",
+        "program": "cosmos",
+        "scope_url": "https://immunefi.com/bug-bounty/cosmos/scope/"
+      }
+    ],
+    "cosmos/solidity-ibc-eureka": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/cosmos/solidity-ibc-eureka",
+        "program": "cosmos",
+        "scope_url": "https://immunefi.com/bug-bounty/cosmos/scope/"
+      }
+    ],
+    "ensdomains/ens-app-v3": [
+      {
+        "asset_type": "websites_and_applications",
+        "asset_url": "https://github.com/ensdomains/ens-app-v3",
+        "program": "ens",
+        "scope_url": "https://immunefi.com/bug-bounty/ens/scope/"
+      }
+    ],
+    "ensdomains/ens-metadata-service": [
+      {
+        "asset_type": "websites_and_applications",
+        "asset_url": "https://github.com/ensdomains/ens-metadata-service",
+        "program": "ens",
+        "scope_url": "https://immunefi.com/bug-bounty/ens/scope/"
+      }
+    ],
+    "ensdomains/ensdomains-landing": [
+      {
+        "asset_type": "websites_and_applications",
+        "asset_url": "https://github.com/ensdomains/ensdomains-landing",
+        "program": "ens",
+        "scope_url": "https://immunefi.com/bug-bounty/ens/scope/"
+      }
+    ],
+    "enzymefinance/protocol": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/enzymefinance/protocol",
+        "program": "enzymefinance",
+        "scope_url": "https://immunefi.com/bug-bounty/enzymefinance/scope/"
+      }
+    ],
+    "filecoin-project/bellperson": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/filecoin-project/bellperson",
+        "program": "filecoin",
+        "scope_url": "https://immunefi.com/bug-bounty/filecoin/scope/"
+      }
+    ],
+    "filecoin-project/boost": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/filecoin-project/boost",
+        "program": "filecoin",
+        "scope_url": "https://immunefi.com/bug-bounty/filecoin/scope/"
+      }
+    ],
+    "filecoin-project/builtin-actors": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/filecoin-project/builtin-actors",
+        "program": "filecoin",
+        "scope_url": "https://immunefi.com/bug-bounty/filecoin/scope/"
+      }
+    ],
+    "filecoin-project/go-address": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/filecoin-project/go-address",
+        "program": "filecoin",
+        "scope_url": "https://immunefi.com/bug-bounty/filecoin/scope/"
+      }
+    ],
+    "filecoin-project/go-amt-ipld": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/filecoin-project/go-amt-ipld",
+        "program": "filecoin",
+        "scope_url": "https://immunefi.com/bug-bounty/filecoin/scope/"
+      }
+    ],
+    "filecoin-project/go-bitfield": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/filecoin-project/go-bitfield",
+        "program": "filecoin",
+        "scope_url": "https://immunefi.com/bug-bounty/filecoin/scope/"
+      }
+    ],
+    "filecoin-project/go-cbor-util": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/filecoin-project/go-cbor-util",
+        "program": "filecoin",
+        "scope_url": "https://immunefi.com/bug-bounty/filecoin/scope/"
+      }
+    ],
+    "filecoin-project/go-crypto": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/filecoin-project/go-crypto",
+        "program": "filecoin",
+        "scope_url": "https://immunefi.com/bug-bounty/filecoin/scope/"
+      }
+    ],
+    "filecoin-project/go-data-transfer": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/filecoin-project/go-data-transfer",
+        "program": "filecoin",
+        "scope_url": "https://immunefi.com/bug-bounty/filecoin/scope/"
+      }
+    ],
+    "filecoin-project/go-f3": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/filecoin-project/go-f3",
+        "program": "filecoin",
+        "scope_url": "https://immunefi.com/bug-bounty/filecoin/scope/"
+      }
+    ],
+    "filecoin-project/go-fil-commcid": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/filecoin-project/go-fil-commcid",
+        "program": "filecoin",
+        "scope_url": "https://immunefi.com/bug-bounty/filecoin/scope/"
+      }
+    ],
+    "filecoin-project/go-padreader": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/filecoin-project/go-padreader",
+        "program": "filecoin",
+        "scope_url": "https://immunefi.com/bug-bounty/filecoin/scope/"
+      }
+    ],
+    "filecoin-project/go-sectorbuilder": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/filecoin-project/go-sectorbuilder",
+        "program": "filecoin",
+        "scope_url": "https://immunefi.com/bug-bounty/filecoin/scope/"
+      }
+    ],
+    "filecoin-project/go-statemachine": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/filecoin-project/go-statemachine",
+        "program": "filecoin",
+        "scope_url": "https://immunefi.com/bug-bounty/filecoin/scope/"
+      }
+    ],
+    "filecoin-project/go-statestore": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/filecoin-project/go-statestore",
+        "program": "filecoin",
+        "scope_url": "https://immunefi.com/bug-bounty/filecoin/scope/"
+      }
+    ],
+    "filecoin-project/lotus": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/filecoin-project/lotus",
+        "program": "filecoin",
+        "scope_url": "https://immunefi.com/bug-bounty/filecoin/scope/"
+      }
+    ],
+    "filecoin-project/merkletree": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/filecoin-project/merkletree",
+        "program": "filecoin",
+        "scope_url": "https://immunefi.com/bug-bounty/filecoin/scope/"
+      }
+    ],
+    "filecoin-project/paired": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/filecoin-project/paired",
+        "program": "filecoin",
+        "scope_url": "https://immunefi.com/bug-bounty/filecoin/scope/"
+      }
+    ],
+    "filecoin-project/ref-fvm": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/filecoin-project/ref-fvm",
+        "program": "filecoin",
+        "scope_url": "https://immunefi.com/bug-bounty/filecoin/scope/"
+      }
+    ],
+    "filecoin-project/rust-fil-proofs": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/filecoin-project/rust-fil-proofs",
+        "program": "filecoin",
+        "scope_url": "https://immunefi.com/bug-bounty/filecoin/scope/"
+      }
+    ],
+    "filecoin-project/rust-fil-proofs-ffi": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/filecoin-project/rust-fil-proofs-ffi",
+        "program": "filecoin",
+        "scope_url": "https://immunefi.com/bug-bounty/filecoin/scope/"
+      }
+    ],
+    "filecoin-project/rust-filecoin-proofs-api": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/filecoin-project/rust-filecoin-proofs-api",
+        "program": "filecoin",
+        "scope_url": "https://immunefi.com/bug-bounty/filecoin/scope/"
+      }
+    ],
+    "galacticcouncil/Hydradx-ui": [
+      {
+        "asset_type": "websites_and_applications",
+        "asset_url": "https://github.com/galacticcouncil/Hydradx-ui/",
+        "program": "hydration",
+        "scope_url": "https://immunefi.com/bug-bounty/hydration/scope/"
+      }
+    ],
+    "galacticcouncil/apps": [
+      {
+        "asset_type": "websites_and_applications",
+        "asset_url": "https://github.com/galacticcouncil/apps",
+        "program": "hydration",
+        "scope_url": "https://immunefi.com/bug-bounty/hydration/scope/"
+      }
+    ],
+    "harvestfi/harvest-strategy": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/harvestfi/harvest-strategy",
+        "program": "harvest",
+        "scope_url": "https://immunefi.com/bug-bounty/harvest/scope/"
+      }
+    ],
+    "harvestfi/harvest-strategy-arbitrum": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/harvestfi/harvest-strategy-arbitrum",
+        "program": "harvest",
+        "scope_url": "https://immunefi.com/bug-bounty/harvest/scope/"
+      },
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/harvestfi/harvest-strategy-arbitrum",
+        "program": "harvest",
+        "scope_url": "https://immunefi.com/bug-bounty/harvest/scope/"
+      }
+    ],
+    "harvestfi/harvest-strategy-polygon": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/harvestfi/harvest-strategy-polygon",
+        "program": "harvest",
+        "scope_url": "https://immunefi.com/bug-bounty/harvest/scope/"
+      }
+    ],
+    "hiero-ledger/hiero-consensus-node": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/hiero-ledger/hiero-consensus-node",
+        "program": "hedera",
+        "scope_url": "https://immunefi.com/bug-bounty/hedera/scope/"
+      }
+    ],
+    "hiero-ledger/hiero-cryptography": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/hiero-ledger/hiero-cryptography",
+        "program": "hedera",
+        "scope_url": "https://immunefi.com/bug-bounty/hedera/scope/"
+      }
+    ],
+    "hiero-ledger/hiero-json-rpc-relay": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/hiero-ledger/hiero-json-rpc-relay",
+        "program": "hedera",
+        "scope_url": "https://immunefi.com/bug-bounty/hedera/scope/"
+      }
+    ],
+    "hiero-ledger/hiero-mirror-node": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/hiero-ledger/hiero-mirror-node",
+        "program": "hedera",
+        "scope_url": "https://immunefi.com/bug-bounty/hedera/scope/"
+      }
+    ],
+    "hiero-ledger/hiero-sdk-go": [
+      {
+        "asset_type": "websites_and_applications",
+        "asset_url": "https://github.com/hiero-ledger/hiero-sdk-go",
+        "program": "hedera",
+        "scope_url": "https://immunefi.com/bug-bounty/hedera/scope/"
+      }
+    ],
+    "hiero-ledger/hiero-sdk-java": [
+      {
+        "asset_type": "websites_and_applications",
+        "asset_url": "https://github.com/hiero-ledger/hiero-sdk-java",
+        "program": "hedera",
+        "scope_url": "https://immunefi.com/bug-bounty/hedera/scope/"
+      }
+    ],
+    "hiero-ledger/hiero-sdk-js": [
+      {
+        "asset_type": "websites_and_applications",
+        "asset_url": "https://github.com/hiero-ledger/hiero-sdk-js",
+        "program": "hedera",
+        "scope_url": "https://immunefi.com/bug-bounty/hedera/scope/"
+      }
+    ],
+    "ichifarm/ichi-oneToken": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/ichifarm/ichi-oneToken",
+        "program": "ichi",
+        "scope_url": "https://immunefi.com/bug-bounty/ichi/scope/"
+      }
+    ],
+    "informalsystems/hermes": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/informalsystems/hermes",
+        "program": "cosmos",
+        "scope_url": "https://immunefi.com/bug-bounty/cosmos/scope/"
+      }
+    ],
+    "ipfs/go-graphsync": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/ipfs/go-graphsync",
+        "program": "filecoin",
+        "scope_url": "https://immunefi.com/bug-bounty/filecoin/scope/"
+      }
+    ],
+    "ipfs/go-hamt-ipld": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/ipfs/go-hamt-ipld",
+        "program": "filecoin",
+        "scope_url": "https://immunefi.com/bug-bounty/filecoin/scope/"
+      }
+    ],
+    "ipfs/go-ipld-cbor": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/ipfs/go-ipld-cbor",
+        "program": "filecoin",
+        "scope_url": "https://immunefi.com/bug-bounty/filecoin/scope/"
+      }
+    ],
+    "leather-io/mono": [
+      {
+        "asset_type": "websites_and_applications",
+        "asset_url": "https://github.com/leather-io/mono",
+        "program": "leather",
+        "scope_url": "https://immunefi.com/bug-bounty/leather/scope/"
+      }
+    ],
+    "lidofinance/aave-delivery-infrastructure": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/lidofinance/aave-delivery-infrastructure",
+        "program": "lido",
+        "scope_url": "https://immunefi.com/bug-bounty/lido/scope/"
+      }
+    ],
+    "lidofinance/aragon-apps": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/lidofinance/aragon-apps",
+        "program": "lido",
+        "scope_url": "https://immunefi.com/bug-bounty/lido/scope/"
+      }
+    ],
+    "lidofinance/circuit-breaker": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/lidofinance/circuit-breaker",
+        "program": "lido",
+        "scope_url": "https://immunefi.com/bug-bounty/lido/scope/"
+      }
+    ],
+    "lidofinance/community-staking-module": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/lidofinance/community-staking-module",
+        "program": "lido",
+        "scope_url": "https://immunefi.com/bug-bounty/lido/scope/"
+      }
+    ],
+    "lidofinance/core": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/lidofinance/core",
+        "program": "lido",
+        "scope_url": "https://immunefi.com/bug-bounty/lido/scope/"
+      }
+    ],
+    "lidofinance/dual-governance": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/lidofinance/dual-governance",
+        "program": "lido",
+        "scope_url": "https://immunefi.com/bug-bounty/lido/scope/"
+      }
+    ],
+    "lidofinance/easy-track": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/lidofinance/easy-track",
+        "program": "lido",
+        "scope_url": "https://immunefi.com/bug-bounty/lido/scope/"
+      }
+    ],
+    "lidofinance/governance-crosschain-bridges": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/lidofinance/governance-crosschain-bridges",
+        "program": "lido",
+        "scope_url": "https://immunefi.com/bug-bounty/lido/scope/"
+      }
+    ],
+    "lidofinance/lido-council-daemon": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/lidofinance/lido-council-daemon",
+        "program": "lido",
+        "scope_url": "https://immunefi.com/bug-bounty/lido/scope/"
+      }
+    ],
+    "lidofinance/lido-keys-api": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/lidofinance/lido-keys-api",
+        "program": "lido",
+        "scope_url": "https://immunefi.com/bug-bounty/lido/scope/"
+      }
+    ],
+    "lidofinance/lido-l2": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/lidofinance/lido-l2",
+        "program": "lido",
+        "scope_url": "https://immunefi.com/bug-bounty/lido/scope/"
+      }
+    ],
+    "lidofinance/lido-l2-with-steth": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/lidofinance/lido-l2-with-steth",
+        "program": "lido",
+        "scope_url": "https://immunefi.com/bug-bounty/lido/scope/"
+      }
+    ],
+    "lidofinance/lido-oracle": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/lidofinance/lido-oracle",
+        "program": "lido",
+        "scope_url": "https://immunefi.com/bug-bounty/lido/scope/"
+      }
+    ],
+    "lidofinance/lido-vesting-escrow": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/lidofinance/lido-vesting-escrow",
+        "program": "lido",
+        "scope_url": "https://immunefi.com/bug-bounty/lido/scope/"
+      }
+    ],
+    "lidofinance/mev-boost-relay-allowed-list": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/lidofinance/mev-boost-relay-allowed-list",
+        "program": "lido",
+        "scope_url": "https://immunefi.com/bug-bounty/lido/scope/"
+      }
+    ],
+    "lidofinance/onchain-mon": [
+      {
+        "asset_type": "websites_and_applications",
+        "asset_url": "https://github.com/lidofinance/onchain-mon",
+        "program": "lido",
+        "scope_url": "https://immunefi.com/bug-bounty/lido/scope/"
+      }
+    ],
+    "lidofinance/oz-merkle-tree": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/lidofinance/oz-merkle-tree",
+        "program": "lido",
+        "scope_url": "https://immunefi.com/bug-bounty/lido/scope/"
+      }
+    ],
+    "lidofinance/stonks": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/lidofinance/stonks",
+        "program": "lido",
+        "scope_url": "https://immunefi.com/bug-bounty/lido/scope/"
+      }
+    ],
+    "lidofinance/validator-ejector": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/lidofinance/validator-ejector",
+        "program": "lido",
+        "scope_url": "https://immunefi.com/bug-bounty/lido/scope/"
+      }
+    ],
+    "lurk-lab/neptune": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/lurk-lab/neptune",
+        "program": "filecoin",
+        "scope_url": "https://immunefi.com/bug-bounty/filecoin/scope/"
+      }
+    ],
+    "lurk-lab/neptune-triton": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/lurk-lab/neptune-triton",
+        "program": "filecoin",
+        "scope_url": "https://immunefi.com/bug-bounty/filecoin/scope/"
+      }
+    ],
+    "marinade-finance/liquid-staking-program": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/marinade-finance/liquid-staking-program",
+        "program": "marinade",
+        "scope_url": "https://immunefi.com/bug-bounty/marinade/scope/"
+      }
+    ],
+    "marsfoundation/spark-app": [
+      {
+        "asset_type": "websites_and_applications",
+        "asset_url": "https://github.com/marsfoundation/spark-app",
+        "program": "sparklend",
+        "scope_url": "https://immunefi.com/bug-bounty/sparklend/scope/"
+      }
+    ],
+    "marsfoundation/spark-dev-docs": [
+      {
+        "asset_type": "websites_and_applications",
+        "asset_url": "https://github.com/marsfoundation/spark-dev-docs",
+        "program": "sparklend",
+        "scope_url": "https://immunefi.com/bug-bounty/sparklend/scope/"
+      }
+    ],
+    "marsfoundation/spark-docs": [
+      {
+        "asset_type": "websites_and_applications",
+        "asset_url": "https://github.com/marsfoundation/spark-docs",
+        "program": "sparklend",
+        "scope_url": "https://immunefi.com/bug-bounty/sparklend/scope/"
+      }
+    ],
+    "money-on-chain/stable-protocol-core-v2": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/money-on-chain/stable-protocol-core-v2",
+        "program": "moneyonchain",
+        "scope_url": "https://immunefi.com/bug-bounty/moneyonchain/scope/"
+      }
+    ],
+    "mux-world/mux-aggregator-protocol": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/mux-world/mux-aggregator-protocol",
+        "program": "mux",
+        "scope_url": "https://immunefi.com/bug-bounty/mux/scope/"
+      }
+    ],
+    "mux-world/mux-degen-protocol": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/mux-world/mux-degen-protocol",
+        "program": "mux",
+        "scope_url": "https://immunefi.com/bug-bounty/mux/scope/"
+      }
+    ],
+    "mux-world/mux-staking": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/mux-world/mux-staking",
+        "program": "mux",
+        "scope_url": "https://immunefi.com/bug-bounty/mux/scope/"
+      }
+    ],
+    "mux-world/mux3-protocol": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/mux-world/mux3-protocol/",
+        "program": "mux",
+        "scope_url": "https://immunefi.com/bug-bounty/mux/scope/"
+      }
+    ],
+    "open-web3-stack/open-runtime-module-library": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/open-web3-stack/open-runtime-module-library",
+        "program": "acala",
+        "scope_url": "https://immunefi.com/bug-bounty/acala/scope/"
+      }
+    ],
+    "pancakeswap/infinity-core": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/pancakeswap/infinity-core",
+        "program": "pancakeswap",
+        "scope_url": "https://immunefi.com/bug-bounty/pancakeswap/scope/"
+      }
+    ],
+    "pancakeswap/infinity-periphery": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/pancakeswap/infinity-periphery",
+        "program": "pancakeswap",
+        "scope_url": "https://immunefi.com/bug-bounty/pancakeswap/scope/"
+      }
+    ],
+    "pancakeswap/infinity-universal-router": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/pancakeswap/infinity-universal-router",
+        "program": "pancakeswap",
+        "scope_url": "https://immunefi.com/bug-bounty/pancakeswap/scope/"
+      }
+    ],
+    "pancakeswap/pancake-swap-periphery": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/pancakeswap/pancake-swap-periphery",
+        "program": "pancakeswap",
+        "scope_url": "https://immunefi.com/bug-bounty/pancakeswap/scope/"
+      }
+    ],
+    "pancakeswap/pancake-v3-contracts": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/pancakeswap/pancake-v3-contracts",
+        "program": "pancakeswap",
+        "scope_url": "https://immunefi.com/bug-bounty/pancakeswap/scope/"
+      }
+    ],
+    "rsksmart/2wp-api": [
+      {
+        "asset_type": "websites_and_applications",
+        "asset_url": "https://github.com/rsksmart/2wp-api",
+        "program": "rootstocklabs",
+        "scope_url": "https://immunefi.com/bug-bounty/rootstocklabs/scope/"
+      }
+    ],
+    "rsksmart/2wp-app": [
+      {
+        "asset_type": "websites_and_applications",
+        "asset_url": "https://github.com/rsksmart/2wp-app",
+        "program": "rootstocklabs",
+        "scope_url": "https://immunefi.com/bug-bounty/rootstocklabs/scope/"
+      }
+    ],
+    "rsksmart/bridges-core-sdk": [
+      {
+        "asset_type": "websites_and_applications",
+        "asset_url": "https://github.com/rsksmart/bridges-core-sdk",
+        "program": "rootstocklabs",
+        "scope_url": "https://immunefi.com/bug-bounty/rootstocklabs/scope/"
+      }
+    ],
+    "rsksmart/flyover-sdk": [
+      {
+        "asset_type": "websites_and_applications",
+        "asset_url": "https://github.com/rsksmart/flyover-sdk",
+        "program": "rootstocklabs",
+        "scope_url": "https://immunefi.com/bug-bounty/rootstocklabs/scope/"
+      }
+    ],
+    "rsksmart/liquidity-provider-server": [
+      {
+        "asset_type": "websites_and_applications",
+        "asset_url": "https://github.com/rsksmart/liquidity-provider-server",
+        "program": "rootstocklabs",
+        "scope_url": "https://immunefi.com/bug-bounty/rootstocklabs/scope/"
+      }
+    ],
+    "rsksmart/powpeg-node": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/rsksmart/powpeg-node",
+        "program": "rootstocklabs",
+        "scope_url": "https://immunefi.com/bug-bounty/rootstocklabs/scope/"
+      }
+    ],
+    "rsksmart/rskj": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/rsksmart/rskj",
+        "program": "rootstocklabs",
+        "scope_url": "https://immunefi.com/bug-bounty/rootstocklabs/scope/"
+      }
+    ],
+    "sei-protocol/go-ethereum": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/sei-protocol/go-ethereum",
+        "program": "sei",
+        "scope_url": "https://immunefi.com/bug-bounty/sei/scope/"
+      }
+    ],
+    "sei-protocol/sei-chain": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/sei-protocol/sei-chain",
+        "program": "sei",
+        "scope_url": "https://immunefi.com/bug-bounty/sei/scope/"
+      }
+    ],
+    "sei-protocol/sei-js": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/sei-protocol/sei-js",
+        "program": "sei",
+        "scope_url": "https://immunefi.com/bug-bounty/sei/scope/"
+      }
+    ],
+    "sky-ecosystem/stusds": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/sky-ecosystem/stusds/",
+        "program": "sky",
+        "scope_url": "https://immunefi.com/bug-bounty/sky/scope/"
+      }
+    ],
+    "smartcontractkit/external-adapters-js": [
+      {
+        "asset_type": "websites_and_applications",
+        "asset_url": "https://github.com/smartcontractkit/external-adapters-js/",
+        "program": "chainlink",
+        "scope_url": "https://immunefi.com/bug-bounty/chainlink/scope/"
+      }
+    ],
+    "smartcontractkit/libocr": [
+      {
+        "asset_type": "websites_and_applications",
+        "asset_url": "https://github.com/smartcontractkit/libocr",
+        "program": "chainlink",
+        "scope_url": "https://immunefi.com/bug-bounty/chainlink/scope/"
+      }
+    ],
+    "smartcontractkit/operator-ui": [
+      {
+        "asset_type": "websites_and_applications",
+        "asset_url": "https://github.com/smartcontractkit/operator-ui",
+        "program": "chainlink",
+        "scope_url": "https://immunefi.com/bug-bounty/chainlink/scope/"
+      }
+    ],
+    "whyrusleeping/cbor-gen": [
+      {
+        "asset_type": "blockchain_dlt",
+        "asset_url": "https://github.com/whyrusleeping/cbor-gen",
+        "program": "filecoin",
+        "scope_url": "https://immunefi.com/bug-bounty/filecoin/scope/"
+      }
+    ],
+    "wormhole-foundation/native-token-transfers": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/wormhole-foundation/native-token-transfers",
+        "program": "wormhole",
+        "scope_url": "https://immunefi.com/bug-bounty/wormhole/scope/"
+      }
+    ],
+    "wormhole-foundation/wormhole-circle-integration": [
+      {
+        "asset_type": "smart_contract",
+        "asset_url": "https://github.com/wormhole-foundation/wormhole-circle-integration",
+        "program": "wormhole",
+        "scope_url": "https://immunefi.com/bug-bounty/wormhole/scope/"
+      }
+    ]
+  },
+  "source": "https://immunefi.com/public-api/bounties.json",
+  "updated_at": "2026-10-16T09:18:16.923817+00:00",
+  "valid_until": "2026-10-16T21:18:16.923817+00:00"
+}

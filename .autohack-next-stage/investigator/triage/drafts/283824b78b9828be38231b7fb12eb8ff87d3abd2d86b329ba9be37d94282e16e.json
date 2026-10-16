@@ -1,0 +1,31 @@
+{
+  "repository": "OpenZeppelin/openzeppelin-contracts",
+  "commit": "598d3905a6f4ebe68a52c79d461bedb7246fa187",
+  "scope_sources": [
+    {
+      "asset_type": "smart_contract",
+      "asset_url": "https://github.com/OpenZeppelin/openzeppelin-contracts",
+      "program": "openzeppelin",
+      "scope_url": "https://immunefi.com/bug-bounty/openzeppelin/scope/"
+    }
+  ],
+  "original_report": "OpenZeppelin__openzeppelin-contracts-598d3905a6f4.json",
+  "lead": {
+    "rule": "SOL_DELEGATECALL",
+    "file": "contracts/utils/SimulateCall.sol",
+    "line": 26,
+    "guidance": "Review delegatecall target and access control",
+    "fingerprint": "6aa76eb2dab30c3319d6"
+  },
+  "source_excerpt": "18:     }\n19: \n20:     /// @dev Same as {simulateCall-address-bytes} but with a value.\n21:     function simulateCall(\n22:         address target,\n23:         uint256 value,\n24:         bytes memory data\n25:     ) internal returns (bool success, bytes memory retData) {\n26:         (success, retData) = getSimulator().delegatecall(abi.encodePacked(target, value, data));\n27:         success = !success; // getSimulator() returns the success value inverted\n28:     }\n29: \n30:     /**\n31:      * @dev Returns the simulator address.\n32:      *\n33:      * The simulator REVERTs on success and RETURNs on failure, preserving the return data in both cases.\n34:      *",
+  "triage": {
+    "classification": "likely_false_positive",
+    "rationale": "The code is a placeholder for a simulated call function, not a real bug. The implementation is incomplete and lacks proper validation of delegatecall parameters, which is a common issue in Solidity. However, there is no evidence of a false positive in the provided code.",
+    "evidence": "The code is a placeholder for a simulated call function, not a real bug. The implementation is incomplete and lacks proper validation of delegatecall parameters, which is a common issue in Solidity.",
+    "follow_up": "If you have more information, please provide it to help us review the code further."
+  },
+  "status": "unverified_draft",
+  "verified_vulnerability": false,
+  "generated_at": "2026-10-15T09:34:29.049157+00:00",
+  "note": "Automated static triage only. No exploitability, eligibility, or bounty award established."
+}

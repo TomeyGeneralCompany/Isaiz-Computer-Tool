@@ -1,0 +1,22 @@
+# SPDX-FileCopyrightText: Hathor Labs
+# SPDX-License-Identifier: Apache-2.0
+
+from hathor.wallet.resources.address import AddressResource
+from hathor.wallet.resources.balance import BalanceResource
+from hathor.wallet.resources.history import HistoryResource
+from hathor.wallet.resources.lock import LockWalletResource
+from hathor.wallet.resources.send_tokens import SendTokensResource
+from hathor.wallet.resources.sign_tx import SignTxResource
+from hathor.wallet.resources.state import StateWalletResource
+from hathor.wallet.resources.unlock import UnlockWalletResource
+
+__all__ = [
+    'BalanceResource',
+    'HistoryResource',
+    'AddressResource',
+    'SendTokensResource',
+    'UnlockWalletResource',
+    'LockWalletResource',
+    'StateWalletResource',
+    'SignTxResource',
+]

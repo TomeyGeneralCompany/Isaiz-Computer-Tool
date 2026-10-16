@@ -1,0 +1,89 @@
+#![no_std]
+
+use soroban_sdk::{contract, contractimpl, contracttype, Env, Symbol, Vec};
+
+pub use common::oracle::providers::reflector::{ReflectorAsset, ReflectorPriceData};
+
+#[contracttype]
+pub enum MockKey {
+    Price(ReflectorAsset),
+    Ts(ReflectorAsset),
+    Base,
+    Decimals,
+    Resolution,
+}
+
+const WAD_TO_14_DECIMALS: i128 = 10_000;
+
+#[contract]
+pub struct MockReflectorOracle;
+
+#[contractimpl]
+impl MockReflectorOracle {
+    pub fn __constructor(env: Env) {
+        env.storage().instance().set(
+            &MockKey::Base,
+            &ReflectorAsset::Other(Symbol::new(&env, "USD")),
+        );
+        env.storage().instance().set(&MockKey::Decimals, &14u32);
+        env.storage().instance().set(&MockKey::Resolution, &300u32);
+    }
+
+    pub fn set_base(env: Env, base: ReflectorAsset) {
+        env.storage().instance().set(&MockKey::Base, &base);
+    }
+
+    pub fn set_price(env: Env, asset: ReflectorAsset, price_wad: i128) {
+        let now = env.ledger().timestamp();
+        Self::set_price_at(env, asset, price_wad, now);
+    }
+
+    pub fn set_price_at(env: Env, asset: ReflectorAsset, price_wad: i128, timestamp: u64) {
+        let price_14 = price_wad / WAD_TO_14_DECIMALS;
+        env.storage()
+            .persistent()
+            .set(&MockKey::Price(asset.clone()), &price_14);
+        env.storage()
+            .persistent()
+            .set(&MockKey::Ts(asset), &timestamp);
+    }
+
+    pub fn base(env: Env) -> ReflectorAsset {
+        env.storage().instance().get(&MockKey::Base).unwrap()
+    }
+
+    pub fn decimals(env: Env) -> u32 {
+        env.storage().instance().get(&MockKey::Decimals).unwrap()
+    }
+
+    pub fn resolution(env: Env) -> u32 {
+        env.storage().instance().get(&MockKey::Resolution).unwrap()
+    }
+
+    pub fn lastprice(env: Env, asset: ReflectorAsset) -> Option<ReflectorPriceData> {
+        let price: i128 = env
+            .storage()
+            .persistent()
+            .get(&MockKey::Price(asset.clone()))?;
+        let timestamp: u64 = env.storage().persistent().get(&MockKey::Ts(asset))?;
+        Some(ReflectorPriceData { price, timestamp })
+    }
+
+    pub fn prices(
+        env: Env,
+        asset: ReflectorAsset,
+        records: u32,
+    ) -> Option<Vec<ReflectorPriceData>> {
+        let entry = Self::lastprice(env.clone(), asset)?;
+        let resolution = u64::from(Self::resolution(env.clone()));
+        let mut out = Vec::new(&env);
+        for slot in 0..records {
+            let timestamp = entry.timestamp.saturating_sub(u64::from(slot) * resolution);
+            out.push_back(ReflectorPriceData {
+                price: entry.price,
+                timestamp,
+            });
+        }
+        Some(out)
+    }
+}

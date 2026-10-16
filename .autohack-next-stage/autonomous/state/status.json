@@ -1,0 +1,13 @@
+{
+  "blocked": 0,
+  "drafts_seen": 0,
+  "evidence_ready": 0,
+  "generated_at": "2026-10-16T22:35:10.032863+00:00",
+  "reproduction_records": 72,
+  "scope_repositories": 0,
+  "service": "active",
+  "unverified": 0,
+  "verification_records": 72,
+  "verified_vulnerabilities": 0,
+  "warning": "Scope missing or expired; evidence processing paused"
+}

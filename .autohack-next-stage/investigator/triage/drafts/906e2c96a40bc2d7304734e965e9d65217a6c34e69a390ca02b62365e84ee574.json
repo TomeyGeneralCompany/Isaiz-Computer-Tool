@@ -1,0 +1,31 @@
+{
+  "repository": "OpenZeppelin/openzeppelin-contracts-upgradeable",
+  "commit": "1717bdd8e6b75a1fa82abb99dbdc29e08b013c59",
+  "scope_sources": [
+    {
+      "asset_type": "smart_contract",
+      "asset_url": "https://github.com/OpenZeppelin/openzeppelin-contracts-upgradeable",
+      "program": "openzeppelin",
+      "scope_url": "https://immunefi.com/bug-bounty/openzeppelin/scope/"
+    }
+  ],
+  "original_report": "OpenZeppelin__openzeppelin-contracts-upgradeable-1717bdd8e6b7.json",
+  "lead": {
+    "rule": "JS_CHILD_EXEC",
+    "file": "hardhat/hardhat-exposed/internal/expose.ts",
+    "line": 168,
+    "guidance": "Review command construction and input provenance",
+    "fingerprint": "7e0b648066c596458c96"
+  },
+  "source_excerpt": "160: // than the raw input source names (`npm/<name>@<version>/<path>`, `project/lib/<path>`, ...). Hardhat records those\n161: // aliases as `[<context>:]<prefix>=<target>` remappings we invert here.\n162: //\n163: // Skip remappings whose target overlaps a project source: those alias the contracts being exposed rather than their\n164: // dependencies, so inverting them would move the whole exposed tree under the alias.\n165: function parseApplicableRemappings(remappings: string[], projectSourcePrefixes: string[]): ParsedRemapping[] {\n166:   return remappings\n167:     .flatMap(remapping => {\n168:       const groups = remappingRegex.exec(remapping)?.groups as\n169:         | { context: string | undefined; prefix: string; target: string }\n170:         | undefined;\n171:       return groups ? [groups] : [];\n172:     })\n173:     .filter(\n174:       ({ context, target }) =>\n175:         [undefined, '', 'project/'].includes(context) &&\n176:         !projectSourcePrefixes.some(source => source.startsWith(target) || target.startsWith(source)),",
+  "triage": {
+    "classification": "likely_false_positive",
+    "rationale": "The code snippet is not related to a bug-bounty project and does not provide evidence of a vulnerability or exploitability. It's a static analysis guideline for a specific project and does not contain exploitable code.",
+    "evidence": "The code is part of a public project and does not contain any exploitable code or vulnerabilities.",
+    "follow_up": "If you have more information or a verified vulnerability, please provide it here for further analysis."
+  },
+  "status": "unverified_draft",
+  "verified_vulnerability": false,
+  "generated_at": "2026-10-15T09:37:57.943533+00:00",
+  "note": "Automated static triage only. No exploitability, eligibility, or bounty award established."
+}

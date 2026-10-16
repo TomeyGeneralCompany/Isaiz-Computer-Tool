@@ -1,0 +1,39 @@
+{
+  "checks": {
+    "has_reproduction_test": false,
+    "in_scope_at_processing": true,
+    "source_commit_matches": true,
+    "triage_requires_review": false
+  },
+  "commit": "153922042b36cf07810b861a623a806934befe62",
+  "lead": {
+    "file": "hardhat/hardhat-exposed/internal/expose.ts",
+    "fingerprint": "7e0b648066c596458c96",
+    "guidance": "Review command construction and input provenance",
+    "line": 168,
+    "rule": "JS_CHILD_EXEC"
+  },
+  "note": "Automated offline evidence preparation only. No project-specific reproduction or verified security impact.",
+  "processed_at": "2026-10-15T00:09:26.997033+00:00",
+  "repository": "OpenZeppelin/openzeppelin-contracts-upgradeable",
+  "scope_urls": [
+    "https://immunefi.com/bug-bounty/openzeppelin/scope/"
+  ],
+  "source_check": {
+    "commit": "153922042b36cf07810b861a623a806934befe62",
+    "excerpt": "  157: }\n  158: \n  159: // Exposed contracts live in the project, so they import dependency files through the project's own aliases rather\n  160: // than the raw input source names (`npm/<name>@<version>/<path>`, `project/lib/<path>`, ...). Hardhat records those\n  161: // aliases as `[<context>:]<prefix>=<target>` remappings we invert here.\n  162: //\n  163: // Skip remappings whose target overlaps a project source: those alias the contracts being exposed rather than their\n  164: // dependencies, so inverting them would move the whole exposed tree under the alias.\n  165: function parseApplicableRemappings(remappings: string[], projectSourcePrefixes: string[]): ParsedRemapping[] {\n  166:   return remappings\n  167:     .flatMap(remapping => {\n  168:       const groups = remappingRegex.exec(remapping)?.groups as\n  169:         | { context: string | undefined; prefix: string; target: string }\n  170:         | undefined;\n  171:       return groups ? [groups] : [];\n  172:     })\n  173:     .filter(\n  174:       ({ context, target }) =>\n  175:         [undefined, '', 'project/'].includes(context) &&\n  176:         !projectSourcePrefixes.some(source => source.startsWith(target) || target.startsWith(source)),\n  177:     )\n  178:     .sort((a, b) => b.target.length - a.target.length) // Longest target first: most specific remapping wins.\n  179:     .map(({ prefix, target }) => ({ prefix, target }));\n  180: }",
+    "file": "hardhat/hardhat-exposed/internal/expose.ts",
+    "file_sha256": "8e9f897cd34b4f06d8cf0c7377bfbd786a01758b943a31f4d9d96a726cf20ea8",
+    "line": 168,
+    "status": "source_matched"
+  },
+  "source_fingerprint": "4a83496a17a373fd4cd454bf8651ba0b8e43aca3c3173a1a1708776f53d57b15",
+  "status": "needs_project_specific_reproduction",
+  "triage": {
+    "classification": "likely_false_positive",
+    "evidence": "The code is part of a public project and does not contain any exploitable code or vulnerabilities.",
+    "follow_up": "If you have more information or a verified vulnerability, please provide it here for further analysis.",
+    "rationale": "The code snippet is not related to a bug-bounty project and does not provide evidence of a vulnerability or exploitability. It's a static analysis guideline for a specific project and does not contain exploitable code."
+  },
+  "verified_vulnerability": false
+}

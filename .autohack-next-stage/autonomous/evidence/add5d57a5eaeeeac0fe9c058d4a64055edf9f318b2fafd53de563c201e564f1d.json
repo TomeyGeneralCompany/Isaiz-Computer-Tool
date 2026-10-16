@@ -1,0 +1,39 @@
+{
+  "checks": {
+    "has_reproduction_test": false,
+    "in_scope_at_processing": true,
+    "source_commit_matches": true,
+    "triage_requires_review": false
+  },
+  "commit": "116a8658d60fb9be25d01847be2a9671ccbf81bf",
+  "lead": {
+    "file": "scripts/update_translations.js",
+    "fingerprint": "869e9a92a58da7317068",
+    "guidance": "Review command construction and input provenance",
+    "line": 201,
+    "rule": "JS_CHILD_EXEC"
+  },
+  "note": "Automated offline evidence preparation only. No project-specific reproduction or verified security impact.",
+  "processed_at": "2026-10-15T01:12:38.496509+00:00",
+  "repository": "HathorNetwork/hathor-wallet-mobile",
+  "scope_urls": [
+    "https://immunefi.com/bug-bounty/hathornetwork/scope/"
+  ],
+  "source_check": {
+    "commit": "116a8658d60fb9be25d01847be2a9671ccbf81bf",
+    "excerpt": "  190: \n  191: /**\n  192:  * Checks for filesystem changes using `git status`. If any changes are found, it means the\n  193:  * translation files have changed, and this may trigger a CI fail when running inside the CI.\n  194:  * @returns {boolean} True if changes were found, or if an error happened\n  195:  */\n  196: function checkForChanges() {\n  197:   console.log(`⏳ Checking for filesystem changes after i18n execution...`);\n  198:   let statusResult = '';\n  199:   let hasChanges = false;\n  200:   try {\n  201:     statusResult = execSync('git status --porcelain', { encoding: 'utf-8' });\n  202:     hasChanges = statusResult.trim().length > 0;\n  203:   } catch (error) {\n  204:     console.error('❌ Error checking for changes:', error);\n  205:     return true;\n  206:   }\n  207: \n  208:   if (hasChanges) {\n  209:     // Print the full diff to the console\n  210:     console.warn(`❗ Changes found in the translation files. Please review them.`);\n  211:     execSync('git  --no-pager diff', { stdio: 'inherit' });\n  212:   }\n  213:   return hasChanges;",
+    "file": "scripts/update_translations.js",
+    "file_sha256": "5b7a433427ae4630a64aeeb32af18a70e63b9d04894feaddb579d8d164e7b22a",
+    "line": 201,
+    "status": "source_matched"
+  },
+  "source_fingerprint": "006b9951fe60b1ffb0f8d6122c8bd0d09726f3d0754ba647fdd63d8042923031",
+  "status": "needs_project_specific_reproduction",
+  "triage": {
+    "classification": "likely_false_positive",
+    "evidence": "The code checks for filesystem changes but does not properly validate the input or ensure that the CI environment is properly configured.",
+    "follow_up": "If you have more information about the specific issue, please provide it, and I will help you refine the analysis further.",
+    "rationale": "The code checks for filesystem changes after i18n execution, but the logic is incomplete and not properly handling the case where no changes are found. The code is not properly validating the input or ensuring that the CI environment is properly configured."
+  },
+  "verified_vulnerability": false
+}

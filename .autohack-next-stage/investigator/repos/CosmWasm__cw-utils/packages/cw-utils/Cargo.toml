@@ -1,0 +1,19 @@
+[package]
+name = "cw-utils"
+version = { workspace = true }
+authors = ["Ethan Frey <ethanfrey@users.noreply.github.com>"]
+description = "Common helpers for other cw specs"
+repository = "https://github.com/CosmWasm/cw-minus"
+edition = "2021"
+license = "Apache-2.0"
+
+[dependencies]
+cosmwasm-schema = { workspace = true }
+cosmwasm-std = { workspace = true }
+schemars = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+cw-storage-plus = { workspace = true }
+prost = "0.12.1"

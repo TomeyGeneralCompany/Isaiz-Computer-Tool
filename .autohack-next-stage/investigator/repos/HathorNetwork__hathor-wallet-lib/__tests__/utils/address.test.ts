@@ -1,0 +1,399 @@
+/**
+ * Copyright (c) Hathor Labs and its affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */
+
+import { HDPublicKey, HDPrivateKey } from 'bitcore-lib';
+import Network from '../../src/models/network';
+import Address from '../../src/models/address';
+import P2PKH from '../../src/models/p2pkh';
+import { MemoryStore, Storage } from '../../src/storage';
+import { WalletType } from '../../src/types';
+import {
+  getAddressType,
+  createOutputScriptFromAddress,
+  deriveAddressFromDataP2SH,
+  deriveAddressFromXPubP2PKH,
+  deriveAddressP2PKH,
+  deriveAddressP2SH,
+  getAddressFromPubkey,
+  fetchVerifiedExternalPrivateKey,
+  toOnChainAddress,
+} from '../../src/utils/address';
+import { encodeShieldedAddress } from '../../src/utils/shieldedAddress';
+import { IShieldedCryptoProvider } from '../../src/shielded/types';
+
+// Shielded derivation from storage only needs a provider to be registered.
+const mockShieldedProvider = { id: 'mock' } as unknown as IShieldedCryptoProvider;
+
+/* eslint-disable @typescript-eslint/no-unused-vars -- These variables also serve as a documentation, even if unused */
+const seed =
+  'upon tennis increase embark dismiss diamond monitor face magnet jungle scout salute rural master shoulder cry juice jeans radar present close meat antenna mind';
+const xprivkey =
+  'htpr58K5ktSehjML89C3uRicPQ9TrrJ7LAbD7Xp1C7AZULDaY75joGmSu7TWGWqb31noixGt9ehSyspRVdFBhCZiJpB1RiuSosUkFw7QezVbECo';
+const xpubkey =
+  'xpub6EvdxHF4vBs38uFrs6UuN8Zu78LDoqLrskMffXk531wy7xMFb7X9Ntxb9dGL2kbYdKJ1d83dqAifQS2Wzcq2DxJf7HPDPvMZMtNQxyBzAWn';
+const MULTISIG_XPUB =
+  'xpub6CvvCBtHqFfErbcW2Rv28TmZ3MqcFuWQVKGg8xDzLeAwEAHRz9LBTgSFSj7B99scSvZGbq6TxAyyATA9b6cnwsgduNs9NGKQJnEQr3PYtwK';
+const WALLET_DATA = {
+  multisig: {
+    seed,
+    data: {
+      numSignatures: 3,
+      total: 5,
+      pubkeys: [
+        MULTISIG_XPUB,
+        'xpub6CA16g2qPwukWAWBMdJKU3p2fQEEi831W3WAs2nesuCzPhbrG29aJsoRDSEDT4Ac3smqSk51uuv6oujU3MAAL3d1Nm87q9GDwE3HRGQLjdP',
+        'xpub6BwNT613Vzy7ARVHDEpoX23SMBEZQMJXdqTWYjQKvJZJVDBjEemU38exJEhc6qbFVc4MmarN68gUKHkyZ3NEgXXCbWtoXXGouHpwMEcXJLf',
+        'xpub6DCyPHg4AwXsdiMh7QSTHR7afmNVwZKHBBMFUiy5aCYQNaWp68ceQXYXCGQr5fZyLAe5hiJDdXrq6w3AXzvVmjFX9F7EdM87repxJEhsmjL',
+        'xpub6CgPUcCCJ9pAK7Rj52hwkxTutSRv91Fq74Hx1SjN62eg6Mp3S3YCJFPChPaDjpp9jCbCZHibBgdKnfNdq6hE9umyjyZKUCySBNF7wkoG4uK',
+      ],
+    },
+    addresses: [
+      'wgyUgNjqZ18uYr4YfE2ALW6tP5hd8MumH5',
+      'wbe2eJdyZVimA7nJjmBQnKYJSXmpnpMKgG',
+      'wQQWdSZwp2CEGKsTvvbJ7i8HfHuV2i5QVQ',
+      'wfrtq9cMe1YfixVgSKXQNQ5hjsmR4hpjP6',
+      'wQG7itjdtZBsNTk9TG4f1HrehyQiAEMN18',
+      'wfgSqHUHPtmj2GDy8YfasbPPcFh8L1GPMA',
+      'wgZbCEMHHnhftCAwj7CRBmfi5TgBhfMZbk',
+      'wdz9NeMac7jyVeP2WK4BJWsM1zpd9tgsBb',
+      'wPs7WaRCqwC89uHycLbctDGmWPgH9oZvjp',
+      'wWJJxvr6oSk7WZdE9rpSRMoE6ZqJ3i8VDc',
+      'wbuDJtmM7vg8at2h5o3pTCHE4SASEFYusr',
+      'wPNkywbiw8UHbRQkD3nZ3EHMQsjyTamh9u',
+      'wQBNidXXYpE943BgydUNtarAwNzk612Yip',
+      'wh2eCGzUK9rLThr5D6tyCfckHpBjS97ERA',
+      'wZvajxVp3LabcZiY3XPrivrXiSS6wphRu7',
+      'wgPbL1WzbrEntepHRC92UX6mA2EmaqfDqt',
+      'wbdx4g3rucX3WHmZRXjPEKtRfZ7XSnCGKf',
+      'wiKTnqSN11ukuCWEXRVrRTTPo2mw4fGue3',
+      'wQ4aQP4YqJqfwshLggR2w1Gg3UFhhKhVKs',
+      'wca2xk9S2MVn2UrKh78UScdwXz3xrTp8Ky',
+      'wcUZ6J7t2B1s8bqRYiyuZAftcdCGRSiiau',
+    ],
+  },
+  p2pkh: {
+    seed,
+    addresses: [
+      'WewDeXWyvHP7jJTs7tjLoQfoB72LLxJQqN',
+      'WmtWgtk5GxdcDKwjNwmXXn74nQWTPWhKfx',
+      'WPynsVhyU6nP7RSZAkqfijEutC88KgAyFc',
+      'WYBwT3xLpDnHNtYZiU52oanupVeDKhAvNp',
+      'WVGxdgZMHkWo2Hdrb1sEFedNdjTXzjvjPi',
+      'Wc4dKp6hBgr5PU9gBmzJofc93XZGAEEUXD',
+      'WUujvZnk3LMbFWUW7CnZbjn5JZzALaqLfm',
+      'WYiD1E8n5oB9weZ8NMyM3KoCjKf1KCjWAZ',
+      'WXN7sf6WzhpESgUuRCBrjzjzHtWTCfV8Cq',
+      'WYaMN32qQ9CAUNsDnbtwi1U41JY9prYhvR',
+      'WWbt2ww4W45YLUAumnumZiyWrABYDzCTdN',
+      'WgpRs9NxhkBPxe7ptm9RcuLdABb7DdVUA5',
+      'WPzpVP34vx6X5Krj4jeiQz9VW87F4LEZnV',
+      'WSn9Bn6EDPSWZqNQdpV3FxGjpTEMsqQHYQ',
+      'WmYnieT3vzzY83eHphQHs6HJ5mYyPwcKSE',
+      'WZfcHjgkfK9UroTzpiricB6gtg99QKraG1',
+      'WiHovoQ5ZLKPpQjZYkLVeoVgP7LoVLK518',
+      'Wi5AvNTnh4mZft65kzsRbDYEPGbTRhd5q3',
+      'Weg6WEncAEJs5qDbGUxcLTR3iycM3hrt4C',
+      'WSVarF73e6UVccGwb44FvTtqFWsHQmjKCt',
+    ],
+  },
+};
+/* eslint-enable @typescript-eslint/no-unused-vars */
+
+test('Get address type', () => {
+  const testnet = new Network('testnet');
+  expect(getAddressType(WALLET_DATA.p2pkh.addresses[0], testnet)).toEqual('p2pkh');
+  expect(getAddressType(WALLET_DATA.multisig.addresses[3], testnet)).toEqual('p2sh');
+});
+
+test('getAddressType throws for shielded addresses with actionable guidance', () => {
+  const testnet = new Network('testnet');
+  const root = HDPrivateKey.fromSeed(Buffer.alloc(32, 0x07), 'testnet');
+  const scanPubkey = root.deriveChild("m/0'/0").publicKey.toBuffer();
+  const spendPubkey = root.deriveChild("m/1'/0").publicKey.toBuffer();
+  const shieldedAddr = encodeShieldedAddress(scanPubkey, spendPubkey, testnet);
+
+  expect(() => getAddressType(shieldedAddr, testnet)).toThrow(
+    /cannot be used directly as output script type.*getSpendAddress/s
+  );
+});
+
+test('createOutputScriptFromAddress builds the spend-P2PKH script for shielded addresses', () => {
+  const testnet = new Network('testnet');
+  const root = HDPrivateKey.fromSeed(Buffer.alloc(32, 0x07), 'testnet');
+  const scanPubkey = root.deriveChild("m/0'/0").publicKey.toBuffer();
+  const spendPubkey = root.deriveChild("m/1'/0").publicKey.toBuffer();
+  const shieldedAddr = encodeShieldedAddress(scanPubkey, spendPubkey, testnet);
+
+  const script = createOutputScriptFromAddress(shieldedAddr, testnet);
+  // Must equal the P2PKH script of the spend-derived address — the shielded
+  // address itself has no script form.
+  const spendAddress = new Address(shieldedAddr, { network: testnet }).getSpendAddress();
+  const expected = new P2PKH(spendAddress).createScript();
+  expect(script).toStrictEqual(expected);
+});
+
+test('Derive p2pkh address from xpub', () => {
+  const xpub = new HDPublicKey(xpubkey);
+  for (let i = 0; i < 5; i++) {
+    expect(deriveAddressFromXPubP2PKH(xpubkey, i, 'testnet')).toMatchObject({
+      base58: WALLET_DATA.p2pkh.addresses[i],
+      bip32AddressIndex: i,
+      publicKey: xpub.deriveChild(i, false).publicKey.toString('hex'),
+    });
+  }
+});
+
+test('Derive p2sh address from data', () => {
+  for (let i = 0; i < 5; i++) {
+    expect(deriveAddressFromDataP2SH(WALLET_DATA.multisig.data, i, 'testnet')).toMatchObject({
+      base58: WALLET_DATA.multisig.addresses[i],
+      bip32AddressIndex: i,
+    });
+  }
+});
+
+test('Derive address p2pkh', async () => {
+  const xpub = new HDPublicKey(xpubkey);
+  const store = new MemoryStore();
+  const storage = new Storage(store);
+  storage.config.setNetwork('testnet');
+  const spy = jest.spyOn(storage, 'getAccessData').mockImplementation(async () => {
+    return {
+      xpubkey,
+      walletType: WalletType.P2PKH,
+      walletFlags: 0,
+    };
+  });
+  for (let i = 0; i < 5; i++) {
+    expect(await deriveAddressP2PKH(i, storage)).toMatchObject({
+      base58: WALLET_DATA.p2pkh.addresses[i],
+      bip32AddressIndex: i,
+      publicKey: xpub.deriveChild(i, false).publicKey.toString('hex'),
+    });
+  }
+
+  spy.mockReturnValue(Promise.resolve(null));
+  await expect(deriveAddressP2PKH(0, storage)).rejects.toThrow('No access data');
+});
+
+test('Derive address p2sh', async () => {
+  const store = new MemoryStore();
+  const storage = new Storage(store);
+  storage.config.setNetwork('testnet');
+  const spy = jest.spyOn(storage, 'getAccessData').mockImplementation(async () => {
+    return {
+      xpubkey,
+      multisigData: WALLET_DATA.multisig.data,
+      walletType: WalletType.MULTISIG,
+      walletFlags: 0,
+    };
+  });
+  for (let i = 0; i < 5; i++) {
+    expect(await deriveAddressP2SH(i, storage)).toMatchObject({
+      base58: WALLET_DATA.multisig.addresses[i],
+      bip32AddressIndex: i,
+    });
+  }
+
+  spy.mockReturnValue(Promise.resolve(null));
+  await expect(deriveAddressP2SH(0, storage)).rejects.toThrow('No access data');
+});
+
+test('Get address from pubkey', async () => {
+  const base58 = WALLET_DATA.p2pkh.addresses[0];
+  const { publicKey } = deriveAddressFromXPubP2PKH(xpubkey, 0, 'testnet');
+  const address = getAddressFromPubkey(publicKey!, new Network('testnet'));
+
+  expect(address.getType()).toBe(WalletType.P2PKH);
+  expect(address.base58).toBe(base58);
+  expect(address.validateAddress()).toBeTruthy();
+});
+
+test('deriveShieldedAddressFromStorage returns null when shielded keys unavailable', async () => {
+  const { deriveShieldedAddressFromStorage } = await import('../../src/utils/address');
+  const { encryptData } = await import('../../src/utils/crypto');
+  const store = new MemoryStore();
+  const storage = new Storage(store);
+  // With a provider registered, the missing xpubs are what rule the chain out.
+  storage.setShieldedCryptoProvider(mockShieldedProvider);
+
+  // Provide minimal access data WITHOUT shielded keys (legacy-only wallet)
+  const xpriv = new HDPrivateKey();
+  await store.saveAccessData({
+    xpubkey: xpriv.xpubkey,
+    mainKey: encryptData(xpriv.xprivkey, '123'),
+    walletType: 'p2pkh' as const,
+    walletFlags: 0,
+    // No scanXpubkey, no spendXpubkey — shielded keys absent
+  });
+
+  const result = await deriveShieldedAddressFromStorage(0, storage);
+  expect(result).toBeNull();
+});
+
+test('deriveShieldedAddressFromStorage returns paired shielded + spend records', async () => {
+  const { deriveShieldedAddressFromStorage } = await import('../../src/utils/address');
+  const { deriveShieldedAddress } = await import('../../src/utils/shieldedAddress');
+  const { encryptData } = await import('../../src/utils/crypto');
+  const store = new MemoryStore();
+  const storage = new Storage(store);
+  storage.config.setNetwork('testnet');
+  // The shielded chain needs a registered crypto provider.
+  storage.setShieldedCryptoProvider(mockShieldedProvider);
+  const networkName = storage.config.getNetwork().name;
+
+  // Independent scan and spend public chains (the wallet derives both from
+  // hardened accounts; for this test any two xpubs exercise the same path).
+  const xpriv = new HDPrivateKey();
+  const scanXpubkey = new HDPrivateKey().xpubkey;
+  const spendXpubkey = new HDPrivateKey().xpubkey;
+  await store.saveAccessData({
+    xpubkey: xpriv.xpubkey,
+    mainKey: encryptData(xpriv.xprivkey, '123'),
+    walletType: 'p2pkh' as const,
+    walletFlags: 0,
+    scanXpubkey,
+    spendXpubkey,
+  });
+
+  const index = 5;
+  const result = await deriveShieldedAddressFromStorage(index, storage);
+  expect(result).not.toBeNull();
+
+  // Independent oracle: the same inputs through the pure derivation helper.
+  const expected = deriveShieldedAddress(scanXpubkey, spendXpubkey, index, networkName);
+
+  // User-facing shielded receive record (71-byte encoded form). Its
+  // ctMappingAddress links to the paired on-chain spend P2PKH.
+  expect(result!.shieldedAddress).toEqual({
+    base58: expected.base58,
+    bip32AddressIndex: index,
+    publicKey: expected.scanPubkey,
+    addressType: 'shielded',
+    ctMappingAddress: expected.spendAddress,
+  });
+
+  // Internal on-chain spend-derived P2PKH record (HASH160(spend_pubkey)). Its
+  // ctMappingAddress links back to the paired user-facing shielded address.
+  expect(result!.spendAddress).toEqual({
+    base58: expected.spendAddress,
+    bip32AddressIndex: index,
+    publicKey: expected.spendPubkey,
+    addressType: 'shielded-spend',
+    ctMappingAddress: expected.base58,
+  });
+
+  // Both records share the BIP32 index; the spend address is the on-chain
+  // P2PKH while the shielded address is the user-facing encoded form.
+  expect(result!.shieldedAddress.base58).not.toEqual(result!.spendAddress.base58);
+});
+
+test('deriveShieldedAddressFromStorage returns null without a shielded crypto provider', async () => {
+  const { deriveShieldedAddressFromStorage } = await import('../../src/utils/address');
+  const { encryptData } = await import('../../src/utils/crypto');
+  const store = new MemoryStore();
+  const storage = new Storage(store);
+  const xpriv = new HDPrivateKey();
+  // Both shielded xpubs, but no provider registered.
+  await store.saveAccessData({
+    xpubkey: xpriv.xpubkey,
+    mainKey: encryptData(xpriv.xprivkey, '123'),
+    walletType: 'p2pkh' as const,
+    walletFlags: 0,
+    scanXpubkey: new HDPrivateKey().xpubkey,
+    spendXpubkey: new HDPrivateKey().xpubkey,
+  });
+
+  await expect(deriveShieldedAddressFromStorage(0, storage)).resolves.toBeNull();
+});
+
+describe('fetchVerifiedExternalPrivateKey', () => {
+  const network = new Network('testnet');
+  const changeXpriv = new HDPrivateKey(network.bitcoreNetwork);
+  const keyAt = (index: number) => changeXpriv.deriveNonCompliantChild(index).privateKey;
+  const addressAt = (index: number) =>
+    getAddressFromPubkey(keyAt(index).publicKey.toString(), network).base58;
+
+  const storageWithProvider = (provider: (index: number, ...rest: unknown[]) => unknown) => {
+    const storage = new Storage(new MemoryStore());
+    storage.setPrivateKeyMethod(jest.fn(provider));
+    return storage;
+  };
+
+  it('returns the provider key when it belongs to the wallet address at the index', async () => {
+    const storage = storageWithProvider(async index => keyAt(index));
+    const getOwnAddress = jest.fn(async (index: number) => addressAt(index));
+
+    const key = await fetchVerifiedExternalPrivateKey(storage, network, 3, getOwnAddress, {
+      pinCode: '123',
+    });
+
+    expect(key.toString()).toBe(keyAt(3).toString());
+    expect(getOwnAddress).toHaveBeenCalledWith(3);
+  });
+
+  it('checks against expectedAddress when given, without looking up the own address', async () => {
+    const provider = jest.fn(async (index: number) => keyAt(index));
+    const storage = new Storage(new MemoryStore());
+    storage.setPrivateKeyMethod(provider);
+    const getOwnAddress = jest.fn(async () => 'never used');
+
+    const key = await fetchVerifiedExternalPrivateKey(storage, network, 2, getOwnAddress, {
+      pinCode: '123',
+      expectedAddress: addressAt(2),
+    });
+
+    expect(key.toString()).toBe(keyAt(2).toString());
+
+    expect(getOwnAddress).not.toHaveBeenCalled();
+    // expectedAddress is verification-only and never reaches the provider.
+    expect(provider).toHaveBeenCalledWith(2, storage, { pinCode: '123' });
+  });
+
+  it('rejects a key for another address', async () => {
+    const storage = storageWithProvider(async index => keyAt(index + 1));
+
+    await expect(
+      fetchVerifiedExternalPrivateKey(storage, network, 0, async index => addressAt(index))
+    ).rejects.toThrow('External private key provider returned a key for the wrong address.');
+  });
+
+  it('rejects a provider that does not return a bitcore PrivateKey', async () => {
+    const storage = storageWithProvider(async () => ({ not: 'a key' }));
+
+    await expect(
+      fetchVerifiedExternalPrivateKey(storage, network, 0, async index => addressAt(index))
+    ).rejects.toThrow('External private key provider must return a bitcore PrivateKey.');
+  });
+});
+
+describe('toOnChainAddress', () => {
+  const network = new Network('testnet');
+  const root = HDPrivateKey.fromSeed(Buffer.alloc(32, 0x4c), 'testnet');
+  const spendPubkey = root.deriveChild("m/1'/0").publicKey;
+  const shieldedAddress = encodeShieldedAddress(
+    root.deriveChild("m/0'/0").publicKey.toBuffer(),
+    spendPubkey.toBuffer(),
+    network
+  );
+
+  it('maps a shielded address to the spend P2PKH it embeds', () => {
+    expect(toOnChainAddress(shieldedAddress, network)).toBe(
+      new Address(shieldedAddress, { network }).getSpendAddress().base58
+    );
+  });
+
+  it('keeps a legacy address', () => {
+    expect(toOnChainAddress('WP1rVhxzT3YTWg8VbBKkacLqLU2LrouWDx', network)).toBe(
+      'WP1rVhxzT3YTWg8VbBKkacLqLU2LrouWDx'
+    );
+  });
+
+  it('keeps a malformed address for the caller to reject', () => {
+    expect(toOnChainAddress('not-an-address', network)).toBe('not-an-address');
+  });
+});

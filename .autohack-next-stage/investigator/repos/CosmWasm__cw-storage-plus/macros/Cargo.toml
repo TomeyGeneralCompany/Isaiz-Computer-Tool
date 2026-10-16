@@ -1,0 +1,18 @@
+[package]
+name = "cw-storage-macro"
+version = "3.0.1"
+authors = ["yoisha <48324733+y-pakorn@users.noreply.github.com>"]
+edition = "2018"
+description = "Macro helpers for storage-plus"
+license = "Apache-2.0"
+repository = "https://github.com/CosmWasm/cw-storage-plus"
+homepage = "https://cosmwasm.com"
+documentation = "https://docs.cosmwasm.com"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1.0.86"
+quote = "1.0.37"
+syn = { version = "2", features = ["full"] }

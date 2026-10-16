@@ -1,0 +1,31 @@
+{
+  "repository": "OpenZeppelin/openzeppelin-contracts-upgradeable",
+  "commit": "1717bdd8e6b75a1fa82abb99dbdc29e08b013c59",
+  "scope_sources": [
+    {
+      "asset_type": "smart_contract",
+      "asset_url": "https://github.com/OpenZeppelin/openzeppelin-contracts-upgradeable",
+      "program": "openzeppelin",
+      "scope_url": "https://immunefi.com/bug-bounty/openzeppelin/scope/"
+    }
+  ],
+  "original_report": "OpenZeppelin__openzeppelin-contracts-upgradeable-1717bdd8e6b7.json",
+  "lead": {
+    "rule": "JS_CHILD_EXEC",
+    "file": "scripts/update-docs-branch.js",
+    "line": 7,
+    "guidance": "Review command construction and input provenance",
+    "fingerprint": "c214e1416d893ca593ea"
+  },
+  "source_excerpt": "1: import proc from 'child_process';\n2: import fs from 'fs';\n3: import path from 'path';\n4: \n5: const read = cmd => proc.execSync(cmd, { encoding: 'utf8' }).trim();\n6: const run = cmd => {\n7:   proc.execSync(cmd, { stdio: 'inherit' });\n8: };\n9: const tryRead = cmd => {\n10:   try {\n11:     return read(cmd);\n12:   } catch {\n13:     return undefined;\n14:   }\n15: };",
+  "triage": {
+    "classification": "likely_false_positive",
+    "rationale": "The code is using 'proc' and 'fs' to execute commands, which is not a known vulnerability. The line number and function are not related to a known bug. There is insufficient context to determine if this is a false positive.",
+    "evidence": "No known vulnerabilities identified in the code, and the context provided is insufficient to determine if this is a false positive.",
+    "follow_up": "If you have more context or a different rule, please provide it so I can review it more thoroughly."
+  },
+  "status": "unverified_draft",
+  "verified_vulnerability": false,
+  "generated_at": "2026-10-15T09:38:38.745211+00:00",
+  "note": "Automated static triage only. No exploitability, eligibility, or bounty award established."
+}

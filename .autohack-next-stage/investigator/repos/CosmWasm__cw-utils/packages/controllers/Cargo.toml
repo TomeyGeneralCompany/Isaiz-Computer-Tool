@@ -1,0 +1,17 @@
+[package]
+name = "cw-controllers"
+version = { workspace = true }
+authors = ["Ethan Frey <ethanfrey@users.noreply.github.com>"]
+description = "Common controllers to be reused in multiple contracts"
+repository = "https://github.com/CosmWasm/cw-minus"
+edition = "2021"
+license = "Apache-2.0"
+
+[dependencies]
+cosmwasm-schema = { workspace = true }
+cosmwasm-std = { workspace = true }
+cw-utils = { workspace = true }
+cw-storage-plus = { workspace = true }
+schemars = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }

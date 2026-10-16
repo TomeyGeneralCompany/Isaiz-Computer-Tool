@@ -1,0 +1,39 @@
+{
+  "checks": {
+    "has_reproduction_test": false,
+    "in_scope_at_processing": true,
+    "source_commit_matches": true,
+    "triage_requires_review": false
+  },
+  "commit": "8891f73d17887e272a5317065961269aee94f7cd",
+  "lead": {
+    "file": "scripts/verify/lib/externalsExtractor.ts",
+    "fingerprint": "9bfcc085c65c116fc426",
+    "guidance": "Review command construction and input provenance",
+    "line": 111,
+    "rule": "JS_CHILD_EXEC"
+  },
+  "note": "Automated offline evidence preparation only. No project-specific reproduction or verified security impact.",
+  "processed_at": "2026-10-15T00:09:27.484726+00:00",
+  "repository": "Instadapp/inst-governance",
+  "scope_urls": [
+    "https://immunefi.com/bug-bounty/instadapp/scope/"
+  ],
+  "source_check": {
+    "commit": "8891f73d17887e272a5317065961269aee94f7cd",
+    "excerpt": "  100:  *   1. `ITarget(EXPR)` — interface cast. `interfaceName = ITarget`,\n  101:  *      `targetSymbol` = inner-most identifier of `EXPR`.\n  102:  *   2. `TARGET` — bare identifier. `targetSymbol = TARGET`, no interface.\n  103:  *   3. `something.member` — fall back to recursive parse of `something`.\n  104:  */\n  105: function parseReceiver(\n  106:   receiver: string\n  107: ): { targetSymbol: string | null; interfaceName: string | null } {\n  108:   const trimmed = receiver.trim();\n  109: \n  110:   // Shape 1: `IFoo(EXPR)` — only if the whole receiver is that form.\n  111:   const interfaceMatch = /^([A-Z][A-Za-z0-9_]*)\\s*\\(([\\s\\S]*)\\)$/.exec(trimmed);\n  112:   if (interfaceMatch && balanced(interfaceMatch[2]!)) {\n  113:     const interfaceName = interfaceMatch[1]!;\n  114:     const inner = interfaceMatch[2]!.trim();\n  115:     return {\n  116:       interfaceName,\n  117:       targetSymbol: extractInnermostIdentifier(inner),\n  118:     };\n  119:   }\n  120: \n  121:   // Shape 3: member access — fall back to the head.\n  122:   const head = trimmed.split(\".\")[0]!.trim();\n  123:   const ident = extractInnermostIdentifier(head);",
+    "file": "scripts/verify/lib/externalsExtractor.ts",
+    "file_sha256": "340554d63eea5973a9fefb9b89f9189f3f5987b7d1fee084d7b20d6e00450d58",
+    "line": 111,
+    "status": "source_matched"
+  },
+  "source_fingerprint": "c328d32e1f984ec8b4f9b94b09b3d3eaa55c20b844dc921c92304c8ffbdc9788",
+  "status": "needs_project_specific_reproduction",
+  "triage": {
+    "classification": "likely_false_positive",
+    "evidence": "The code is not implementing proper validation of command construction and input provenance, which could lead to potential issues with the logic.",
+    "follow_up": "If you have more specific information about the code or the context, I can provide further analysis.",
+    "rationale": "The code is not implementing proper validation of command construction and input provenance, which could lead to potential issues with the logic. However, this is a static analysis result and not a verification of actual code."
+  },
+  "verified_vulnerability": false
+}

@@ -1,0 +1,134 @@
+# React-Native-Permissions helper function
+def node_require(script)
+  # Resolve script with node to allow for hoisting
+  require Pod::Executable.execute_command('node', ['-p',
+    "require.resolve(
+      '#{script}',
+      {paths: [process.argv[1]]},
+    )", __dir__]).strip
+end
+
+# Use the helper to require both react-native's and this package's scripts:
+node_require('react-native/scripts/react_native_pods.rb')
+node_require('react-native-permissions/scripts/setup.rb')
+
+min_ios_version_supported = '15.1'
+platform :ios, min_ios_version_supported
+prepare_react_native_project!
+
+# Permissions needed from react-native-permissions
+setup_permissions([
+    # 'AppTrackingTransparency',
+    # 'Bluetooth',
+    # 'Calendars',
+    # 'CalendarsWriteOnly',
+    'Camera',
+    # 'Contacts',
+    'FaceID',
+    # 'LocationAccuracy',
+    # 'LocationAlways',
+    # 'LocationWhenInUse',
+    # 'MediaLibrary',
+    # 'Microphone',
+    # 'Motion',
+    'Notifications',
+    # 'PhotoLibrary',
+    # 'PhotoLibraryAddOnly',
+    # 'Reminders',
+    # 'Siri',
+    # 'SpeechRecognition',
+    # 'StoreKit',
+])
+
+linkage = ENV['USE_FRAMEWORKS']
+if linkage != nil
+  Pod::UI.puts "Configuring Pod with #{linkage}ally linked Frameworks".green
+  use_frameworks! :linkage => linkage.to_sym
+end
+
+target 'HathorMobile' do
+  # Don't change the order of any declaration!
+  config = use_native_modules!
+
+  # Firebase requires the usage of frameworks linked statically.
+  # This means the firebase code will be compiled into the app binary.
+  # A reason for this is to avoid compatibility issues with a 3rd paty dependency.
+  # A consequence of it is a better performance.
+  #
+  # This needs to be executed before use_react_native!(),
+  # @see https://github.com/facebook/react-native/issues/36120#issuecomment-1425892304
+  use_frameworks! :linkage => :static
+
+  # Instruct the build script to use the Firebase as an static framework.
+  $RNFirebaseAsStaticFramework = true
+
+  use_react_native!(
+    :path => config[:reactNativePath],
+
+    # We can't use Hermes with SES (https://github.com/facebook/hermes/issues/957)
+    :hermes_enabled => true,
+
+    # An absolute path to your application root.
+    :app_path => "#{Pod::Config.instance.installation_root}/.."
+  )
+
+  # Firebase required dependency.
+  # It contains native code to integrate with Google Services.
+  # When the modular header feature is enabled, only used modules
+  # are compiled within the app binary.
+  pod 'GoogleUtilities', :modular_headers => true
+
+  post_install do |installer|
+    # https://github.com/facebook/react-native/blob/main/packages/react-native/scripts/react_native_pods.rb#L197-L202
+    react_native_post_install(
+      installer,
+      config[:reactNativePath],
+      :mac_catalyst_enabled => false,
+      # :ccache_enabled => true
+    )
+
+    # Fix for Hermes dSYM upload issue to App Store
+    # https://github.com/facebook/react-native/issues/36279
+    installer.pods_project.targets.each do |target|
+      if target.name.include?('hermes') || target.name.include?('Hermes')
+        target.build_configurations.each do |config|
+          config.build_settings['DEBUG_INFORMATION_FORMAT'] = 'dwarf-with-dsym'
+          config.build_settings['ENABLE_BITCODE'] = 'NO'
+          config.build_settings['STRIP_INSTALLED_PRODUCT'] = 'NO'
+          config.build_settings['GCC_GENERATE_DEBUGGING_SYMBOLS'] = 'YES'
+        end
+      end
+    end
+
+    # Xcode 27 refuses deployment targets below iOS 15.0. Some pods still declare older ones
+    # (9.0 to 13.4), so raise every pod target to the app's own minimum.
+    installer.pods_project.targets.each do |target|
+      target.build_configurations.each do |config|
+        current = config.build_settings['IPHONEOS_DEPLOYMENT_TARGET']
+        if current && Gem::Version.new(current) < Gem::Version.new(min_ios_version_supported)
+          config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = min_ios_version_supported
+        end
+      end
+    end
+
+    # Fix fmt 11.x consteval build error on Xcode 26+.
+    # Apple clang claims consteval support but fmt's usage is incompatible.
+    # We disable consteval for ALL Apple clang versions as a safe fallback.
+    fmt_base = File.join(installer.sandbox.root, 'fmt', 'include', 'fmt', 'base.h')
+    if File.exist?(fmt_base)
+      begin
+        content = File.read(fmt_base)
+        patched = content.gsub(
+          /defined\(__apple_build_version__\) && __apple_build_version__ < \d+L/,
+          'defined(__apple_build_version__)'
+        )
+        if content != patched
+          File.write(fmt_base, patched)
+          Pod::UI.puts "Patched fmt/base.h to disable consteval on Apple clang"
+        end
+      rescue => e
+        Pod::UI.warn "Failed to patch fmt/base.h: #{e.message}"
+      end
+    end
+  end
+end

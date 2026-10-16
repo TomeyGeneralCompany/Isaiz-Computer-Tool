@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -u
+ROOT="${AUTOHACK_ROOT:-$HOME/isaiz-bugbounty/autohack}"
+echo "=== AutoHack runtime ==="
+podman info >/dev/null 2>&1 && echo "Rootless Podman: ready" || echo "Rootless Podman: unavailable"
+podman image inspect ghcr.io/foundry-rs/foundry:stable >/dev/null 2>&1 && echo "Foundry: ready" || echo "Foundry: unavailable"
+echo "Research service: $(systemctl --user is-active autohack-research-engine.service 2>/dev/null || true)"
+echo "=== Research results ==="
+python3 - "$ROOT/.autohack-next-stage/research-engine" <<'PY'
+from pathlib import Path
+from collections import Counter
+import json,sys
+root=Path(sys.argv[1])
+p=root/'state/status.json'
+if p.exists():
+ d=json.loads(p.read_text())
+ print(json.dumps(d,indent=2))
+else: print('No status file yet')
+counts=Counter()
+for p in (root/'results').glob('*.json'):
+ try: counts[json.loads(p.read_text()).get('status','unknown')]+=1
+ except Exception: counts['invalid_json']+=1
+print('Result counts:',dict(counts))
+print('NOTE: Test execution is not proof of a vulnerability; submissions remain subject to program rules.')
+PY

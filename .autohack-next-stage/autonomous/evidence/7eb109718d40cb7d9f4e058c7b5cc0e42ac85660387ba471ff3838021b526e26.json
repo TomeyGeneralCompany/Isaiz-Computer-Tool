@@ -1,0 +1,39 @@
+{
+  "checks": {
+    "has_reproduction_test": false,
+    "in_scope_at_processing": true,
+    "source_commit_matches": true,
+    "triage_requires_review": false
+  },
+  "commit": "1717bdd8e6b75a1fa82abb99dbdc29e08b013c59",
+  "lead": {
+    "file": "scripts/update-docs-branch.js",
+    "fingerprint": "c214e1416d893ca593ea",
+    "guidance": "Review command construction and input provenance",
+    "line": 7,
+    "rule": "JS_CHILD_EXEC"
+  },
+  "note": "Automated offline evidence preparation only. No project-specific reproduction or verified security impact.",
+  "processed_at": "2026-10-15T09:39:30.985503+00:00",
+  "repository": "OpenZeppelin/openzeppelin-contracts-upgradeable",
+  "scope_urls": [
+    "https://immunefi.com/bug-bounty/openzeppelin/scope/"
+  ],
+  "source_check": {
+    "commit": "1717bdd8e6b75a1fa82abb99dbdc29e08b013c59",
+    "excerpt": "    1: import proc from 'child_process';\n    2: import fs from 'fs';\n    3: import path from 'path';\n    4: \n    5: const read = cmd => proc.execSync(cmd, { encoding: 'utf8' }).trim();\n    6: const run = cmd => {\n    7:   proc.execSync(cmd, { stdio: 'inherit' });\n    8: };\n    9: const tryRead = cmd => {\n   10:   try {\n   11:     return read(cmd);\n   12:   } catch {\n   13:     return undefined;\n   14:   }\n   15: };\n   16: \n   17: const releaseBranchRegex = /^release-v(?<version>(?<major>\\d+)\\.(?<minor>\\d+)(?:\\.(?<patch>\\d+))?)$/;\n   18: \n   19: const currentBranch = read('git rev-parse --abbrev-ref HEAD');",
+    "file": "scripts/update-docs-branch.js",
+    "file_sha256": "b8eaa19b98d576625e1c7e5014b40e2dae8e682b6a18ed0a68a74b16270429ad",
+    "line": 7,
+    "status": "source_matched"
+  },
+  "source_fingerprint": "bb1402fde4b32224b46105f0df5d8190f4634336cb10be6dfbbecfd018316012",
+  "status": "needs_project_specific_reproduction",
+  "triage": {
+    "classification": "likely_false_positive",
+    "evidence": "No known vulnerabilities identified in the code, and the context provided is insufficient to determine if this is a false positive.",
+    "follow_up": "If you have more context or a different rule, please provide it so I can review it more thoroughly.",
+    "rationale": "The code is using 'proc' and 'fs' to execute commands, which is not a known vulnerability. The line number and function are not related to a known bug. There is insufficient context to determine if this is a false positive."
+  },
+  "verified_vulnerability": false
+}

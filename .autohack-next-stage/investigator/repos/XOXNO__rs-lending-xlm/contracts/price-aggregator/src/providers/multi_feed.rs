@@ -1,0 +1,84 @@
+//! Reads RedStone-format price data from a multi-feed contract, caching each
+//! feed lookup for the duration of the session. Outside the `certora` build,
+//! also exposes a bulk-read helper for fetching several feed IDs from one
+//! contract in a single call.
+
+#[cfg(not(feature = "certora"))]
+use common::oracle::providers::redstone::RedStonePriceFeedClient;
+use common::oracle::providers::redstone::{read_price_data_uncached, RedStonePriceData};
+use common::types::MultiFeedRef;
+use soroban_sdk::{Address, String};
+#[cfg(not(feature = "certora"))]
+use soroban_sdk::{Env, Vec};
+
+use crate::observation::OracleObservation;
+use crate::session::Session;
+
+#[cfg(feature = "certora")]
+pub(crate) use certora_read::read_multi_feed_source;
+
+/// Wraps `read_multi_feed_source_impl` behind a CVLR summary so the Certora
+/// prover can substitute its own model of the call during formal
+/// verification.
+#[cfg(feature = "certora")]
+mod certora_read {
+    use super::*;
+    cvlr_soroban_macros::apply_summary!(
+        crate::spec::summaries::read_multi_feed_source_summary,
+        pub(crate) fn read_multi_feed_source(
+            session: &mut Session,
+            feed: &MultiFeedRef,
+            decimals: u32,
+        ) -> Option<OracleObservation> {
+            super::read_multi_feed_source_impl(session, feed, decimals)
+        }
+    );
+}
+
+#[cfg(not(feature = "certora"))]
+pub(crate) use read_multi_feed_source_impl as read_multi_feed_source;
+
+/// Reads `feed`'s price data (via the session cache) from its contract and
+/// converts it from `decimals` to a WAD `OracleObservation`. Returns `None`
+/// if the price data cannot be read or the conversion fails.
+pub(crate) fn read_multi_feed_source_impl(
+    session: &mut Session,
+    feed: &MultiFeedRef,
+    decimals: u32,
+) -> Option<OracleObservation> {
+    let now_secs = session.now_secs();
+    let price_data = read_price_data(session, &feed.contract, &feed.feed_id)?;
+    OracleObservation::from_multi_feed(now_secs, &price_data, decimals)
+}
+
+/// Returns `feed_id`'s price data for `contract`, taking it from the
+/// session cache if already present, otherwise reading it uncached from the
+/// contract and storing it in the session cache before returning it.
+fn read_price_data(
+    session: &mut Session,
+    contract: &Address,
+    feed_id: &String,
+) -> Option<RedStonePriceData> {
+    if let Some(data) = session.get_feed(contract, feed_id) {
+        return Some(data);
+    }
+    let env = session.env().clone();
+    let data = read_price_data_uncached(&env, contract, feed_id)?;
+    session.set_feed(contract, feed_id, data.clone());
+    Some(data)
+}
+
+/// Reads price data for every ID in `feed_ids` from `contract` in a single
+/// call. Returns `None` if the call fails or the returned data does not
+/// contain exactly one entry per requested feed ID.
+#[cfg(not(feature = "certora"))]
+pub(crate) fn read_price_data_bulk(
+    env: &Env,
+    contract: &Address,
+    feed_ids: &Vec<String>,
+) -> Option<Vec<RedStonePriceData>> {
+    match RedStonePriceFeedClient::new(env, contract).try_read_price_data(feed_ids) {
+        Ok(Ok(data)) if data.len() == feed_ids.len() => Some(data),
+        _ => None,
+    }
+}

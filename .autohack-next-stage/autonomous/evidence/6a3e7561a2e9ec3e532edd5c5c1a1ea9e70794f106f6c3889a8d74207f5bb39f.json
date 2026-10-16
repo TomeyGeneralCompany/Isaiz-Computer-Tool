@@ -1,0 +1,39 @@
+{
+  "checks": {
+    "has_reproduction_test": false,
+    "in_scope_at_processing": true,
+    "source_commit_matches": true,
+    "triage_requires_review": true
+  },
+  "commit": "8891f73d17887e272a5317065961269aee94f7cd",
+  "lead": {
+    "file": "contracts/TokenDelegator.sol",
+    "fingerprint": "2bfe674005d5eb207fba",
+    "guidance": "Review delegatecall target and access control",
+    "line": 51,
+    "rule": "SOL_DELEGATECALL"
+  },
+  "note": "Automated offline evidence preparation only. No project-specific reproduction or verified security impact.",
+  "processed_at": "2026-10-15T00:09:26.500847+00:00",
+  "repository": "Instadapp/inst-governance",
+  "scope_urls": [
+    "https://immunefi.com/bug-bounty/instadapp/scope/"
+  ],
+  "source_check": {
+    "commit": "8891f73d17887e272a5317065961269aee94f7cd",
+    "excerpt": "   40: \n   41:         emit NewImplementation(oldImplementation, implementation);\n   42:     }\n   43: \n   44:     /**\n   45:      * @notice Internal method to delegate execution to another contract\n   46:      * @dev It returns to the external caller whatever the implementation returns or forwards reverts\n   47:      * @param callee The contract to delegatecall\n   48:      * @param data The raw data to delegatecall\n   49:      */\n   50:     function delegateTo(address callee, bytes memory data) internal {\n   51:         (bool success, bytes memory returnData) = callee.delegatecall(data);\n   52:         assembly {\n   53:             if eq(success, 0) {\n   54:                 revert(add(returnData, 0x20), returndatasize())\n   55:             }\n   56:         }\n   57:     }\n   58: \n   59:     /**\n   60:      * @dev Delegates execution to an implementation contract.\n   61:      * It returns to the external caller whatever the implementation returns\n   62:      * or forwards reverts.\n   63:      */",
+    "file": "contracts/TokenDelegator.sol",
+    "file_sha256": "4ff3c4f0b19fa2858925b0dda3cdd5dbd7206e61e3a7a5788b441fc9cab90952",
+    "line": 51,
+    "status": "source_matched"
+  },
+  "source_fingerprint": "3ca820efad80bebcdf6bd9657df6734410f12bad1c054a7ed8b81f23beb4ae1b",
+  "status": "needs_project_specific_reproduction",
+  "triage": {
+    "classification": "needs_review",
+    "evidence": "Insufficient context on the delegatecall implementation details.",
+    "follow_up": "If the implementation is incomplete, further analysis is needed to determine if it's secure or not.",
+    "rationale": "The rule is about delegatecall in a token-delegation contract, but the implementation is incomplete and lacks proper handling of delegatecall parameters. There is insufficient context to determine if the implementation is secure or not."
+  },
+  "verified_vulnerability": false
+}

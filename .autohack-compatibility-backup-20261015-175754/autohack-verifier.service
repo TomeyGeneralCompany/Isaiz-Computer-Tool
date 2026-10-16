@@ -1,0 +1,19 @@
+[Unit]
+Description=AutoHack offline draft evidence verifier
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /home/izy/isaiz-bugbounty/autohack/.autohack-next-stage/investigator/verification/verifier.py
+Restart=on-failure
+RestartSec=10
+CPUQuota=25%%
+MemoryMax=350M
+Nice=10
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/home/izy/isaiz-bugbounty/autohack/.autohack-next-stage/investigator/verification
+ReadOnlyPaths=/home/izy/isaiz-bugbounty/autohack/.autohack-next-stage/investigator/triage/drafts
+
+[Install]
+WantedBy=default.target

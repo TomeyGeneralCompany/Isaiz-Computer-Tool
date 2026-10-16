@@ -1,0 +1,57 @@
+{
+  "source_draft": "/home/izy/isaiz-bugbounty/autohack/.autohack-next-stage/investigator/triage/drafts/cb0563ae6bdb38aeaa6c6af2274bf6620237e1a16aebbf7020f4370260b2e730.json",
+  "input_fingerprint": "b6e74841e341140d620ae9b4f28afd7559e9defc9a41292fc0a3d91462a70a25",
+  "checked_at": "2026-10-14T23:57:06.017090+00:00",
+  "status": "ready_for_isolated_reproduction",
+  "verified_vulnerability": false,
+  "tests_executed": 0,
+  "checks": [
+    {
+      "name": "has_repository_and_commit",
+      "passed": true
+    },
+    {
+      "name": "has_program_scope_reference",
+      "passed": true
+    },
+    {
+      "name": "has_code_excerpt",
+      "passed": true
+    },
+    {
+      "name": "has_source_location",
+      "passed": true
+    },
+    {
+      "name": "javascript_excerpt_syntax",
+      "passed": null,
+      "note": "Partial snippet: no execution or syntax claim"
+    },
+    {
+      "name": "has_ai_triage",
+      "passed": true
+    }
+  ],
+  "limitations": [
+    "This is offline evidence validation, not exploit reproduction.",
+    "No project code or generated test cases are executed.",
+    "A valid excerpt or parseable code does not prove vulnerability."
+  ],
+  "repository": "OpenZeppelin/openzeppelin-contracts-upgradeable",
+  "commit": "153922042b36cf07810b861a623a806934befe62",
+  "scope_sources": [
+    {
+      "asset_type": "smart_contract",
+      "asset_url": "https://github.com/OpenZeppelin/openzeppelin-contracts-upgradeable",
+      "program": "openzeppelin",
+      "scope_url": "https://immunefi.com/bug-bounty/openzeppelin/scope/"
+    }
+  ],
+  "lead_location": {
+    "path": "scripts/update-docs-branch.js",
+    "line": 5
+  },
+  "triage_present": true,
+  "missing_evidence": [],
+  "next_step": "Create a non-destructive, isolated regression test tailored to the alleged flaw and run it in a sandbox; do not label verified until a reproducible security impact is demonstrated."
+}

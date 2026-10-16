@@ -1,0 +1,39 @@
+{
+  "checks": {
+    "has_reproduction_test": false,
+    "in_scope_at_processing": true,
+    "source_commit_matches": true,
+    "triage_requires_review": false
+  },
+  "commit": "97430aa29ac10a70ee0c18f2a905c4925363b58f",
+  "lead": {
+    "file": "scripts/update-docs-branch.js",
+    "fingerprint": "e1638b943dc61eddae07",
+    "guidance": "Review command construction and input provenance",
+    "line": 5,
+    "rule": "JS_CHILD_EXEC"
+  },
+  "note": "Automated offline evidence preparation only. No project-specific reproduction or verified security impact.",
+  "processed_at": "2026-10-15T00:09:25.902461+00:00",
+  "repository": "OpenZeppelin/openzeppelin-contracts",
+  "scope_urls": [
+    "https://immunefi.com/bug-bounty/openzeppelin/scope/"
+  ],
+  "source_check": {
+    "commit": "97430aa29ac10a70ee0c18f2a905c4925363b58f",
+    "excerpt": "    1: import proc from 'child_process';\n    2: import fs from 'fs';\n    3: import path from 'path';\n    4: \n    5: const read = cmd => proc.execSync(cmd, { encoding: 'utf8' }).trim();\n    6: const run = cmd => {\n    7:   proc.execSync(cmd, { stdio: 'inherit' });\n    8: };\n    9: const tryRead = cmd => {\n   10:   try {\n   11:     return read(cmd);\n   12:   } catch {\n   13:     return undefined;\n   14:   }\n   15: };\n   16: \n   17: const releaseBranchRegex = /^release-v(?<version>(?<major>\\d+)\\.(?<minor>\\d+)(?:\\.(?<patch>\\d+))?)$/;",
+    "file": "scripts/update-docs-branch.js",
+    "file_sha256": "b8eaa19b98d576625e1c7e5014b40e2dae8e682b6a18ed0a68a74b16270429ad",
+    "line": 5,
+    "status": "source_matched"
+  },
+  "source_fingerprint": "7058fa3a03a385fc9920eb1738f78f1a0765fa4882e9b4754b18be963271f4ea",
+  "status": "needs_project_specific_reproduction",
+  "triage": {
+    "classification": "likely_false_positive",
+    "evidence": "The code is part of a bug-bounty project and is not a known vulnerability. The rule is not triggered as the code is not a known bug-bounty issue.",
+    "follow_up": "If you have more information, please provide it to help us determine if this is a false positive.",
+    "rationale": "The code is using 'proc' and 'fs' to execute commands, which is not a known vulnerability. The 'JS_CHILD_EXEC' rule is not triggered as the code is not a known bug-bounty issue. There is insufficient context to determine if this is a false positive."
+  },
+  "verified_vulnerability": false
+}

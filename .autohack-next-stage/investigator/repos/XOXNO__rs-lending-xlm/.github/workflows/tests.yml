@@ -1,0 +1,111 @@
+name: Tests
+
+on:
+  # `mock/**` holds five workspace members, three of them dependencies of
+  # test-harness and price-aggregator, and `vendor/**` holds the patched cvlr
+  # crates the certora feature builds against. Both can break the build, so
+  # both must trigger it. `.github/scripts/**` installs the stellar-cli this
+  # workflow runs on. `make wasm-size-check` reads the budget file, the two
+  # `scripts/` checkers, and the declaration and invariant files the
+  # access-control checker loads.
+  push:
+    branches: [main]
+    paths:
+      - "contracts/**"
+      - "common/**"
+      - "interfaces/**"
+      - "mock/**"
+      - "tests/**"
+      - "certora/**"
+      - "vendor/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "Makefile"
+      - "configs/wasm_size_budget.txt"
+      - "scripts/check_access_control.py"
+      - "scripts/strip_spec_docs.py"
+      - "scripts/permissionless_entrypoints.txt"
+      - "docs/reference/invariants.md"
+      - ".github/workflows/**"
+      - ".github/scripts/**"
+  pull_request:
+    branches: [master, main, feat/*, rc/*]
+    paths:
+      - "contracts/**"
+      - "common/**"
+      - "interfaces/**"
+      - "mock/**"
+      - "tests/**"
+      - "certora/**"
+      - "vendor/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "Makefile"
+      - "configs/wasm_size_budget.txt"
+      - "scripts/check_access_control.py"
+      - "scripts/strip_spec_docs.py"
+      - "scripts/permissionless_entrypoints.txt"
+      - "docs/reference/invariants.md"
+      - ".github/workflows/**"
+      - ".github/scripts/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  STELLAR_VERSION: "28.0.0"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build-and-test:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    name: Build & Test
+    runs-on: self-hosted
+    env:
+      RUSTC_WRAPPER: sccache
+      CARGO_INCREMENTAL: "0"
+      SCCACHE_CACHE_SIZE: 20G
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          clean: false
+
+      - name: Reset workspace
+        run: |
+          git reset --hard
+          git clean -ffdx
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+        with:
+          toolchain: "1.95"
+          targets: wasm32v1-none
+          components: clippy, rustfmt
+
+      - name: Install stellar-cli
+        run: bash .github/scripts/install-stellar-cli.sh
+
+      - name: Install sccache (prebuilt)
+        uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
+        with:
+          tool: sccache
+
+      - name: Build deploy artifacts and WASM size budget
+        run: make wasm-size-check
+
+      - name: Run tests
+        run: cargo test --workspace --features price-aggregator/testing
+
+      - name: Clippy (workspace)
+        run: cargo clippy --workspace --all-targets --features price-aggregator/testing -- -D warnings
+
+      - name: Clippy (fuzz crate, workspace-excluded)
+        run: make clippy-fuzz

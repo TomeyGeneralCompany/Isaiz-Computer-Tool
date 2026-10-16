@@ -1,0 +1,31 @@
+{
+  "repository": "HathorNetwork/hathor-wallet-mobile",
+  "commit": "116a8658d60fb9be25d01847be2a9671ccbf81bf",
+  "scope_sources": [
+    {
+      "asset_type": "websites_and_applications",
+      "asset_url": "https://github.com/HathorNetwork/hathor-wallet-mobile",
+      "program": "hathornetwork",
+      "scope_url": "https://immunefi.com/bug-bounty/hathornetwork/scope/"
+    }
+  ],
+  "original_report": "HathorNetwork__hathor-wallet-mobile-116a8658d60f.json",
+  "lead": {
+    "rule": "JS_CHILD_EXEC",
+    "file": "scripts/update_translations.js",
+    "line": 122,
+    "guidance": "Review command construction and input provenance",
+    "fingerprint": "819b4f80c00d0af82b64"
+  },
+  "source_excerpt": "114:     }\n115:     const poFile = path.join(subfolderPath, 'texts.po');\n116:     // Create the file if it does not exist\n117:     if (!fs.existsSync(poFile)) {\n118:       fs.writeFileSync(poFile, '');\n119:     }\n120: \n121:     // Merge the `.pot` file with the existing translations\n122:     execSync(`msgmerge ${poFile} ${potFile} -o ${poFile}`, { stdio: 'inherit' });\n123:   });\n124: }\n125: \n126: /**\n127:  * Checks if all `.po` files have all messages from the `.pot` file.\n128:  * Allows untranslated messages if `strict` is false.\n129:  * @param {string[]} strictLanguages - Does not allow untranslated messages for those languages.\n130:  * @returns {boolean} True if an error happened or if there are any missing i18n lines",
+  "triage": {
+    "classification": "likely_false_positive",
+    "rationale": "The code checks for existing `.po` files and merges them with a `.pot` file, but there's no indication of potential issues with the merging process or the presence of untranslated messages. The code is likely correct and not a false positive.",
+    "evidence": "No false positive claims made in the code.",
+    "follow_up": "If you have more details, please provide the code and the issue you're encountering, and I can help analyze it further."
+  },
+  "status": "unverified_draft",
+  "verified_vulnerability": false,
+  "generated_at": "2026-10-15T01:01:46.800196+00:00",
+  "note": "Automated static triage only. No exploitability, eligibility, or bounty award established."
+}

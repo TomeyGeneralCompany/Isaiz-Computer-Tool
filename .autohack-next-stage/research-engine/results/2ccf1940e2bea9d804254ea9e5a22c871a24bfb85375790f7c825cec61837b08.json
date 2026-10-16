@@ -1,0 +1,11 @@
+{
+  "commit": "9496626f71a761fc296dc3b2efbfd54c504e18f0",
+  "detail": {},
+  "input_hash": "4be780dc6931e28f37c8c217e18515298739b3cd802af2fe6af80d2c5393db2f",
+  "processed_at": "2026-10-15T20:04:51.311149+00:00",
+  "repository": "Instadapp/fluid-contracts-public",
+  "source_draft": "/home/izy/isaiz-bugbounty/autohack/.autohack-next-stage/investigator/triage/drafts/2ccf1940e2bea9d804254ea9e5a22c871a24bfb85375790f7c825cec61837b08.json",
+  "status": "out_of_scope",
+  "submitted": false,
+  "verified_vulnerability": false
+}

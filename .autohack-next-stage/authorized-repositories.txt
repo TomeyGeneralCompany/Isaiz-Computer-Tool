@@ -1,0 +1,2 @@
+# Add only public GitHub repositories explicitly permitted by their bounty program.
+# Format: owner/repo

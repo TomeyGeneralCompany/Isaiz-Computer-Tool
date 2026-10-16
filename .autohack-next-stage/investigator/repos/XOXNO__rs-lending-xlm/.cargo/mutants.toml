@@ -1,0 +1,106 @@
+gitignore = true
+
+exclude_globs = [
+
+    "tests/test-harness/**",
+    "tests/fuzz/**",
+    "mock/**",
+
+    "**/certora/**",
+    "**/test_support.rs",
+    "**/tests.rs",
+
+    "common/src/types/shared.rs",
+]
+
+# Mutation exclusions, grouped by reason or review status:
+#
+#   EQUIVALENT    the mutated program is observably identical to the original,
+#                 so no test can kill it.
+#   OUT OF SCOPE  the code is not compiled into the deployed contract or into
+#                 an ordinary test build.
+#   UNREVIEWED    nobody has shown the mutant is equivalent, so it is a possible
+#                 test gap. Say what you checked when you add an entry.
+#
+# Every pattern must match at least one mutant in `cargo mutants --list`. A
+# name-scoped pattern that matches nothing can suppress a later function that
+# reuses the name, so delete it.
+exclude_re = [
+    # --- EQUIVALENT: boundary-equivalent comparisons -------------------------
+    # Flipping strict/non-strict where the equal case is unreachable or both
+    # branches produce the same value.
+    # `rescale` returns early when the decimal counts are equal, so the
+    # upscale/downscale branch never sees equal operands.
+    "fp_core.rs:[0-9]+:20: replace > with >= in rescale$",
+    "observation.rs:[0-9]+:14: replace > with >= in is_stale",
+    "replace > with >= in calculate_annual_borrow_rate",
+    "replace > with >= in update_borrow_index",
+    "replace > with >= in normalize_repayment_plan",
+    "replace > with >= in estimate_liquidation_amount",
+    # `add_liquidity` pushes `before[i] = if amount > 0 { balance(router) } else
+    # { 0 }`, and reads `before[i]` only when `held[i]`, the same `amount`, is
+    # nonzero. At amount == 0 the pushed value is never read, so `>=` only adds
+    # a discarded `balance` read.
+    "venues/aquarius/mint.rs:[0-9]+:36: replace > with >= in add_liquidity",
+
+    # --- EQUIVALENT: boundary-equivalent comparison --------------------------
+    "vault.rs:[0-9]+:19: replace < with <= in Vault",
+
+    # --- EQUIVALENT: widened slice bound that is never read -------------------
+    # The referral id is read as `&buf[head::REFERRAL..head::REFERRAL + 4]`, and
+    # `head::REFERRAL` is 4, so the mutant widens the slice from `buf[4..8]` to
+    # `buf[4..16]`. `buf` is always `[u8; MAX_PROGRAM_BYTES]` (346 bytes), so the
+    # wider slice stays in bounds, and only its indexes 0..=3 are read. The
+    # referral id is identical on every input.
+    "program.rs:[0-9]+:60: replace \\+ with \\* in Program::decode",
+
+    # --- EQUIVALENT: comparison the surrounding logic already decided ---------
+    # Column 42 is `ctx.hop.token_in < ctx.hop.token_out`, which picks the pair's
+    # reserve orientation. `HopContext::new` panics with `SameToken` before the
+    # adapter runs, so the two operands are never equal and `<` and `<=` agree on
+    # every reachable input.
+    "soroswap.rs:[0-9]+:42: replace < with <= in swap",
+
+    # --- EQUIVALENT: unobservable against a Stellar Asset Contract ------------
+    # Both build invoker-contract auth for the Comet hop. Against a SAC token
+    # neither is needed: the router calls `approve` directly, so its auth is
+    # implicit, and SAC `transfer_from` requires the spender (the pool), not the
+    # router. With either call deleted, `env.auths()` under `mock_auths` records
+    # the same sender tree. Only a venue mock that demands the router's auth can
+    # kill these.
+    "replace authorize_token_approve with \\(\\)",
+    "replace authorize_comet_swap with \\(\\)",
+
+    # --- OUT OF SCOPE: not in the deployed contract ---------------------------
+    # Both are `#[cfg(feature = "certora")]` entry points in
+    # `contracts/price-aggregator/src/engine.rs` that drive oracle price blending
+    # for the prover. They are unrelated to the Blend integration. Neither the
+    # deployed wasm nor an ordinary test build compiles them, so no test can
+    # kill these.
+    "replace blend_empty -> Outcome with Default::default\\(\\)",
+    "replace blend_partial -> Outcome with Default::default\\(\\)",
+
+    # --- EQUIVALENT: guard is unreachable under the owner-holds-all invariant --
+    # `__constructor` grants the five operational roles to the owner,
+    # `sync_owner_access_control` moves them on an ownership transfer, and
+    # neither `apply_revoke_role` nor `apply_canceller_reset` revokes from the
+    # owner. So the owner holds every role, and a role a non-owner holds has at
+    # least two members. The `count > 1` guard passes for every role that reaches
+    # it under `==` or `!=`, and `CannotRemoveLastProposer` (error 48) is
+    # unreachable.
+    # If the owner stops holding every role, this entry becomes killable and
+    # belongs in UNREVIEWED.
+    "replace == with != in apply_revoke_role",
+
+    # For the owner both operands are false. The `while` loop above the grant
+    # loop revokes CANCELLER from every non-owner holder, so a non-owner's first
+    # occurrence in `new_cancellers` reaches the grant under `&&` and `||`. A
+    # repeated address reaches it again under `||`: the separation check passes
+    # again, and `grant_role_no_auth` returns early for an existing holder. The
+    # two forms agree on every reachable input.
+    "replace && with \\|\\| in apply_canceller_reset",
+
+    # --- UNREVIEWED: possible test gaps, not shown equivalent -----------------
+    # Write the test that kills each entry, or move the entry to a group above
+    # with the reason it is equivalent.
+]

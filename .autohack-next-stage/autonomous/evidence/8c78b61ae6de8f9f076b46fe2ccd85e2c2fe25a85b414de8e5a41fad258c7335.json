@@ -1,0 +1,39 @@
+{
+  "checks": {
+    "has_reproduction_test": false,
+    "in_scope_at_processing": true,
+    "source_commit_matches": true,
+    "triage_requires_review": false
+  },
+  "commit": "b5f10574f943911635754dd76ed6ce95858b7d93",
+  "lead": {
+    "file": "scripts/publish-docs.js",
+    "fingerprint": "be29c54d51608c1e51c9",
+    "guidance": "Review command construction and input provenance",
+    "line": 4,
+    "rule": "JS_CHILD_EXEC"
+  },
+  "note": "Automated offline evidence preparation only. No project-specific reproduction or verified security impact.",
+  "processed_at": "2026-10-15T00:09:26.986350+00:00",
+  "repository": "OpenZeppelin/uniswap-hooks",
+  "scope_urls": [
+    "https://immunefi.com/bug-bounty/openzeppelin/scope/"
+  ],
+  "source_check": {
+    "commit": "b5f10574f943911635754dd76ed6ce95858b7d93",
+    "excerpt": "    1: const proc = require('child_process');\n    2: \n    3: const run = cmd => {\n    4:     proc.execSync(cmd, { stdio: 'inherit' });\n    5: };\n    6: \n    7: const read = cmd => proc.execSync(cmd, { encoding: 'utf8' }).trim();\n    8: \n    9: run('npm run prepare-docs');\n   10: run('git add -f docs');  // --force needed because generated docs files are gitignored\n   11: \n   12: // Check if there are staged changes to commit\n   13: const stagedChanges = read('git diff --cached --name-only');\n   14: if (!stagedChanges) {\n   15:     console.log('No changes to commit, skipping commit step');\n   16:     process.exit(0);",
+    "file": "scripts/publish-docs.js",
+    "file_sha256": "cf30c9482adc7fac5cc8ae4ad40660b6fba0be6d933498c631be4f1c03d99864",
+    "line": 4,
+    "status": "source_matched"
+  },
+  "source_fingerprint": "e0ce7cc93c907b72e6b2f26f736efbdbfb6b88c7d6010ef696db3d415cbc06c7",
+  "status": "needs_project_specific_reproduction",
+  "triage": {
+    "classification": "likely_false_positive",
+    "evidence": "The code is part of a standard command execution process in JavaScript, not a false positive.",
+    "follow_up": "If you have more details about the specific command or input, I can provide further analysis.",
+    "rationale": "The code is using 'child_process' to execute commands, which is generally safe but not a direct vulnerability. The line is part of a command execution process, which is a normal part of software development workflows. There is no indication of malicious intent or command injection."
+  },
+  "verified_vulnerability": false
+}

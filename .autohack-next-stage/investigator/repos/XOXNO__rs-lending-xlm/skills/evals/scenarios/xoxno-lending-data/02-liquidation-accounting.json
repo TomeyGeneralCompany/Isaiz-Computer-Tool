@@ -1,0 +1,18 @@
+{
+  "skills": [
+    "xoxno-lending-data"
+  ],
+  "query": "From the events, work out how much collateral each liquidator actually received and how much the protocol took as fee on every XOXNO liquidation.",
+  "expected_behavior": [
+    "For Credit mode, derive exact fees from target and receiver share deltas immediately before each liquidation. Apply earlier operations first. Omitted receiver legs credit zero shares.",
+    "Credit receiver batches are optional when net credit is zero. Preserve event order; do not require two batches for every liquidation.",
+    "Create the Credit(0) receiver row from the NFT mint and known liquidate return. Enrich it from the receiver batch when present.",
+    "Reads bonus_bps on position:liquidation as basis points and repaid_usd_wad as 10^18-scaled USD, not token units",
+    "Does not treat the SDK's raw discriminant strings (e.g. '16') or unknown actions as errors"
+  ],
+  "machine_checkable": [
+    "Generated TypeScript passes tsc --noEmit against @xoxno/sdk-js@1.0.228",
+    "Source never adds liq_seize and liq_credit amounts together for the same account/asset pair",
+    "Source references both discriminants 5 and 15 (or the strings 'liq_seize' and 'liq_credit')"
+  ]
+}

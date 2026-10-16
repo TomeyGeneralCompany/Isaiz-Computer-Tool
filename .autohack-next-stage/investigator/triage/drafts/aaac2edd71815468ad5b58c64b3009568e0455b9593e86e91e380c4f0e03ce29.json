@@ -1,0 +1,31 @@
+{
+  "repository": "Instadapp/avocado-contracts-public",
+  "commit": "0bc1dd9c49203dd45f48f0046abc4e95a50d06da",
+  "scope_sources": [
+    {
+      "asset_type": "smart_contract",
+      "asset_url": "https://github.com/Instadapp/avocado-contracts-public",
+      "program": "instadapp",
+      "scope_url": "https://immunefi.com/bug-bounty/instadapp/scope/"
+    }
+  ],
+  "original_report": "Instadapp__avocado-contracts-public-0bc1dd9c4920.json",
+  "lead": {
+    "rule": "SOL_DELEGATECALL",
+    "file": "contracts/AvocadoMultisig/AvocadoMultisigCore.sol",
+    "line": 691,
+    "guidance": "Review delegatecall target and access control",
+    "fingerprint": "2b7f64002114ebcc64ee"
+  },
+  "source_excerpt": "683:             } else if (action_.operation == 1 && isDelegateCallId_) {\n684:                 // delegatecall (operation = 1 & id = mixed(1 / 21))\n685:                 unchecked {\n686:                     // store amount of gas that stays with caller, according to EIP150 to detect out of gas errors\n687:                     // -> as close as possible to actual call\n688:                     actionMinGasLeft_ = gasleft() / 64;\n689:                 }\n690: \n691:                 (success_, result_) = action_.target.delegatecall(action_.data);\n692: \n693:                 // handle action failure right after external call to better detect out of gas errors\n694:                 if (!success_) {\n695:                     _handleActionFailure(actionMinGasLeft_, i, result_);\n696:                 }\n697: \n698:                 // reset _transientAllowHash to make sure it can not be set up in any way for reentrancy\n699:                 _resetTransientStorage();",
+  "triage": {
+    "classification": "needs_review",
+    "rationale": "The code snippet appears to be part of a Solidity contract for a multisig, but the line number and context are unclear. The presence of 'SOL_DELEGATECALL' and the use of 'isDelegateCallId_' suggest potential issues with delegate call handling, but the exact nature of the problem is unclear. There is insufficient context to determine if this is a false positive or a valid review.",
+    "evidence": "The code snippet is part of a Solidity contract, but the line numbers and context are unclear.",
+    "follow_up": "If you have more context or details, please provide them to help further review."
+  },
+  "status": "unverified_draft",
+  "verified_vulnerability": false,
+  "generated_at": "2026-10-14T23:41:14.697362+00:00",
+  "note": "Automated static triage only. No exploitability, eligibility, or bounty award established."
+}

@@ -1,0 +1,40 @@
+{
+  "checks": {
+    "has_reproduction_test": false,
+    "in_scope_at_processing": true,
+    "source_commit_matches": true,
+    "triage_requires_review": false
+  },
+  "commit": "0738c7c981e506c582d83fa5456fe1b84eeccedc",
+  "lead": {
+    "file": "hathorlib/hathorlib/nanocontracts/metered_exec.py",
+    "fingerprint": "817cbe3bdb9cbf94842d",
+    "guidance": "Review dynamic execution and input provenance",
+    "line": 65,
+    "rule": "PY_EVAL"
+  },
+  "note": "Automated offline evidence preparation only. No project-specific reproduction or verified security impact.",
+  "processed_at": "2026-10-15T00:09:27.290086+00:00",
+  "repository": "HathorNetwork/hathor-core",
+  "scope_urls": [
+    "https://immunefi.com/bug-bounty/hathornetwork/scope/"
+  ],
+  "source_check": {
+    "commit": "0738c7c981e506c582d83fa5456fe1b84eeccedc",
+    "excerpt": "   54:         # XXX: calling compile now makes the exec step consume less fuel\n   55:         code = compile(\n   56:             source=source,\n   57:             filename='<blueprint>',\n   58:             mode='exec',\n   59:             flags=0,\n   60:             dont_inherit=True,\n   61:             optimize=0,\n   62:             _feature_version=PYTHON_CODE_COMPAT_VERSION[1],\n   63:         )\n   64:         # XXX: SECURITY: `code` and `env` need the proper restrictions by this point\n   65:         exec(code, env)\n   66:         del env['__builtins__']\n   67:         return env\n   68: \n   69:     def call(self, func: Callable[[Unpack[_Ts]], _T], /, *, args: tuple[Unpack[_Ts]]) -> _T:\n   70:         \"\"\" This is equivalent to `func(*args, **kwargs)` but with execution metering and memory limiting.\n   71:         \"\"\"\n   72:         from hathorlib.nanocontracts.custom_builtins import get_exec_builtins\n   73:         from hathorlib.nanocontracts.exception import NCFail\n   74: \n   75:         env: dict[str, object] = {\n   76:             '__builtins__': get_exec_builtins(),\n   77:             '__func__': func,",
+    "file": "hathorlib/hathorlib/nanocontracts/metered_exec.py",
+    "file_sha256": "74888a38f66d7bc91088fb454db859bb6093ed20f77c1064cf5c98f96797d229",
+    "line": 65,
+    "python_syntax": "valid",
+    "status": "source_matched"
+  },
+  "source_fingerprint": "0a819e6920f4666a5355a1fe531f7c8e4e3d502a71f88e922cbb2a60b6da9434",
+  "status": "needs_project_specific_reproduction",
+  "triage": {
+    "classification": "likely_false_positive",
+    "evidence": "No explicit security restrictions or provenance checks are indicated in the code.",
+    "follow_up": "If you have further questions, please provide more context about the specific use case or security concerns you're encountering with this code.",
+    "rationale": "The code snippet is part of a nanocontract implementation and does not indicate any explicit security restrictions or provenance checks. The use of `exec` with dynamic execution and memory limits is not a security concern in this context."
+  },
+  "verified_vulnerability": false
+}

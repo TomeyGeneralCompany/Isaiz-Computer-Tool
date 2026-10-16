@@ -1,0 +1,103 @@
+=== SERVICES ===
+autohack-native.service                 activating
+Result=exit-code
+NRestarts=1
+autohack-research-engine.service        active
+Result=success
+NRestarts=0
+autohack-extended-research.service      inactive
+Result=success
+NRestarts=0
+autohack-review-backlog.timer           active
+Result=success
+=== ROOTLESS PODMAN ===
+true
+=== RESEARCH WORKER STATUS ===
+research-engine {
+  "checked_at": "2026-10-16T00:10:18.530751+00:00",
+  "container_engine": null,
+  "counts": {
+    "adapter_not_available": 51,
+    "commit_mismatch": 2,
+    "out_of_scope": 19
+  },
+  "foundry_image_available": false,
+  "scope_repositories": 155,
+  "submission_enabled": false
+}
+extended-research no status file
+=== LAST SERVICE ERRORS ===
+--- autohack-native.service ---
+Oct 15 20:08:35 izy-Latitude-5290-2-in-1 systemd[1097]: autohack-native.service: Scheduled restart job, restart counter is at 151.
+Oct 15 20:08:35 izy-Latitude-5290-2-in-1 systemd[1097]: Started autohack-native.service - AutoHack original autonomous discovery, hunt, review and authenticated submission engine.
+Oct 15 20:08:35 izy-Latitude-5290-2-in-1 npm[265976]: /usr/bin/env: ‘node’: No such file or directory
+Oct 15 20:08:35 izy-Latitude-5290-2-in-1 systemd[1097]: autohack-native.service: Main process exited, code=exited, status=127/n/a
+Oct 15 20:08:35 izy-Latitude-5290-2-in-1 systemd[1097]: autohack-native.service: Failed with result 'exit-code'.
+Oct 15 20:09:06 izy-Latitude-5290-2-in-1 systemd[1097]: autohack-native.service: Scheduled restart job, restart counter is at 152.
+Oct 15 20:09:06 izy-Latitude-5290-2-in-1 systemd[1097]: Started autohack-native.service - AutoHack original autonomous discovery, hunt, review and authenticated submission engine.
+Oct 15 20:09:06 izy-Latitude-5290-2-in-1 npm[266297]: /usr/bin/env: ‘node’: No such file or directory
+Oct 15 20:09:06 izy-Latitude-5290-2-in-1 systemd[1097]: autohack-native.service: Main process exited, code=exited, status=127/n/a
+Oct 15 20:09:06 izy-Latitude-5290-2-in-1 systemd[1097]: autohack-native.service: Failed with result 'exit-code'.
+Oct 15 20:09:36 izy-Latitude-5290-2-in-1 systemd[1097]: autohack-native.service: Scheduled restart job, restart counter is at 1.
+Oct 15 20:09:36 izy-Latitude-5290-2-in-1 systemd[1097]: Started autohack-native.service - AutoHack original autonomous discovery, hunt, review and authenticated submission engine.
+Oct 15 20:09:36 izy-Latitude-5290-2-in-1 npm[266354]: /usr/bin/env: ‘node’: No such file or directory
+Oct 15 20:09:36 izy-Latitude-5290-2-in-1 systemd[1097]: autohack-native.service: Main process exited, code=exited, status=127/n/a
+Oct 15 20:09:36 izy-Latitude-5290-2-in-1 systemd[1097]: autohack-native.service: Failed with result 'exit-code'.
+Oct 15 20:09:36 izy-Latitude-5290-2-in-1 systemd[1097]: Stopped autohack-native.service - AutoHack original autonomous discovery, hunt, review and authenticated submission engine.
+Oct 15 20:09:36 izy-Latitude-5290-2-in-1 systemd[1097]: Started autohack-native.service - AutoHack original autonomous discovery, hunt, review and authenticated submission engine.
+Oct 15 20:09:36 izy-Latitude-5290-2-in-1 npm[266357]: /usr/bin/env: ‘node’: No such file or directory
+Oct 15 20:09:36 izy-Latitude-5290-2-in-1 systemd[1097]: autohack-native.service: Main process exited, code=exited, status=127/n/a
+Oct 15 20:09:36 izy-Latitude-5290-2-in-1 systemd[1097]: autohack-native.service: Failed with result 'exit-code'.
+Oct 15 20:10:06 izy-Latitude-5290-2-in-1 systemd[1097]: autohack-native.service: Scheduled restart job, restart counter is at 2.
+Oct 15 20:10:06 izy-Latitude-5290-2-in-1 systemd[1097]: Started autohack-native.service - AutoHack original autonomous discovery, hunt, review and authenticated submission engine.
+Oct 15 20:10:06 izy-Latitude-5290-2-in-1 npm[266387]: /usr/bin/env: ‘node’: No such file or directory
+Oct 15 20:10:06 izy-Latitude-5290-2-in-1 systemd[1097]: autohack-native.service: Main process exited, code=exited, status=127/n/a
+Oct 15 20:10:06 izy-Latitude-5290-2-in-1 systemd[1097]: autohack-native.service: Failed with result 'exit-code'.
+Oct 15 20:10:36 izy-Latitude-5290-2-in-1 systemd[1097]: autohack-native.service: Scheduled restart job, restart counter is at 1.
+Oct 15 20:10:36 izy-Latitude-5290-2-in-1 systemd[1097]: Started autohack-native.service - AutoHack original autonomous discovery, hunt, review and authenticated submission engine.
+Oct 15 20:10:36 izy-Latitude-5290-2-in-1 npm[266665]: /usr/bin/env: ‘node’: No such file or directory
+Oct 15 20:10:36 izy-Latitude-5290-2-in-1 systemd[1097]: autohack-native.service: Main process exited, code=exited, status=127/n/a
+Oct 15 20:10:36 izy-Latitude-5290-2-in-1 systemd[1097]: autohack-native.service: Failed with result 'exit-code'.
+Oct 15 20:10:36 izy-Latitude-5290-2-in-1 systemd[1097]: Stopped autohack-native.service - AutoHack original autonomous discovery, hunt, review and authenticated submission engine.
+Oct 15 20:10:36 izy-Latitude-5290-2-in-1 systemd[1097]: Started autohack-native.service - AutoHack original autonomous discovery, hunt, review and authenticated submission engine.
+Oct 15 20:10:36 izy-Latitude-5290-2-in-1 npm[266668]: /usr/bin/env: ‘node’: No such file or directory
+Oct 15 20:10:36 izy-Latitude-5290-2-in-1 systemd[1097]: autohack-native.service: Main process exited, code=exited, status=127/n/a
+Oct 15 20:10:36 izy-Latitude-5290-2-in-1 systemd[1097]: autohack-native.service: Failed with result 'exit-code'.
+--- autohack-research-engine.service ---
+Oct 15 16:04:51 izy-Latitude-5290-2-in-1 python3[201913]: aaac2edd71815468ad5b58c64b3009568e0455b9593e86e91e380c4f0e03ce29.json: out_of_scope
+Oct 15 16:04:51 izy-Latitude-5290-2-in-1 python3[201913]: c11d5c56a267e08c795ecc20489508377970fd835ea070485b02a171c9cd2f3e.json: out_of_scope
+Oct 15 16:04:51 izy-Latitude-5290-2-in-1 python3[201913]: d22c29cafe73c26036632037b145135d76dcd2da9b061f4fa74217224aa37bb4.json: out_of_scope
+Oct 15 16:04:51 izy-Latitude-5290-2-in-1 python3[201913]: d2ab98aa666e3d414a7428804e0e56acdb4ee865e69ef0c869bc402c1952e8d9.json: out_of_scope
+Oct 15 16:04:51 izy-Latitude-5290-2-in-1 python3[201913]: e403696b8a526402a5d4c513e60d32aea308caa462637bdf9f2eadd5b661a284.json: out_of_scope
+Oct 15 16:04:51 izy-Latitude-5290-2-in-1 python3[201913]: f5820aa9425f295c375a5a55d52c05564eee74b3427d0fbe15e17dddff370345.json: out_of_scope
+Oct 15 17:49:29 izy-Latitude-5290-2-in-1 systemd[1097]: Stopping autohack-research-engine.service - AutoHack autonomous isolated security research engine...
+Oct 15 17:49:30 izy-Latitude-5290-2-in-1 systemd[1097]: Stopped autohack-research-engine.service - AutoHack autonomous isolated security research engine.
+Oct 15 17:49:30 izy-Latitude-5290-2-in-1 systemd[1097]: autohack-research-engine.service: Consumed 2min 35.993s CPU time, 70.4M memory peak, 0B memory swap peak.
+Oct 15 17:49:30 izy-Latitude-5290-2-in-1 systemd[1097]: Started autohack-research-engine.service - AutoHack autonomous isolated security research engine.
+Oct 15 17:49:30 izy-Latitude-5290-2-in-1 python3[251234]: AutoHack offline research engine started. No automatic submission or live tests.
+Oct 15 18:03:06 izy-Latitude-5290-2-in-1 systemd[1097]: Stopping autohack-research-engine.service - AutoHack autonomous isolated security research engine...
+Oct 15 18:03:06 izy-Latitude-5290-2-in-1 systemd[1097]: Stopped autohack-research-engine.service - AutoHack autonomous isolated security research engine.
+Oct 15 18:03:06 izy-Latitude-5290-2-in-1 systemd[1097]: autohack-research-engine.service: Consumed 2.167s CPU time, 25.9M memory peak, 0B memory swap peak.
+Oct 15 18:03:06 izy-Latitude-5290-2-in-1 systemd[1097]: Started autohack-research-engine.service - AutoHack autonomous isolated security research engine.
+Oct 15 18:03:06 izy-Latitude-5290-2-in-1 python3[252478]: AutoHack offline research engine started. No automatic submission or live tests.
+Oct 15 18:37:24 izy-Latitude-5290-2-in-1 systemd[1097]: Stopping autohack-research-engine.service - AutoHack autonomous isolated security research engine...
+Oct 15 18:37:25 izy-Latitude-5290-2-in-1 systemd[1097]: Stopped autohack-research-engine.service - AutoHack autonomous isolated security research engine.
+Oct 15 18:37:25 izy-Latitude-5290-2-in-1 systemd[1097]: autohack-research-engine.service: Consumed 5.654s CPU time, 40.5M memory peak, 0B memory swap peak.
+Oct 15 18:37:25 izy-Latitude-5290-2-in-1 systemd[1097]: Started autohack-research-engine.service - AutoHack autonomous isolated security research engine.
+Oct 15 18:37:25 izy-Latitude-5290-2-in-1 python3[256420]: AutoHack offline research engine started. No automatic submission or live tests.
+Oct 15 19:01:05 izy-Latitude-5290-2-in-1 systemd[1097]: Stopping autohack-research-engine.service - AutoHack autonomous isolated security research engine...
+Oct 15 19:01:06 izy-Latitude-5290-2-in-1 systemd[1097]: Stopped autohack-research-engine.service - AutoHack autonomous isolated security research engine.
+Oct 15 19:01:06 izy-Latitude-5290-2-in-1 systemd[1097]: autohack-research-engine.service: Consumed 2.760s CPU time, 23.4M memory peak, 0B memory swap peak.
+Oct 15 19:01:06 izy-Latitude-5290-2-in-1 systemd[1097]: Started autohack-research-engine.service - AutoHack autonomous isolated security research engine.
+Oct 15 19:01:07 izy-Latitude-5290-2-in-1 python3[258081]: AutoHack offline research engine started. No automatic submission or live tests.
+Oct 15 20:08:09 izy-Latitude-5290-2-in-1 systemd[1097]: Stopping autohack-research-engine.service - AutoHack autonomous isolated security research engine...
+Oct 15 20:08:09 izy-Latitude-5290-2-in-1 systemd[1097]: Stopped autohack-research-engine.service - AutoHack autonomous isolated security research engine.
+Oct 15 20:08:09 izy-Latitude-5290-2-in-1 systemd[1097]: autohack-research-engine.service: Consumed 10.260s CPU time, 24.1M memory peak, 0B memory swap peak.
+Oct 15 20:08:09 izy-Latitude-5290-2-in-1 systemd[1097]: Started autohack-research-engine.service - AutoHack autonomous isolated security research engine.
+Oct 15 20:08:10 izy-Latitude-5290-2-in-1 python3[265931]: AutoHack offline research engine started. No automatic submission or live tests.
+Oct 15 20:10:17 izy-Latitude-5290-2-in-1 systemd[1097]: Stopping autohack-research-engine.service - AutoHack autonomous isolated security research engine...
+Oct 15 20:10:18 izy-Latitude-5290-2-in-1 systemd[1097]: Stopped autohack-research-engine.service - AutoHack autonomous isolated security research engine.
+Oct 15 20:10:18 izy-Latitude-5290-2-in-1 systemd[1097]: Started autohack-research-engine.service - AutoHack autonomous isolated security research engine.
+Oct 15 20:10:18 izy-Latitude-5290-2-in-1 python3[266575]: AutoHack offline research engine started. No automatic submission or live tests.
+--- autohack-extended-research.service ---
+-- No entries --

@@ -1,0 +1,31 @@
+{
+  "repository": "HathorNetwork/hathor-core",
+  "commit": "0738c7c981e506c582d83fa5456fe1b84eeccedc",
+  "scope_sources": [
+    {
+      "asset_type": "blockchain_dlt",
+      "asset_url": "https://github.com/HathorNetwork/hathor-core",
+      "program": "hathornetwork",
+      "scope_url": "https://immunefi.com/bug-bounty/hathornetwork/scope/"
+    }
+  ],
+  "original_report": "HathorNetwork__hathor-core-0738c7c981e5.json",
+  "lead": {
+    "rule": "PY_EVAL",
+    "file": "hathorlib/hathorlib/nanocontracts/metered_exec.py",
+    "line": 48,
+    "guidance": "Review dynamic execution and input provenance",
+    "fingerprint": "97621d649fcffd026942"
+  },
+  "source_excerpt": "40: \n41:     def get_fuel(self) -> int:\n42:         return self._fuel\n43: \n44:     def get_memory_limit(self) -> int:\n45:         return self._memory_limit\n46: \n47:     def exec(self, source: str, /) -> dict[str, Any]:\n48:         \"\"\" This is equivalent to `exec(source)` but with execution metering and memory limiting.\n49:         \"\"\"\n50:         from hathorlib.nanocontracts.custom_builtins import get_exec_builtins\n51:         env: dict[str, object] = {\n52:             '__builtins__': get_exec_builtins(),\n53:         }\n54:         # XXX: calling compile now makes the exec step consume less fuel\n55:         code = compile(\n56:             source=source,",
+  "triage": {
+    "classification": "likely_false_positive",
+    "rationale": "The code is part of a nano-contract implementation and is not a bug-bounty source. The line is part of a custom implementation and does not indicate any exploitable behavior. There is insufficient context to determine if this is a false positive.",
+    "evidence": "The code is part of a nano-contract implementation and is not a bug-bounty source. The line is part of a custom implementation and does not indicate any exploitable behavior.",
+    "follow_up": "If you have more context or a specific use case, please provide it so I can review it further."
+  },
+  "status": "unverified_draft",
+  "verified_vulnerability": false,
+  "generated_at": "2026-10-14T23:30:51.301132+00:00",
+  "note": "Automated static triage only. No exploitability, eligibility, or bounty award established."
+}

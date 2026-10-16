@@ -1,0 +1,31 @@
+{
+  "repository": "Instadapp/avocado-contracts-public",
+  "commit": "0bc1dd9c49203dd45f48f0046abc4e95a50d06da",
+  "scope_sources": [
+    {
+      "asset_type": "smart_contract",
+      "asset_url": "https://github.com/Instadapp/avocado-contracts-public",
+      "program": "instadapp",
+      "scope_url": "https://immunefi.com/bug-bounty/instadapp/scope/"
+    }
+  ],
+  "original_report": "Instadapp__avocado-contracts-public-0bc1dd9c4920.json",
+  "lead": {
+    "rule": "SOL_TX_ORIGIN",
+    "file": "contracts/AvocadoMultisig/AvocadoMultisig.sol",
+    "line": 156,
+    "guidance": "Review authorization based on tx.origin",
+    "fingerprint": "cddc16525076b5304313"
+  },
+  "source_excerpt": "148: \n149:     /// @dev             executes a low-level .call or .delegateCall on all `actions_`.\n150:     ///                  Can only be self-called by this contract under certain conditions, essentially internal method.\n151:     ///                  This is called like an external call to create a separate execution frame.\n152:     ///                  This way we can revert all the `actions_` if one fails without reverting the whole transaction.\n153:     /// @param actions_  the actions to execute (target, data, value, operation)\n154:     /// @param id_       id for `actions_`, see `CastParams.id`\n155:     function _callTargets(Action[] calldata actions_, uint256 id_) external payable {\n156:         if (tx.origin == 0x000000000000000000000000000000000000dEaD) {\n157:             // tx origin 0x000000000000000000000000000000000000dEaD used for backend gas estimations -> forward to simulate\n158:             _spell(address(avoSecondary), abi.encodeCall(avoSecondary._simulateExecuteActions, (actions_, id_, false)));\n159:         } else {\n160:             // _transientAllowHash must be set\n161:             if (\n162:                 (_transientAllowHash !=\n163:                     bytes31(keccak256(abi.encode(actions_, id_, block.timestamp, _CALL_TARGETS_SELECTOR))))\n164:             ) {",
+  "triage": {
+    "classification": "needs_review",
+    "rationale": "The code checks if the transaction origin is set to a specific address, but it's not clear if this is a valid authorization check or a placeholder for a future implementation. There's insufficient context to determine if this is a false positive or a valid authorization rule.",
+    "evidence": "Insufficient context to determine if this is a false positive or a valid authorization rule.",
+    "follow_up": "If this is a false positive, suggest adding more context or testing. If it's a valid authorization rule, provide further details about its purpose and implementation."
+  },
+  "status": "unverified_draft",
+  "verified_vulnerability": false,
+  "generated_at": "2026-10-14T23:40:32.564824+00:00",
+  "note": "Automated static triage only. No exploitability, eligibility, or bounty award established."
+}

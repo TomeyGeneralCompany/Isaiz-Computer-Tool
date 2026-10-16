@@ -1,0 +1,39 @@
+{
+  "checks": {
+    "has_reproduction_test": false,
+    "in_scope_at_processing": true,
+    "source_commit_matches": true,
+    "triage_requires_review": true
+  },
+  "commit": "9496626f71a761fc296dc3b2efbfd54c504e18f0",
+  "lead": {
+    "file": "contracts/protocols/dex/factory/main.sol",
+    "fingerprint": "b4c34e8535c056fcb949",
+    "guidance": "Review delegatecall target and access control",
+    "line": 234,
+    "rule": "SOL_DELEGATECALL"
+  },
+  "note": "Automated offline evidence preparation only. No project-specific reproduction or verified security impact.",
+  "processed_at": "2026-10-15T00:09:25.698616+00:00",
+  "repository": "Instadapp/fluid-contracts-public",
+  "scope_urls": [
+    "https://immunefi.com/bug-bounty/instadapp/scope/"
+  ],
+  "source_check": {
+    "commit": "9496626f71a761fc296dc3b2efbfd54c504e18f0",
+    "excerpt": "  223:         if (!isDeployer(msg.sender)) revert FluidDexError(ErrorTypes.DexFactory__Unauthorized);\n  224:         // Revert if dexDeploymentLogic_ is not whitelisted.\n  225:         if (!isDexDeploymentLogic(dexDeploymentLogic_)) revert FluidDexError(ErrorTypes.DexFactory__Unauthorized);\n  226: \n  227:         // Dex ID for the new dex and also acts as `nonce` for CREATE\n  228:         uint256 dexId_ = ++_totalDexes;\n  229: \n  230:         // compute dex address for dex id.\n  231:         dex_ = getDexAddress(dexId_);\n  232: \n  233:         // deploy the dex using dex deployment logic by making .delegatecall\n  234:         (bool success_, bytes memory data_) = dexDeploymentLogic_.delegatecall(dexDeploymentData_);\n  235: \n  236:         if (!(success_ && dex_ == _deploy(abi.decode(data_, (bytes))) && isDex(dex_))) {\n  237:             revert FluidDexError(ErrorTypes.DexFactory__InvalidDexAddress);\n  238:         }\n  239: \n  240:         emit LogDexDeployed(dex_, dexId_);\n  241:     }\n  242: \n  243:     /// @notice                       Computes the address of a dex based on its given ID (`dexId_`).\n  244:     /// @param dexId_                 The ID of the dex.\n  245:     /// @return dex_                  Returns the computed address of the dex.\n  246:     function getDexAddress(uint256 dexId_) public view returns (address dex_) {",
+    "file": "contracts/protocols/dex/factory/main.sol",
+    "file_sha256": "61c5cc9962854c3f72dfb6bfae0cfd20939b303c33b108b566aaa91f9cb4b9bf",
+    "line": 234,
+    "status": "source_matched"
+  },
+  "source_fingerprint": "69d74675039ab9fc4c5bf1a20c4f679e66b763d384cc9b123a5c57c82fe87c09",
+  "status": "needs_project_specific_reproduction",
+  "triage": {
+    "classification": "needs_review",
+    "evidence": "The code includes a check for the Dex address's validity and its deployment logic, but no further validation is performed.",
+    "follow_up": "If you have more information or a specific context, please provide it to help further analyze the code.",
+    "rationale": "The code appears to be part of a DexFactory contract, but there is no explicit validation of the Dex address or its validity. The current implementation does not check if the Dex address is valid or if it is already a Dex, which could lead to invalid deployments. This is a potential issue in the contract's logic, but no specific exploitability or verified vulnerability is claimed."
+  },
+  "verified_vulnerability": false
+}

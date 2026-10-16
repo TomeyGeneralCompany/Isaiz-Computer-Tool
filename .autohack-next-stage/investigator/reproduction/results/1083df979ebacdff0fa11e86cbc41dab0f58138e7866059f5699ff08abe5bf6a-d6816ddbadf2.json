@@ -1,0 +1,13 @@
+{
+  "commit": "598d3905a6f4ebe68a52c79d461bedb7246fa187",
+  "processed_at": "2026-10-15T09:35:46.715526+00:00",
+  "repository": "OpenZeppelin/openzeppelin-contracts",
+  "source_record": "/home/izy/isaiz-bugbounty/autohack/.autohack-next-stage/investigator/verification/results/1083df979ebacdff0fa11e86cbc41dab0f58138e7866059f5699ff08abe5bf6a.json",
+  "source_sha256": "d6816ddbadf29a5526d622b2fe17abfde69610db791c0c1ccc698f3edcb3d0e3",
+  "status": "awaiting_reproduction_case",
+  "test_result": {
+    "case_manifest": "/home/izy/isaiz-bugbounty/autohack/.autohack-next-stage/investigator/reproduction/cases/1083df979ebacdff0fa11e86cbc41dab0f58138e7866059f5699ff08abe5bf6a.json",
+    "reason": "No explicit local regression case supplied"
+  },
+  "verified_vulnerability": false
+}

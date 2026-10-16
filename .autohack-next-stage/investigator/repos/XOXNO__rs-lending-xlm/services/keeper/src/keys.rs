@@ -1,0 +1,827 @@
+use anyhow::{anyhow, Result};
+use stellar_xdr::{
+    ContractDataDurability, ContractId, Hash, LedgerKey, LedgerKeyContractData, ScAddress, ScMap,
+    ScMapEntry, ScSymbol, ScVal, ScVec, StringM, VecM,
+};
+
+/// Shared persistent keys of the controller (`common::types::ControllerKey`).
+#[derive(Debug, Clone)]
+pub enum ControllerPersistentKey {
+    Hub(u32),
+    Spoke(u32),
+    SpokeAsset(u32, HubAssetKey),
+    SpokeUsage(u32, HubAssetKey),
+    SpokeFlagsEpoch(u32, HubAssetKey),
+    PositionManager(ScAddress),
+    BlendPoolAllowed(ScAddress),
+}
+
+impl ControllerPersistentKey {
+    pub fn to_sc_val(&self) -> Result<ScVal> {
+        Ok(match self {
+            Self::Hub(id) => sc_enum("Hub", &[ScVal::U32(*id)])?,
+            Self::Spoke(id) => sc_enum("Spoke", &[ScVal::U32(*id)])?,
+            Self::SpokeAsset(spoke, hub_asset) => sc_enum(
+                "SpokeAsset",
+                &[ScVal::U32(*spoke), hub_asset_key_sc_val(hub_asset)?],
+            )?,
+            Self::SpokeUsage(spoke, hub_asset) => sc_enum(
+                "SpokeUsage",
+                &[ScVal::U32(*spoke), hub_asset_key_sc_val(hub_asset)?],
+            )?,
+            Self::SpokeFlagsEpoch(spoke, hub_asset) => sc_enum(
+                "SpokeFlagsEpoch",
+                &[ScVal::U32(*spoke), hub_asset_key_sc_val(hub_asset)?],
+            )?,
+            Self::PositionManager(manager) => {
+                sc_enum("PositionManager", &[ScVal::Address(manager.clone())])?
+            }
+            Self::BlendPoolAllowed(pool) => {
+                sc_enum("BlendPoolAllowed", &[ScVal::Address(pool.clone())])?
+            }
+        })
+    }
+
+    pub fn to_ledger_key(&self, controller_id: &[u8; 32]) -> Result<LedgerKey> {
+        Ok(contract_data_key(
+            controller_id,
+            self.to_sc_val()?,
+            ContractDataDurability::Persistent,
+        ))
+    }
+}
+
+/// A `PriceKey` exactly as the price-aggregator stores it
+/// (`common::types::composable_oracle::PriceKey`): either a token contract
+/// address, or a named synthetic reference used as an intermediate quote.
+///
+/// `Ref` rows are real storage entries — `Ref("BTC")` backs the SolvBTC assets
+/// — so enumerating only token addresses leaves them unrenewed.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum AggregatorPriceKey {
+    Token([u8; 32]),
+    Ref(String),
+}
+
+impl AggregatorPriceKey {
+    pub fn to_sc_val(&self) -> Result<ScVal> {
+        Ok(match self {
+            Self::Token(addr) => sc_enum("Token", &[sc_address_contract(addr)])?,
+            Self::Ref(name) => sc_enum("Ref", &[symbol_val(name)?])?,
+        })
+    }
+}
+
+/// Persistent keys owned by the price aggregator.
+///
+/// `Oracle` wraps a nested `PriceKey`, matching `AggregatorKey::Oracle(PriceKey)`
+/// in `contracts/price-aggregator/src/registry.rs`.
+#[derive(Debug, Clone)]
+pub enum PriceAggregatorPersistentKey {
+    Oracle(AggregatorPriceKey),
+}
+
+impl PriceAggregatorPersistentKey {
+    pub fn to_sc_val(&self) -> Result<ScVal> {
+        Ok(match self {
+            Self::Oracle(key) => sc_enum("Oracle", &[key.to_sc_val()?])?,
+        })
+    }
+
+    pub fn to_ledger_key(&self, aggregator_id: &[u8; 32]) -> Result<LedgerKey> {
+        Ok(contract_data_key(
+            aggregator_id,
+            self.to_sc_val()?,
+            ContractDataDurability::Persistent,
+        ))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum ControllerUserKey {
+    AccountMeta(u64),
+    SupplyPositions(u64),
+    BorrowPositions(u64),
+    Delegates(u64),
+}
+
+impl ControllerUserKey {
+    pub fn to_sc_val(&self) -> Result<ScVal> {
+        Ok(match self {
+            Self::AccountMeta(id) => sc_enum("AccountMeta", &[ScVal::U64(*id)])?,
+            Self::SupplyPositions(id) => sc_enum("SupplyPositions", &[ScVal::U64(*id)])?,
+            Self::BorrowPositions(id) => sc_enum("BorrowPositions", &[ScVal::U64(*id)])?,
+            Self::Delegates(id) => sc_enum("Delegates", &[ScVal::U64(*id)])?,
+        })
+    }
+
+    pub fn to_ledger_key(&self, controller_id: &[u8; 32]) -> Result<LedgerKey> {
+        Ok(contract_data_key(
+            controller_id,
+            self.to_sc_val()?,
+            ContractDataDurability::Persistent,
+        ))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum AccessControlPersistentKey {
+    ExistingRoles,
+
+    RoleAccountsCount(String),
+
+    RoleAccounts(String, u32),
+
+    HasRole(ScAddress, String),
+
+    RoleAdmin(String),
+}
+
+impl AccessControlPersistentKey {
+    pub fn to_sc_val(&self) -> Result<ScVal> {
+        Ok(match self {
+            Self::ExistingRoles => sc_enum("ExistingRoles", &[])?,
+            Self::RoleAccountsCount(role) => sc_enum("RoleAccountsCount", &[symbol_val(role)?])?,
+            Self::RoleAccounts(role, index) => {
+                sc_enum("RoleAccounts", &[role_account_key_map(role, *index)?])?
+            }
+            Self::HasRole(account, role) => sc_enum(
+                "HasRole",
+                &[ScVal::Address(account.clone()), symbol_val(role)?],
+            )?,
+            Self::RoleAdmin(role) => sc_enum("RoleAdmin", &[symbol_val(role)?])?,
+        })
+    }
+
+    pub fn to_ledger_key(&self, controller_id: &[u8; 32]) -> Result<LedgerKey> {
+        Ok(contract_data_key(
+            controller_id,
+            self.to_sc_val()?,
+            ContractDataDurability::Persistent,
+        ))
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct HubAssetKey {
+    pub hub_id: u32,
+    pub asset: [u8; 32],
+}
+
+#[derive(Debug, Clone)]
+pub enum PoolPersistentKey {
+    Params(HubAssetKey),
+    State(HubAssetKey),
+}
+
+impl PoolPersistentKey {
+    pub fn to_sc_val(&self) -> Result<ScVal> {
+        Ok(match self {
+            Self::Params(hub_asset) => sc_enum("Params", &[hub_asset_key_sc_val(hub_asset)?])?,
+            Self::State(hub_asset) => sc_enum("State", &[hub_asset_key_sc_val(hub_asset)?])?,
+        })
+    }
+
+    pub fn to_ledger_key(&self, pool_id: &[u8; 32]) -> Result<LedgerKey> {
+        Ok(contract_data_key(
+            pool_id,
+            self.to_sc_val()?,
+            ContractDataDurability::Persistent,
+        ))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum OracleAdapterKey {
+    AssetCount,
+    FeedCount,
+    AssetAt(u32),
+    FeedAt(u32),
+
+    AssetIndex(ScVal),
+    FeedMapping(ScVal),
+
+    FeedOwner(ScVal),
+
+    FeedIndex(ScVal),
+    CurrentAggregate(ScVal),
+    History(ScVal),
+
+    LatestSubmission(ScVal, ScAddress),
+
+    SignerFeeds(ScAddress),
+}
+
+impl OracleAdapterKey {
+    pub fn to_sc_val(&self) -> Result<ScVal> {
+        Ok(match self {
+            Self::AssetCount => sc_enum("AssetCount", &[])?,
+            Self::FeedCount => sc_enum("FeedCount", &[])?,
+            Self::AssetAt(index) => sc_enum("AssetAt", &[ScVal::U32(*index)])?,
+            Self::FeedAt(index) => sc_enum("FeedAt", &[ScVal::U32(*index)])?,
+            Self::AssetIndex(asset) => sc_enum("AssetIndex", std::slice::from_ref(asset))?,
+            Self::FeedMapping(asset) => sc_enum("FeedMapping", std::slice::from_ref(asset))?,
+            Self::FeedOwner(feed) => sc_enum("FeedOwner", std::slice::from_ref(feed))?,
+            Self::FeedIndex(feed) => sc_enum("FeedIndex", std::slice::from_ref(feed))?,
+            Self::CurrentAggregate(feed) => {
+                sc_enum("CurrentAggregate", std::slice::from_ref(feed))?
+            }
+            Self::History(feed) => sc_enum("History", std::slice::from_ref(feed))?,
+            Self::LatestSubmission(feed, signer) => sc_enum(
+                "LatestSubmission",
+                &[feed.clone(), ScVal::Address(signer.clone())],
+            )?,
+            Self::SignerFeeds(signer) => sc_enum("SignerFeeds", &[ScVal::Address(signer.clone())])?,
+        })
+    }
+
+    pub fn to_ledger_key(&self, adapter_id: &[u8; 32]) -> Result<LedgerKey> {
+        Ok(contract_data_key(
+            adapter_id,
+            self.to_sc_val()?,
+            ContractDataDurability::Persistent,
+        ))
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ControllerInstanceKey {
+    Pool,
+    PositionNft,
+    LastHubId,
+    LastSpokeId,
+}
+
+impl ControllerInstanceKey {
+    pub fn variant_name(&self) -> &'static str {
+        match self {
+            Self::Pool => "Pool",
+            Self::PositionNft => "PositionNft",
+            Self::LastHubId => "LastHubId",
+            Self::LastSpokeId => "LastSpokeId",
+        }
+    }
+}
+
+/// Instance-storage keys read from the price aggregator.
+///
+/// `OracleKeys` (`AggregatorKey::OracleKeys`) indexes every registered
+/// `PriceKey`, so discovery renews the exact stored set, `Ref` rows included.
+#[derive(Debug, Clone, Copy)]
+pub enum PriceAggregatorInstanceKey {
+    OracleKeys,
+}
+
+impl PriceAggregatorInstanceKey {
+    pub fn variant_name(&self) -> &'static str {
+        match self {
+            Self::OracleKeys => "OracleKeys",
+        }
+    }
+}
+
+/// Persistent keys owned by the position-NFT contract.
+///
+/// `Owner` records who holds an account. OpenZeppelin `owner_of` extends it to
+/// 30 days, while the controller extends its account keys to 120 days, so
+/// `Owner` archives first if nothing renews it. An archived `Owner` makes the
+/// account unusable until the entry is restored.
+#[derive(Debug, Clone, Copy)]
+pub enum PositionNftUserKey {
+    Owner(u32),
+}
+
+impl PositionNftUserKey {
+    pub fn to_sc_val(&self) -> Result<ScVal> {
+        Ok(match self {
+            Self::Owner(token_id) => sc_enum("Owner", &[ScVal::U32(*token_id)])?,
+        })
+    }
+
+    pub fn to_ledger_key(&self, position_nft_id: &[u8; 32]) -> Result<LedgerKey> {
+        Ok(contract_data_key(
+            position_nft_id,
+            self.to_sc_val()?,
+            ContractDataDurability::Persistent,
+        ))
+    }
+}
+
+/// Instance-storage keys read from the position-NFT contract.
+///
+/// Account ids are position-NFT token ids. `TokenIdCounter` is the OpenZeppelin
+/// sequential counter (`NFTSequentialStorageKey::TokenIdCounter` in
+/// `stellar-tokens`) and holds the next free token id, not the highest minted one.
+#[derive(Debug, Clone, Copy)]
+pub enum PositionNftInstanceKey {
+    TokenIdCounter,
+}
+
+impl PositionNftInstanceKey {
+    pub fn variant_name(&self) -> &'static str {
+        match self {
+            Self::TokenIdCounter => "TokenIdCounter",
+        }
+    }
+}
+
+pub fn contract_instance_key(contract_id: &[u8; 32]) -> LedgerKey {
+    contract_data_key(
+        contract_id,
+        ScVal::LedgerKeyContractInstance,
+        ContractDataDurability::Persistent,
+    )
+}
+
+pub fn contract_code_key(wasm_hash: &[u8; 32]) -> LedgerKey {
+    LedgerKey::ContractCode(stellar_xdr::LedgerKeyContractCode {
+        hash: Hash(*wasm_hash),
+    })
+}
+
+fn contract_data_key(
+    contract_id: &[u8; 32],
+    key: ScVal,
+    durability: ContractDataDurability,
+) -> LedgerKey {
+    LedgerKey::ContractData(LedgerKeyContractData {
+        contract: ScAddress::Contract(ContractId(Hash(*contract_id))),
+        key,
+        durability,
+    })
+}
+
+fn sc_enum(variant: &str, args: &[ScVal]) -> Result<ScVal> {
+    let mut elems: Vec<ScVal> = Vec::with_capacity(1 + args.len());
+    elems.push(ScVal::Symbol(symbol(variant)?));
+    elems.extend_from_slice(args);
+    let vec_m: VecM<ScVal> = elems
+        .try_into()
+        .map_err(|_| anyhow!("variant {variant} too many args for ScVec"))?;
+    Ok(ScVal::Vec(Some(ScVec(vec_m))))
+}
+
+fn symbol(text: &str) -> Result<ScSymbol> {
+    let string_m: StringM<32> = text
+        .try_into()
+        .map_err(|_| anyhow!("symbol '{text}' exceeds 32 bytes"))?;
+    Ok(ScSymbol(string_m))
+}
+
+fn symbol_val(text: &str) -> Result<ScVal> {
+    Ok(ScVal::Symbol(symbol(text)?))
+}
+
+pub fn hub_asset_key_sc_val(hub_asset: &HubAssetKey) -> Result<ScVal> {
+    let entries = vec![
+        ScMapEntry {
+            key: symbol_val("asset")?,
+            val: sc_address_contract(&hub_asset.asset),
+        },
+        ScMapEntry {
+            key: symbol_val("hub_id")?,
+            val: ScVal::U32(hub_asset.hub_id),
+        },
+    ];
+    let map: VecM<ScMapEntry> = entries
+        .try_into()
+        .map_err(|_| anyhow!("hub asset map convert"))?;
+    Ok(ScVal::Map(Some(ScMap(map))))
+}
+
+fn role_account_key_map(role: &str, index: u32) -> Result<ScVal> {
+    let entries = vec![
+        ScMapEntry {
+            key: symbol_val("index")?,
+            val: ScVal::U32(index),
+        },
+        ScMapEntry {
+            key: symbol_val("role")?,
+            val: symbol_val(role)?,
+        },
+    ];
+    let map: VecM<ScMapEntry> = entries
+        .try_into()
+        .map_err(|_| anyhow!("role-account map convert"))?;
+    Ok(ScVal::Map(Some(ScMap(map))))
+}
+
+fn sc_address_contract(contract: &[u8; 32]) -> ScVal {
+    ScVal::Address(ScAddress::Contract(ContractId(Hash(*contract))))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use stellar_xdr::{AccountId, PublicKey, Uint256};
+
+    #[test]
+    fn tuple_variant_carries_args_in_order() {
+        let sv = ControllerPersistentKey::Spoke(99).to_sc_val().unwrap();
+        match sv {
+            ScVal::Vec(Some(ScVec(items))) => {
+                assert_eq!(items.len(), 2);
+                assert!(matches!(items[0], ScVal::Symbol(_)));
+                assert!(matches!(items[1], ScVal::U32(99)));
+            }
+            _ => panic!("expected Vec"),
+        }
+    }
+
+    #[test]
+    fn pool_params_key_carries_hub_asset_map() {
+        let hub_asset = HubAssetKey {
+            hub_id: 7,
+            asset: [9u8; 32],
+        };
+        let sv = PoolPersistentKey::Params(hub_asset).to_sc_val().unwrap();
+        let ScVal::Vec(Some(ScVec(items))) = sv else {
+            panic!("expected Vec");
+        };
+        assert_eq!(items.len(), 2);
+        assert_eq!(sym_text(&items[0]), "Params");
+        assert_hub_asset(&items[1], hub_asset);
+    }
+
+    #[test]
+    fn pool_state_key_is_persistent_data_on_pool_contract() {
+        let key = PoolPersistentKey::State(HubAssetKey {
+            hub_id: 3,
+            asset: [4u8; 32],
+        })
+        .to_ledger_key(&[8u8; 32])
+        .unwrap();
+        let LedgerKey::ContractData(cd) = key else {
+            panic!("expected ContractData");
+        };
+        assert!(matches!(cd.durability, ContractDataDurability::Persistent));
+        assert!(matches!(
+            cd.contract,
+            ScAddress::Contract(ContractId(Hash(b))) if b == [8u8; 32]
+        ));
+        let ScVal::Vec(Some(ScVec(items))) = cd.key else {
+            panic!("expected Vec key");
+        };
+        assert_eq!(sym_text(&items[0]), "State");
+    }
+
+    fn sym_text(v: &ScVal) -> String {
+        match v {
+            ScVal::Symbol(ScSymbol(s)) => s.to_utf8_string_lossy(),
+            other => panic!("expected Symbol, got {other:?}"),
+        }
+    }
+
+    fn assert_hub_asset(v: &ScVal, expected: HubAssetKey) {
+        let ScVal::Map(Some(ScMap(entries))) = v else {
+            panic!("expected HubAssetKey map");
+        };
+        assert_eq!(entries.len(), 2);
+        assert_eq!(sym_text(&entries[0].key), "asset");
+        assert!(matches!(
+            &entries[0].val,
+            ScVal::Address(ScAddress::Contract(ContractId(Hash(b)))) if *b == expected.asset
+        ));
+        assert_eq!(sym_text(&entries[1].key), "hub_id");
+        assert!(matches!(entries[1].val, ScVal::U32(id) if id == expected.hub_id));
+    }
+
+    #[test]
+    fn existing_roles_encodes_as_symbol_vec() {
+        let sv = AccessControlPersistentKey::ExistingRoles
+            .to_sc_val()
+            .unwrap();
+        match sv {
+            ScVal::Vec(Some(ScVec(items))) => {
+                assert_eq!(items.len(), 1);
+                assert_eq!(sym_text(&items[0]), "ExistingRoles");
+            }
+            other => panic!("expected Vec, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn role_accounts_count_carries_role_symbol() {
+        let sv = AccessControlPersistentKey::RoleAccountsCount("KEEPER".into())
+            .to_sc_val()
+            .unwrap();
+        match sv {
+            ScVal::Vec(Some(ScVec(items))) => {
+                assert_eq!(items.len(), 2);
+                assert_eq!(sym_text(&items[0]), "RoleAccountsCount");
+                assert_eq!(sym_text(&items[1]), "KEEPER");
+            }
+            other => panic!("expected Vec, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn role_accounts_struct_arg_is_map_sorted_index_then_role() {
+        let sv = AccessControlPersistentKey::RoleAccounts("ORACLE".into(), 0)
+            .to_sc_val()
+            .unwrap();
+        let ScVal::Vec(Some(ScVec(items))) = sv else {
+            panic!("expected Vec");
+        };
+        assert_eq!(items.len(), 2);
+        assert_eq!(sym_text(&items[0]), "RoleAccounts");
+
+        let ScVal::Map(Some(map)) = &items[1] else {
+            panic!("expected Map arg, got {:?}", items[1]);
+        };
+        assert_eq!(map.0.len(), 2);
+        assert_eq!(sym_text(&map.0[0].key), "index");
+        assert!(matches!(map.0[0].val, ScVal::U32(0)));
+        assert_eq!(sym_text(&map.0[1].key), "role");
+        assert_eq!(sym_text(&map.0[1].val), "ORACLE");
+    }
+
+    #[test]
+    fn has_role_carries_address_then_role() {
+        let addr = ScAddress::Account(AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(
+            [7u8; 32],
+        ))));
+        let sv = AccessControlPersistentKey::HasRole(addr, "REVENUE".into())
+            .to_sc_val()
+            .unwrap();
+        let ScVal::Vec(Some(ScVec(items))) = sv else {
+            panic!("expected Vec");
+        };
+        assert_eq!(items.len(), 3);
+        assert_eq!(sym_text(&items[0]), "HasRole");
+        assert!(matches!(items[1], ScVal::Address(ScAddress::Account(_))));
+        assert_eq!(sym_text(&items[2]), "REVENUE");
+    }
+
+    /// Golden keys read with `stellar contract read --key-xdr` from the mainnet
+    /// price aggregator (`CBGUF2G2Q7HCVCWYISDXBHPVBGMYNXA7PG2VET66YBZX6IKOOV27NSMV`).
+    /// Each returned a live entry: the SolvBTC oracle config and the
+    /// `Ref("BTC")` reference.
+    ///
+    /// A wrong encoding reads back absent, which looks like "nothing to do" in
+    /// production, so only a pin against an on-chain value catches it.
+    #[test]
+    fn oracle_keys_match_the_encoding_proven_on_mainnet() {
+        use stellar_xdr::{Limits, WriteXdr};
+
+        // CBIJBDNZNF4X35BJ4FFZWCDBSCKOP5NB4PLG4SNENRMLAPYG4P5FM6VN (SolvBTC)
+        let solv_btc = [
+            0x50, 0x90, 0x8d, 0xb9, 0x69, 0x79, 0x7d, 0xf4, 0x29, 0xe1, 0x4b, 0x9b, 0x08, 0x61,
+            0x90, 0x94, 0xe7, 0xf5, 0xa1, 0xe3, 0xd6, 0x6e, 0x49, 0xa4, 0x6c, 0x58, 0xb0, 0x3f,
+            0x06, 0xe3, 0xfa, 0x56,
+        ];
+
+        let token = PriceAggregatorPersistentKey::Oracle(AggregatorPriceKey::Token(solv_btc))
+            .to_sc_val()
+            .unwrap();
+        assert_eq!(
+            token.to_xdr_base64(Limits::none()).unwrap(),
+            "AAAAEAAAAAEAAAACAAAADwAAAAZPcmFjbGUAAAAAABAAAAABAAAAAgAAAA8AAAAFVG9rZW4AAAAAAAASAAAAAVCQjblpeX30KeFLmwhhkJTn9aHj1m5JpGxYsD8G4/pW",
+            "Oracle(Token) no longer matches the key the aggregator stores"
+        );
+
+        let reference = PriceAggregatorPersistentKey::Oracle(AggregatorPriceKey::Ref("BTC".into()))
+            .to_sc_val()
+            .unwrap();
+        assert_eq!(
+            reference.to_xdr_base64(Limits::none()).unwrap(),
+            "AAAAEAAAAAEAAAACAAAADwAAAAZPcmFjbGUAAAAAABAAAAABAAAAAgAAAA8AAAADUmVmAAAAAA8AAAADQlRDAA==",
+            "Oracle(Ref) no longer matches the key the aggregator stores"
+        );
+    }
+
+    /// Golden controller shared keys, encoded with `stellar xdr encode --type
+    /// LedgerKey` against the mainnet controller
+    /// (`CAUCMIN5KSXEVZ7NMXR3LZATGD5EFIEUI5XWTFLYRO2R5OTXI22WE5JX`). The
+    /// `SpokeAsset`, `SpokeUsage` and `BlendPoolAllowed` keys each returned a
+    /// live entry from mainnet `getLedgerEntries`.
+    #[test]
+    fn controller_shared_keys_match_the_encoding_proven_on_mainnet() {
+        use crate::stellar::client::{account_id_from_strkey, contract_id_from_strkey};
+        use stellar_xdr::{Limits, WriteXdr};
+
+        let controller =
+            contract_id_from_strkey("CAUCMIN5KSXEVZ7NMXR3LZATGD5EFIEUI5XWTFLYRO2R5OTXI22WE5JX")
+                .unwrap();
+        let xlm = HubAssetKey {
+            hub_id: 1,
+            asset: contract_id_from_strkey(
+                "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA",
+            )
+            .unwrap(),
+        };
+        let fixed_v2 = ScAddress::Contract(ContractId(Hash(
+            contract_id_from_strkey("CAJJZSGMMM3PD7N33TAPHGBUGTB43OC73HVIK2L2G6BNGGGYOSSYBXBD")
+                .unwrap(),
+        )));
+        let account = ScAddress::Account(
+            account_id_from_strkey("GAVWFZK5BGCGBWH4O2CXAHXVRIYVAMGCTZJ24IPLVNLT2WQ2LJBDEEBP")
+                .unwrap(),
+        );
+
+        let golden = [
+            (
+                ControllerPersistentKey::SpokeAsset(1, xlm),
+                "AAAABgAAAAEoJiG9VK5K5+1l47XkEzD6QqCUR29plXiLtR66d0a1YgAAABAAAAABAAAAAwAAAA8AAAAKU3Bva2VBc3NldAAAAAAAAwAAAAEAAAARAAAAAQAAAAIAAAAPAAAABWFzc2V0AAAAAAAAEgAAAAEltPzYWa7C+mNIQ4xImzw8EMmLbSG+T9PLMMtolT75dwAAAA8AAAAGaHViX2lkAAAAAAADAAAAAQAAAAE=",
+            ),
+            (
+                ControllerPersistentKey::SpokeUsage(1, xlm),
+                "AAAABgAAAAEoJiG9VK5K5+1l47XkEzD6QqCUR29plXiLtR66d0a1YgAAABAAAAABAAAAAwAAAA8AAAAKU3Bva2VVc2FnZQAAAAAAAwAAAAEAAAARAAAAAQAAAAIAAAAPAAAABWFzc2V0AAAAAAAAEgAAAAEltPzYWa7C+mNIQ4xImzw8EMmLbSG+T9PLMMtolT75dwAAAA8AAAAGaHViX2lkAAAAAAADAAAAAQAAAAE=",
+            ),
+            (
+                ControllerPersistentKey::SpokeFlagsEpoch(1, xlm),
+                "AAAABgAAAAEoJiG9VK5K5+1l47XkEzD6QqCUR29plXiLtR66d0a1YgAAABAAAAABAAAAAwAAAA8AAAAPU3Bva2VGbGFnc0Vwb2NoAAAAAAMAAAABAAAAEQAAAAEAAAACAAAADwAAAAVhc3NldAAAAAAAABIAAAABJbT82FmuwvpjSEOMSJs8PBDJi20hvk/TyzDLaJU++XcAAAAPAAAABmh1Yl9pZAAAAAAAAwAAAAEAAAAB",
+            ),
+            (
+                ControllerPersistentKey::BlendPoolAllowed(fixed_v2),
+                "AAAABgAAAAEoJiG9VK5K5+1l47XkEzD6QqCUR29plXiLtR66d0a1YgAAABAAAAABAAAAAgAAAA8AAAAQQmxlbmRQb29sQWxsb3dlZAAAABIAAAABEpzIzGM28f273MDzmDQ0w824X9nqhWl6N4LTGNh0pYAAAAAB",
+            ),
+            (
+                ControllerPersistentKey::PositionManager(account),
+                "AAAABgAAAAEoJiG9VK5K5+1l47XkEzD6QqCUR29plXiLtR66d0a1YgAAABAAAAABAAAAAgAAAA8AAAAPUG9zaXRpb25NYW5hZ2VyAAAAABIAAAAAAAAAACti5V0JhGDY/HaFcB71ijFQMMKeU64h66tXPVoaWkIyAAAAAQ==",
+            ),
+        ];
+        for (key, expected) in golden {
+            assert_eq!(
+                key.to_ledger_key(&controller)
+                    .unwrap()
+                    .to_xdr_base64(Limits::none())
+                    .unwrap(),
+                expected,
+                "{key:?} no longer matches the key the controller stores"
+            );
+        }
+    }
+
+    #[test]
+    fn role_admin_carries_role_symbol() {
+        let sv = AccessControlPersistentKey::RoleAdmin("KEEPER".into())
+            .to_sc_val()
+            .unwrap();
+        let ScVal::Vec(Some(ScVec(items))) = sv else {
+            panic!("expected Vec");
+        };
+        assert_eq!(items.len(), 2);
+        assert_eq!(sym_text(&items[0]), "RoleAdmin");
+        assert_eq!(sym_text(&items[1]), "KEEPER");
+    }
+
+    #[test]
+    fn access_control_key_is_persistent_contract_data() {
+        let key = AccessControlPersistentKey::ExistingRoles
+            .to_ledger_key(&[3u8; 32])
+            .unwrap();
+        match key {
+            LedgerKey::ContractData(cd) => {
+                assert!(matches!(cd.durability, ContractDataDurability::Persistent));
+                assert!(matches!(cd.contract, ScAddress::Contract(_)));
+            }
+            other => panic!("expected ContractData, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn account_meta_user_key_carries_u64_id() {
+        let sv = ControllerUserKey::AccountMeta(7).to_sc_val().unwrap();
+        let ScVal::Vec(Some(ScVec(items))) = sv else {
+            panic!("expected Vec");
+        };
+        assert_eq!(items.len(), 2);
+        assert_eq!(sym_text(&items[0]), "AccountMeta");
+        assert!(matches!(items[1], ScVal::U64(7)));
+    }
+
+    #[test]
+    fn supply_positions_user_key_carries_u64_id() {
+        let sv = ControllerUserKey::SupplyPositions(42).to_sc_val().unwrap();
+        let ScVal::Vec(Some(ScVec(items))) = sv else {
+            panic!("expected Vec");
+        };
+        assert_eq!(items.len(), 2);
+        assert_eq!(sym_text(&items[0]), "SupplyPositions");
+        assert!(matches!(items[1], ScVal::U64(42)));
+    }
+
+    #[test]
+    fn borrow_positions_user_key_carries_u64_id() {
+        let sv = ControllerUserKey::BorrowPositions(1).to_sc_val().unwrap();
+        let ScVal::Vec(Some(ScVec(items))) = sv else {
+            panic!("expected Vec");
+        };
+        assert_eq!(items.len(), 2);
+        assert_eq!(sym_text(&items[0]), "BorrowPositions");
+        assert!(matches!(items[1], ScVal::U64(1)));
+    }
+
+    #[test]
+    fn delegates_user_key_carries_u64_id() {
+        let sv = ControllerUserKey::Delegates(9).to_sc_val().unwrap();
+        let ScVal::Vec(Some(ScVec(items))) = sv else {
+            panic!("expected Vec");
+        };
+        assert_eq!(items.len(), 2);
+        assert_eq!(sym_text(&items[0]), "Delegates");
+        assert!(matches!(items[1], ScVal::U64(9)));
+    }
+
+    #[test]
+    fn oracle_adapter_asset_count_is_unit_variant() {
+        let sv = OracleAdapterKey::AssetCount.to_sc_val().unwrap();
+        let ScVal::Vec(Some(ScVec(items))) = sv else {
+            panic!("expected Vec");
+        };
+        assert_eq!(items.len(), 1);
+        assert_eq!(sym_text(&items[0]), "AssetCount");
+    }
+
+    #[test]
+    fn oracle_adapter_feed_at_carries_u32_slot() {
+        let sv = OracleAdapterKey::FeedAt(5).to_sc_val().unwrap();
+        let ScVal::Vec(Some(ScVec(items))) = sv else {
+            panic!("expected Vec");
+        };
+        assert_eq!(items.len(), 2);
+        assert_eq!(sym_text(&items[0]), "FeedAt");
+        assert!(matches!(items[1], ScVal::U32(5)));
+    }
+
+    #[test]
+    fn oracle_adapter_feed_mapping_wraps_raw_asset_scval() {
+        let asset = ScVal::Vec(Some(ScVec(
+            vec![ScVal::Symbol(symbol("Other").unwrap())]
+                .try_into()
+                .unwrap(),
+        )));
+        let sv = OracleAdapterKey::FeedMapping(asset.clone())
+            .to_sc_val()
+            .unwrap();
+        let ScVal::Vec(Some(ScVec(items))) = sv else {
+            panic!("expected Vec");
+        };
+        assert_eq!(items.len(), 2);
+        assert_eq!(sym_text(&items[0]), "FeedMapping");
+        assert_eq!(items[1], asset);
+    }
+
+    #[test]
+    fn oracle_adapter_latest_submission_is_feed_then_signer() {
+        let feed = ScVal::String(stellar_xdr::ScString(StringM::try_from("BTC").unwrap()));
+        let signer = ScAddress::Account(AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(
+            [1u8; 32],
+        ))));
+        let sv = OracleAdapterKey::LatestSubmission(feed.clone(), signer.clone())
+            .to_sc_val()
+            .unwrap();
+        let ScVal::Vec(Some(ScVec(items))) = sv else {
+            panic!("expected Vec");
+        };
+        assert_eq!(items.len(), 3);
+        assert_eq!(sym_text(&items[0]), "LatestSubmission");
+        assert_eq!(items[1], feed);
+        assert!(matches!(items[2], ScVal::Address(ScAddress::Account(_))));
+    }
+
+    #[test]
+    fn oracle_adapter_signer_feeds_carries_single_address() {
+        let signer = ScAddress::Account(AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(
+            [2u8; 32],
+        ))));
+        let sv = OracleAdapterKey::SignerFeeds(signer).to_sc_val().unwrap();
+        let ScVal::Vec(Some(ScVec(items))) = sv else {
+            panic!("expected Vec");
+        };
+        assert_eq!(items.len(), 2);
+        assert_eq!(sym_text(&items[0]), "SignerFeeds");
+        assert!(matches!(items[1], ScVal::Address(ScAddress::Account(_))));
+    }
+
+    #[test]
+    fn oracle_adapter_key_is_persistent_contract_data() {
+        let key = OracleAdapterKey::FeedCount
+            .to_ledger_key(&[5u8; 32])
+            .unwrap();
+        let LedgerKey::ContractData(cd) = key else {
+            panic!("expected ContractData");
+        };
+        assert!(matches!(cd.durability, ContractDataDurability::Persistent));
+        assert!(matches!(
+            cd.contract,
+            ScAddress::Contract(ContractId(Hash(b))) if b == [5u8; 32]
+        ));
+    }
+
+    #[test]
+    fn user_key_is_persistent_contract_data_on_controller() {
+        let key = ControllerUserKey::AccountMeta(3)
+            .to_ledger_key(&[6u8; 32])
+            .unwrap();
+        let LedgerKey::ContractData(cd) = key else {
+            panic!("expected ContractData");
+        };
+        assert!(matches!(cd.durability, ContractDataDurability::Persistent));
+        assert!(matches!(
+            cd.contract,
+            ScAddress::Contract(ContractId(Hash(b))) if b == [6u8; 32]
+        ));
+    }
+}

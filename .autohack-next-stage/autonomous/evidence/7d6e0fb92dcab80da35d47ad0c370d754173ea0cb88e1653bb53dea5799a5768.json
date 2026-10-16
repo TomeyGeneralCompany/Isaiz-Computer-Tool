@@ -1,0 +1,40 @@
+{
+  "checks": {
+    "has_reproduction_test": false,
+    "in_scope_at_processing": true,
+    "source_commit_matches": true,
+    "triage_requires_review": false
+  },
+  "commit": "0738c7c981e506c582d83fa5456fe1b84eeccedc",
+  "lead": {
+    "file": "hathorlib/hathorlib/nanocontracts/metered_exec.py",
+    "fingerprint": "a2c8211ad918a6da8a23",
+    "guidance": "Review dynamic execution and input provenance",
+    "line": 47,
+    "rule": "PY_EVAL"
+  },
+  "note": "Automated offline evidence preparation only. No project-specific reproduction or verified security impact.",
+  "processed_at": "2026-10-15T00:09:26.883925+00:00",
+  "repository": "HathorNetwork/hathor-core",
+  "scope_urls": [
+    "https://immunefi.com/bug-bounty/hathornetwork/scope/"
+  ],
+  "source_check": {
+    "commit": "0738c7c981e506c582d83fa5456fe1b84eeccedc",
+    "excerpt": "   36:     def __init__(self, fuel: int, memory_limit: int) -> None:\n   37:         self._fuel = fuel\n   38:         self._memory_limit = memory_limit\n   39:         self._debug = False\n   40: \n   41:     def get_fuel(self) -> int:\n   42:         return self._fuel\n   43: \n   44:     def get_memory_limit(self) -> int:\n   45:         return self._memory_limit\n   46: \n   47:     def exec(self, source: str, /) -> dict[str, Any]:\n   48:         \"\"\" This is equivalent to `exec(source)` but with execution metering and memory limiting.\n   49:         \"\"\"\n   50:         from hathorlib.nanocontracts.custom_builtins import get_exec_builtins\n   51:         env: dict[str, object] = {\n   52:             '__builtins__': get_exec_builtins(),\n   53:         }\n   54:         # XXX: calling compile now makes the exec step consume less fuel\n   55:         code = compile(\n   56:             source=source,\n   57:             filename='<blueprint>',\n   58:             mode='exec',\n   59:             flags=0,",
+    "file": "hathorlib/hathorlib/nanocontracts/metered_exec.py",
+    "file_sha256": "74888a38f66d7bc91088fb454db859bb6093ed20f77c1064cf5c98f96797d229",
+    "line": 47,
+    "python_syntax": "valid",
+    "status": "source_matched"
+  },
+  "source_fingerprint": "e8d186cb99e608ec618d6e6d44382dc07d3643ca3ded5df899b25e5dc1e78855",
+  "status": "needs_project_specific_reproduction",
+  "triage": {
+    "classification": "likely_false_positive",
+    "evidence": "The code is part of a nanocontract implementation and is not a bug-bounty source. The line is part of a function that may be part of a larger system, not a vulnerability.",
+    "follow_up": "If you're looking for a false positive, please provide more context about the code and its purpose.",
+    "rationale": "The code is part of a nanocontract implementation and is not a bug-bounty source. The line is part of a function that may be part of a larger system, not a vulnerability. There is insufficient context to determine if this is a false positive."
+  },
+  "verified_vulnerability": false
+}

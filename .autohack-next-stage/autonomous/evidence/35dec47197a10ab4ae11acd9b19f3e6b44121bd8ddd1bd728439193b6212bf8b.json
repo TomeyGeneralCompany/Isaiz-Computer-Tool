@@ -1,0 +1,39 @@
+{
+  "checks": {
+    "has_reproduction_test": false,
+    "in_scope_at_processing": true,
+    "source_commit_matches": true,
+    "triage_requires_review": false
+  },
+  "commit": "d2a86ece964247d8313c20fbfeb0c7199d9bff5a",
+  "lead": {
+    "file": "scripts/update_translations.js",
+    "fingerprint": "58074b206ca25b0295ac",
+    "guidance": "Review command construction and input provenance",
+    "line": 149,
+    "rule": "JS_CHILD_EXEC"
+  },
+  "note": "Automated offline evidence preparation only. No project-specific reproduction or verified security impact.",
+  "processed_at": "2026-10-15T00:09:25.889998+00:00",
+  "repository": "HathorNetwork/hathor-wallet-mobile",
+  "scope_urls": [
+    "https://immunefi.com/bug-bounty/hathornetwork/scope/"
+  ],
+  "source_check": {
+    "commit": "d2a86ece964247d8313c20fbfeb0c7199d9bff5a",
+    "excerpt": "  138:     .filter((subfolder) => fs.statSync(path.join(localeDir, subfolder)).isDirectory());\n  139:   let errorHappened = false;\n  140: \n  141:   subfolders.forEach((subfolder) => {\n  142:     const poFile = path.join(localeDir, subfolder, 'texts.po');\n  143:     const isStrictLanguage = strictLanguages.includes(subfolder);\n  144:     const cmd = isStrictLanguage\n  145:       ? `msgcmp ${poFile} ${potFile}`\n  146:       : `msgcmp --use-untranslated ${poFile} ${potFile}`;\n  147:     try {\n  148:       // If there are any differences, the command will throw an error\n  149:       execSync(cmd, { stdio: 'inherit' });\n  150:     } catch (error) {\n  151:       console.error(`Error checking ${poFile}:`, error);\n  152:       errorHappened = true;\n  153:     }\n  154:   });\n  155: \n  156:   if (errorHappened) {\n  157:     console.warn('❌ Some translations are missing. Please review the changes.');\n  158:   }\n  159:   return errorHappened\n  160: }\n  161: ",
+    "file": "scripts/update_translations.js",
+    "file_sha256": "5b7a433427ae4630a64aeeb32af18a70e63b9d04894feaddb579d8d164e7b22a",
+    "line": 149,
+    "status": "source_matched"
+  },
+  "source_fingerprint": "1fda166ae68a15135cda67e82c8f8e3766a32119bdc05e4837c526ad07b6b626",
+  "status": "needs_project_specific_reproduction",
+  "triage": {
+    "classification": "likely_false_positive",
+    "evidence": "No known vulnerabilities or exploitable logic in the command construction.",
+    "follow_up": "If you have more context or a different rule, please provide it for further analysis.",
+    "rationale": "The code checks for strict languages and constructs a command based on that, but there's no indication of potential issues with the command itself. The logic is correct, but insufficient context is provided to confirm the command's correctness."
+  },
+  "verified_vulnerability": false
+}

@@ -1,0 +1,13 @@
+[Unit]
+Description=AutoHack recovery review for queued native findings
+After=network-online.target
+[Service]
+Type=oneshot
+WorkingDirectory=/home/izy/isaiz-bugbounty/autohack
+Environment=PROJECT_ROOT=/home/izy/isaiz-bugbounty/autohack
+Environment=PATH=/home/izy/.local/bin:/home/izy/.npm-global/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/izy/isaiz-bugbounty/autohack/node_modules/.bin/tsx /home/izy/isaiz-bugbounty/autohack/.autohack-integrated/review-backlog.ts
+TimeoutStartSec=3600
+NoNewPrivileges=true
+CPUQuota=60%
+MemoryMax=4G

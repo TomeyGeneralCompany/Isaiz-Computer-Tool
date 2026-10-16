@@ -1,0 +1,31 @@
+{
+  "repository": "Instadapp/inst-governance",
+  "commit": "8891f73d17887e272a5317065961269aee94f7cd",
+  "scope_sources": [
+    {
+      "asset_type": "smart_contract",
+      "asset_url": "https://github.com/Instadapp/inst-governance",
+      "program": "instadapp",
+      "scope_url": "https://immunefi.com/bug-bounty/instadapp/scope/"
+    }
+  ],
+  "original_report": "Instadapp__inst-governance-8891f73d1788.json",
+  "lead": {
+    "rule": "JS_CHILD_EXEC",
+    "file": "scripts/verify/lib/externalsExtractor.ts",
+    "line": 60,
+    "guidance": "Review command construction and input provenance",
+    "fingerprint": "ebafe3a1e0fd537fd9b2"
+  },
+  "source_excerpt": "52: \n53:   // Walk every `.<ident>(` occurrence. These are either:\n54:   //   - method calls on a prior expression (our primary interest)\n55:   //   - member accesses followed by a paren (same thing syntactically)\n56:   //   - occasional library calls like `LiquidityCalcs.calcExchangePrices(...)`\n57:   //     which we also capture; callers filter these out if irrelevant.\n58:   const METHOD = /\\.([A-Za-z_][A-Za-z0-9_]*)\\s*\\(/g;\n59:   let m: RegExpExecArray | null;\n60:   while ((m = METHOD.exec(src)) !== null) {\n61:     const method = m[1]!;\n62:     const parenOpen = src.indexOf(\"(\", m.index + 1);\n63:     if (parenOpen === -1) continue;\n64:     const parenClose = matchParen(src, parenOpen);\n65:     if (parenClose === -1) continue;\n66: \n67:     // Receiver: walk backwards from `.` collecting a balanced expression.\n68:     const receiverEnd = m.index;",
+  "triage": {
+    "classification": "likely_false_positive",
+    "rationale": "The rule is focused on command construction and input provenance, but the code snippet appears to be part of a verification process for external libraries, not a false positive. The logic is unclear and lacks context for a false positive classification.",
+    "evidence": "The rule is about command construction and input provenance, but the code snippet appears to be part of a verification process for external libraries, not a false positive.",
+    "follow_up": "If the rule is part of a false positive, it would be classified as such. Otherwise, no further action is needed."
+  },
+  "status": "unverified_draft",
+  "verified_vulnerability": false,
+  "generated_at": "2026-10-14T23:50:43.819560+00:00",
+  "note": "Automated static triage only. No exploitability, eligibility, or bounty award established."
+}

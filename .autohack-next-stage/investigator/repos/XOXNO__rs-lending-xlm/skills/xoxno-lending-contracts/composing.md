@@ -1,0 +1,145 @@
+# Composing controller operations
+
+A contract can call several controller operations in one atomic invocation.
+Authorize each token transfer separately. Check account state before each
+operation that uses it.
+
+## Token-pull ordering
+
+Complete reads and resolve the stored account ID. Authorize the exact token
+transfer. Immediately call the contract that uses the authorization:
+
+| Call | Authorized nested transfer |
+|---|---|
+| `supply`, `repay`, `recapitalize` | each hub-asset leg: `self -> pool`, exact submitted amount; duplicate legs are summed into one transfer |
+| `liquidate` | each debt leg: `self -> pool`, exact offered amount when the quote is the whole debt, else exact planned amount |
+| `multiply` with initial payment | payment asset: `self -> controller`, exact amount |
+| router `execute_strategy` | input token: `self -> router`, exact amount |
+
+`borrow`, `withdraw`, and controller strategy calls without an initial payment
+do not pull tokens from the caller contract. The wrapper's `open_account`,
+`deposit`, `supply`, `repay`, and `liquidate` create their transfer
+authorization. For every other pull in the table, use
+`xoxno_contract_sdk::lending::helpers::authorize_transfer_as_current(env,
+token, from, to, amount)` with the exact `to` from the table; do not copy the
+low-level auth tree unless the downstream ABI differs. The crate has no router
+client; declare the `execute_strategy` client as in
+[`../xoxno-swap-aggregator/payload.md`](../xoxno-swap-aggregator/payload.md).
+
+Every public entrypoint that owns this orchestration should start with
+`env.storage().instance().extend_ttl(INSTANCE_TTL_THRESHOLD,
+INSTANCE_TTL_EXTEND_TO)`, with the constants in
+[SKILL.md](SKILL.md#storage-ttl). If it reads a persisted account ID, use the
+renew/reconcile helper in
+[positions.md](positions.md#canonical-local-account-pointer) before creating
+any auth entry.
+
+## Swap route rules
+
+Route bytes come from the quote service; do not construct
+`StrategyPayload` on-chain.
+
+- `multiply`:
+  - `PositionMode::Multiply` requires distinct `HubAssetKey` markets. If those
+    markets use the same token address, the token passes through and the swap
+    bytes must be empty.
+  - `PositionMode::Long` and `PositionMode::Short` require different token
+    addresses. Identical token addresses fail `AssetsAreTheSame`; empty-route
+    passthrough is not available.
+- `swap_debt` and `swap_collateral` require distinct markets. For two hubs
+  using the same token, the token passes through and the route must be empty;
+  otherwise a non-empty route is required.
+- `repay_debt_with_collateral` nets directly only when collateral and debt are
+  the same `HubAssetKey`, and that branch requires empty swap bytes. Distinct
+  markets use the swap path, where same-token cross-hub passthrough requires
+  empty bytes.
+
+A route that breaks these emptiness rules fails `InvalidPayments`. These
+branches are enforced by
+[`strategies/multiply.rs`](../../contracts/controller/src/strategies/multiply.rs),
+[`strategies/swap.rs`](../../contracts/controller/src/strategies/swap.rs),
+[`strategies/swap_debt.rs`](../../contracts/controller/src/strategies/swap_debt.rs),
+[`strategies/swap_collateral.rs`](../../contracts/controller/src/strategies/swap_collateral.rs),
+and
+[`strategies/repay_debt_with_collateral.rs`](../../contracts/controller/src/strategies/repay_debt_with_collateral.rs).
+Quote sizing and payload checks are in
+[`../xoxno-swap-aggregator/composition.md`](../xoxno-swap-aggregator/composition.md).
+
+## Contract liquidation
+
+`get_liquidation_estimate` and execution share the liquidation planner. Build
+the intended `SeizeMode`, simulate the estimate, subtract per-asset refunds,
+and authorize only the resulting planned debt payments. Then invoke
+`liquidate` with those planned amounts.
+
+`XoxnoLending::liquidate` does this for one debt market in `Transfer` mode:
+it reads the estimate, then offers and authorizes only the planned amount,
+and returns it. For `Credit` mode or several debt legs, use the generated
+client and submit exactly the planned amounts you authorize. A submitted
+amount above the authorized one fails when the quote is the whole debt,
+because the controller then pulls the whole submitted amount.
+
+For `Credit(existing_id)`, verify before submission:
+
+- `account_exists(existing_id)`
+- the receiving ID is not the liquidated account
+- the liquidator contract owns the position NFT or is an active delegate
+- account mode is `Normal`
+- receiving account spoke matches the liquidated account's spoke
+
+For `Credit(0)`, store and renew the returned account ID locally. Do not infer
+the receiving ID from NFT enumeration or events.
+
+The plan/apply implementation is under
+[`positions/liquidation/`](../../contracts/controller/src/positions/liquidation/).
+
+## Keeper threshold updates
+
+`update_account_threshold` loops over `account_ids` without an explicit
+contract-side input bound. Do not submit an arbitrarily large owner inventory.
+Use conservative batches and require successful Soroban simulation for each
+exact batch before signing/submitting it. A later batch can observe changed
+prices or ownership, so treat each simulation result independently.
+
+The call skips, without an error, an ID with no `AccountMeta`, no supply
+positions, or no resolvable NFT owner. A successful call does not prove that
+every listed ID was refreshed. A failed call refreshes no ID.
+
+## Operation-specific cleanup
+
+Do not apply a generic "empty after any verb means deleted" rule:
+
+- a full withdrawal requests cleanup after persisting supply changes
+- repay does not automatically remove an empty account
+- liquidation and bad-debt paths perform cleanup under their own conditions
+- `repay_debt_with_collateral(close_position = true)` first requires debt to
+  be gone, then withdraws remaining collateral to the caller and removes the
+  empty account
+
+After a path that can delete, call `account_exists` and reconcile the local
+pointer. This view checks only `AccountMeta`; a surviving ID still needs NFT
+owner/mode/spoke checks before reuse. On the wrapper path,
+`Withdrawal::account_closed` from `withdraw` or `withdraw_all` is the same
+explicit signal; see
+[positions.md](positions.md#full-exit-with-the-wrapper).
+
+## Submission checklist
+
+Before signing:
+
+1. local account pointer lookup succeeded and renewed its persistent TTL
+2. expected `account_exists` branch was observed
+3. NFT owner and account mode/spoke match the branch
+4. route emptiness matches token and mode rules
+5. exact transaction simulation succeeds, including nested auth and footprint
+
+After execution:
+
+1. returned account IDs are stored with a fresh local TTL
+2. actual withdrawal/liquidation return values are used for accounting
+3. potentially deleted accounts are reconciled
+4. flash flows are considered complete only after callback settlement, not
+   merely after callback return
+
+Atomic rollback protects on-chain state when a later leg fails, but it does not
+make a stale off-chain quote or an archived local pointer safe.

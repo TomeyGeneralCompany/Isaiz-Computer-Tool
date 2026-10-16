@@ -1,0 +1,39 @@
+{
+  "checks": {
+    "has_reproduction_test": false,
+    "in_scope_at_processing": true,
+    "source_commit_matches": true,
+    "triage_requires_review": false
+  },
+  "commit": "0bc1dd9c49203dd45f48f0046abc4e95a50d06da",
+  "lead": {
+    "file": "contracts/AvocadoMultisig/AvocadoMultisigCore.sol",
+    "fingerprint": "2a59db9f62fd08e9d044",
+    "guidance": "Review authorization based on tx.origin",
+    "line": 529,
+    "rule": "SOL_TX_ORIGIN"
+  },
+  "note": "Automated offline evidence preparation only. No project-specific reproduction or verified security impact.",
+  "processed_at": "2026-10-15T00:09:25.798187+00:00",
+  "repository": "Instadapp/avocado-contracts-public",
+  "scope_urls": [
+    "https://immunefi.com/bug-bounty/instadapp/scope/"
+  ],
+  "source_check": {
+    "commit": "0bc1dd9c49203dd45f48f0046abc4e95a50d06da",
+    "excerpt": "  518:     }\n  519: \n  520:     function _simulateCast(\n  521:         CastParams calldata params_,\n  522:         CastForwardParams calldata forwardParams_,\n  523:         SignatureParams[] memory signaturesParams_,\n  524:         ChainAgnosticHash[] memory chainAgnosticHashes_,\n  525:         bool estimate_\n  526:     ) internal returns (bool success_, string memory revertReason_) {\n  527:         if (\n  528:             !(msg.sender == 0x000000000000000000000000000000000000dEaD ||\n  529:                 (msg.sender == avoForwarder && tx.origin == 0x000000000000000000000000000000000000dEaD))\n  530:         ) {\n  531:             // sender must be the allowed AvoForwarder and tx origin must be dead address,\n  532:             // or msg.sender must be 0x000000000000000000000000000000000000dEaD directly.\n  533:             revert AvocadoMultisig__Unauthorized();\n  534:         }\n  535: \n  536:         (success_, revertReason_) = abi.decode(\n  537:             _spell(\n  538:                 address(avoSecondary),\n  539:                 abi.encodeCall(\n  540:                     avoSecondary.simulateCast,\n  541:                     (params_, forwardParams_, signaturesParams_, chainAgnosticHashes_)",
+    "file": "contracts/AvocadoMultisig/AvocadoMultisigCore.sol",
+    "file_sha256": "d0cc2d19a51b1521a1c4cf46ac158437ce00ecc81cd7bb07f5ab543c7b9f20ed",
+    "line": 529,
+    "status": "source_matched"
+  },
+  "source_fingerprint": "c3b8f693788c2efccefcca024d564b7e45b03106bacb942d2bcc5bd6a8d52f94",
+  "status": "needs_project_specific_reproduction",
+  "triage": {
+    "classification": "likely_false_positive",
+    "evidence": "The code checks for sender == 0x000000000000000000000000000000000000dEaD or sender == avoForwarder and tx.origin == 0x000000000000000000000000000000000000dEaD, but does not cover all possible cases. The code is incomplete and lacks proper validation for all possible scenarios.",
+    "follow_up": "Review the code for completeness and ensure all possible cases are covered. If the code is incomplete, it may require additional validation steps to ensure correctness.",
+    "rationale": "The code checks if the sender is the allowed AvoForwarder and the tx origin is a dead address, but the logic is incomplete and may not cover all cases. The code is incomplete and lacks proper validation for all possible scenarios."
+  },
+  "verified_vulnerability": false
+}

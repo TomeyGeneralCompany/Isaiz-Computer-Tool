@@ -1,0 +1,16 @@
+[Unit]
+Description=AutoHack local Ollama bounty dashboard and discovery
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/izy/isaiz-bugbounty/autohack
+ExecStart=/home/izy/isaiz-bugbounty/autohack/run-local-autohack.sh
+Environment=HOME=/home/izy
+Environment=PATH=/home/izy/.local/bin:/home/izy/.nvm/versions/node/v22.23.3/bin:/usr/local/bin:/usr/bin:/bin
+Restart=on-failure
+RestartSec=15
+
+[Install]
+WantedBy=default.target

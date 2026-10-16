@@ -1,0 +1,12 @@
+{
+  "checked_at": "2026-10-16T22:35:13.331451+00:00",
+  "container_engine": null,
+  "counts": {
+    "adapter_not_available": 51,
+    "commit_mismatch": 2,
+    "out_of_scope": 19
+  },
+  "foundry_image_available": false,
+  "scope_repositories": 0,
+  "submission_enabled": false
+}

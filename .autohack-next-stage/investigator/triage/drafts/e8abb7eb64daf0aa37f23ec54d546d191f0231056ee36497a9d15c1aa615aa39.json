@@ -1,0 +1,31 @@
+{
+  "repository": "OpenZeppelin/openzeppelin-contracts",
+  "commit": "598d3905a6f4ebe68a52c79d461bedb7246fa187",
+  "scope_sources": [
+    {
+      "asset_type": "smart_contract",
+      "asset_url": "https://github.com/OpenZeppelin/openzeppelin-contracts",
+      "program": "openzeppelin",
+      "scope_url": "https://immunefi.com/bug-bounty/openzeppelin/scope/"
+    }
+  ],
+  "original_report": "OpenZeppelin__openzeppelin-contracts-598d3905a6f4.json",
+  "lead": {
+    "rule": "JS_CHILD_EXEC",
+    "file": "scripts/update-docs-branch.js",
+    "line": 7,
+    "guidance": "Review command construction and input provenance",
+    "fingerprint": "c214e1416d893ca593ea"
+  },
+  "source_excerpt": "1: import proc from 'child_process';\n2: import fs from 'fs';\n3: import path from 'path';\n4: \n5: const read = cmd => proc.execSync(cmd, { encoding: 'utf8' }).trim();\n6: const run = cmd => {\n7:   proc.execSync(cmd, { stdio: 'inherit' });\n8: };\n9: const tryRead = cmd => {\n10:   try {\n11:     return read(cmd);\n12:   } catch {\n13:     return undefined;\n14:   }\n15: };",
+  "triage": {
+    "classification": "likely_false_positive",
+    "rationale": "The code is using 'proc' and 'fs' to execute child processes, which is not a known vulnerability. The 'read' function is designed to handle command execution, but there's no indication of potential security issues in the code. The 'tryRead' function is a safeguard against undefined values, but it's not a direct vulnerability.",
+    "evidence": "The code is part of a bug-bounty project and is used to update documentation. There's no indication of exploitable code or potential security issues.",
+    "follow_up": "If you're looking for a vulnerability, please provide more details about the code and the context in which it's used."
+  },
+  "status": "unverified_draft",
+  "verified_vulnerability": false,
+  "generated_at": "2026-10-15T09:35:46.557639+00:00",
+  "note": "Automated static triage only. No exploitability, eligibility, or bounty award established."
+}

@@ -1,0 +1,13 @@
+{
+  "commit": "9496626f71a761fc296dc3b2efbfd54c504e18f0",
+  "processed_at": "2026-10-14T23:59:32.453819+00:00",
+  "repository": "Instadapp/fluid-contracts-public",
+  "source_record": "/home/izy/isaiz-bugbounty/autohack/.autohack-next-stage/investigator/verification/results/d22c29cafe73c26036632037b145135d76dcd2da9b061f4fa74217224aa37bb4.json",
+  "source_sha256": "91e281e893be7cd337de98dea66ffd04369c44de9ab2a80e060f0403866d27b0",
+  "status": "awaiting_reproduction_case",
+  "test_result": {
+    "case_manifest": "/home/izy/isaiz-bugbounty/autohack/.autohack-next-stage/investigator/reproduction/cases/d22c29cafe73c26036632037b145135d76dcd2da9b061f4fa74217224aa37bb4.json",
+    "reason": "No explicit local regression case supplied"
+  },
+  "verified_vulnerability": false
+}

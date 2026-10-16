@@ -1,0 +1,39 @@
+{
+  "checks": {
+    "has_reproduction_test": false,
+    "in_scope_at_processing": true,
+    "source_commit_matches": true,
+    "triage_requires_review": false
+  },
+  "commit": "9496626f71a761fc296dc3b2efbfd54c504e18f0",
+  "lead": {
+    "file": "contracts/protocols/vault/factory/main.sol",
+    "fingerprint": "b4b65c41271f1ba8b0a5",
+    "guidance": "Review delegatecall target and access control",
+    "line": 335,
+    "rule": "SOL_DELEGATECALL"
+  },
+  "note": "Automated offline evidence preparation only. No project-specific reproduction or verified security impact.",
+  "processed_at": "2026-10-15T00:09:27.627471+00:00",
+  "repository": "Instadapp/fluid-contracts-public",
+  "scope_urls": [
+    "https://immunefi.com/bug-bounty/instadapp/scope/"
+  ],
+  "source_check": {
+    "commit": "9496626f71a761fc296dc3b2efbfd54c504e18f0",
+    "excerpt": "  324:     /// @param vaultDeploymentLogic_    The address of the vault deployment logic contract.\n  325:     /// @param vaultDeploymentData_     The data to be used for vault deployment.\n  326:     /// @return vault_                  Returns the address of the newly deployed vault.\n  327:     function deployVault(\n  328:         address vaultDeploymentLogic_,\n  329:         bytes calldata vaultDeploymentData_\n  330:     ) public virtual returns (address vault_) {\n  331:         uint256 vaultId_;\n  332:         (vault_, vaultId_) = _deployVaultStart(vaultDeploymentLogic_);\n  333: \n  334:         // deploy the vault using vault deployment logic by making .delegatecall\n  335:         (bool success_, bytes memory data_) = vaultDeploymentLogic_.delegatecall(vaultDeploymentData_);\n  336: \n  337:         _deployVaultFinalize(vault_, vaultId_, success_, data_);\n  338:     }\n  339: }\n  340: \n  341: abstract contract VaultFactoryERC721 is VaultFactoryCore, VaultFactoryDeploymentCore {\n  342:     /// @notice                   Mints a new ERC721 token for a specific vault (`vaultId_`) to a specified user (`user_`).\n  343:     ///                           Only the corresponding vault is authorized to mint a token.\n  344:     /// @param vaultId_           The ID of the vault that's minting the token.\n  345:     /// @param user_              The address receiving the minted token.\n  346:     /// @return tokenId_          The ID of the newly minted token.\n  347:     function mint(uint256 vaultId_, address user_) external returns (uint256 tokenId_) {",
+    "file": "contracts/protocols/vault/factory/main.sol",
+    "file_sha256": "4944cf323db72e058025793ee4aa8c4c423d09f94ddb9fe090d097361077ec2c",
+    "line": 335,
+    "status": "source_matched"
+  },
+  "source_fingerprint": "59f9298b22aba6efd303ccdd26e72f1d77493d5e4f385503a1ca27829be23c00",
+  "status": "needs_project_specific_reproduction",
+  "triage": {
+    "classification": "likely_false_positive",
+    "evidence": "No known vulnerabilities or exploitable features identified in the code snippet.",
+    "follow_up": "If you have more context or details about the specific implementation, please provide them, and I will review further.",
+    "rationale": "The code snippet appears to be part of a contract implementation for a VaultFactory, but there is no indication of a false positive or a known vulnerability. The code is likely a placeholder or incomplete implementation, and there is insufficient context to determine its actual functionality or potential issues."
+  },
+  "verified_vulnerability": false
+}

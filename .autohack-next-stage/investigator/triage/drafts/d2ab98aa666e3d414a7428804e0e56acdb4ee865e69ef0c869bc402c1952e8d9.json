@@ -1,0 +1,31 @@
+{
+  "repository": "Instadapp/avocado-contracts-public",
+  "commit": "0bc1dd9c49203dd45f48f0046abc4e95a50d06da",
+  "scope_sources": [
+    {
+      "asset_type": "smart_contract",
+      "asset_url": "https://github.com/Instadapp/avocado-contracts-public",
+      "program": "instadapp",
+      "scope_url": "https://immunefi.com/bug-bounty/instadapp/scope/"
+    }
+  ],
+  "original_report": "Instadapp__avocado-contracts-public-0bc1dd9c4920.json",
+  "lead": {
+    "rule": "SOL_TX_ORIGIN",
+    "file": "contracts/AvocadoMultisig/AvocadoMultisig.sol",
+    "line": 131,
+    "guidance": "Review authorization based on tx.origin",
+    "fingerprint": "cddc16525076b5304313"
+  },
+  "source_excerpt": "123:         ) {\n124:             revert AvocadoMultisig__Unauthorized();\n125:         }\n126: \n127:         // get and reset transient id\n128:         uint256 id_ = uint256(_transientId);\n129:         _transientId = 0;\n130: \n131:         if (tx.origin == 0x000000000000000000000000000000000000dEaD) {\n132:             // tx origin 0x000000000000000000000000000000000000dEaD used for backend gas estimations -> forward to simulate\n133:             _spell(\n134:                 address(avoSecondary),\n135:                 abi.encodeCall(avoSecondary._simulateExecuteActions, (abi.decode(data_, (Action[])), id_, true))\n136:             );\n137:         } else {\n138:             // decode actions to be executed after getting the flashloan and id_ packed into the data_\n139:             _executeActions(abi.decode(data_, (Action[])), id_, true);",
+  "triage": {
+    "classification": "likely_false_positive",
+    "rationale": "The code checks if the tx.origin is zero, which is a known issue with Solana's tx.origin. This is a known bug in Solana and should be fixed. However, the code is not providing any evidence of a false positive, and the context is limited to a single file and line.",
+    "evidence": "The code checks for a zero tx.origin, which is a known issue, but no further analysis is provided.",
+    "follow_up": "If you have more information, please provide it to help with the review."
+  },
+  "status": "unverified_draft",
+  "verified_vulnerability": false,
+  "generated_at": "2026-10-14T23:40:17.684181+00:00",
+  "note": "Automated static triage only. No exploitability, eligibility, or bounty award established."
+}

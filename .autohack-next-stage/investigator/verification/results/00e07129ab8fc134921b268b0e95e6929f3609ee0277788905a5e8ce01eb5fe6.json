@@ -1,0 +1,57 @@
+{
+  "source_draft": "/home/izy/isaiz-bugbounty/autohack/.autohack-next-stage/investigator/triage/drafts/00e07129ab8fc134921b268b0e95e6929f3609ee0277788905a5e8ce01eb5fe6.json",
+  "input_fingerprint": "6c1bfe84dd5634f65633c51dca3005310a20fd576ba0e64b5ab81bf6a70c44a9",
+  "checked_at": "2026-10-14T23:47:05.502725+00:00",
+  "status": "ready_for_isolated_reproduction",
+  "verified_vulnerability": false,
+  "tests_executed": 0,
+  "checks": [
+    {
+      "name": "has_repository_and_commit",
+      "passed": true
+    },
+    {
+      "name": "has_program_scope_reference",
+      "passed": true
+    },
+    {
+      "name": "has_code_excerpt",
+      "passed": true
+    },
+    {
+      "name": "has_source_location",
+      "passed": true
+    },
+    {
+      "name": "python_excerpt_syntax",
+      "passed": null,
+      "note": "Partial excerpt cannot be assessed as a standalone module"
+    },
+    {
+      "name": "has_ai_triage",
+      "passed": true
+    }
+  ],
+  "limitations": [
+    "This is offline evidence validation, not exploit reproduction.",
+    "No project code or generated test cases are executed.",
+    "A valid excerpt or parseable code does not prove vulnerability."
+  ],
+  "repository": "HathorNetwork/hathor-core",
+  "commit": "0738c7c981e506c582d83fa5456fe1b84eeccedc",
+  "scope_sources": [
+    {
+      "asset_type": "blockchain_dlt",
+      "asset_url": "https://github.com/HathorNetwork/hathor-core",
+      "program": "hathornetwork",
+      "scope_url": "https://immunefi.com/bug-bounty/hathornetwork/scope/"
+    }
+  ],
+  "lead_location": {
+    "path": "hathor_tests/nanocontracts/on_chain_blueprints/test_script_restrictions.py",
+    "line": 124
+  },
+  "triage_present": true,
+  "missing_evidence": [],
+  "next_step": "Create a non-destructive, isolated regression test tailored to the alleged flaw and run it in a sandbox; do not label verified until a reproducible security impact is demonstrated."
+}

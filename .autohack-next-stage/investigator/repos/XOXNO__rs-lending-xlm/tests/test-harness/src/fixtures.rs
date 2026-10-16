@@ -1,0 +1,83 @@
+use controller::constants::WAD;
+
+use crate::context::{LendingTest, LendingTestBuilder};
+use crate::helpers::usd_cents;
+use crate::presets::{
+    eth_preset, usdc_preset, usdt_stable_preset, wbtc_preset, ALICE, BOB, STABLECOIN_SPOKE,
+};
+
+/// Spoke id the harness builder assigns to the first extra spoke.
+const STABLECOIN_SPOKE_ID: u32 = 2;
+
+impl LendingTestBuilder {
+    pub fn standard_two_asset(self) -> Self {
+        self.with_market(usdc_preset()).with_market(eth_preset())
+    }
+
+    pub fn standard_two_asset_dust_disabled(self) -> LendingTest {
+        self.standard_two_asset()
+            .with_dust_disabled_all_markets()
+            .build()
+    }
+
+    pub fn three_asset_usdc_eth_wbtc(self) -> Self {
+        self.with_market(usdc_preset())
+            .with_market(eth_preset())
+            .with_market(wbtc_preset())
+    }
+
+    /// Adds USDC and USDT and lists both on the stablecoin spoke (id 2) as
+    /// collateral and borrowable.
+    pub fn stablecoin_spoke_two_asset(self) -> Self {
+        self.with_market(usdc_preset())
+            .with_market(usdt_stable_preset())
+            .with_spoke(STABLECOIN_SPOKE_ID, STABLECOIN_SPOKE)
+            .with_spoke_asset(STABLECOIN_SPOKE_ID, "USDC", true, true)
+            .with_spoke_asset(STABLECOIN_SPOKE_ID, "USDT", true, true)
+    }
+
+    pub fn dual_source_two_asset(self) -> LendingTest {
+        let t = self.standard_two_asset_dust_disabled();
+        configure_dual_source_oracle(&t);
+        t
+    }
+}
+
+pub fn liquidatable_usdc_eth() -> LendingTest {
+    let mut t = LendingTest::new().standard_two_asset().build();
+    seed_liquidatable_usdc_eth(&mut t);
+    t
+}
+
+pub fn seed_liquidatable_usdc_eth(t: &mut LendingTest) {
+    t.supply(ALICE, "USDC", 10_000.0);
+    t.borrow(ALICE, "ETH", 3.0);
+    t.assert_healthy(ALICE);
+    t.set_price("USDC", usd_cents(50));
+    t.assert_liquidatable(ALICE);
+}
+
+pub fn seed_band_usdc_eth(t: &mut LendingTest) {
+    t.supply(ALICE, "USDC", 10_000.0);
+    t.borrow(ALICE, "ETH", 3.0);
+    t.assert_healthy(ALICE);
+    t.set_price("USDC", usd_cents(62));
+    t.assert_liquidatable(ALICE);
+}
+
+pub fn seed_fuzz_conservation_book(t: &mut LendingTest) {
+    t.supply(ALICE, "USDC", 50_000.0);
+    t.supply(BOB, "USDC", 50_000.0);
+    t.supply(ALICE, "ETH", 20.0);
+    t.supply(BOB, "WBTC", 1.0);
+
+    t.borrow(ALICE, "ETH", 5.0);
+    t.borrow(BOB, "USDC", 5_000.0);
+}
+
+fn configure_dual_source_oracle(t: &LendingTest) {
+    t.set_oracle_primary_anchor("USDC");
+    t.set_oracle_primary_anchor("ETH");
+    t.set_safe_price("USDC", WAD);
+    t.set_safe_price("ETH", WAD * 2_000);
+}

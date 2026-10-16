@@ -1,0 +1,8 @@
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Committed env templates hold only public config (contract addresses, RPC/subgraph URLs), never secrets. Real .env is gitignored."
+paths = [
+  '''frontend/\.env\.template.*''',
+]

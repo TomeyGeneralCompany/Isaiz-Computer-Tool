@@ -1,0 +1,367 @@
+use soroban_sdk::vec;
+use test_harness::{
+    assert_contract_error, errors, hub_asset, map_try_ok_value, usdc_preset, HubAssetKey,
+    LendingTest, PositionType, ALICE, BOB,
+};
+#[test]
+fn test_supply_single_asset() {
+    let mut t = LendingTest::new().with_market(usdc_preset()).build();
+
+    t.supply(ALICE, "USDC", 10_000.0);
+
+    t.assert_position_exists(ALICE, "USDC", PositionType::Supply);
+
+    let wallet = t.token_balance(ALICE, "USDC");
+    assert!(
+        wallet < 0.01,
+        "wallet should be ~0 after supply, got {}",
+        wallet
+    );
+
+    t.assert_supply_near(ALICE, "USDC", 10_000.0, 1.0);
+
+    let coll = t.total_collateral(ALICE);
+    assert!(
+        coll > 9_999.0 && coll < 10_001.0,
+        "collateral should be ~$10k, got {}",
+        coll
+    );
+}
+#[test]
+fn test_supply_to_existing_account() {
+    let mut t = LendingTest::new().with_market(usdc_preset()).build();
+
+    t.supply(ALICE, "USDC", 5_000.0);
+    t.assert_supply_near(ALICE, "USDC", 5_000.0, 1.0);
+    let wallet_after_first = t.token_balance(ALICE, "USDC");
+    assert!(
+        wallet_after_first < 0.01,
+        "wallet should be ~0 after first supply, got {}",
+        wallet_after_first
+    );
+
+    t.supply(ALICE, "USDC", 3_000.0);
+    t.assert_supply_near(ALICE, "USDC", 8_000.0, 1.0);
+    let wallet_after_second = t.token_balance(ALICE, "USDC");
+    assert!(
+        wallet_after_second < 0.01,
+        "wallet should be ~0 after second supply, got {}",
+        wallet_after_second
+    );
+}
+#[test]
+fn test_supply_multiple_assets_bulk() {
+    let mut t = LendingTest::new().standard_two_asset().build();
+
+    t.supply_bulk(ALICE, &[("USDC", 10_000.0), ("ETH", 1.0)]);
+
+    t.assert_position_exists(ALICE, "USDC", PositionType::Supply);
+    t.assert_position_exists(ALICE, "ETH", PositionType::Supply);
+    t.assert_supply_near(ALICE, "USDC", 10_000.0, 1.0);
+    t.assert_supply_near(ALICE, "ETH", 1.0, 0.001);
+    let usdc_wallet = t.token_balance(ALICE, "USDC");
+    let eth_wallet = t.token_balance(ALICE, "ETH");
+    assert!(
+        usdc_wallet < 0.01,
+        "USDC wallet should be ~0, got {}",
+        usdc_wallet
+    );
+    assert!(
+        eth_wallet < 0.0001,
+        "ETH wallet should be ~0, got {}",
+        eth_wallet
+    );
+}
+
+#[test]
+fn test_supply_duplicate_asset_bulk_accumulates_single_position() {
+    let mut t = LendingTest::new().with_market(usdc_preset()).build();
+
+    t.supply_bulk(ALICE, &[("USDC", 5_000.0), ("USDC", 3_000.0)]);
+
+    t.assert_supply_count(ALICE, 1);
+    t.assert_supply_near(ALICE, "USDC", 8_000.0, 1.0);
+}
+
+#[test]
+fn test_supply_duplicate_asset_bulk_is_allowed() {
+    let mut t = LendingTest::new().with_market(usdc_preset()).build();
+
+    t.supply_bulk(ALICE, &[("USDC", 2_000.0), ("USDC", 3_000.0)]);
+
+    t.assert_supply_count(ALICE, 1);
+    t.assert_supply_near(ALICE, "USDC", 5_000.0, 1.0);
+}
+#[test]
+fn test_supply_creates_account_on_first_call() {
+    let mut t = LendingTest::new().with_market(usdc_preset()).build();
+
+    t.supply(ALICE, "USDC", 1_000.0);
+
+    let accounts = t.get_active_accounts(ALICE);
+    assert_eq!(accounts.len(), 1, "supply should auto-create an account");
+    t.assert_position_exists(ALICE, "USDC", PositionType::Supply);
+}
+#[test]
+fn test_supply_with_spoke_category() {
+    let mut t = LendingTest::new().stablecoin_spoke_two_asset().build();
+
+    t.create_spoke_account(ALICE, 2);
+    t.supply(ALICE, "USDC", 10_000.0);
+
+    let attrs = t.get_account_attributes(ALICE);
+    assert_eq!(attrs.spoke_id, 2);
+    t.assert_position_exists(ALICE, "USDC", PositionType::Supply);
+    t.assert_supply_near(ALICE, "USDC", 10_000.0, 1.0);
+    assert!(
+        t.token_balance(ALICE, "USDC") < 0.01,
+        "wallet should be ~0 after supply"
+    );
+}
+#[test]
+fn test_supply_rejects_zero_amount() {
+    let mut t = LendingTest::new().with_market(usdc_preset()).build();
+
+    t.create_account(ALICE);
+
+    let result = t.try_supply(ALICE, "USDC", 0.0);
+    assert_contract_error(result, errors::AMOUNT_MUST_BE_POSITIVE);
+}
+
+#[test]
+fn test_supply_rejects_empty_asset_vector() {
+    let mut t = LendingTest::new().with_market(usdc_preset()).build();
+
+    let caller = t.get_or_create_user(ALICE);
+    let assets: soroban_sdk::Vec<(HubAssetKey, i128)> = vec![&t.env];
+    let result = map_try_ok_value(t.ctrl_client().try_supply(&caller, &0u64, &1u32, &assets));
+
+    assert_contract_error(result, errors::INVALID_PAYMENTS);
+}
+
+#[test]
+fn test_supply_rejects_negative_raw_amount() {
+    let mut t = LendingTest::new().with_market(usdc_preset()).build();
+
+    let caller = t.get_or_create_user(ALICE);
+    let usdc = t.resolve_asset("USDC");
+    let assets = vec![&t.env, (hub_asset(usdc), -1i128)];
+    let result = map_try_ok_value(t.ctrl_client().try_supply(&caller, &0u64, &1u32, &assets));
+
+    assert_contract_error(result, errors::AMOUNT_MUST_BE_POSITIVE);
+}
+
+#[test]
+fn test_supply_duplicate_raw_amount_overflow_reverts() {
+    let mut t = LendingTest::new().with_market(usdc_preset()).build();
+
+    let caller = t.get_or_create_user(ALICE);
+    let usdc = t.resolve_asset("USDC");
+    let assets = vec![
+        &t.env,
+        (hub_asset(usdc.clone()), i128::MAX),
+        (hub_asset(usdc), 1i128),
+    ];
+    let result = map_try_ok_value(t.ctrl_client().try_supply(&caller, &0u64, &1u32, &assets));
+
+    assert_contract_error(result, errors::GenericError::MathOverflow as u32);
+}
+
+#[test]
+fn test_supply_rejects_non_collateralizable() {
+    let mut t = LendingTest::new()
+        .with_market(usdc_preset())
+        .with_market_config("USDC", |cfg| {
+            cfg.is_collateralizable = false;
+        })
+        .build();
+
+    let result = t.try_supply(ALICE, "USDC", 1_000.0);
+    assert_contract_error(result, errors::NOT_COLLATERAL);
+}
+#[test]
+fn test_supply_rejects_during_flash_loan() {
+    let mut t = LendingTest::new().with_market(usdc_preset()).build();
+
+    t.set_flash_loan_ongoing(true);
+
+    let result = t.try_supply(ALICE, "USDC", 1_000.0);
+    assert_contract_error(result, errors::FLASH_LOAN_ONGOING);
+}
+#[test]
+fn test_supply_rejects_when_paused() {
+    let mut t = LendingTest::new().with_market(usdc_preset()).build();
+
+    t.pause();
+
+    let result = t.try_supply(ALICE, "USDC", 1_000.0);
+    assert_contract_error(result, errors::CONTRACT_PAUSED);
+}
+#[test]
+fn test_supply_position_limit_exceeded() {
+    let mut t = LendingTest::new()
+        .three_asset_usdc_eth_wbtc()
+        .with_position_limits(2, 2)
+        .build();
+
+    t.supply(ALICE, "USDC", 1_000.0);
+    t.supply(ALICE, "ETH", 1.0);
+
+    let result = t.try_supply(ALICE, "WBTC", 0.01);
+    assert_contract_error(result, errors::POSITION_LIMIT_EXCEEDED);
+}
+#[test]
+fn test_supply_raw_precision() {
+    let mut t = LendingTest::new()
+        .with_market(usdc_preset())
+        .with_dust_disabled_all_markets()
+        .build();
+
+    let raw_amount = 1i128;
+    t.supply_raw(ALICE, "USDC", raw_amount);
+
+    let balance = t.supply_balance_raw(ALICE, "USDC");
+
+    // Fresh market: `supply_index == RAY` (pinned by `views::test_get_market_index_view`),
+    // so the credit is exact and any rounding in the depositor's favour is visible.
+    assert_eq!(
+        balance, 1,
+        "a one-unit deposit must credit exactly one unit, got {}",
+        balance
+    );
+
+    let wallet_raw = t.token_balance_raw(ALICE, "USDC");
+    assert_eq!(
+        wallet_raw, 0,
+        "raw wallet should be 0 after pulling 1 unit, got {}",
+        wallet_raw
+    );
+}
+
+#[test]
+fn test_third_party_supply_to_existing_account_succeeds() {
+    let mut t = LendingTest::new().with_market(usdc_preset()).build();
+
+    t.supply(ALICE, "USDC", 5_000.0);
+    let before = t.supply_balance(ALICE, "USDC");
+
+    let result = t.try_supply_to_account(BOB, ALICE, "USDC", 1_000.0);
+    assert!(
+        result.is_ok(),
+        "third-party supply should succeed: {:?}",
+        result
+    );
+
+    let after = t.supply_balance(ALICE, "USDC");
+    assert!(
+        after > before + 999.0,
+        "Alice collateral should increase after Bob's supply: before={}, after={}",
+        before,
+        after
+    );
+}
+
+#[test]
+fn test_third_party_supply_cannot_force_low_threshold_update() {
+    let mut t = LendingTest::new().standard_two_asset_dust_disabled();
+
+    t.supply(ALICE, "USDC", 10_000.0);
+    t.borrow(ALICE, "ETH", 3.0);
+    let account_id = t.resolve_account_id(ALICE);
+    let usdc = t.resolve_asset("USDC");
+
+    t.edit_asset_config("USDC", |c| {
+        c.loan_to_value = 5000;
+        c.liquidation_threshold = 6100;
+    });
+
+    t.try_supply_to_account(BOB, ALICE, "USDC", 1.0)
+        .expect("third-party top-up should still be allowed");
+
+    let (supplies, _borrows) = t.ctrl_client().get_account_positions(&account_id);
+    let position = supplies
+        .get(hub_asset(usdc))
+        .expect("USDC supply position should remain");
+    assert_eq!(
+        position.liquidation_threshold, 8000,
+        "supply must not force a lower LT snapshot while HF is below the update buffer"
+    );
+}
+
+#[test]
+fn test_bulk_supply_duplicate_asset_counts_once() {
+    let mut t = LendingTest::new()
+        .standard_two_asset()
+        .with_position_limits(1, 2)
+        .build();
+
+    let alice = t.get_or_create_user(ALICE);
+    let account_id = t.create_account(ALICE);
+    let usdc = t.resolve_market("USDC");
+    usdc.token_admin.mint(&alice, &1_000_000_000_000_i128);
+
+    let assets = vec![
+        &t.env,
+        (hub_asset(usdc.asset.clone()), 500_000_000_000_i128),
+        (hub_asset(usdc.asset.clone()), 250_000_000_000_i128),
+    ];
+    t.ctrl_client().supply(&alice, &account_id, &1u32, &assets);
+    t.assert_supply_near(ALICE, "USDC", 75_000.0, 1.0);
+}
+
+#[test]
+fn poc_single_actor_spams_unbounded_dust_accounts() {
+    let mut t = LendingTest::new().with_market(usdc_preset()).build();
+
+    let attacker = t.get_or_create_user("attacker");
+    let usdc = t.resolve_market("USDC");
+
+    const N: u64 = 64;
+    usdc.token_admin.mint(&attacker, &(N as i128));
+    let asset = usdc.asset.clone();
+
+    let ctrl = t.ctrl_client();
+    let mut created: u64 = 0;
+    let mut last_id: u64 = 0;
+    for _ in 0..N {
+        let dust = vec![&t.env, (hub_asset(asset.clone()), 1i128)];
+        let id = ctrl.supply(&attacker, &0u64, &1u32, &dust);
+        assert!(id > 0, "1-unit deposit must be accepted (no dust floor)");
+
+        assert!(id > last_id, "each supply(id=0) must mint a new account id");
+        assert!(
+            ctrl.account_exists(&id),
+            "spammed account persists in storage"
+        );
+        last_id = id;
+        created += 1;
+    }
+
+    assert_eq!(
+        created, N,
+        "one actor created {N} distinct accounts with dust deposits"
+    );
+}
+
+#[test]
+fn regression_non_owner_cannot_open_new_supply_slot_on_victim() {
+    let mut t = LendingTest::new().standard_two_asset().build();
+
+    t.supply(ALICE, "USDC", 1_000.0);
+    let alice_id = t.resolve_account_id(ALICE);
+    let alice = t.get_or_create_user(ALICE);
+
+    let new_slot = t.try_supply_to_account(BOB, ALICE, "ETH", 0.5);
+    assert_contract_error(new_slot, errors::NOT_AUTHORIZED);
+
+    let top_up = t.try_supply_to_account(BOB, ALICE, "USDC", 1.0);
+    assert!(
+        top_up.is_ok(),
+        "same-asset third-party top-up must work: {top_up:?}"
+    );
+    assert_eq!(
+        t.get_account_owner(alice_id),
+        alice,
+        "owner is unchanged after third-party top-up"
+    );
+}

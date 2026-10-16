@@ -1,0 +1,31 @@
+{
+  "repository": "OpenZeppelin/openzeppelin-contracts",
+  "commit": "97430aa29ac10a70ee0c18f2a905c4925363b58f",
+  "scope_sources": [
+    {
+      "asset_type": "smart_contract",
+      "asset_url": "https://github.com/OpenZeppelin/openzeppelin-contracts",
+      "program": "openzeppelin",
+      "scope_url": "https://immunefi.com/bug-bounty/openzeppelin/scope/"
+    }
+  ],
+  "original_report": "OpenZeppelin__openzeppelin-contracts-97430aa29ac1.json",
+  "lead": {
+    "rule": "JS_CHILD_EXEC",
+    "file": "hardhat/hardhat-solidity-docgen/internal/utils/execall.ts",
+    "line": 10,
+    "guidance": "Review command construction and input provenance",
+    "fingerprint": "310840617c6a7d46b78e"
+  },
+  "source_excerpt": "2:  * Iterates over all contiguous matches of the regular expression over the\n3:  * text. Stops as soon as the regular expression no longer matches at the\n4:  * current position.\n5:  */\n6: export function* execAll(re: RegExp, text: string) {\n7:   re = new RegExp(re, re.flags + (re.sticky ? '' : 'y'));\n8: \n9:   while (true) {\n10:     const match = re.exec(text);\n11: \n12:     // We break out of the loop if there is no match or if the empty string is\n13:     // matched because no progress will be made and it will loop indefinitely.\n14:     if (!match?.[0]) break;\n15: \n16:     yield match;\n17:   }\n18: }",
+  "triage": {
+    "classification": "likely_false_positive",
+    "rationale": "The code is not a false positive but a static analysis rule that is not being applied to the actual code. The rule is about command construction and input provenance, but the code in question is not a false positive but a static analysis rule that is not being applied to the actual code. The rule is not being applied to the actual code, so it is not a false positive.",
+    "evidence": "The rule is about command construction and input provenance, but the code in question is not a false positive but a static analysis rule that is not being applied to the actual code.",
+    "follow_up": "If the rule is applied to the actual code, it would be a false positive. However, since the rule is not being applied to the actual code, it is not a false positive."
+  },
+  "status": "unverified_draft",
+  "verified_vulnerability": false,
+  "generated_at": "2026-10-14T23:53:58.846817+00:00",
+  "note": "Automated static triage only. No exploitability, eligibility, or bounty award established."
+}

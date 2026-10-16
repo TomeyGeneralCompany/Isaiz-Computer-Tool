@@ -1,0 +1,148 @@
+[package]
+name = "runtime-integration-tests"
+version = { workspace = true }
+authors = { workspace = true }
+edition = { workspace = true }
+
+[dependencies]
+smallvec = { workspace = true }
+parity-scale-codec = { workspace = true, features = ["derive", "max-encoded-len"] }
+serde_json = { workspace = true, features = ["std"] }
+hex = { workspace = true, features = ["std"] }
+hex-literal = { workspace = true }
+libsecp256k1 = { workspace = true, features = ["std", "hmac", "static-context"] }
+
+# substrate
+frame-support = { workspace = true, features = ["std"] }
+frame-system = { workspace = true, features = ["std"] }
+pallet-aura = { workspace = true, features = ["std"] }
+pallet-authorship = { workspace = true, features = ["std"] }
+pallet-balances = { workspace = true, features = ["std"] }
+pallet-bounties = { workspace = true, features = ["std"] }
+pallet-collective = { workspace = true, features = ["std"] }
+pallet-democracy = { workspace = true, features = ["std"] }
+pallet-indices = { workspace = true, features = ["std"] }
+pallet-membership = { workspace = true, features = ["std"] }
+pallet-multisig = { workspace = true, features = ["std"] }
+pallet-proxy = { workspace = true, features = ["std"] }
+pallet-session = { workspace = true, features = ["std", "historical"] }
+pallet-scheduler = { workspace = true, features = ["std"] }
+pallet-sudo = { workspace = true, features = ["std"] }
+pallet-timestamp = { workspace = true, features = ["std"] }
+pallet-tips = { workspace = true, features = ["std"] }
+pallet-transaction-payment = { workspace = true, features = ["std"] }
+pallet-transaction-payment-rpc-runtime-api = { workspace = true, features = ["std"] }
+pallet-treasury = { workspace = true, features = ["std"] }
+pallet-utility = { workspace = true, features = ["std"] }
+sp-api = { workspace = true, features = ["std"] }
+sp-application-crypto = { workspace = true, features = ["std"] }
+sp-block-builder = { workspace = true, features = ["std"] }
+sp-consensus-aura = { workspace = true, features = ["std"] }
+sp-core = { workspace = true, features = ["std"] }
+sp-inherents = { workspace = true, features = ["std"] }
+sp-io = { workspace = true, features = ["std"] }
+sp-keyring = { workspace = true }
+sp-offchain = { workspace = true, features = ["std"] }
+sp-runtime = { workspace = true, features = ["std"] }
+sp-session = { workspace = true, features = ["std"] }
+sp-staking = { workspace = true, features = ["std"] }
+sp-std = { workspace = true, features = ["std"] }
+sp-tracing = { workspace = true, features = ["std"] }
+sp-transaction-pool = { workspace = true, features = ["std"] }
+sp-version = { workspace = true, features = ["std"] }
+
+# cumulus
+cumulus-pallet-aura-ext = { workspace = true, features = ["std"] }
+cumulus-primitives-core = { workspace = true, features = ["std"] }
+cumulus-primitives-utility = { workspace = true, features = ["std"] }
+cumulus-primitives-timestamp = { workspace = true, features = ["std"] }
+cumulus-pallet-parachain-system = { workspace = true, features = ["std"] }
+cumulus-pallet-xcmp-queue = { workspace = true, features = ["std"] }
+cumulus-pallet-xcm = { workspace = true, features = ["std"] }
+parachain-info = { workspace = true, features = ["std"] }
+
+# polkadot
+xcm = { workspace = true, features = ["std"] }
+xcm-executor = { workspace = true, features = ["std"] }
+xcm-builder = { workspace = true, features = ["std"] }
+pallet-xcm = { workspace = true, features = ["std"] }
+polkadot-parachain-primitives = { workspace = true, features = ["std"] }
+
+# orml
+orml-auction = { workspace = true, features = ["std"] }
+orml-authority = { workspace = true, features = ["std"] }
+orml-benchmarking = { workspace = true, features = ["std"], optional = true }
+orml-oracle = { workspace = true, features = ["std"] }
+orml-oracle-runtime-api = { workspace = true, features = ["std"] }
+orml-tokens = { workspace = true, features = ["std"] }
+orml-traits = { workspace = true, features = ["std"] }
+orml-vesting = { workspace = true, features = ["std"] }
+orml-rewards = { workspace = true, features = ["std"] }
+orml-nft = { workspace = true, features = ["std"] }
+orml-xtokens = { workspace = true, features = ["std"] }
+orml-xcm-support = { workspace = true, features = ["std"] }
+orml-unknown-tokens = { workspace = true, features = ["std"] }
+orml-xcm = { workspace = true, features = ["std"] }
+
+# modules
+module-transaction-payment = { workspace = true, features = ["std"] }
+module-asset-registry = { workspace = true, features = ["std"] }
+module-auction-manager = { workspace = true, features = ["std"] }
+module-cdp-engine = { workspace = true, features = ["std"] }
+module-cdp-treasury = { workspace = true, features = ["std"] }
+module-collator-selection = { workspace = true, features = ["std"] }
+module-currencies = { workspace = true, features = ["std"] }
+module-dex = { workspace = true, features = ["std"] }
+module-dex-oracle = { workspace = true, features = ["std"] }
+module-emergency-shutdown = { workspace = true, features = ["std"] }
+module-evm = { workspace = true, features = ["std"] }
+module-evm-accounts = { workspace = true, features = ["std"] }
+module-evm-bridge = { workspace = true, features = ["std"] }
+module-honzon = { workspace = true, features = ["std"] }
+module-loans = { workspace = true, features = ["std"] }
+module-nft = { workspace = true, features = ["std"] }
+module-prices = { workspace = true, features = ["std"] }
+module-incentives = { workspace = true, features = ["std"] }
+module-support = { workspace = true, features = ["std"] }
+module-xcm-interface = { workspace = true, features = ["std"] }
+module-homa = { workspace = true, features = ["std"] }
+module-session-manager = { workspace = true, features = ["std"] }
+module-assethub = { workspace = true, features = ["std"] }
+
+primitives = { workspace = true, features = ["std"] }
+runtime-common = { workspace = true, features = ["std"] }
+mandala-runtime = { workspace = true, features = ["std"], optional = true }
+karura-runtime = { workspace = true, features = ["std"], optional = true }
+acala-runtime = { workspace = true, features = ["std"], optional = true }
+
+[dev-dependencies]
+insta = { workspace = true }
+env_logger = { workspace = true }
+log = { workspace = true }
+sp-io = { workspace = true, features = ["std"] }
+sp-trie = { workspace = true, features = ["std"] }
+
+cumulus-primitives-parachain-inherent = { workspace = true, features = ["std"] }
+cumulus-test-relay-sproof-builder = { workspace = true, features = ["std"] }
+
+module-aggregated-dex = { workspace = true, features = ["std"] }
+nutsfinance-stable-asset = { workspace = true, features = ["std"] }
+
+[features]
+default = ["std"]
+no_std = []
+with-mandala-runtime = [
+	"mandala-runtime",
+]
+with-karura-runtime = [
+	"karura-runtime",
+]
+with-acala-runtime = [
+	"acala-runtime",
+]
+with-ethereum-compatibility = [
+	"mandala-runtime",
+	"mandala-runtime/with-ethereum-compatibility",
+	"module-evm/with-ethereum-compatibility",
+]
+std = []

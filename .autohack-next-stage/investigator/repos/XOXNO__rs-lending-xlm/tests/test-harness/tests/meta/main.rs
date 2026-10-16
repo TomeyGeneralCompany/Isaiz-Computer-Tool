@@ -1,0 +1,16 @@
+extern crate std;
+
+mod account_ttl_regression;
+mod admin_instance_ttl_regression;
+mod bench_liquidate_max_positions;
+mod budget_breakdown;
+mod chaos_simulation;
+mod economic_attacks;
+mod footprint_test;
+mod invariant;
+mod lifecycle_regression;
+mod mem_attribution;
+mod reentrancy_matrix;
+mod repro_live_supply;
+mod stress_simulation;
+mod utils;

@@ -1,0 +1,301 @@
+use common::math::fp::{Ray, Wad};
+use common::math::fp_core::{div_by_int_half_up, mul_div_half_up, rescale_half_up};
+use common::rates::*;
+use controller::constants::{MILLISECONDS_PER_YEAR, RAY, WAD};
+use soroban_sdk::Env;
+#[test]
+fn test_rescale_same_decimals() {
+    let env = Env::default();
+    assert_eq!(rescale_half_up(&env, 12345, 7, 7), 12345);
+    assert_eq!(rescale_half_up(&env, 0, 18, 18), 0);
+    assert_eq!(rescale_half_up(&env, -100, 6, 6), -100);
+}
+
+#[test]
+fn test_rescale_upscale() {
+    let env = Env::default();
+    let result = rescale_half_up(&env, 100, 7, 18);
+    assert_eq!(result, 100 * 100_000_000_000i128);
+}
+
+#[test]
+fn test_rescale_downscale_half_up() {
+    let env = Env::default();
+    let result = rescale_half_up(&env, 1_500_000_000_000i128, 18, 7);
+    assert_eq!(result, 15);
+
+    let result = rescale_half_up(&env, 1_550_000_000_000i128, 18, 7);
+    assert_eq!(result, 16);
+
+    let result = rescale_half_up(&env, 1_449_999_999_999i128, 18, 7);
+    assert_eq!(result, 14);
+}
+
+#[test]
+fn test_mul_div_half_up_zero() {
+    let env = Env::default();
+    assert_eq!(mul_div_half_up(&env, 0, RAY, RAY), 0);
+    assert_eq!(mul_div_half_up(&env, RAY, 0, RAY), 0);
+    assert_eq!(mul_div_half_up(&env, 0, 0, RAY), 0);
+}
+
+#[test]
+fn test_mul_div_half_up_precision_boundary() {
+    let env = Env::default();
+
+    let result = mul_div_half_up(&env, 3, WAD / 2, WAD);
+    assert_eq!(result, 2);
+
+    let result = mul_div_half_up(&env, 1, WAD / 2, WAD);
+    assert_eq!(result, 1);
+}
+
+#[test]
+fn test_div_half_up_exact() {
+    let env = Env::default();
+
+    let result = mul_div_half_up(&env, 10 * WAD, WAD, 2 * WAD);
+    assert_eq!(result, 5 * WAD);
+}
+
+#[test]
+fn test_div_half_up_rounds_up() {
+    let env = Env::default();
+
+    let result = mul_div_half_up(&env, 2 * WAD, WAD, 3 * WAD);
+    assert_eq!(result, 666_666_666_666_666_667);
+}
+
+#[test]
+fn test_div_by_int_half_up() {
+    let env = Env::default();
+    assert_eq!(div_by_int_half_up(&env, 7, 2), 4);
+
+    assert_eq!(div_by_int_half_up(&env, 6, 2), 3);
+
+    assert_eq!(div_by_int_half_up(&env, 5, 3), 2);
+}
+
+#[test]
+fn test_wad_min_max() {
+    let a = Wad::from(5 * WAD);
+    let b = Wad::from(7 * WAD);
+    let c = Wad::from(-3 * WAD);
+
+    assert_eq!(a.min(b), a, "min picks the smaller side");
+    assert_eq!(a.max(b), b, "max picks the larger side");
+    assert_eq!(a.min(a), a, "min is reflexive on equal values");
+    assert_eq!(a.max(a), a, "max is reflexive on equal values");
+    assert_eq!(c.min(a), c, "min handles negatives");
+    assert_eq!(c.max(a), a, "max handles negatives");
+}
+
+fn make_test_params() -> controller::types::MarketParams {
+    use common::math::fp::{Bps, Ray};
+    controller::types::MarketParams {
+        base_borrow_rate: Ray::from(RAY / 100),
+        slope1: Ray::from(RAY * 4 / 100),
+        slope2: Ray::from(RAY * 10 / 100),
+        slope3: Ray::from(RAY * 300 / 100),
+        mid_utilization: Ray::from(RAY * 50 / 100),
+        optimal_utilization: Ray::from(RAY * 80 / 100),
+        max_utilization: Ray::from(RAY * 95 / 100),
+        max_borrow_rate: Ray::from(RAY),
+        reserve_factor: Bps::from(1000),
+        is_flashloanable: false,
+        flashloan_fee: 0,
+        asset_id: soroban_sdk::Address::from_str(
+            &Env::default(),
+            "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+        ),
+        asset_decimals: 7,
+    }
+}
+#[test]
+fn test_borrow_rate_zero_utilization() {
+    let env = Env::default();
+    let params = make_test_params();
+
+    let rate = calculate_borrow_rate(&env, Ray::ZERO, &params);
+    let expected = div_by_int_half_up(&env, RAY / 100, MILLISECONDS_PER_YEAR as i128);
+    assert_eq!(rate.raw(), expected);
+}
+#[test]
+fn test_borrow_rate_at_mid_utilization() {
+    let env = Env::default();
+    let params = make_test_params();
+
+    let util_mid = RAY * 50 / 100;
+    let rate = calculate_borrow_rate(&env, Ray::from(util_mid), &params);
+    let expected_annual = RAY * 5 / 100;
+    let expected = div_by_int_half_up(&env, expected_annual, MILLISECONDS_PER_YEAR as i128);
+    assert!((rate.raw() - expected).abs() <= 1);
+}
+#[test]
+fn test_borrow_rate_at_optimal_utilization() {
+    let env = Env::default();
+    let params = make_test_params();
+
+    let util_opt = RAY * 80 / 100;
+    let rate = calculate_borrow_rate(&env, Ray::from(util_opt), &params);
+    let expected_annual = RAY * 15 / 100;
+    let expected = div_by_int_half_up(&env, expected_annual, MILLISECONDS_PER_YEAR as i128);
+    assert!((rate.raw() - expected).abs() <= 1);
+}
+#[test]
+fn test_borrow_rate_full_utilization() {
+    let env = Env::default();
+    let params = make_test_params();
+
+    let rate = calculate_borrow_rate(&env, Ray::ONE, &params);
+    let expected = div_by_int_half_up(
+        &env,
+        params.max_borrow_rate.raw(),
+        MILLISECONDS_PER_YEAR as i128,
+    );
+    assert!((rate.raw() - expected).abs() <= 1);
+}
+#[test]
+fn test_borrow_rate_capped_at_max() {
+    let env = Env::default();
+    let params = make_test_params();
+
+    let rate = calculate_borrow_rate(&env, Ray::from(RAY * 90 / 100), &params);
+    let max_rate = div_by_int_half_up(&env, RAY, MILLISECONDS_PER_YEAR as i128);
+    assert!((rate.raw() - max_rate).abs() <= 1);
+}
+#[test]
+fn test_deposit_rate_zero_utilization() {
+    let env = Env::default();
+    let rate = calculate_deposit_rate(
+        &env,
+        Ray::ZERO,
+        Ray::from(RAY / 10),
+        common::math::fp::Bps::from(1000),
+    );
+    assert_eq!(rate, Ray::ZERO);
+}
+#[test]
+fn test_deposit_rate_with_reserve_factor() {
+    let env = Env::default();
+    let rate = calculate_deposit_rate(
+        &env,
+        Ray::from(RAY * 80 / 100),
+        Ray::from(RAY * 5 / 100),
+        common::math::fp::Bps::from(1000),
+    );
+    let expected = RAY * 36 / 1000;
+    assert!((rate.raw() - expected).abs() <= 1);
+}
+#[test]
+fn test_compound_interest_zero_delta() {
+    let env = Env::default();
+    let result = compound_interest(&env, Ray::from(RAY / 10), 0);
+    assert_eq!(result, Ray::ONE);
+}
+#[test]
+fn test_compound_interest_one_year() {
+    let env = Env::default();
+
+    let annual_rate = RAY / 10;
+    let rate_per_ms = div_by_int_half_up(&env, annual_rate, MILLISECONDS_PER_YEAR as i128);
+    let factor = compound_interest(&env, Ray::from(rate_per_ms), MILLISECONDS_PER_YEAR);
+
+    let expected = 1_105_170_918_075_647_624_811_707_826_i128;
+
+    let diff = (factor.raw() - expected).abs();
+    let tolerance = expected / 1_000_000;
+    assert!(
+        diff < tolerance,
+        "compound interest accuracy: got {}, expected {}, diff={}",
+        factor.raw(),
+        expected,
+        diff
+    );
+}
+#[test]
+fn test_utilization_zero_supply() {
+    let env = Env::default();
+    assert_eq!(utilization(&env, Ray::from(50 * RAY), Ray::ZERO), Ray::ZERO);
+}
+#[test]
+fn test_utilization_over_one() {
+    let env = Env::default();
+    let util = utilization(&env, Ray::from(150 * RAY), Ray::from(100 * RAY));
+    let expected = RAY * 3 / 2;
+    assert!((util.raw() - expected).abs() <= 1);
+}
+#[test]
+fn test_supply_index_update_zero_rewards() {
+    let env = Env::default();
+    let result = update_supply_index(&env, Ray::from(100 * RAY), Ray::ONE, Ray::ZERO);
+    assert_eq!(
+        result,
+        Ray::ONE,
+        "zero rewards should leave index unchanged"
+    );
+}
+#[test]
+fn test_supply_index_update_with_rewards() {
+    let env = Env::default();
+    let new_index = update_supply_index(&env, Ray::from(100 * RAY), Ray::ONE, Ray::from(5 * RAY));
+
+    let expected = RAY * 105 / 100;
+    assert!((new_index.raw() - expected).abs() <= 1);
+}
+#[test]
+fn test_borrow_index_update() {
+    let env = Env::default();
+    let factor = RAY + RAY * 5 / 100;
+    let new_index = update_borrow_index(&env, Ray::ONE, Ray::from(factor));
+    let expected = RAY * 105 / 100;
+    assert!((new_index.raw() - expected).abs() <= 1);
+}
+#[test]
+fn test_supplier_rewards_split() {
+    let env = Env::default();
+    let params = make_test_params();
+
+    let borrowed = Ray::from(100 * RAY);
+    let old_index = Ray::ONE;
+    let new_index = Ray::from(RAY + RAY / 100);
+
+    let (rewards, fee) = calculate_supplier_rewards(&env, &params, borrowed, new_index, old_index);
+
+    let expected_fee = RAY / 10;
+    let expected_rewards = RAY * 9 / 10;
+
+    assert!((fee.raw() - expected_fee).abs() <= 1);
+    assert!((rewards.raw() - expected_rewards).abs() <= 1);
+    assert_eq!(
+        rewards.raw() + fee.raw(),
+        RAY,
+        "rewards + fee should equal total interest"
+    );
+}
+#[test]
+fn test_scaled_to_original_basic() {
+    let env = Env::default();
+    let result = scaled_to_original(&env, Ray::from(100 * RAY), Ray::from(RAY * 105 / 100));
+    let expected = 105 * RAY;
+    assert!((result.raw() - expected).abs() <= 1);
+}
+#[test]
+fn test_compound_interest_small_rate() {
+    let env = Env::default();
+    let annual_rate = RAY / 10_000;
+    let rate_per_ms = div_by_int_half_up(&env, annual_rate, MILLISECONDS_PER_YEAR as i128);
+    let factor = compound_interest(&env, Ray::from(rate_per_ms), MILLISECONDS_PER_YEAR);
+
+    assert!(
+        factor.raw() > RAY,
+        "compound factor should be > 1.0 for positive rate"
+    );
+    let growth = factor.raw() - RAY;
+    assert!(
+        growth > RAY / 10_001 && growth < RAY / 9_999,
+        "growth {} should be ~{}",
+        growth,
+        RAY / 10_000
+    );
+}

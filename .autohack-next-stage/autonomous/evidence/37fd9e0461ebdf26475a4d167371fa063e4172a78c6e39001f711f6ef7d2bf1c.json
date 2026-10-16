@@ -1,0 +1,39 @@
+{
+  "checks": {
+    "has_reproduction_test": false,
+    "in_scope_at_processing": true,
+    "source_commit_matches": true,
+    "triage_requires_review": false
+  },
+  "commit": "598d3905a6f4ebe68a52c79d461bedb7246fa187",
+  "lead": {
+    "file": "hardhat/hardhat-solidity-docgen/internal/utils/execall.ts",
+    "fingerprint": "310840617c6a7d46b78e",
+    "guidance": "Review command construction and input provenance",
+    "line": 10,
+    "rule": "JS_CHILD_EXEC"
+  },
+  "note": "Automated offline evidence preparation only. No project-specific reproduction or verified security impact.",
+  "processed_at": "2026-10-15T09:36:30.551830+00:00",
+  "repository": "OpenZeppelin/openzeppelin-contracts",
+  "scope_urls": [
+    "https://immunefi.com/bug-bounty/openzeppelin/scope/"
+  ],
+  "source_check": {
+    "commit": "598d3905a6f4ebe68a52c79d461bedb7246fa187",
+    "excerpt": "    1: /**\n    2:  * Iterates over all contiguous matches of the regular expression over the\n    3:  * text. Stops as soon as the regular expression no longer matches at the\n    4:  * current position.\n    5:  */\n    6: export function* execAll(re: RegExp, text: string) {\n    7:   re = new RegExp(re, re.flags + (re.sticky ? '' : 'y'));\n    8: \n    9:   while (true) {\n   10:     const match = re.exec(text);\n   11: \n   12:     // We break out of the loop if there is no match or if the empty string is\n   13:     // matched because no progress will be made and it will loop indefinitely.\n   14:     if (!match?.[0]) break;\n   15: \n   16:     yield match;\n   17:   }\n   18: }",
+    "file": "hardhat/hardhat-solidity-docgen/internal/utils/execall.ts",
+    "file_sha256": "b27a5fe6eb5ae22bb891395a26f8a5c1981afaeb61ef1e6fb6def6489d33c691",
+    "line": 10,
+    "status": "source_matched"
+  },
+  "source_fingerprint": "85778ad86d994e95ed4bbfeb0f341bd2114abdc4afd4737879f7d501ea5d7725",
+  "status": "needs_project_specific_reproduction",
+  "triage": {
+    "classification": "likely_false_positive",
+    "evidence": "The rule is about command construction and input provenance, but the code in question is not a false positive but a static analysis rule that is not being applied to the actual code.",
+    "follow_up": "If the rule is applied to the actual code, it would be a false positive. However, since the rule is not being applied to the actual code, it is not a false positive.",
+    "rationale": "The code is not a false positive but a static analysis rule that is not being applied to the actual code. The rule is about command construction and input provenance, but the code in question is not a false positive but a static analysis rule that is not being applied to the actual code. The rule is not being applied to the actual code, so it is not a false positive."
+  },
+  "verified_vulnerability": false
+}

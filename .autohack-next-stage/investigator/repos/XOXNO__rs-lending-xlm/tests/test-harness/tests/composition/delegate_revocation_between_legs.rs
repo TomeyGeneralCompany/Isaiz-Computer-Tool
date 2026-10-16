@@ -1,0 +1,107 @@
+//! GH-12. A delegate contract keeps only the permissionless verbs after the
+//! owner removes it, and loses the owner-gated verbs the moment governance
+//! deactivates it as a position manager, even while the stored grant lists it.
+
+use crate::helpers::{borrow_op, repay_op, withdraw_op};
+use soroban_sdk::vec;
+use test_harness::{assert_contract_error, errors, LendingTest, ALICE, BOB};
+
+const U: i128 = 10_000_000;
+
+#[test]
+fn a_removed_delegate_can_still_repay_but_cannot_borrow_or_withdraw() {
+    let mut t = LendingTest::new().standard_two_asset_dust_disabled();
+    t.supply(BOB, "ETH", 100.0);
+    t.supply(ALICE, "USDC", 10_000.0);
+    let account = t.account_id(ALICE);
+    let runner = t.deploy_script_runner();
+    t.fund_runner(&runner, "ETH", U);
+    let alice = t.get_or_create_user(ALICE);
+    t.ctrl_client().set_position_manager(&runner, &true);
+    t.ctrl_client().add_delegate(&alice, &account, &runner);
+
+    t.run_script(
+        &runner,
+        &vec![&t.env, borrow_op(&t, account, "ETH", U / 10, None)],
+    )
+    .expect("a live delegate borrows");
+
+    t.ctrl_client().remove_delegate(&alice, &account, &runner);
+    t.run_script(&runner, &vec![&t.env, repay_op(&t, account, "ETH", U / 20)])
+        .expect("repay is permissionless");
+    assert_contract_error(
+        t.run_script(
+            &runner,
+            &vec![&t.env, borrow_op(&t, account, "ETH", 1, None)],
+        )
+        .map(|_| ()),
+        errors::NOT_AUTHORIZED,
+    );
+    assert_contract_error(
+        t.run_script(
+            &runner,
+            &vec![&t.env, withdraw_op(&t, account, "USDC", 1, None)],
+        )
+        .map(|_| ()),
+        errors::NOT_AUTHORIZED,
+    );
+}
+
+#[test]
+fn deactivating_the_manager_kills_a_stored_grant_immediately() {
+    let mut t = LendingTest::new().standard_two_asset_dust_disabled();
+    t.supply(BOB, "ETH", 100.0);
+    t.supply(ALICE, "USDC", 10_000.0);
+    let account = t.account_id(ALICE);
+    let runner = t.deploy_script_runner();
+    let alice = t.get_or_create_user(ALICE);
+    t.ctrl_client().set_position_manager(&runner, &true);
+    t.ctrl_client().add_delegate(&alice, &account, &runner);
+    t.ctrl_client().set_position_manager(&runner, &false);
+    assert_contract_error(
+        t.run_script(
+            &runner,
+            &vec![&t.env, borrow_op(&t, account, "ETH", U / 10, None)],
+        )
+        .map(|_| ()),
+        errors::NOT_AUTHORIZED,
+    );
+    t.ctrl_client().set_position_manager(&runner, &true);
+    t.run_script(
+        &runner,
+        &vec![&t.env, borrow_op(&t, account, "ETH", U / 10, None)],
+    )
+    .expect("reactivation re-arms the still-stored grant");
+}
+
+#[test]
+fn a_stranger_cannot_grant_or_revoke_a_delegate_on_another_owners_account() {
+    let mut t = LendingTest::new().standard_two_asset_dust_disabled();
+    t.supply(ALICE, "USDC", 10_000.0);
+    let account = t.account_id(ALICE);
+    let runner = t.deploy_script_runner();
+    let alice = t.get_or_create_user(ALICE);
+    let bob = t.get_or_create_user(BOB);
+    t.ctrl_client().set_position_manager(&runner, &true);
+
+    // The account exists, so #13 here is the owner check, not the meta lookup.
+    assert_eq!(
+        t.ctrl_client().try_add_delegate(&bob, &account, &runner),
+        Err(Ok(soroban_sdk::Error::from_contract_error(
+            errors::ACCOUNT_NOT_IN_MARKET
+        )))
+    );
+
+    t.ctrl_client().add_delegate(&alice, &account, &runner);
+    assert_eq!(
+        t.ctrl_client().try_remove_delegate(&bob, &account, &runner),
+        Err(Ok(soroban_sdk::Error::from_contract_error(
+            errors::ACCOUNT_NOT_IN_MARKET
+        )))
+    );
+    t.run_script(
+        &runner,
+        &vec![&t.env, withdraw_op(&t, account, "USDC", U, None)],
+    )
+    .expect("the grant survives a stranger's revoke attempt");
+}

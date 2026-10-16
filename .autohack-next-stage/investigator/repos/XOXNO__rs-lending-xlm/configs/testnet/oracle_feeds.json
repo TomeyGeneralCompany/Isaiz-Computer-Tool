@@ -1,0 +1,91 @@
+{
+  "max_submission_age_seconds": 900,
+  "max_stale_seconds": 93600,
+  "max_relative_skew_seconds": 900,
+  "feeds": [
+    {
+      "feed_id": "SPIKOEUTBL",
+      "asset": {
+        "tag": "Other",
+        "value": "SPIKOEUTBL"
+      }
+    },
+    {
+      "feed_id": "SPIKOUSTBL",
+      "asset": {
+        "tag": "Other",
+        "value": "SPIKOUSTBL"
+      }
+    },
+    {
+      "feed_id": "SPIKOUKTBL",
+      "asset": {
+        "tag": "Other",
+        "value": "SPIKOUKTBL"
+      }
+    },
+    {
+      "feed_id": "DEJTRSY",
+      "asset": {
+        "tag": "Other",
+        "value": "DEJTRSY"
+      }
+    },
+    {
+      "feed_id": "DEJAAA",
+      "asset": {
+        "tag": "Other",
+        "value": "DEJAAA"
+      }
+    },
+    {
+      "feed_id": "SPIKOSPKCC",
+      "asset": {
+        "tag": "Other",
+        "value": "SPIKOSPKCC"
+      }
+    },
+    {
+      "feed_id": "SPIKOEURSPKCC",
+      "asset": {
+        "tag": "Other",
+        "value": "SPIKOEURSPKCC"
+      }
+    },
+    {
+      "feed_id": "SPIKOSAFO",
+      "asset": {
+        "tag": "Other",
+        "value": "SPIKOSAFO"
+      }
+    },
+    {
+      "feed_id": "SPIKOEURSAFO",
+      "asset": {
+        "tag": "Other",
+        "value": "SPIKOEURSAFO"
+      }
+    },
+    {
+      "feed_id": "SPIKOGBPSAFO",
+      "asset": {
+        "tag": "Other",
+        "value": "SPIKOGBPSAFO"
+      }
+    },
+    {
+      "feed_id": "LIQVID1039",
+      "asset": {
+        "tag": "Stellar",
+        "value": "CAH7FDDP6IDC76VTXNPN6MF5TWVZMM2N3PCU5C7TXRLTCKBSG6BGUGEA"
+      }
+    },
+    {
+      "feed_id": "LIQVID1037",
+      "asset": {
+        "tag": "Stellar",
+        "value": "CDCS4Y5BZY62YS2ABQHZSQXWGFHNQXID64CYDCBSQDNDKEG6T2OE2HWC"
+      }
+    }
+  ]
+}

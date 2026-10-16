@@ -1,0 +1,9 @@
+[Unit]
+Description=Refresh Immunefi public bounty scope every six hours
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=6h
+Persistent=true
+Unit=autohack-immunefi.service
+[Install]
+WantedBy=timers.target

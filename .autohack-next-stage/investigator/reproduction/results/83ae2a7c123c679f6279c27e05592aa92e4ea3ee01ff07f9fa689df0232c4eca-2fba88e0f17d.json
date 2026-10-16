@@ -1,0 +1,13 @@
+{
+  "commit": "b5f10574f943911635754dd76ed6ce95858b7d93",
+  "processed_at": "2026-10-14T23:59:32.372683+00:00",
+  "repository": "OpenZeppelin/uniswap-hooks",
+  "source_record": "/home/izy/isaiz-bugbounty/autohack/.autohack-next-stage/investigator/verification/results/83ae2a7c123c679f6279c27e05592aa92e4ea3ee01ff07f9fa689df0232c4eca.json",
+  "source_sha256": "2fba88e0f17df16c24a92b9e98e08d56a472c43f266c4e6bf7606255a8370146",
+  "status": "awaiting_reproduction_case",
+  "test_result": {
+    "case_manifest": "/home/izy/isaiz-bugbounty/autohack/.autohack-next-stage/investigator/reproduction/cases/83ae2a7c123c679f6279c27e05592aa92e4ea3ee01ff07f9fa689df0232c4eca.json",
+    "reason": "No explicit local regression case supplied"
+  },
+  "verified_vulnerability": false
+}

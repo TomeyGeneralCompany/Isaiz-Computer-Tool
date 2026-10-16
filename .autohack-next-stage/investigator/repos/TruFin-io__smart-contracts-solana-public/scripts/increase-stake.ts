@@ -1,0 +1,136 @@
+import * as anchor from "@coral-xyz/anchor";
+import { AnchorProvider, BN, Program, Wallet } from "@coral-xyz/anchor";
+import { Keypair, LAMPORTS_PER_SOL, PublicKey } from "@solana/web3.js";
+import * as fs from "fs";
+import { getStakePool, getValidatorStakeInfo, randomStakeSeed, transientStakeSeedFor } from "../tests/helpers";
+import { getConnection, getStakePoolAccount, getStakePoolProgramId, getStakerProgramId, parseU64Arg } from "./utils";
+
+// Get the Solana connection
+const connection = getConnection();
+
+// get config variables
+const stake_pool_program_id = new PublicKey(getStakePoolProgramId());
+const staker_program_id = new PublicKey(getStakerProgramId());
+const stake_pool_account = new PublicKey(getStakePoolAccount());
+
+const stake_manager_keypair = Keypair.fromSecretKey(
+  Uint8Array.from(JSON.parse(fs.readFileSync(`${process.cwd()}/accounts/stake-manager.json`, "utf-8")))
+);
+
+const owner_keypair = Keypair.fromSecretKey(
+  Uint8Array.from(JSON.parse(fs.readFileSync(`${process.cwd()}/accounts/owner.json`, "utf-8"))) // Replace with your keypair file
+);
+
+// Configure the Solana connection and Anchor provider
+const provider = new AnchorProvider(connection, new Wallet(owner_keypair), { commitment: "confirmed" });
+anchor.setProvider(provider);
+
+// A script to increase the additional stake of a validator
+// usage: yarn increase-stake <validator> <amount> [ephemeral_seed] [transient_seed]
+// The optional ephemeral_seed lets the operator route around a poisoned ephemeral PDA;
+// when omitted a fresh random seed is used.
+// The optional transient_seed overrides the seed derived from the validator list: the
+// recorded transient_seed_suffix while transient stake is in flight (SPL rejects any other),
+// otherwise a fresh random seed. Pass it explicitly only to address a specific transient PDA.
+// It is positional, so it can only follow an ephemeral_seed: pass "" there to keep a fresh
+// random ephemeral seed rather than making one up, e.g.
+//   yarn increase-stake <validator> <amount> "" <transient_seed>
+async function main() {
+
+  // parse arguments
+  const args = process.argv.slice(2);
+  const validatorVoteAccount = args.length >= 2 && new PublicKey(args[0])
+  if (!validatorVoteAccount) {
+    console.error("Usage: yarn increase-stake <validator> <amount> [ephemeral_seed] [transient_seed]");
+    process.exit(1);
+  }
+
+  const increaseStakeAmount = args.length >= 2 && Number(args[1]) * LAMPORTS_PER_SOL
+  if (!increaseStakeAmount) {
+    console.error("Usage: yarn increase-stake <validator> <amount> [ephemeral_seed] [transient_seed]");
+    process.exit(1);
+  }
+
+  const ephemeralSeedArg = args[2] ? parseU64Arg("ephemeral_seed", args[2]) : null;
+  const transientSeedArg = args[3] ? parseU64Arg("transient_seed", args[3]) : null;
+
+  console.log(
+    "validatorVoteAccount:", validatorVoteAccount.toBase58(),
+    "increaseStakeAmount:", increaseStakeAmount, `${increaseStakeAmount / LAMPORTS_PER_SOL} SOL`
+  );
+
+  // Load the program deployed at the specified address
+  const stakePool = await getStakePool(connection, stake_pool_account);
+
+  // derive the required accounts
+  const [poolWithdrawAuthority] = PublicKey.findProgramAddressSync(
+    [stake_pool_account.toBuffer(), Buffer.from("withdraw")],
+    stake_pool_program_id
+  );
+
+  const [validatorStakeAccount] = PublicKey.findProgramAddressSync([
+    validatorVoteAccount.toBuffer(),
+    stake_pool_account.toBuffer(),
+  ],
+  stake_pool_program_id
+  );
+
+  // default the ephemeral seed to a fresh random value; an explicit seed can be passed to
+  // reuse/route around a specific ephemeral PDA.
+  const ephemeralStakeSeed = ephemeralSeedArg ?? randomStakeSeed();
+  const [ephemeralStakeAccount] = await PublicKey.findProgramAddressSync(
+    [
+      Buffer.from("ephemeral"),
+      stake_pool_account.toBuffer(),
+      ephemeralStakeSeed.toArrayLike(Buffer, "le", 8),
+    ],
+    stake_pool_program_id
+  );
+
+  // the transient seed must be the one recorded in the validator list while transient stake is
+  // in flight, and a fresh random seed otherwise; an explicit seed overrides it
+  const validatorInfo = await getValidatorStakeInfo(connection, stakePool.validatorList, validatorVoteAccount);
+  const transientStakeSeed = transientSeedArg ?? transientStakeSeedFor(validatorInfo);
+  const [transientStakeAccount] = PublicKey.findProgramAddressSync(
+    [
+      Buffer.from("transient"),
+      validatorVoteAccount.toBuffer(),
+      stake_pool_account.toBuffer(),
+      transientStakeSeed.toArrayLike(Buffer, "le", 8),
+    ],
+    stake_pool_program_id
+  );
+
+  console.log(
+    "transientStakeAccount:", transientStakeAccount.toBase58(),
+    "transientStakeSeed:", transientStakeSeed.toString(),
+    "ephemeralStakeAccount:", ephemeralStakeAccount.toBase58(),
+    "ephemeralStakeSeed:", ephemeralStakeSeed.toString()
+  );
+
+  // stake_maanger calls increase_validator_stake
+  const program = await Program.at(staker_program_id, provider);
+  const tx = await program.methods
+    .increaseValidatorStake(new BN(increaseStakeAmount), transientStakeSeed, ephemeralStakeSeed)
+    .accounts({
+      signer: stake_manager_keypair.publicKey,
+      validatorVoteAccount: validatorVoteAccount,
+      stakePool: stake_pool_account,
+      reserveStake: stakePool.reserveStake,
+      withdrawAuthority: poolWithdrawAuthority,
+      validatorList: stakePool.validatorList,
+      validatorStakeAccount: validatorStakeAccount,
+      transientStakeAccount: transientStakeAccount,
+      ephemeralStakeAccount: ephemeralStakeAccount,
+    })
+    .signers([stake_manager_keypair])
+    .rpc();
+
+  console.log("IncreaseAdditionalValidatorStake tx hash:", tx);
+}
+
+// Run the main function
+main().catch((error) => {
+    console.error("Unexpected error:", error);
+    process.exit(1);
+});

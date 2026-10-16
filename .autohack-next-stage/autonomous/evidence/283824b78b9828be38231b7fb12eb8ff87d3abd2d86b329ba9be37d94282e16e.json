@@ -1,0 +1,39 @@
+{
+  "checks": {
+    "has_reproduction_test": false,
+    "in_scope_at_processing": true,
+    "source_commit_matches": true,
+    "triage_requires_review": false
+  },
+  "commit": "598d3905a6f4ebe68a52c79d461bedb7246fa187",
+  "lead": {
+    "file": "contracts/utils/SimulateCall.sol",
+    "fingerprint": "6aa76eb2dab30c3319d6",
+    "guidance": "Review delegatecall target and access control",
+    "line": 26,
+    "rule": "SOL_DELEGATECALL"
+  },
+  "note": "Automated offline evidence preparation only. No project-specific reproduction or verified security impact.",
+  "processed_at": "2026-10-15T09:35:00.296593+00:00",
+  "repository": "OpenZeppelin/openzeppelin-contracts",
+  "scope_urls": [
+    "https://immunefi.com/bug-bounty/openzeppelin/scope/"
+  ],
+  "source_check": {
+    "commit": "598d3905a6f4ebe68a52c79d461bedb7246fa187",
+    "excerpt": "   15:     /// @dev Simulates a call to the target contract through a dynamically deployed simulator.\n   16:     function simulateCall(address target, bytes memory data) internal returns (bool success, bytes memory retData) {\n   17:         return simulateCall(target, 0, data);\n   18:     }\n   19: \n   20:     /// @dev Same as {simulateCall-address-bytes} but with a value.\n   21:     function simulateCall(\n   22:         address target,\n   23:         uint256 value,\n   24:         bytes memory data\n   25:     ) internal returns (bool success, bytes memory retData) {\n   26:         (success, retData) = getSimulator().delegatecall(abi.encodePacked(target, value, data));\n   27:         success = !success; // getSimulator() returns the success value inverted\n   28:     }\n   29: \n   30:     /**\n   31:      * @dev Returns the simulator address.\n   32:      *\n   33:      * The simulator REVERTs on success and RETURNs on failure, preserving the return data in both cases.\n   34:      *\n   35:      * * A failed target call returns the return data and succeeds in our context (no state changes).\n   36:      * * A successful target call causes a revert in our context (undoing all state changes) while still\n   37:      * capturing the return data.\n   38:      */",
+    "file": "contracts/utils/SimulateCall.sol",
+    "file_sha256": "669e6b9be383111fb64f01e0fe7b3575fbd86c75e8ce49f58c65fac179d9093b",
+    "line": 26,
+    "status": "source_matched"
+  },
+  "source_fingerprint": "b4fc788560a4e789cb4d236e0f72529b2fa3297214a4a57df3954cd3d239b04f",
+  "status": "needs_project_specific_reproduction",
+  "triage": {
+    "classification": "likely_false_positive",
+    "evidence": "The code is a placeholder for a simulated call function, not a real bug. The implementation is incomplete and lacks proper validation of delegatecall parameters, which is a common issue in Solidity.",
+    "follow_up": "If you have more information, please provide it to help us review the code further.",
+    "rationale": "The code is a placeholder for a simulated call function, not a real bug. The implementation is incomplete and lacks proper validation of delegatecall parameters, which is a common issue in Solidity. However, there is no evidence of a false positive in the provided code."
+  },
+  "verified_vulnerability": false
+}

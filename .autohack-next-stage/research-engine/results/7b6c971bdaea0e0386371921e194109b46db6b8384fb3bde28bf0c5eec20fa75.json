@@ -1,0 +1,14 @@
+{
+  "commit": "97430aa29ac10a70ee0c18f2a905c4925363b58f",
+  "detail": {
+    "language": ".ts",
+    "note": "Solidity Foundry adapter only in this release"
+  },
+  "input_hash": "f37894b10935cb6fe0cc423fb4bac9f05614aa155132fead8038a616a86ba6f2",
+  "processed_at": "2026-10-15T00:50:50.152853+00:00",
+  "repository": "OpenZeppelin/openzeppelin-contracts",
+  "source_draft": "/home/izy/isaiz-bugbounty/autohack/.autohack-next-stage/investigator/triage/drafts/7b6c971bdaea0e0386371921e194109b46db6b8384fb3bde28bf0c5eec20fa75.json",
+  "status": "adapter_not_available",
+  "submitted": false,
+  "verified_vulnerability": false
+}

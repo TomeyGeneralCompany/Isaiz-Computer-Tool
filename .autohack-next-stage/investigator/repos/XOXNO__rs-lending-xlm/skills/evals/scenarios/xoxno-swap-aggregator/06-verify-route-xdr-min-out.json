@@ -1,0 +1,20 @@
+{
+  "skills": [
+    "xoxno-swap-aggregator"
+  ],
+  "query": "Before I sign, I want to check that the routeXdr I got back really enforces the minimum output the quote promised. How do I inspect it?",
+  "expected_behavior": [
+    "Use verifyStellarRouteBytes(routeXdr, { tokenIn, tokenOut, amountIn, minOut }) or mapQuoteResponseToStrategySwap with caller-owned expected values.",
+    "Take pair, input, and accepted minimum from request state. Do not copy expectations only from response JSON.",
+    "Use the published SDK decoder for route inspection. Do not copy an application decoder.",
+    "Build the standalone invocation locally with trusted router, caller, and current source sequence. Prepare it and check assertStellarPreparedTxAuth against builtXdr.",
+    "Do not transfer or approve tokens to the router beforehand. The router pulls input under the sender authorization.",
+    "Simulate the complete transaction. Route verification does not prove liquidity, venue behavior, or budget feasibility.",
+    "Pass caller-owned pair, input, and accepted output floor to the SDK route mapper expected option."
+  ],
+  "machine_checkable": [
+    "Generated TypeScript passes tsc --noEmit against @xoxno/sdk-js@1.0.228 and @stellar/stellar-sdk@16.",
+    "Source imports the SDK route verifier or mapper.",
+    "Source contains no custom ScVal route decoder."
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "repository": "HathorNetwork/hathor-wallet-mobile",
+  "commit": "116a8658d60fb9be25d01847be2a9671ccbf81bf",
+  "scope_sources": [
+    {
+      "asset_type": "websites_and_applications",
+      "asset_url": "https://github.com/HathorNetwork/hathor-wallet-mobile",
+      "program": "hathornetwork",
+      "scope_url": "https://immunefi.com/bug-bounty/hathornetwork/scope/"
+    }
+  ],
+  "original_report": "HathorNetwork__hathor-wallet-mobile-116a8658d60f.json",
+  "lead": {
+    "rule": "JS_CHILD_EXEC",
+    "file": "scripts/update_translations.js",
+    "line": 68,
+    "guidance": "Review command construction and input provenance",
+    "fingerprint": "24be76a10f540722d788"
+  },
+  "source_excerpt": "60:   try {\n61:     // Check if the pot file exists. If not, create it.\n62:     if (!fs.existsSync('./locale/texts.pot')) {\n63:       fs.mkdirSync('./locale', { recursive: true });\n64:       fs.writeFileSync('./locale/texts.pot', '');\n65:     }\n66: \n67:     // Extract the strings from the source code\n68:     execSync('npx ttag extract -o ./locale/texts.pot ./src/', { stdio: 'inherit' });\n69:   } catch (error) {\n70:     console.error('\u274c Error updating pot file:', error);\n71:     process.exit(1);\n72:   }\n73: }\n74: \n75: /**\n76:  * Checks whether the root `.pot` file is outdated.",
+  "triage": {
+    "classification": "likely_false_positive",
+    "rationale": "The code checks for the existence of a file and creates it, but the logic is incomplete and does not address the potential for outdated `.pot` files. The code is not designed to validate or update the `.pot` file, which is a common issue in translation systems. This is a general guideline for command construction, not a specific vulnerability.",
+    "evidence": "The code checks for the existence of a file and creates it, but the logic is incomplete and does not address the potential for outdated `.pot` files.",
+    "follow_up": "If you have more specific questions about the code's behavior, please provide additional context."
+  },
+  "status": "unverified_draft",
+  "verified_vulnerability": false,
+  "generated_at": "2026-10-15T00:56:06.501965+00:00",
+  "note": "Automated static triage only. No exploitability, eligibility, or bounty award established."
+}

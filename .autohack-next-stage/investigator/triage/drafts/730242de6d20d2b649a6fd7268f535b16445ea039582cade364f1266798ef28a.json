@@ -1,0 +1,31 @@
+{
+  "repository": "HathorNetwork/hathor-wallet-mobile",
+  "commit": "116a8658d60fb9be25d01847be2a9671ccbf81bf",
+  "scope_sources": [
+    {
+      "asset_type": "websites_and_applications",
+      "asset_url": "https://github.com/HathorNetwork/hathor-wallet-mobile",
+      "program": "hathornetwork",
+      "scope_url": "https://immunefi.com/bug-bounty/hathornetwork/scope/"
+    }
+  ],
+  "original_report": "HathorNetwork__hathor-wallet-mobile-116a8658d60f.json",
+  "lead": {
+    "rule": "JS_CHILD_EXEC",
+    "file": "scripts/update_translations.js",
+    "line": 89,
+    "guidance": "Review command construction and input provenance",
+    "fingerprint": "37d86f040e0a5a272225"
+  },
+  "source_excerpt": "81: \n82:   let isPotOutdated = false;\n83:   const myTmpDir = fs.mkdtempSync(path.join(tmpdir(), 'check_pot-'));\n84:   temporaryDirs.push(myTmpDir); // Cleanup will be done on process.exit()\n85:   try {\n86:     // Extract the strings from the source code\n87:     execSync(`npx ttag extract -o ${myTmpDir}/pot ./src/`, { stdio: 'inherit' });\n88:     // Generate the `.po` files\n89:     execSync(`msgen -o ${myTmpDir}/po ${myTmpDir}/pot`, { stdio: 'inherit' });\n90:     // Check if the `.pot` file is outdated\n91:     execSync(`msgcmp ${myTmpDir}/po ./locale/texts.pot`, { stdio: 'inherit' });\n92:   } catch (error) {\n93:     isPotOutdated = true;\n94:     console.error('\u274c Error checking pot file, or pot file outdated:', error);\n95:   }\n96: \n97:   return isPotOutdated;",
+  "triage": {
+    "classification": "needs_review",
+    "rationale": "The code is attempting to check if a `.pot` file is outdated, but the logic for determining outdatedness is incomplete and lacks proper validation of the file's contents. The code is not properly handling potential errors or invalid file paths, which could lead to incorrect results. This is a potential issue with the rule's implementation.",
+    "evidence": "The code does not properly validate the `.pot` file contents or handle errors in a robust way.",
+    "follow_up": "If the issue is with the rule's implementation, it may need to be reviewed or updated to ensure it correctly identifies outdated `.pot` files."
+  },
+  "status": "unverified_draft",
+  "verified_vulnerability": false,
+  "generated_at": "2026-10-15T00:59:39.059694+00:00",
+  "note": "Automated static triage only. No exploitability, eligibility, or bounty award established."
+}

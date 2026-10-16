@@ -1,0 +1,34 @@
+// Minor helper for test development. Allows for specific file testing.
+const mainTestMatch = process.env.SPECIFIC_INTEGRATION_TEST_FILE
+  ? `<rootDir>/__tests__/integration/**/${process.env.SPECIFIC_INTEGRATION_TEST_FILE}.test.ts`
+  : '<rootDir>/__tests__/integration/**/*.test.ts';
+
+module.exports = {
+  testRunner: 'jest-circus/runner',
+  clearMocks: true,
+  coverageDirectory: 'coverage-integration',
+  testEnvironment: './CustomEnvironment.js',
+  collectCoverage: true,
+  collectCoverageFrom: ['<rootDir>/src/**/*.js', '<rootDir>/src/**/*.ts'],
+  testMatch: [mainTestMatch],
+  coverageReporters: ['text-summary', 'lcov', 'clover'],
+  testTimeout: 20 * 60 * 1000, // May be adjusted with optimizations
+  setupFilesAfterEnv: ['<rootDir>/setupTests-integration.js'],
+  maxConcurrency: 1,
+  forceExit: true,
+  coverageThreshold: {
+    global: {
+      statements: 42,
+      branches: 30,
+      functions: 40,
+      lines: 42,
+    },
+    // We need a high coverage for the HathorWallet class
+    './src/new/wallet.ts': {
+      statements: 75,
+      branches: 65,
+      functions: 75,
+      lines: 75,
+    },
+  },
+};

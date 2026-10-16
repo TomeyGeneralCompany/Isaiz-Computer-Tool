@@ -1,0 +1,66 @@
+use common::rates::simulate_update_indexes;
+use controller::constants::MS_PER_SECOND;
+use controller::types::MarketIndexRaw;
+use soroban_sdk::testutils::Address as _;
+use test_harness::{
+    assert_contract_error, errors, hub_asset, usdc_preset, LendingTest, ALICE, BOB,
+};
+
+#[test]
+fn test_detailed_indexes_view_matches_pool_simulation() {
+    let mut t = LendingTest::new().standard_two_asset().build();
+
+    t.supply(BOB, "ETH", 100.0);
+    t.supply(ALICE, "USDC", 100_000.0);
+    t.supply(BOB, "USDC", 1_000.0);
+    t.borrow(ALICE, "ETH", 10.0);
+    t.borrow(BOB, "USDC", 100.0);
+
+    t.advance_time(86_400);
+
+    let usdc = t.resolve_asset("USDC");
+    let eth = t.resolve_asset("ETH");
+    let now_ms = t.env.ledger().timestamp() * MS_PER_SECOND;
+
+    let assets = soroban_sdk::vec![&t.env, hub_asset(usdc.clone()), hub_asset(eth.clone())];
+    let views = t.ctrl_client().get_market_indexes_detailed(&assets);
+    assert_eq!(views.len(), 2);
+
+    for (i, asset) in [usdc, eth].iter().enumerate() {
+        let pool = t.resolve_market_by_asset(asset).pool.clone();
+        let sync =
+            pool::LiquidityPoolClient::new(&t.env, &pool).get_sync_data(&hub_asset(asset.clone()));
+        let expected = MarketIndexRaw::from(&simulate_update_indexes(&t.env, now_ms, &sync));
+        let view = views.get_unchecked(i as u32);
+
+        assert!(
+            expected.borrow_index > controller::constants::RAY,
+            "market must have accrued for the equality to be meaningful"
+        );
+        assert_eq!(
+            view.borrow_index, expected.borrow_index,
+            "bulk-seeded borrow index must equal the lazy simulation"
+        );
+        assert_eq!(
+            view.supply_index, expected.supply_index,
+            "bulk-seeded supply index must equal the lazy simulation"
+        );
+    }
+}
+
+#[test]
+fn test_index_view_with_unlisted_asset_still_fails() {
+    let t = LendingTest::new().with_market(usdc_preset()).build();
+
+    let unlisted = soroban_sdk::Address::generate(&t.env);
+    let assets = soroban_sdk::vec![
+        &t.env,
+        hub_asset(t.resolve_asset("USDC")),
+        hub_asset(unlisted)
+    ];
+    let result = match t.ctrl_client().try_get_market_indexes_detailed(&assets) {
+        Ok(res) => res.map(|_| ()).map_err(|e| e.into()),
+        Err(e) => Err(e.expect("expected contract error, got InvokeError")),
+    };
+    assert_contract_error(result, errors::GenericError::PoolNotInitialized as u32);
+}

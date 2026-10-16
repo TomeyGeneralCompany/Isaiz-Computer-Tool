@@ -1,0 +1,39 @@
+{
+  "checks": {
+    "has_reproduction_test": false,
+    "in_scope_at_processing": true,
+    "source_commit_matches": true,
+    "triage_requires_review": false
+  },
+  "commit": "0bc1dd9c49203dd45f48f0046abc4e95a50d06da",
+  "lead": {
+    "file": "contracts/AvocadoMultisig/AvocadoMultisig.sol",
+    "fingerprint": "cddc16525076b5304313",
+    "guidance": "Review authorization based on tx.origin",
+    "line": 131,
+    "rule": "SOL_TX_ORIGIN"
+  },
+  "note": "Automated offline evidence preparation only. No project-specific reproduction or verified security impact.",
+  "processed_at": "2026-10-15T00:09:27.712991+00:00",
+  "repository": "Instadapp/avocado-contracts-public",
+  "scope_urls": [
+    "https://immunefi.com/bug-bounty/instadapp/scope/"
+  ],
+  "source_check": {
+    "commit": "0bc1dd9c49203dd45f48f0046abc4e95a50d06da",
+    "excerpt": "  120:             !(_transientAllowHash ==\n  121:                 bytes31(keccak256(abi.encode(data_, block.timestamp, EXECUTE_OPERATION_SELECTOR))) &&\n  122:                 initiator_ == address(this))\n  123:         ) {\n  124:             revert AvocadoMultisig__Unauthorized();\n  125:         }\n  126: \n  127:         // get and reset transient id\n  128:         uint256 id_ = uint256(_transientId);\n  129:         _transientId = 0;\n  130: \n  131:         if (tx.origin == 0x000000000000000000000000000000000000dEaD) {\n  132:             // tx origin 0x000000000000000000000000000000000000dEaD used for backend gas estimations -> forward to simulate\n  133:             _spell(\n  134:                 address(avoSecondary),\n  135:                 abi.encodeCall(avoSecondary._simulateExecuteActions, (abi.decode(data_, (Action[])), id_, true))\n  136:             );\n  137:         } else {\n  138:             // decode actions to be executed after getting the flashloan and id_ packed into the data_\n  139:             _executeActions(abi.decode(data_, (Action[])), id_, true);\n  140:         }\n  141: \n  142:         return true;\n  143:     }",
+    "file": "contracts/AvocadoMultisig/AvocadoMultisig.sol",
+    "file_sha256": "2dd29453828f5c69eee9b89493c50a5f4965ba7e23d56586a795bf32c0329d91",
+    "line": 131,
+    "status": "source_matched"
+  },
+  "source_fingerprint": "d8400128a611b73f34f25d655e3645a77b9822d9121beb057ac51fe3d1968f85",
+  "status": "needs_project_specific_reproduction",
+  "triage": {
+    "classification": "likely_false_positive",
+    "evidence": "The code checks for a zero tx.origin, which is a known issue, but no further analysis is provided.",
+    "follow_up": "If you have more information, please provide it to help with the review.",
+    "rationale": "The code checks if the tx.origin is zero, which is a known issue with Solana's tx.origin. This is a known bug in Solana and should be fixed. However, the code is not providing any evidence of a false positive, and the context is limited to a single file and line."
+  },
+  "verified_vulnerability": false
+}

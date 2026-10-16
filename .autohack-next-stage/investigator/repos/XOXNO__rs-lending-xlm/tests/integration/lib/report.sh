@@ -1,0 +1,55 @@
+write_report() {
+    local report="$RUN_DIR/report.md"
+    {
+        echo "# Live Testnet Integration Run — \`$RUN_TS\`"
+        echo
+        echo "- Network: **$NETWORK** (\`$RPC_URL\`)"
+        echo "- Date: $(date -u '+%Y-%m-%d %H:%M UTC')"
+        echo "- Controller: \`${CONTROLLER:-n/a}\`"
+        echo "- Central pool: \`${POOL:-n/a}\`"
+        echo "- Aggregator: \`$AGGREGATOR\`"
+        echo "- Mock Reflector: \`${MOCK:-n/a}\` · Mock RedStone: \`${MOCKRS:-n/a}\`"
+        echo
+        echo "## Result summary"
+        echo
+        echo '| status | count | meaning |'
+        echo '|---|---|---|'
+        awk -F'\t' 'NR>1 {c[$4]++} END {
+            m["ok"]="transaction succeeded on-chain";
+            m["read"]="read-only view (simulated, no tx)";
+            m["xfail"]="reverted exactly as the test expected";
+            m["sim-ok"]="budget probe: fits in the per-tx budget";
+            m["sim-exceeded"]="budget probe: Budget,ExceededLimit";
+            m["sim-error"]="budget probe: non-budget simulation error";
+            m["FAIL"]="UNEXPECTED failure";
+            m["retry"]="transient attempt inside a retry loop (a later attempt settled it)";
+            m["UNEXPECTED-OK"]="expected a revert but succeeded";
+            for (k in c) printf "| %s | %d | %s |\n", k, c[k], m[k];
+        }' "$ACTIONS_TSV"
+        echo
+        local phases
+        phases=$(awk -F'\t' 'NR>1 && !seen[$2]++ {print $2}' "$ACTIONS_TSV")
+        for ph in $phases; do
+            echo "## Phase: $ph"
+            echo
+            echo '| # | action | status | fn | instructions | read B | write B | fee (stroops) | tx | note |'
+            echo '|---|---|---|---|---|---|---|---|---|---|'
+            awk -F'\t' -v ph="$ph" -v xp="$EXPLORER_TX" 'NR>1 && $2==ph {
+                link = ($6 != "") ? "[" substr($6,1,8) "…](" xp "/" $6 ")" : "";
+                printf "| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n",
+                    $1, $3, $4, $5, $7, $8, $9, $10, link, $11;
+            }' "$ACTIONS_TSV"
+            echo
+        done
+        echo "---"
+        echo "_Every linked transaction page on stellar.expert shows the full"
+        echo "resource report (CPU instructions, read/write entries and bytes)"
+        echo "under \"Resources\". Memory bytes are not surfaced on-chain or by"
+        echo "explorers — the appendix carries locally measured memory budgets._"
+        if [ -f "$RUN_DIR/appendix.md" ]; then
+            echo
+            cat "$RUN_DIR/appendix.md"
+        fi
+    } > "$report"
+    log "report written: $report"
+}

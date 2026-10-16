@@ -1,0 +1,18 @@
+{
+  "skills": [
+    "xoxno-lending-liquidations"
+  ],
+  "query": "My liquidate tx simulates fine on estimate but reverts with #318. What is going on?",
+  "expected_behavior": [
+    "Identify code and emitter from the same diagnostic before mapping controller SpokeAssetSeizureHalted (318).",
+    "no_seize blocks generated nonzero seizure legs. The planner drops rounded-empty legs before this gate.",
+    "Do not claim every halted supplied asset always blocks every payment size. Inspect the actual plan and simulate the complete write.",
+    "Repayment rejects paused and permits frozen listings. Seizure permits paused or frozen listings, but enforces no_seize on generated legs.",
+    "Missing listing permits repayment and Transfer seizure. Credit requires a listing for a new receiver supply position.",
+    "Use on-chain spoke IDs at least 1."
+  ],
+  "machine_checkable": [
+    "Response contains 'SpokeAssetSeizureHalted' and 'no_seize'",
+    "Any Rust snippet builds with `stellar contract build` against `soroban-sdk = \"28\"` and `xoxno-contract-sdk = \"0.2\"`"
+  ]
+}

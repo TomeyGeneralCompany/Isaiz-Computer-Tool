@@ -1,0 +1,86 @@
+use super::*;
+use test_harness::{liquidatable_usdc_eth, LIQUIDATOR};
+
+#[test]
+fn test_swap_collateral_paused_collateral_reverts() {
+    let mut t = LendingTest::new().standard_two_asset().build();
+
+    t.supply(ALICE, "USDC", 100_000.0);
+    t.fund_router("ETH", 5.0);
+    let steps = build_aggregator_swap(&t, "USDC", "ETH", 10_000_000_000, 5_0000000);
+
+    t.set_spoke_asset_paused("USDC", true);
+
+    assert_contract_error(
+        t.try_withdraw(ALICE, "USDC", 100.0),
+        errors::SPOKE_ASSET_PAUSED,
+    );
+    let result = t.try_swap_collateral(ALICE, "USDC", 1_000.0, "ETH", &steps);
+    assert_contract_error(result, errors::SPOKE_ASSET_PAUSED);
+}
+
+#[test]
+fn test_repay_debt_with_collateral_paused_debt_reverts() {
+    let mut t = LendingTest::new().standard_two_asset().build();
+
+    t.supply(ALICE, "USDC", 100_000.0);
+    t.borrow(ALICE, "ETH", 1.0);
+    t.fund_router("ETH", 1.0);
+    let steps = build_aggregator_swap(&t, "USDC", "ETH", 10_000_000_000, 1_0000000);
+
+    t.set_spoke_asset_paused("ETH", true);
+
+    assert_contract_error(t.try_repay(ALICE, "ETH", 0.5), errors::SPOKE_ASSET_PAUSED);
+    let result = t.try_repay_debt_with_collateral(ALICE, "USDC", 1_000.0, "ETH", &steps, false);
+    assert_contract_error(result, errors::SPOKE_ASSET_PAUSED);
+}
+
+#[test]
+fn test_close_position_paused_residual_collateral_reverts() {
+    let mut t = LendingTest::new().three_asset_usdc_eth_wbtc().build();
+
+    t.supply(ALICE, "USDC", 100_000.0);
+    t.supply(ALICE, "WBTC", 0.1);
+    t.borrow(ALICE, "ETH", 1.0);
+    t.fund_router("ETH", 1.0);
+    let steps = build_aggregator_swap(&t, "USDC", "ETH", 10_000_000_000, 1_0000000);
+
+    t.set_spoke_asset_paused("WBTC", true);
+
+    let result = t.try_repay_debt_with_collateral(ALICE, "USDC", 1_000.0, "ETH", &steps, true);
+    assert_contract_error(result, errors::SPOKE_ASSET_PAUSED);
+}
+
+/// A paused collateral does not block the seizure leg; `no_seize` does (ADR-0008).
+///
+/// Seizure is pro-rata across the account's whole collateral set, so a `paused` gate on
+/// seizure would turn one paused listing into a protocol-wide liquidation halt.
+#[test]
+fn test_liquidation_of_paused_collateral_is_allowed_but_no_seize_blocks_it() {
+    let mut t = liquidatable_usdc_eth();
+
+    t.set_spoke_asset_paused("USDC", true);
+    assert!(
+        t.try_liquidate(LIQUIDATOR, ALICE, "ETH", 1.0).is_ok(),
+        "pausing a collateral must not strand its holders"
+    );
+
+    t.set_spoke_asset_flags("USDC", true, false, true);
+    assert_contract_error(
+        t.try_liquidate(LIQUIDATOR, ALICE, "ETH", 1.0),
+        errors::SPOKE_ASSET_SEIZURE_HALTED,
+    );
+}
+
+#[test]
+fn test_liquidation_of_paused_debt_reverts() {
+    let mut t = liquidatable_usdc_eth();
+
+    t.set_spoke_asset_paused("ETH", true);
+
+    assert_contract_error(t.try_repay(ALICE, "ETH", 0.5), errors::SPOKE_ASSET_PAUSED);
+    assert_contract_error(
+        t.try_liquidate(LIQUIDATOR, ALICE, "ETH", 1.0),
+        errors::SPOKE_ASSET_PAUSED,
+    );
+}

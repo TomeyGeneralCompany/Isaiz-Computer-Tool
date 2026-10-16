@@ -1,0 +1,31 @@
+{
+  "repository": "Instadapp/inst-governance",
+  "commit": "8891f73d17887e272a5317065961269aee94f7cd",
+  "scope_sources": [
+    {
+      "asset_type": "smart_contract",
+      "asset_url": "https://github.com/Instadapp/inst-governance",
+      "program": "instadapp",
+      "scope_url": "https://immunefi.com/bug-bounty/instadapp/scope/"
+    }
+  ],
+  "original_report": "Instadapp__inst-governance-8891f73d1788.json",
+  "lead": {
+    "rule": "JS_CHILD_EXEC",
+    "file": "scripts/verify/lib/actionExtractor.ts",
+    "line": 77,
+    "guidance": "Review command construction and input provenance",
+    "fingerprint": "6a07f79f580d467603a3"
+  },
+  "source_excerpt": "69:     if (closeBrace === -1) continue;\n70: \n71:     const signature = src.slice(m.index, openBrace).trim();\n72:     const rawBody = src.slice(openBrace + 1, closeBrace);\n73:     const body = rawBody.trim();\n74: \n75:     const natspec = grabNatspecAbove(src, m.index);\n76: \n77:     const skippableMatch = /isActionSkippable\\(\\s*(\\d+)\\s*\\)/.exec(signature);\n78:     const skippableIndex = skippableMatch ? Number(skippableMatch[1]) : null;\n79: \n80:     const normalisedBody = normaliseBody(body);\n81:     const bodyHash = keccak256(toHex(normalisedBody));\n82: \n83:     const [startLine, endLine] = computeLineRange(\n84:       src,\n85:       m.index,",
+  "triage": {
+    "classification": "likely_false_positive",
+    "rationale": "The code is not checking for invalid command construction or input provenance, which is a general rule. The provided code is part of a bug-bounty system and may not be relevant to the current review.",
+    "evidence": "The code is part of a bug-bounty system and may not be relevant to the current review.",
+    "follow_up": "If you have more context, please provide it to help with the review."
+  },
+  "status": "unverified_draft",
+  "verified_vulnerability": false,
+  "generated_at": "2026-10-14T23:48:31.720680+00:00",
+  "note": "Automated static triage only. No exploitability, eligibility, or bounty award established."
+}

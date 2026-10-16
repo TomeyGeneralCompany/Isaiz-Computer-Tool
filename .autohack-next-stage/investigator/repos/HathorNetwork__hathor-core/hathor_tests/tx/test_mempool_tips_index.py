@@ -1,0 +1,491 @@
+# SPDX-FileCopyrightText: Hathor Labs
+# SPDX-License-Identifier: Apache-2.0
+
+from unittest.mock import patch
+
+from hathor.crypto.util import decode_address
+from hathor.daa import DAAFactory, TestMode
+from hathor.graphviz import GraphvizVisualizer
+from hathor.indexes.rocksdb_mempool_tips_index import SimpleRocksDBMempoolTipsIndex
+from hathor.simulator.utils import add_new_blocks
+from hathor.transaction import Block, Transaction
+from hathor_tests import unittest
+from hathor_tests.dag_builder.builder import TestDAGBuilder
+from hathor_tests.utils import add_new_transactions
+
+DEBUG: bool = False
+
+
+class TestMempoolTipsIndex(unittest.TestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        assert self._settings is not None
+        settings = self._settings.model_copy(update={'REWARD_SPEND_MIN_BLOCKS': 1})  # for simplicity
+        daa_factory = DAAFactory(settings=settings, test_mode=TestMode.TEST_ALL_WEIGHT)
+        builder = self.get_builder(settings).set_daa_factory(daa_factory)
+
+        self.manager = self.create_peer_from_builder(builder)
+        self.tx_storage = self.manager.tx_storage
+        self.mempool_tips = self.tx_storage.indexes.mempool_tips
+
+        self.dag_builder = TestDAGBuilder.from_manager(self.manager)
+
+    def test_empty_marker_is_written_and_skips_next_initialization(self) -> None:
+        path = self.mkdtemp()
+        settings = self._settings.model_copy(update={'REWARD_SPEND_MIN_BLOCKS': 1})
+        artifacts = self.get_builder(settings).set_rocksdb_path(path).build()
+        manager = artifacts.manager
+        manager.start()
+        self.clock.run()
+        self.clock.advance(5)
+
+        dag_builder = TestDAGBuilder.from_manager(manager)
+        dag_artifacts = dag_builder.build_from_str('''
+            blockchain genesis b[1..1]
+        ''')
+        dag_artifacts.propagate_with(manager, up_to='b1')
+
+        tx_storage = manager.tx_storage
+        mempool_tips = tx_storage.indexes.mempool_tips
+        assert isinstance(mempool_tips, SimpleRocksDBMempoolTipsIndex)
+        assert mempool_tips.get() == set()
+        assert mempool_tips.is_empty_marker_set()
+
+        mempool_tips._clear_empty_marker()
+        assert not mempool_tips.is_empty_marker_set()
+
+        manager.stop()
+        assert artifacts.rocksdb_storage is not None
+        artifacts.rocksdb_storage.close()
+
+        artifacts = self.get_builder(settings).set_rocksdb_path(path).build()
+        tx_storage = artifacts.tx_storage
+        mempool_tips = tx_storage.indexes.mempool_tips
+        assert isinstance(mempool_tips, SimpleRocksDBMempoolTipsIndex)
+
+        with patch.object(mempool_tips, 'init_loop_step', wraps=mempool_tips.init_loop_step) as init_loop_step:
+            tx_storage.indexes._manually_initialize(tx_storage)
+
+        assert init_loop_step.call_count > 0
+        assert mempool_tips.get() == set()
+        assert mempool_tips.is_empty_marker_set()
+
+        assert artifacts.rocksdb_storage is not None
+        artifacts.rocksdb_storage.close()
+
+        artifacts = self.get_builder(settings).set_rocksdb_path(path).build()
+        tx_storage = artifacts.tx_storage
+        mempool_tips = tx_storage.indexes.mempool_tips
+        assert isinstance(mempool_tips, SimpleRocksDBMempoolTipsIndex)
+
+        assert mempool_tips.is_empty_marker_set()
+        with (
+            patch.object(mempool_tips, 'init_loop_step', side_effect=AssertionError('unexpected init loop step')),
+            patch.object(tx_storage, 'get_all_transactions', side_effect=AssertionError('unexpected tx iteration')),
+        ):
+            tx_storage.indexes._manually_initialize(tx_storage)
+
+        assert mempool_tips.get() == set()
+        assert mempool_tips.is_empty_marker_set()
+
+        assert artifacts.rocksdb_storage is not None
+        artifacts.rocksdb_storage.close()
+
+    def test_missing_empty_marker_rebuilds_non_empty_mempool(self) -> None:
+        path = self.mkdtemp()
+        settings = self._settings.model_copy(update={'REWARD_SPEND_MIN_BLOCKS': 1})
+        daa_factory = DAAFactory(settings=settings, test_mode=TestMode.TEST_ALL_WEIGHT)
+        wallet = self._create_test_wallet(unlocked=True)
+        wallet.settings = settings
+        artifacts = self.get_builder(settings) \
+            .set_daa_factory(daa_factory) \
+            .set_rocksdb_path(path) \
+            .set_wallet(wallet) \
+            .enable_wallet_index() \
+            .build()
+        manager = artifacts.manager
+        manager.start()
+        self.clock.run()
+        self.clock.advance(5)
+
+        address = decode_address(wallet.get_unused_address())
+        add_new_blocks(manager, settings.REWARD_SPEND_MIN_BLOCKS + 1, address=address)
+        self.clock.run()
+        tx, = add_new_transactions(manager, 1)
+
+        mempool_tips = manager.tx_storage.indexes.mempool_tips
+        assert isinstance(mempool_tips, SimpleRocksDBMempoolTipsIndex)
+        assert mempool_tips.get() == {tx.hash}
+        assert not mempool_tips.is_empty_marker_set()
+
+        manager.stop()
+        assert artifacts.rocksdb_storage is not None
+        artifacts.rocksdb_storage.close()
+
+        artifacts = self.get_builder(settings).set_rocksdb_path(path).build()
+        tx_storage = artifacts.tx_storage
+        mempool_tips = tx_storage.indexes.mempool_tips
+        assert isinstance(mempool_tips, SimpleRocksDBMempoolTipsIndex)
+
+        assert not mempool_tips.is_empty_marker_set()
+        with patch.object(mempool_tips, 'init_loop_step', wraps=mempool_tips.init_loop_step) as init_loop_step:
+            tx_storage.indexes._manually_initialize(tx_storage)
+
+        assert init_loop_step.call_count > 0
+        assert mempool_tips.get() == {tx.hash}
+        assert not mempool_tips.is_empty_marker_set()
+
+        assert artifacts.rocksdb_storage is not None
+        artifacts.rocksdb_storage.close()
+
+    def test_empty_marker_runtime_updates(self) -> None:
+        mempool_tips = self.mempool_tips
+        assert isinstance(mempool_tips, SimpleRocksDBMempoolTipsIndex)
+
+        artifacts = self.dag_builder.build_from_str('''
+            blockchain genesis b[1..3]
+            b2 < dummy
+            b2 < tx1
+            tx1 <-- b3
+        ''')
+        tx1, = artifacts.get_typed_vertices(['tx1'], Transaction)
+
+        artifacts.propagate_with(self.manager, up_to='b2')
+        assert mempool_tips.get() == set()
+        assert mempool_tips.is_empty_marker_set()
+
+        artifacts.propagate_with(self.manager, up_to='tx1')
+        assert mempool_tips.get() == {tx1.hash}
+        assert not mempool_tips.is_empty_marker_set()
+
+        artifacts.propagate_with(self.manager, up_to='b3')
+        assert mempool_tips.get() == set()
+        assert mempool_tips.is_empty_marker_set()
+
+    def test_mempool_tip_spender_became_valid(self) -> None:
+        """
+        Covers the case where a tx spending a tip becomes non-voided, making the tip not a tip anymore.
+        It's a long test that probably also covers more stuff, as it was created during a debug session.
+        """
+        artifacts = self.dag_builder.build_from_str('''
+            blockchain genesis b[1..3]
+            blockchain b1 a[2..4]
+            b1 < dummy
+
+            b1 < tx1 < tx2 < tx3 < tx4 < b2
+            tx3 <-- b2
+            tx4 <-- b3
+
+            # tx2 has a conflict with tx4
+            tx1.out[0] <<< tx2
+            tx1.out[0] <<< tx4
+
+            # a2 will generate a reorg
+            a2.weight = 10
+            b3 < a2
+            tx2 <-- a3
+        ''')
+
+        b1, b2, b3, a2, a3, a4 = artifacts.get_typed_vertices(['b1', 'b2', 'b3', 'a2', 'a3', 'a4'], Block)
+        tx1, tx2, tx3, tx4, dummy = artifacts.get_typed_vertices(
+            ['tx1', 'tx2', 'tx3', 'tx4', 'dummy'],
+            Transaction,
+        )
+
+        artifacts.propagate_with(self.manager, up_to='b1')
+        if DEBUG:
+            dot = GraphvizVisualizer(self.tx_storage, include_verifications=True, include_funds=True).dot()
+            dot.render('after-b1')
+
+        assert b1.get_metadata().voided_by is None
+
+        assert tx1.get_metadata().validation.is_initial()
+        assert tx2.get_metadata().validation.is_initial()
+        assert tx3.get_metadata().validation.is_initial()
+        assert tx4.get_metadata().validation.is_initial()
+
+        assert tx1.get_metadata().voided_by is None
+        assert tx2.get_metadata().voided_by is None
+        assert tx3.get_metadata().voided_by is None
+        assert tx4.get_metadata().voided_by is None
+
+        assert tx1.get_metadata().first_block is None
+        assert tx2.get_metadata().first_block is None
+        assert tx3.get_metadata().first_block is None
+        assert tx4.get_metadata().first_block is None
+
+        assert set(self.mempool_tips.iter(self.tx_storage)) == set()
+        assert set(self.mempool_tips.iter_all(self.tx_storage)) == set()
+
+        artifacts.propagate_with(self.manager, up_to='tx4')
+        if DEBUG:
+            dot = GraphvizVisualizer(self.tx_storage, include_verifications=True, include_funds=True).dot()
+            dot.render('after-tx4')
+
+        assert set(self.mempool_tips.iter(self.tx_storage)) == {tx1, tx3}
+        assert set(self.mempool_tips.iter_all(self.tx_storage)) == {tx1, tx3, dummy}
+
+        artifacts.propagate_with(self.manager, up_to='b2')
+        if DEBUG:
+            dot = GraphvizVisualizer(self.tx_storage, include_verifications=True, include_funds=True).dot()
+            dot.render('after-b2')
+
+        assert b1.get_metadata().voided_by is None
+        assert b2.get_metadata().voided_by is None
+
+        assert tx1.get_metadata().validation.is_valid()
+        assert tx2.get_metadata().validation.is_valid()
+        assert tx3.get_metadata().validation.is_valid()
+        assert tx4.get_metadata().validation.is_valid()
+
+        assert tx1.get_metadata().voided_by is None
+        assert tx2.get_metadata().voided_by == {tx2.hash}
+        assert tx3.get_metadata().voided_by is None
+        assert tx4.get_metadata().voided_by == {tx4.hash}
+
+        assert tx1.get_metadata().first_block is None
+        assert tx2.get_metadata().first_block is None
+        assert tx3.get_metadata().first_block == b2.hash
+        assert tx4.get_metadata().first_block is None
+
+        assert set(self.mempool_tips.iter(self.tx_storage)) == {tx1}
+        assert set(self.mempool_tips.iter_all(self.tx_storage)) == {tx1}
+
+        artifacts.propagate_with(self.manager, up_to='b3')
+        if DEBUG:
+            dot = GraphvizVisualizer(self.tx_storage, include_verifications=True, include_funds=True).dot()
+            dot.render('after-b3')
+
+        assert b1.get_metadata().voided_by is None
+        assert b2.get_metadata().voided_by is None
+        assert b3.get_metadata().voided_by is None
+
+        assert tx1.get_metadata().voided_by is None
+        assert tx2.get_metadata().voided_by == {tx2.hash}
+        assert tx3.get_metadata().voided_by is None
+        assert tx4.get_metadata().voided_by is None
+
+        assert tx1.get_metadata().first_block == b3.hash
+        assert tx2.get_metadata().first_block is None
+        assert tx3.get_metadata().first_block == b2.hash
+        assert tx4.get_metadata().first_block == b3.hash
+
+        assert set(self.mempool_tips.iter(self.tx_storage)) == set()
+        assert set(self.mempool_tips.iter_all(self.tx_storage)) == set()
+
+        artifacts.propagate_with(self.manager, up_to='a2')
+        if DEBUG:
+            dot = GraphvizVisualizer(self.tx_storage, include_verifications=True, include_funds=True).dot()
+            dot.render('after-a2')
+
+        assert b1.get_metadata().voided_by is None
+        assert b2.get_metadata().voided_by == {b2.hash}
+        assert b3.get_metadata().voided_by == {b3.hash}
+        assert a2.get_metadata().voided_by is None
+
+        assert tx1.get_metadata().voided_by is None
+        assert tx2.get_metadata().voided_by == {tx2.hash}
+        assert tx3.get_metadata().voided_by is None
+        assert tx4.get_metadata().voided_by is None
+
+        assert tx1.get_metadata().first_block is None
+        assert tx2.get_metadata().first_block is None
+        assert tx3.get_metadata().first_block is None
+        assert tx4.get_metadata().first_block is None
+
+        assert set(self.mempool_tips.iter(self.tx_storage)) == {tx3, tx4}
+        assert set(self.mempool_tips.iter_all(self.tx_storage)) == {dummy, tx1, tx3, tx4}
+
+        artifacts.propagate_with(self.manager, up_to='a3')
+        if DEBUG:
+            dot = GraphvizVisualizer(self.tx_storage, include_verifications=True, include_funds=True).dot()
+            dot.render('after-a3')
+
+        assert b1.get_metadata().voided_by is None
+        assert b2.get_metadata().voided_by == {b2.hash}
+        assert b3.get_metadata().voided_by == {b3.hash, tx4.hash}
+        assert a2.get_metadata().voided_by is None
+        assert a3.get_metadata().voided_by == {a3.hash, tx2.hash}
+
+        assert tx1.get_metadata().voided_by is None
+        assert tx2.get_metadata().voided_by == {tx2.hash}
+        assert tx3.get_metadata().voided_by is None
+        assert tx4.get_metadata().voided_by == {tx4.hash}
+
+        assert tx1.get_metadata().first_block is None
+        assert tx2.get_metadata().first_block is None
+        assert tx3.get_metadata().first_block is None
+        assert tx4.get_metadata().first_block is None
+
+        assert set(self.mempool_tips.iter(self.tx_storage)) == {tx1, tx3}
+        assert set(self.mempool_tips.iter_all(self.tx_storage)) == {dummy, tx1, tx3}
+
+        artifacts.propagate_with(self.manager, up_to='a4')
+        if DEBUG:
+            dot = GraphvizVisualizer(self.tx_storage, include_verifications=True, include_funds=True).dot()
+            dot.render('after-a4')
+
+        assert b1.get_metadata().voided_by is None
+        assert b2.get_metadata().voided_by == {b2.hash}
+        assert b3.get_metadata().voided_by == {b3.hash, tx4.hash}
+        assert a2.get_metadata().voided_by is None
+        assert a3.get_metadata().voided_by is None
+        assert a4.get_metadata().voided_by is None
+
+        assert tx1.get_metadata().voided_by is None
+        assert tx2.get_metadata().voided_by is None
+        assert tx3.get_metadata().voided_by is None
+        assert tx4.get_metadata().voided_by == {tx4.hash}
+
+        assert tx1.get_metadata().first_block == a3.hash
+        assert tx2.get_metadata().first_block == a3.hash
+        assert tx3.get_metadata().first_block is None
+        assert tx4.get_metadata().first_block is None
+
+        assert set(self.mempool_tips.iter(self.tx_storage)) == {tx3}
+        assert set(self.mempool_tips.iter_all(self.tx_storage)) == {tx3}
+
+    def test_mempool_tip_became_voided_with_spent(self) -> None:
+        """Covers the case where a tip becomes voided, making the tx it was spending a new tip."""
+        artifacts = self.dag_builder.build_from_str('''
+            blockchain genesis b[1..2]
+            b1 < dummy < tx1 < tx2 < b2
+
+            tx_spent.out[0] <<< tx1
+            tx0.out[0] <<< tx1
+            tx0.out[0] <<< tx2
+
+            tx1.weight = 10
+
+            b2.weight = 10
+            tx2 <-- b2
+        ''')
+
+        b1, b2 = artifacts.get_typed_vertices(['b1', 'b2'], Block)
+        dummy, tx0, tx1, tx2, tx_spent = artifacts.get_typed_vertices(
+            ['dummy', 'tx0', 'tx1', 'tx2', 'tx_spent'],
+            Transaction,
+        )
+
+        artifacts.propagate_with(self.manager, up_to='tx2')
+        if DEBUG:
+            dot = GraphvizVisualizer(self.tx_storage, include_verifications=True, include_funds=True).dot()
+            dot.render('after-tx2')
+
+        assert b1.get_metadata().voided_by is None
+
+        assert tx0.get_metadata().voided_by is None
+        assert tx1.get_metadata().voided_by is None
+        assert tx2.get_metadata().voided_by == {tx2.hash}
+        assert tx_spent.get_metadata().voided_by is None
+
+        assert tx0.get_metadata().first_block is None
+        assert tx1.get_metadata().first_block is None
+        assert tx2.get_metadata().first_block is None
+        assert tx_spent.get_metadata().first_block is None
+
+        assert set(self.mempool_tips.iter(self.tx_storage)) == {tx1}
+        assert set(self.mempool_tips.iter_all(self.tx_storage)) == {dummy, tx_spent, tx0, tx1}
+
+        artifacts.propagate_with(self.manager, up_to='b2')
+        if DEBUG:
+            dot = GraphvizVisualizer(self.tx_storage, include_verifications=True, include_funds=True).dot()
+            dot.render('after-b2')
+
+        assert b1.get_metadata().voided_by is None
+        assert b2.get_metadata().voided_by is None
+
+        assert tx0.get_metadata().voided_by is None
+        assert tx1.get_metadata().voided_by == {tx1.hash}
+        assert tx2.get_metadata().voided_by is None
+        assert tx_spent.get_metadata().voided_by is None
+
+        assert tx0.get_metadata().first_block == b2.hash
+        assert tx1.get_metadata().first_block is None
+        assert tx2.get_metadata().first_block == b2.hash
+        assert tx_spent.get_metadata().first_block is None
+
+        assert set(self.mempool_tips.iter(self.tx_storage)) == {tx_spent}
+        assert set(self.mempool_tips.iter_all(self.tx_storage)) == {tx_spent}
+
+    def test_mempool_tips_on_voided_block(self) -> None:
+        """Test that the mempool tips index is updated when a block is voided."""
+        dag_builder = TestDAGBuilder.from_manager(self.manager)
+        artifacts = dag_builder.build_from_str('''
+            blockchain genesis b[1..12]
+            blockchain b10 a[11..11]
+            b10 < dummy
+
+            tx1 <-- b11
+
+            # a11 makes b11 be voided
+            a11.weight = 10
+            b11 < a11
+
+            # b12 makes a11 be voided
+            b12.weight = 10
+            a11 < b12
+        ''')
+
+        tx1, = artifacts.get_typed_vertices(['tx1'], Transaction)
+        b11, a11, b12 = artifacts.get_typed_vertices(['b11', 'a11', 'b12'], Block)
+
+        # Propagate up to tx1, it should be added to the mempool tips index.
+        artifacts.propagate_with(self.manager, up_to='tx1')
+
+        assert tx1.get_metadata().first_block is None
+        assert tx1.get_metadata().validation.is_valid()
+        assert tx1.get_metadata().voided_by is None
+
+        assert tx1 in self.mempool_tips.iter_all(self.tx_storage)
+        assert tx1 in self.mempool_tips.iter(self.tx_storage)
+
+        # Propagate up to b11, tx1 will be confirmed by it,
+        # and therefore it should be removed from the mempool tips index.
+        artifacts.propagate_with(self.manager, up_to='b11')
+
+        assert b11.get_metadata().validation.is_valid()
+        assert b11.get_metadata().voided_by is None
+
+        assert tx1.get_metadata().first_block == b11.hash
+        assert tx1.get_metadata().validation.is_valid()
+        assert tx1.get_metadata().voided_by is None
+
+        assert tx1 not in self.mempool_tips.iter_all(self.tx_storage)
+        assert tx1 not in self.mempool_tips.iter(self.tx_storage)
+
+        # Propagate up to a11, b11 will be voided, and therefore tx1 should be readded to the mempool tips index.
+        artifacts.propagate_with(self.manager, up_to='a11')
+
+        assert b11.get_metadata().validation.is_valid()
+        assert b11.get_metadata().voided_by == {b11.hash}
+
+        assert a11.get_metadata().validation.is_valid()
+        assert a11.get_metadata().voided_by is None
+
+        assert tx1.get_metadata().first_block is None
+        assert tx1.get_metadata().validation.is_valid()
+        assert tx1.get_metadata().voided_by is None
+
+        assert tx1 in self.mempool_tips.iter_all(self.tx_storage)
+        assert tx1 in self.mempool_tips.iter(self.tx_storage)
+
+        # Propagate up to b12, a11 will be voided,
+        # and therefore tx1 should be removed from the mempool tips index again.
+        artifacts.propagate_with(self.manager, up_to='b12')
+
+        assert b11.get_metadata().validation.is_valid()
+        assert b11.get_metadata().voided_by is None
+
+        assert a11.get_metadata().validation.is_valid()
+        assert a11.get_metadata().voided_by == {a11.hash}
+
+        assert b12.get_metadata().validation.is_valid()
+        assert b12.get_metadata().voided_by is None
+
+        assert tx1.get_metadata().first_block == b11.hash
+        assert tx1.get_metadata().validation.is_valid()
+        assert tx1.get_metadata().voided_by is None
+
+        assert tx1 not in self.mempool_tips.iter_all(self.tx_storage)
+        assert tx1 not in self.mempool_tips.iter(self.tx_storage)

@@ -1,0 +1,75 @@
+# SPDX-FileCopyrightText: Hathor Labs
+# SPDX-License-Identifier: Apache-2.0
+
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING, Optional
+
+from structlog import get_logger
+
+from hathor.indexes.scope import Scope
+from hathor.transaction.base_transaction import BaseTransaction
+
+if TYPE_CHECKING:  # pragma: no cover
+    from hathor.conf.settings import HathorSettings
+    from hathor.indexes.manager import IndexesManager
+    from hathor.transaction.storage import TransactionStorage
+
+logger = get_logger()
+
+
+class BaseIndex(ABC):
+    """ All indexes must inherit from this index.
+
+    This class exists so we can interact with indexes without knowing anything specific to its implemented. It was
+    created to generalize how we initialize indexes and keep track of which ones are up-to-date.
+    """
+    def __init__(self, *, settings: HathorSettings) -> None:
+        self._settings = settings
+        self.log = logger.new()
+
+    def init_start(self, indexes_manager: 'IndexesManager') -> None:
+        """ This method will always be called when starting the index manager, regardless of initialization state.
+
+        It comes with a no-op implementation by default because usually indexes will not need this.
+        """
+        pass
+
+    def still_needs_initialization(self, tx_storage: 'TransactionStorage') -> bool:
+        """Return whether this index still needs to receive transactions during initialization.
+
+        This is called after ``init_start`` and after the index has been cleared, so indexes can use persisted
+        metadata to skip a known unnecessary rebuild.
+        """
+        return True
+
+    def init_finish(self, tx_storage: 'TransactionStorage') -> None:
+        """Called after initialization finishes for indexes selected at the beginning of initialization."""
+        pass
+
+    @abstractmethod
+    def get_scope(self) -> Scope:
+        """ Returns the scope of interest of this index, whether the scope is configurable is up to the index."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_db_name(self) -> Optional[str]:
+        """ The returned string is used to generate the relevant attributes for storing an indexe's state in the db.
+
+        If None is returned, the database will not store the index initialization state and they will always be
+        initialized.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def init_loop_step(self, tx: BaseTransaction) -> None:
+        """ When the index needs to be initialized, this function will be called for every tx in topological order.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def force_clear(self) -> None:
+        """ Clear any existing data in the index.
+        """
+        raise NotImplementedError

@@ -1,0 +1,39 @@
+{
+  "checks": {
+    "has_reproduction_test": false,
+    "in_scope_at_processing": true,
+    "source_commit_matches": true,
+    "triage_requires_review": false
+  },
+  "commit": "8891f73d17887e272a5317065961269aee94f7cd",
+  "lead": {
+    "file": "scripts/verify/lib/externalsExtractor.ts",
+    "fingerprint": "ebafe3a1e0fd537fd9b2",
+    "guidance": "Review command construction and input provenance",
+    "line": 60,
+    "rule": "JS_CHILD_EXEC"
+  },
+  "note": "Automated offline evidence preparation only. No project-specific reproduction or verified security impact.",
+  "processed_at": "2026-10-15T00:09:26.390595+00:00",
+  "repository": "Instadapp/inst-governance",
+  "scope_urls": [
+    "https://immunefi.com/bug-bounty/instadapp/scope/"
+  ],
+  "source_check": {
+    "commit": "8891f73d17887e272a5317065961269aee94f7cd",
+    "excerpt": "   49: export function extractExternalCalls(body: string): ExtractedCall[] {\n   50:   const src = stripComments(body);\n   51:   const calls: ExtractedCall[] = [];\n   52: \n   53:   // Walk every `.<ident>(` occurrence. These are either:\n   54:   //   - method calls on a prior expression (our primary interest)\n   55:   //   - member accesses followed by a paren (same thing syntactically)\n   56:   //   - occasional library calls like `LiquidityCalcs.calcExchangePrices(...)`\n   57:   //     which we also capture; callers filter these out if irrelevant.\n   58:   const METHOD = /\\.([A-Za-z_][A-Za-z0-9_]*)\\s*\\(/g;\n   59:   let m: RegExpExecArray | null;\n   60:   while ((m = METHOD.exec(src)) !== null) {\n   61:     const method = m[1]!;\n   62:     const parenOpen = src.indexOf(\"(\", m.index + 1);\n   63:     if (parenOpen === -1) continue;\n   64:     const parenClose = matchParen(src, parenOpen);\n   65:     if (parenClose === -1) continue;\n   66: \n   67:     // Receiver: walk backwards from `.` collecting a balanced expression.\n   68:     const receiverEnd = m.index;\n   69:     const receiverStart = walkReceiverBack(src, receiverEnd);\n   70:     if (receiverStart === -1) continue;\n   71:     const receiver = src.slice(receiverStart, receiverEnd).trim();\n   72: ",
+    "file": "scripts/verify/lib/externalsExtractor.ts",
+    "file_sha256": "340554d63eea5973a9fefb9b89f9189f3f5987b7d1fee084d7b20d6e00450d58",
+    "line": 60,
+    "status": "source_matched"
+  },
+  "source_fingerprint": "168971675c61b04d74beb33f5d6bdce3075d5d74b82955320a17f9d97d724967",
+  "status": "needs_project_specific_reproduction",
+  "triage": {
+    "classification": "likely_false_positive",
+    "evidence": "The rule is about command construction and input provenance, but the code snippet appears to be part of a verification process for external libraries, not a false positive.",
+    "follow_up": "If the rule is part of a false positive, it would be classified as such. Otherwise, no further action is needed.",
+    "rationale": "The rule is focused on command construction and input provenance, but the code snippet appears to be part of a verification process for external libraries, not a false positive. The logic is unclear and lacks context for a false positive classification."
+  },
+  "verified_vulnerability": false
+}

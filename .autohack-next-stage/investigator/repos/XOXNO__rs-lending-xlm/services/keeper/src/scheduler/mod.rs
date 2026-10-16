@@ -1,0 +1,663 @@
+pub mod budget;
+pub mod tasks;
+
+use anyhow::Result;
+use std::collections::BTreeMap;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::time::{interval, MissedTickBehavior};
+use tokio_util::sync::CancellationToken;
+use tracing::{error, info, warn};
+
+use crate::classify::{classify_persistent, contract_label, KeyClass};
+use crate::config::KeeperConfig;
+use crate::discovery::{commit_user_scan_cursor, snapshot, ContractIds};
+use crate::metrics::Metrics;
+use crate::signer::Ed25519Signer;
+use crate::stellar::client::RpcClient;
+use crate::stellar::tx::{
+    simulate_job, submit_with_sim, SimReport, SubmitOutcome, TxContext, TxJob, TxKind,
+};
+
+use self::budget::TickBudget;
+use self::tasks::{
+    plan_extends, plan_extends_for_keys, plan_index_refresh, plan_restores, restored_keys,
+};
+
+pub struct SchedulerHandle {
+    pub ttl_task: tokio::task::JoinHandle<()>,
+    pub index_task: Option<tokio::task::JoinHandle<()>>,
+}
+
+pub async fn run(
+    cfg: Arc<KeeperConfig>,
+    client: Arc<RpcClient>,
+    signer: Arc<Ed25519Signer>,
+    metrics: Arc<Metrics>,
+    cancel: CancellationToken,
+    dry_run: bool,
+) -> Result<SchedulerHandle> {
+    let ids = ContractIds::resolve(&cfg.contracts)?;
+
+    let ttl = spawn_ttl_loop(
+        cfg.clone(),
+        client.clone(),
+        signer.clone(),
+        metrics.clone(),
+        cancel.clone(),
+        dry_run,
+        ids,
+    );
+    let index = if cfg.schedule.enable_index_refresh {
+        Some(spawn_index_loop(
+            cfg, client, signer, metrics, cancel, dry_run, ids,
+        ))
+    } else {
+        None
+    };
+    Ok(SchedulerHandle {
+        ttl_task: ttl,
+        index_task: index,
+    })
+}
+
+fn spawn_ttl_loop(
+    cfg: Arc<KeeperConfig>,
+    client: Arc<RpcClient>,
+    signer: Arc<Ed25519Signer>,
+    metrics: Arc<Metrics>,
+    cancel: CancellationToken,
+    dry_run: bool,
+    ids: ContractIds,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut tick = interval(Duration::from_secs(cfg.schedule.ttl_tick_seconds.max(1)));
+        tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+
+        // Publish the storage gauges before the first scheduled tick; priming
+        // sends nothing. The immediate tick below is discarded so a
+        // crash-looping keeper cannot send `max_txs_per_tick` transactions at
+        // every restart.
+        prime_storage_metrics(&cfg, &client, &metrics, &ids).await;
+
+        tick.tick().await;
+        loop {
+            tokio::select! {
+                _ = cancel.cancelled() => {
+                    info!(target: "keeper.scheduler", "ttl loop cancelled");
+                    return;
+                }
+                _ = tick.tick() => {
+                    if let Err(e) = run_ttl_tick(&cfg, &client, &signer, &metrics, dry_run, &ids).await {
+                        error!(target: "keeper.scheduler", error = ?e, "ttl tick failed");
+                        metrics.tick_failed.with_label_values(&["ttl"]).inc();
+                    }
+                }
+            }
+        }
+    })
+}
+
+fn spawn_index_loop(
+    cfg: Arc<KeeperConfig>,
+    client: Arc<RpcClient>,
+    signer: Arc<Ed25519Signer>,
+    metrics: Arc<Metrics>,
+    cancel: CancellationToken,
+    dry_run: bool,
+    ids: ContractIds,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut tick = interval(Duration::from_secs(cfg.schedule.index_tick_seconds.max(1)));
+        tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        tick.tick().await;
+        loop {
+            tokio::select! {
+                _ = cancel.cancelled() => {
+                    info!(target: "keeper.scheduler", "index loop cancelled");
+                    return;
+                }
+                _ = tick.tick() => {
+                    if let Err(e) = run_index_tick(&cfg, &client, &signer, &metrics, dry_run, &ids).await {
+                        error!(target: "keeper.scheduler", error = ?e, "index tick failed");
+                        metrics.tick_failed.with_label_values(&["index"]).inc();
+                    }
+                }
+            }
+        }
+    })
+}
+
+async fn run_ttl_tick(
+    cfg: &KeeperConfig,
+    client: &RpcClient,
+    signer: &Ed25519Signer,
+    metrics: &Metrics,
+    dry_run: bool,
+    ids: &ContractIds,
+) -> Result<()> {
+    let snap = snapshot(client, ids, &cfg.contracts, &cfg.schedule).await?;
+    record_snapshot_metrics(metrics, &snap, ids, cfg.safety_margin_ledgers());
+
+    let safety = cfg.safety_margin_ledgers();
+    let restore_jobs = plan_restores(&snap, safety)?;
+    let extend_jobs = plan_extends(&snap, safety)?;
+    commit_user_scan_cursor(&snap);
+
+    let restored = restored_keys(&restore_jobs);
+    metrics.entries_archived.set(restored.len() as i64);
+    let post_restore_extends = plan_extends_for_keys(&restored)?;
+
+    let mut budget = TickBudget::new(cfg.schedule.max_txs_per_tick);
+    let ctx = tx_context(cfg, client, signer);
+
+    drive_jobs(&ctx, metrics, restore_jobs, dry_run, "ttl", &mut budget).await?;
+    let mut extends = extend_jobs;
+    if dry_run {
+        if !post_restore_extends.is_empty() {
+            info!(
+                target: "keeper.scheduler",
+                restored = restored.len(),
+                "[dry-run] would extend restored keys after restore lands (not simulated — would fail pre-restore)"
+            );
+        }
+    } else {
+        extends.extend(post_restore_extends);
+    }
+    drive_jobs(&ctx, metrics, extends, dry_run, "ttl", &mut budget).await
+}
+
+async fn run_index_tick(
+    cfg: &KeeperConfig,
+    client: &RpcClient,
+    signer: &Ed25519Signer,
+    metrics: &Metrics,
+    dry_run: bool,
+    ids: &ContractIds,
+) -> Result<()> {
+    let snap = snapshot(client, ids, &cfg.contracts, &cfg.schedule).await?;
+    record_snapshot_metrics(metrics, &snap, ids, cfg.safety_margin_ledgers());
+
+    if snap.assets.is_empty() {
+        return Ok(());
+    }
+    let jobs = plan_index_refresh(
+        &ids.controller,
+        &signer.public_key_strkey(),
+        &snap.assets,
+        cfg.schedule.asset_chunk,
+    )?;
+    let mut budget = TickBudget::new(cfg.schedule.max_txs_per_tick);
+    let ctx = tx_context(cfg, client, signer);
+    drive_jobs(&ctx, metrics, jobs, dry_run, "index", &mut budget).await
+}
+
+fn tx_context<'a>(
+    cfg: &'a KeeperConfig,
+    client: &'a RpcClient,
+    signer: &'a Ed25519Signer,
+) -> TxContext<'a> {
+    TxContext {
+        client,
+        signer,
+        network_passphrase: &cfg.rpc.passphrase,
+        base_fee_stroops: cfg.fees.base_fee_stroops,
+        resource_fee_multiplier: cfg.fees.resource_fee_multiplier,
+        poll_timeout_seconds: cfg.rpc.timeout_seconds as u32,
+    }
+}
+
+fn record_snapshot_metrics(
+    metrics: &Metrics,
+    snap: &crate::discovery::DiscoverySnapshot,
+    ids: &ContractIds,
+    safety_ledgers: u32,
+) {
+    metrics.max_account_id.set(snap.max_account_id as i64);
+    metrics.current_ledger.set(snap.current_ledger as i64);
+    metrics.safety_margin_ledgers.set(safety_ledgers as i64);
+    metrics.last_tick_timestamp_seconds.set(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0),
+    );
+    publish_storage_gauges(metrics, snap, ids);
+}
+
+/// Publishes the storage gauges once at startup, without planning or sending a
+/// transaction.
+///
+/// `spawn_ttl_loop` discards the first interval tick. Without this, the gauges
+/// stay empty and `keeper_last_tick_timestamp_seconds` stays 0 for a full
+/// `ttl_tick_seconds` after boot, so a new keeper looks dead.
+///
+/// Logs a failure and does not return it, so the loop always starts; the next
+/// scheduled tick retries.
+async fn prime_storage_metrics(
+    cfg: &KeeperConfig,
+    client: &RpcClient,
+    metrics: &Metrics,
+    ids: &ContractIds,
+) {
+    match snapshot(client, ids, &cfg.contracts, &cfg.schedule).await {
+        Ok(snap) => {
+            record_snapshot_metrics(metrics, &snap, ids, cfg.safety_margin_ledgers());
+            info!(
+                target: "keeper.scheduler",
+                ledger = snap.current_ledger,
+                "primed storage gauges at boot"
+            );
+        }
+        Err(e) => {
+            warn!(
+                target: "keeper.scheduler",
+                error = ?e,
+                "boot metric priming failed; gauges stay empty until the first scheduled tick"
+            );
+        }
+    }
+}
+
+/// Classifies one entry into the state the dashboard reports.
+///
+/// `never_created` in bulk is what a wrong key encoding looks like. `expired` is
+/// what `keeper_entries_archived` counts: the RPC returns the entry, its TTL has
+/// lapsed, and the keeper restores it. The RPC returns an archived or evicted
+/// entry with its value and a live-until of 0, so it also reads as `expired`.
+fn entry_state(
+    row: &crate::stellar::client::LedgerEntryQuery,
+    current_ledger: u32,
+) -> &'static str {
+    match (row.value.is_some(), row.live_until_ledger) {
+        (true, Some(live_until)) if live_until < current_ledger => "expired",
+        (true, _) => "live",
+        (false, _) => "never_created",
+    }
+}
+
+/// Publishes the per-`(contract, group)` TTL and entry-count gauges.
+///
+/// Resets both families first, so a group that empties between ticks drops its
+/// series instead of keeping a stale value.
+fn publish_storage_gauges(
+    metrics: &Metrics,
+    snap: &crate::discovery::DiscoverySnapshot,
+    ids: &ContractIds,
+) {
+    metrics.entry_ttl_ledgers_min.reset();
+    metrics.entries.reset();
+
+    let mut min_ttl: BTreeMap<(String, &'static str), u32> = BTreeMap::new();
+    let mut counts: BTreeMap<(String, &'static str, &'static str), i64> = BTreeMap::new();
+
+    let classified = snap
+        .persistent_entries
+        .iter()
+        .map(|row| {
+            (
+                row,
+                classify_persistent(row, &ids.controller, ids.governance.as_ref()),
+            )
+        })
+        .chain(
+            snap.instance_entries
+                .iter()
+                .map(|row| (row, KeyClass::Instance)),
+        )
+        .chain(
+            snap.wasm_code_entries
+                .iter()
+                .map(|row| (row, KeyClass::WasmCode)),
+        );
+
+    for (row, class) in classified {
+        let contract = contract_label(
+            &row.key,
+            ids,
+            snap.pool_id.as_ref(),
+            snap.position_nft_id.as_ref(),
+        );
+        let group = class.label();
+        let state = entry_state(row, snap.current_ledger);
+        *counts.entry((contract.clone(), group, state)).or_insert(0) += 1;
+
+        // Only an entry with a value has a meaningful TTL. Counting an absent
+        // one as zero would pin the group's minimum at zero.
+        if row.value.is_some() {
+            if let Some(live_until) = row.live_until_ledger {
+                let remaining = live_until.saturating_sub(snap.current_ledger);
+                min_ttl
+                    .entry((contract, group))
+                    .and_modify(|m| *m = (*m).min(remaining))
+                    .or_insert(remaining);
+            }
+        }
+    }
+
+    for ((contract, group), remaining) in &min_ttl {
+        metrics
+            .entry_ttl_ledgers_min
+            .with_label_values(&[contract, group])
+            .set(i64::from(*remaining));
+    }
+    for ((contract, group, state), n) in &counts {
+        metrics
+            .entries
+            .with_label_values(&[contract, group, state])
+            .set(*n);
+    }
+}
+
+async fn drive_jobs(
+    ctx: &TxContext<'_>,
+    metrics: &Metrics,
+    jobs: Vec<TxJob>,
+    dry_run: bool,
+    loop_label: &str,
+    budget: &mut TickBudget,
+) -> Result<()> {
+    metrics
+        .jobs_planned
+        .with_label_values(&[loop_label])
+        .inc_by(jobs.len() as u64);
+
+    for job in jobs {
+        if !budget.try_spend() {
+            warn!(
+                target: "keeper.scheduler",
+                loop_label,
+                spent = budget.spent(),
+                "tick budget exhausted; deferring remaining jobs to next tick"
+            );
+            break;
+        }
+        let kind = job.kind;
+        if dry_run {
+            match simulate_job(ctx, &job).await {
+                Ok(SimReport::Ok {
+                    resource_fee,
+                    read_only,
+                    read_write,
+                }) => {
+                    info!(
+                        target: "keeper.scheduler",
+                        kind = kind.as_str(),
+                        resource_fee,
+                        read_only,
+                        read_write,
+                        "[dry-run] sim ok — would submit"
+                    );
+                    metrics
+                        .tx_total
+                        .with_label_values(&[kind.as_str(), "dry_run_ok"])
+                        .inc();
+                    record_sim_fee(metrics, kind, resource_fee);
+                }
+                Ok(SimReport::Rejected(reason)) => {
+                    warn!(
+                        target: "keeper.scheduler",
+                        kind = kind.as_str(),
+                        %reason,
+                        "[dry-run] sim REJECTED"
+                    );
+                    metrics
+                        .sim_failures
+                        .with_label_values(&[kind.as_str(), classify_reason(&reason)])
+                        .inc();
+                }
+                Err(e) => {
+                    error!(target: "keeper.scheduler", kind = kind.as_str(), error = ?e, "[dry-run] sim pipeline error");
+                }
+            }
+            continue;
+        }
+        record_submit_outcome(metrics, kind, submit_with_sim(ctx, job).await);
+    }
+    Ok(())
+}
+
+fn record_submit_outcome(metrics: &Metrics, kind: TxKind, outcome: Result<SubmitOutcome>) {
+    match outcome {
+        Ok(SubmitOutcome::Success {
+            sim_resource_fee, ..
+        }) => {
+            record_sim_fee(metrics, kind, sim_resource_fee);
+            metrics
+                .tx_total
+                .with_label_values(&[kind.as_str(), "success"])
+                .inc();
+        }
+        Ok(SubmitOutcome::SkippedSimError(reason)) => {
+            metrics
+                .sim_failures
+                .with_label_values(&[kind.as_str(), classify_reason(&reason)])
+                .inc();
+        }
+        Ok(SubmitOutcome::Retriable(reason)) => {
+            warn!(target: "keeper.scheduler", kind = kind.as_str(), %reason, "retriable failure");
+            metrics
+                .tx_total
+                .with_label_values(&[kind.as_str(), "retriable"])
+                .inc();
+        }
+        Ok(SubmitOutcome::Failed(reason)) => {
+            error!(target: "keeper.scheduler", kind = kind.as_str(), %reason, "tx failed");
+            metrics
+                .tx_total
+                .with_label_values(&[kind.as_str(), "failed"])
+                .inc();
+        }
+        Err(e) => {
+            error!(target: "keeper.scheduler", kind = kind.as_str(), error = ?e, "submitter pipeline error");
+            metrics
+                .tx_total
+                .with_label_values(&[kind.as_str(), "error"])
+                .inc();
+        }
+    }
+}
+
+fn record_sim_fee(metrics: &Metrics, kind: TxKind, resource_fee: i64) {
+    metrics
+        .sim_resource_fee_stroops
+        .with_label_values(&[kind.as_str()])
+        .set(resource_fee as f64);
+}
+
+fn classify_reason(msg: &str) -> &'static str {
+    let lower = msg.to_ascii_lowercase();
+    if lower.contains("unauthor") || lower.contains("role") {
+        "unauthorized"
+    } else if lower.contains("budget") || lower.contains("instruction") {
+        "budget"
+    } else if lower.contains("archiv") {
+        "archived"
+    } else {
+        "other"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{entry_state, record_snapshot_metrics, record_submit_outcome};
+    use crate::discovery::{ContractIds, DiscoverySnapshot};
+    use crate::metrics::Metrics;
+    use crate::policy::{classify, Decision};
+    use crate::stellar::client::LedgerEntryQuery;
+    use crate::stellar::tx::{SubmitOutcome, TxKind};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    use stellar_rpc_client::{GetTransactionEvents, GetTransactionResponse};
+    use stellar_xdr::{ContractDataDurability, LedgerEntryData, LedgerKey, ScAddress, ScVal};
+
+    const NOW: u32 = 1_000;
+
+    fn row(value: bool, live_until: Option<u32>) -> LedgerEntryQuery {
+        LedgerEntryQuery {
+            key: LedgerKey::ContractData(stellar_xdr::LedgerKeyContractData {
+                contract: ScAddress::Contract(stellar_xdr::ContractId(stellar_xdr::Hash(
+                    [0u8; 32],
+                ))),
+                key: ScVal::Void,
+                durability: ContractDataDurability::Persistent,
+            }),
+            value: value.then_some(LedgerEntryData::ContractData(
+                stellar_xdr::ContractDataEntry {
+                    ext: stellar_xdr::ExtensionPoint::V0,
+                    contract: ScAddress::Contract(stellar_xdr::ContractId(stellar_xdr::Hash(
+                        [0u8; 32],
+                    ))),
+                    key: ScVal::Void,
+                    durability: ContractDataDurability::Persistent,
+                    val: ScVal::Void,
+                },
+            )),
+            live_until_ledger: live_until,
+        }
+    }
+
+    /// The RPC returns an archived or evicted entry with its value and a
+    /// live-until of 0, so it reads as `expired` and is restored.
+    #[test]
+    fn entry_states_cover_every_row_the_rpc_returns() {
+        assert_eq!(entry_state(&row(true, Some(NOW + 500)), NOW), "live");
+        assert_eq!(entry_state(&row(true, Some(NOW - 1)), NOW), "expired");
+        assert_eq!(entry_state(&row(true, Some(0)), NOW), "expired");
+        assert_eq!(classify(Some(0), true, NOW, 100), Decision::Restore);
+        assert_eq!(entry_state(&row(false, None), NOW), "never_created");
+        assert_eq!(
+            entry_state(&row(false, Some(NOW + 500)), NOW),
+            "never_created"
+        );
+    }
+
+    /// Every `state` an alert or dashboard panel selects is one `entry_state`
+    /// can return, so no rule watches a series that never exists.
+    #[test]
+    fn alerts_and_panels_select_only_produced_states() {
+        let produced = ["live", "expired", "never_created"];
+        for (name, text) in [
+            ("ops/alerts.yml", include_str!("../../ops/alerts.yml")),
+            (
+                "ops/grafana-dashboard.json",
+                include_str!("../../ops/grafana-dashboard.json"),
+            ),
+        ] {
+            for selector in text.split("state=").skip(1) {
+                let value: String = selector
+                    .trim_start_matches(['\\', '"'])
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                    .collect();
+                assert!(
+                    produced.contains(&value.as_str()),
+                    "{name} selects state {value:?}, which entry_state never returns"
+                );
+            }
+        }
+    }
+
+    /// An entry whose TTL lapses exactly at the current ledger is still live —
+    /// the bound is exclusive, matching `policy::classify`.
+    #[test]
+    fn ttl_expiring_at_the_current_ledger_is_still_live() {
+        assert_eq!(entry_state(&row(true, Some(NOW)), NOW), "live");
+    }
+
+    /// A submitting keeper publishes the fee its own simulation returned, as a
+    /// dry-run keeper does.
+    #[test]
+    fn a_submitted_job_publishes_its_simulated_resource_fee() {
+        let metrics = Metrics::new("testnet").expect("metrics registry");
+        let resp = GetTransactionResponse {
+            status: "SUCCESS".into(),
+            ledger: Some(1),
+            application_order: None,
+            fee_bump: None,
+            tx_hash: None,
+            created_at: None,
+            envelope: None,
+            result: None,
+            result_meta: None,
+            events: GetTransactionEvents {
+                contract_events: Vec::new(),
+                diagnostic_events: Vec::new(),
+                transaction_events: Vec::new(),
+            },
+        };
+
+        record_submit_outcome(
+            &metrics,
+            TxKind::ExtendFootprintTtl,
+            Ok(SubmitOutcome::Success {
+                resp: Box::new(resp),
+                sim_resource_fee: 12_345,
+            }),
+        );
+
+        let kind = TxKind::ExtendFootprintTtl.as_str();
+        assert_eq!(
+            metrics
+                .sim_resource_fee_stroops
+                .with_label_values(&[kind])
+                .get(),
+            12_345.0
+        );
+        assert_eq!(
+            metrics.tx_total.with_label_values(&[kind, "success"]).get(),
+            1
+        );
+    }
+
+    fn empty_snapshot(current_ledger: u32) -> DiscoverySnapshot {
+        DiscoverySnapshot {
+            current_ledger,
+            assets: Vec::new(),
+            persistent_entries: Vec::new(),
+            instance_entries: Vec::new(),
+            wasm_code_entries: Vec::new(),
+            max_account_id: 0,
+            pool_id: None,
+            position_nft_id: None,
+            next_user_cursor: None,
+        }
+    }
+
+    /// `record_snapshot_metrics`, which `prime_storage_metrics` runs at boot,
+    /// stamps the last-tick timestamp with the current time instead of 0.
+    #[test]
+    fn a_snapshot_stamps_a_real_last_tick_timestamp() {
+        let metrics = Metrics::new("testnet").expect("metrics registry");
+        let ids = ContractIds {
+            controller: [0u8; 32],
+            pool_wasm_hash: [0u8; 32],
+            flash_receiver: None,
+            governance: None,
+            xoxno_oracle_adapter: None,
+            price_aggregator: None,
+            redstone_adapter: None,
+            swap_router: None,
+        };
+
+        // Before any snapshot the gauge holds its registered value, 0.
+        assert_eq!(metrics.last_tick_timestamp_seconds.get(), 0);
+
+        record_snapshot_metrics(&metrics, &empty_snapshot(12_345), &ids, 100);
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock before unix epoch")
+            .as_secs() as i64;
+        let stamped = metrics.last_tick_timestamp_seconds.get();
+        assert!(
+            stamped > 0,
+            "last tick timestamp is still zero; the age panel would report ~57 years"
+        );
+        assert!(
+            (now - stamped).abs() < 60,
+            "last tick timestamp {stamped} is not close to now ({now})"
+        );
+        assert_eq!(metrics.current_ledger.get(), 12_345);
+        assert_eq!(metrics.safety_margin_ledgers.get(), 100);
+    }
+}

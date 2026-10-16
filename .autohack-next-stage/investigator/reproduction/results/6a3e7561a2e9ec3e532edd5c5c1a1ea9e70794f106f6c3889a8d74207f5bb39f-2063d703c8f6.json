@@ -1,0 +1,13 @@
+{
+  "commit": "8891f73d17887e272a5317065961269aee94f7cd",
+  "processed_at": "2026-10-14T23:59:32.365083+00:00",
+  "repository": "Instadapp/inst-governance",
+  "source_record": "/home/izy/isaiz-bugbounty/autohack/.autohack-next-stage/investigator/verification/results/6a3e7561a2e9ec3e532edd5c5c1a1ea9e70794f106f6c3889a8d74207f5bb39f.json",
+  "source_sha256": "2063d703c8f6b41075f8e5ef42ce6d37535ad88022368ba65557e2cd5eae1a2c",
+  "status": "awaiting_reproduction_case",
+  "test_result": {
+    "case_manifest": "/home/izy/isaiz-bugbounty/autohack/.autohack-next-stage/investigator/reproduction/cases/6a3e7561a2e9ec3e532edd5c5c1a1ea9e70794f106f6c3889a8d74207f5bb39f.json",
+    "reason": "No explicit local regression case supplied"
+  },
+  "verified_vulnerability": false
+}

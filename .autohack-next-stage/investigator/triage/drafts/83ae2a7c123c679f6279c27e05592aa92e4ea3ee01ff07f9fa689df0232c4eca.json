@@ -1,0 +1,31 @@
+{
+  "repository": "OpenZeppelin/uniswap-hooks",
+  "commit": "b5f10574f943911635754dd76ed6ce95858b7d93",
+  "scope_sources": [
+    {
+      "asset_type": "smart_contract",
+      "asset_url": "https://github.com/OpenZeppelin/uniswap-hooks",
+      "program": "openzeppelin",
+      "scope_url": "https://immunefi.com/bug-bounty/openzeppelin/scope/"
+    }
+  ],
+  "original_report": "OpenZeppelin__uniswap-hooks-b5f10574f943.json",
+  "lead": {
+    "rule": "JS_CHILD_EXEC",
+    "file": "scripts/publish-docs.js",
+    "line": 7,
+    "guidance": "Review command construction and input provenance",
+    "fingerprint": "f2c65fb19f6c6e5f6a16"
+  },
+  "source_excerpt": "1: const proc = require('child_process');\n2: \n3: const run = cmd => {\n4:     proc.execSync(cmd, { stdio: 'inherit' });\n5: };\n6: \n7: const read = cmd => proc.execSync(cmd, { encoding: 'utf8' }).trim();\n8: \n9: run('npm run prepare-docs');\n10: run('git add -f docs');  // --force needed because generated docs files are gitignored\n11: \n12: // Check if there are staged changes to commit\n13: const stagedChanges = read('git diff --cached --name-only');\n14: if (!stagedChanges) {\n15:     console.log('No changes to commit, skipping commit step');",
+  "triage": {
+    "classification": "likely_false_positive",
+    "rationale": "The code is using 'child_process' to execute commands, which is generally safe but not a direct vulnerability. The presence of 'git diff --cached --name-only' indicates that the code is checking for staged changes, which is a normal part of version control workflows. There is no indication of malicious intent or exploitation.",
+    "evidence": "The code is part of a standard workflow for publishing documentation, not for malicious purposes.",
+    "follow_up": "If you have more specific questions about the code's functionality, feel free to ask."
+  },
+  "status": "unverified_draft",
+  "verified_vulnerability": false,
+  "generated_at": "2026-10-14T23:57:22.469926+00:00",
+  "note": "Automated static triage only. No exploitability, eligibility, or bounty award established."
+}

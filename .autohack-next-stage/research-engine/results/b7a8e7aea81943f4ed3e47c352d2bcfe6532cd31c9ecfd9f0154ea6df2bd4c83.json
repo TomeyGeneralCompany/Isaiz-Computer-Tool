@@ -1,0 +1,14 @@
+{
+  "commit": "8891f73d17887e272a5317065961269aee94f7cd",
+  "detail": {
+    "language": ".ts",
+    "note": "Solidity Foundry adapter only in this release"
+  },
+  "input_hash": "0f18321f3642ffd056b22895fdb59ad63b20659834239c33505178b9e9280910",
+  "processed_at": "2026-10-15T00:50:50.325029+00:00",
+  "repository": "Instadapp/inst-governance",
+  "source_draft": "/home/izy/isaiz-bugbounty/autohack/.autohack-next-stage/investigator/triage/drafts/b7a8e7aea81943f4ed3e47c352d2bcfe6532cd31c9ecfd9f0154ea6df2bd4c83.json",
+  "status": "adapter_not_available",
+  "submitted": false,
+  "verified_vulnerability": false
+}

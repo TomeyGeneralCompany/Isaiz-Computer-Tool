@@ -1,0 +1,81 @@
+{
+  "testnet": {
+    "rpc_url": "https://stellar-testnet-gateway.xoxno.com",
+    "network_passphrase": "Test SDF Network ; September 2015",
+    "timelock_min_delay_ledgers": 12,
+    "governance": "CDS33JDOYH3F3FL4QUQ6DV4WKHML2AKHF4LADTZ57FRUAEBTE7NMY5FQ",
+    "controller": "CCXRWJ6SIU2WPFEGLFGJVITPL57QAYIMIO6OAM2NBGNDQSSCK2FFV3F3",
+    "aggregator": "CDNTWMWW2WGYTKIZTJYNGNVQQZI4KTC5BQRZ3275KESRX5T4O3AYECL5",
+    "accumulator": "GDBBOILYIJBSUQKC3Z3USAW3DGPFHIGVKYA5T4ZUZBO56HBUPHJEN3FV",
+    "pool_wasm_hash": "0be54b45afe46f40b82e66d8569074f421e872d0304c7c540db8dd14df528965",
+    "controller_wasm_hash": "52ed959d53933c4616b927cea04acb2dddc9a7b159c394e926978655ff17fd9b",
+    "governance_wasm_hash": "9a15c97e17f0421fa84fa457dfd231909a37bebebe6e1a6b65bf0ecf0104c230",
+    "ledger_index": 4037973,
+    "reflector_cex_oracle": "CCYOZJCOPG34LLQQ7N24YXBM7LL62R7ONMZ3G6WZAAYPB5OYKOMJRN63",
+    "reflector_dex_oracle": "CAVLP5DH2GJPZMVO7IJY4CVOD5MWEFTJFVPD2YY2FQXOQHRGHK4D6HLP",
+    "reflector_fx_oracle": "CCSSOHTBL3LEWUCBBEB5NJFC2OKFRC74OWEIJIZLRJBGAAU4VMU5NV4W",
+    "redstone_adapter_contract": "CBIHT4HVRIT5OMVLSXZ44J2ZAXYBDDGOSCN3LTN2DOC6SWHDS5IP6BK3",
+    "xoxno_oracle_adapter": "CDYX4ZEO556YZDYDJLUE5XQUE2DLWVFJDTBJJGF7HYQP5HK5NICNTQ6F",
+    "flash_loan_receiver": "CANI3S22VAOTL3EH3JCTMJKTZ3OW5BRLDYQ75FLFUQMCAD4HFYQDQ2X7",
+    "pool": "CBSGF6QOQAMPFBEVSYPEQHSZRIHJ6RCGUPCRDMUX36DEKRWFAO2PZB5A",
+    "hub_ids": {
+      "1": 1,
+      "2": 2,
+      "3": 3,
+      "4": 4
+    },
+    "spoke_ids": {
+      "1": 1,
+      "2": 2,
+      "3": 3,
+      "4": 4,
+      "5": 5,
+      "6": 6,
+      "7": 7
+    },
+    "price_aggregator": "CBMARXSYE56NPDLX42TTICM5GS5XQCYRD5VMCJME624TS6C2S53VETYU",
+    "position_nft": "CDVN5JU675MEDPVRPCYC45AHFC275UH57WEU5OTFE4WFGZBNN7HTLPSY",
+    "price_aggregator_wasm_hash": "7c38fc75e1774fbbdd459ccbfdfe2f224817db8707da6bafcf06561ecb5fee9b"
+  },
+  "mainnet": {
+    "rpc_url": "https://stellar-gateway.xoxno.com",
+    "network_passphrase": "Public Global Stellar Network ; September 2015",
+    "timelock_min_delay_ledgers": 12,
+    "governance": "CC44PEQW7HSEPKAZ5ZRPH2JS5M5KVJXCUBLJ2ZX4E3WCDKMNFILHC2AD",
+    "controller": "CAUCMIN5KSXEVZ7NMXR3LZATGD5EFIEUI5XWTFLYRO2R5OTXI22WE5JX",
+    "aggregator": "CCVENFSVCBYDHVOACFZXMNNYVOZ3LKXPZYU5LUI4N7KTXOKRVYD7F3TR",
+    "accumulator": "GAVWFZK5BGCGBWH4O2CXAHXVRIYVAMGCTZJ24IPLVNLT2WQ2LJBDEEBP",
+    "pool_wasm_hash": "0be54b45afe46f40b82e66d8569074f421e872d0304c7c540db8dd14df528965",
+    "controller_wasm_hash": "52ed959d53933c4616b927cea04acb2dddc9a7b159c394e926978655ff17fd9b",
+    "ledger_index": 64140891,
+    "reflector_cex_oracle": "CAFJZQWSED6YAWZU3GWRTOCNPPCGBN32L7QV43XX5LZLFTK6JLN34DLN",
+    "reflector_dex_oracle": "CALI2BYU2JE6WVRUFYTS6MSBNEHGJ35P4AVCZYF3B6QOE3QKOB2PLE6M",
+    "reflector_fx_oracle": "CBKGPWGKSKZF52CFHMTRR23TBWTPMRDIYZ4O2P5VS65BMHYH4DXMCJZC",
+    "redstone_adapter_contract": "CA526Y2NQWGWVVQ7RFFPGAZMU66PSYJ3UC2MTVAV4ZU7OM5BOPHDXUSG",
+    "xoxno_oracle_adapter": "CDA3XS2HETVCW5GSRN3FH4X3YJ45IA6DNVSZTEOYDFGOCXQK4ZJG22JM",
+    "flash_loan_receiver": "",
+    "pool": "CBXRNDQMAJFG4VUKMKFEMFS75UUXE2SPSNV4LEEFCSNBCN66PYRWBKXO",
+    "governance_wasm_hash": "9a15c97e17f0421fa84fa457dfd231909a37bebebe6e1a6b65bf0ecf0104c230",
+    "hub_ids": {
+      "1": 1,
+      "2": 2,
+      "3": 3
+    },
+    "spoke_ids": {
+      "1": 1,
+      "2": 2,
+      "4": 3,
+      "5": 4,
+      "6": 5,
+      "7": 6,
+      "8": 7,
+      "9": 8
+    },
+    "price_aggregator": "CBGUF2G2Q7HCVCWYISDXBHPVBGMYNXA7PG2VET66YBZX6IKOOV27NSMV",
+    "position_nft": "CAWCSG77AY2W24QZ6ZXLHZU4UXEFHZBM6EI4A4IF7JB5CTY4XND3TI6C",
+    "price_aggregator_wasm_hash": "7c38fc75e1774fbbdd459ccbfdfe2f224817db8707da6bafcf06561ecb5fee9b",
+    "position_nft_wasm_hash": "09a3970aca2d72a3195771441108f07330b46e1f8479064c9b727b7653c487ab",
+    "aggregator_wasm_hash": "18eb766e87ed578892828cbb8c14817731dd8e570cf3861771fb944b85c352e8",
+    "oracle_adapter_wasm_hash": "5a579a63eebef923becd21382eb49678c5119f8a23b6a0d0e9565a9b53d525f7"
+  }
+}

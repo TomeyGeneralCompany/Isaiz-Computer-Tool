@@ -1,0 +1,82 @@
+name: Static Gates
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  fork-pull-request:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+    name: Fork pull request
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Self-hosted gates need a branch in this repository
+        run: |
+          echo "::error::Fork pull requests do not run the self-hosted gates. A maintainer must push this branch to this repository to run them."
+          exit 1
+
+  # Offline gates: no contract deployment or live-network tests.
+  static-gates:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    name: Static Gates
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          clean: false
+
+      - name: Reset workspace, preserve target/ build cache
+        run: |
+          git reset --hard
+          git clean -ffdx -e target
+
+      - name: Workflow actions pinned, Static Gates unfiltered, self-hosted jobs fork-guarded
+        run: |
+          python3 .github/scripts/test_check_workflows.py
+          python3 .github/scripts/check_workflows.py
+
+      - name: stellar-cli installer verifies its download
+        run: bash .github/scripts/test_install_stellar_cli.sh
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+        with:
+          toolchain: "1.95"
+          components: rustfmt
+
+      - name: Formatting
+        run: make fmt-check
+
+      - name: Doc links and symbol references resolve
+        run: make docs-check
+
+      - name: Install pinned CLI for offline XDR regressions
+        run: bash .github/scripts/install-stellar-cli.sh
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+      - name: Offline pinned SDK RPC fixtures
+        run: |
+          npm ci --ignore-scripts --prefix tests/integration/sdk
+          make integration-sdk-validate
+
+      - name: Integration shell harness parses
+        run: make integration-validate
+
+      - name: Operator script guards (spoke id mapping, live flags)
+        run: make ops-script-check

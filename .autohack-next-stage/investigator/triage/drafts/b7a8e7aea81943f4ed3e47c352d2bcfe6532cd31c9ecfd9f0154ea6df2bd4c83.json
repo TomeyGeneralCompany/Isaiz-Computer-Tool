@@ -1,0 +1,31 @@
+{
+  "repository": "Instadapp/inst-governance",
+  "commit": "8891f73d17887e272a5317065961269aee94f7cd",
+  "scope_sources": [
+    {
+      "asset_type": "smart_contract",
+      "asset_url": "https://github.com/Instadapp/inst-governance",
+      "program": "instadapp",
+      "scope_url": "https://immunefi.com/bug-bounty/instadapp/scope/"
+    }
+  ],
+  "original_report": "Instadapp__inst-governance-8891f73d1788.json",
+  "lead": {
+    "rule": "JS_CHILD_EXEC",
+    "file": "scripts/verify/lib/externalsExtractor.ts",
+    "line": 111,
+    "guidance": "Review command construction and input provenance",
+    "fingerprint": "9bfcc085c65c116fc426"
+  },
+  "source_excerpt": "103:  *   3. `something.member` \u2014 fall back to recursive parse of `something`.\n104:  */\n105: function parseReceiver(\n106:   receiver: string\n107: ): { targetSymbol: string | null; interfaceName: string | null } {\n108:   const trimmed = receiver.trim();\n109: \n110:   // Shape 1: `IFoo(EXPR)` \u2014 only if the whole receiver is that form.\n111:   const interfaceMatch = /^([A-Z][A-Za-z0-9_]*)\\s*\\(([\\s\\S]*)\\)$/.exec(trimmed);\n112:   if (interfaceMatch && balanced(interfaceMatch[2]!)) {\n113:     const interfaceName = interfaceMatch[1]!;\n114:     const inner = interfaceMatch[2]!.trim();\n115:     return {\n116:       interfaceName,\n117:       targetSymbol: extractInnermostIdentifier(inner),\n118:     };\n119:   }",
+  "triage": {
+    "classification": "likely_false_positive",
+    "rationale": "The code is not implementing proper validation of command construction and input provenance, which could lead to potential issues with the logic. However, this is a static analysis result and not a verification of actual code.",
+    "evidence": "The code is not implementing proper validation of command construction and input provenance, which could lead to potential issues with the logic.",
+    "follow_up": "If you have more specific information about the code or the context, I can provide further analysis."
+  },
+  "status": "unverified_draft",
+  "verified_vulnerability": false,
+  "generated_at": "2026-10-14T23:50:55.034370+00:00",
+  "note": "Automated static triage only. No exploitability, eligibility, or bounty award established."
+}

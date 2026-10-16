@@ -1,0 +1,1000 @@
+/**
+ * Copyright (c) Hathor Labs and its affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */
+
+import bitcore from 'bitcore-lib';
+import {
+  EcdsaTxSign,
+  PrivateKeyProvider,
+  TokenVersion,
+  IStorage,
+  OutputValueType,
+  IHistoryTx,
+  IDataTx,
+  WalletAddressMode,
+  IAddressChainOptions,
+  IHistoryShieldedOutput,
+} from '../types';
+import Transaction from '../models/transaction';
+import CreateTokenTransaction from '../models/create_token_transaction';
+import SendTransactionWalletService from './sendTransactionWalletService';
+import Input from '../models/input';
+import Output from '../models/output';
+import { CreateNanoTxData, CreateNanoTxOptions } from '../nano_contracts/types';
+import NanoContractHeader from '../nano_contracts/header';
+import type {
+  ChangeOutputMode,
+  IShieldedCryptoProvider,
+  ShieldedOutputMode,
+} from '../shielded/types';
+
+// Type used in create token methods so we can have defaults for required params
+export type CreateTokenOptionsInput = {
+  // Required fields with no defaults
+  name: string;
+  symbol: string;
+  amount: OutputValueType;
+  mintAddress: string;
+  contractPaysTokenDeposit: boolean;
+  // Optional fields which have defaults
+  changeAddress?: string | null;
+  createMint?: boolean;
+  mintAuthorityAddress?: string | null;
+  allowExternalMintAuthorityAddress?: boolean;
+  createMelt?: boolean;
+  meltAuthorityAddress?: string | null;
+  allowExternalMeltAuthorityAddress?: boolean;
+  data?: string[] | null;
+  isCreateNFT?: boolean;
+  // Token version (DEPOSIT or FEE) - defaults to DEPOSIT
+  tokenVersion?: TokenVersion;
+};
+
+export interface GetAddressesObject {
+  address: string; // Address in base58
+  index: number; // derivation index of the address
+  transactions: number; // quantity of transactions
+}
+
+export interface GetBalanceObject {
+  token: TokenInfo; // Information about the token
+  balance: WalletServiceBalance; // Balance information
+  tokenAuthorities: AuthoritiesBalance; // Authorities mint/melt availability
+  transactions: number; // quantity of transactions
+  lockExpires: number | null; // When next lock expires, if has a timelock
+}
+
+export interface TokenInfo {
+  id: string; // Token id
+  name: string; // Token name
+  symbol: string; // Token symbol
+  version: TokenVersion; // Token version
+}
+
+export interface WalletServiceBalance {
+  unlocked: OutputValueType; // Available amount
+  locked: OutputValueType; // Locked amount
+}
+
+export interface AuthoritiesBalance {
+  unlocked: WalletServiceAuthority; // unlocked mint/melt
+  locked: WalletServiceAuthority; // locked mint/melt
+}
+
+export interface WalletServiceAuthority {
+  mint: boolean; // if has mint authority
+  melt: boolean; // if has melt authority
+}
+
+export type TxKind = 'transparent' | 'shielded' | 'mixed';
+
+export interface BalanceBreakdown {
+  transparent: OutputValueType;
+  shielded: OutputValueType;
+}
+
+export interface GetHistoryObject {
+  txId: string; // Transaction ID
+  balance: OutputValueType; // Balance of this tx in this wallet (can be negative)
+  timestamp: number; // Transaction timestamp
+  voided: boolean; // If transaction is voided
+  version: number; // Transaction version
+  txKind?: TxKind; // Which outputs moved this wallet's balance (shielded-capable servers only)
+  balanceBreakdown?: BalanceBreakdown; // `balance` split into transparent and shielded parts
+}
+
+/**
+ * History row as returned by the wallet-service, before the facade maps
+ * `tx_kind` to `txKind`.
+ */
+export interface HistoryResponseObject extends Omit<GetHistoryObject, 'txKind'> {
+  // eslint-disable-next-line camelcase
+  tx_kind?: TxKind;
+}
+
+export interface ShieldedAddressRow {
+  address: string; // Shielded address in base58
+  spendAddress: string; // On-chain P2PKH the shielded address's outputs are locked to
+  index: number; // derivation index of the address
+  transactions: number; // quantity of transactions
+  seqnum?: number;
+}
+
+export interface ShieldedAddressInfoObject {
+  address: string; // Shielded address in base58
+  spendAddress: string; // On-chain P2PKH paired with the shielded address
+  index: number; // derivation index of the address
+  addressPath: string; // Path of the spend key for this address
+  info?: string | undefined; // Optional extra info when getting address info
+}
+
+export interface AddressInfoObject {
+  address: string; // Address in base58
+  index: number; // derivation index of the address
+  addressPath: string; // Path of the address
+  info?: string | undefined; // Optional extra info when getting address info
+}
+
+export interface GetAddressDetailsObject {
+  address: string;
+  index: number;
+  transactions: number;
+  seqnum: number;
+}
+
+export interface WalletStatusResponseData {
+  success: boolean;
+  status: WalletStatus;
+  error?: string | undefined; // Optional error code when there is a problem creating the wallet
+  ignoredFields?: string[]; // Request fields the service does not know and dropped
+}
+
+export interface WalletStatus {
+  walletId: string; // wallet service id of the wallet
+  xpubkey: string; // xpubkey of the wallet
+  status: string; // wallet ready status (creating, ready, error)
+  maxGap: number; // gap limit of the wallet
+  createdAt: number; // wallet creation timestamp
+  readyAt: number | null; // wallet timestamp when it got ready
+  shieldedMaxGap?: number | null; // gap limit of the shielded chain, null when not registered
+  lastUsedShieldedIndex?: number | null; // last used shielded address index
+  legacyStatus?: string; // status of the legacy side alone, from services that report it
+  shieldedStatus?: string; // status of the shielded side alone ('none' without shielded keys)
+}
+
+export interface AddressesResponseData {
+  success: boolean;
+  addresses: GetAddressesObject[];
+}
+
+export interface AddressDetailsResponseData {
+  success: boolean;
+  data: GetAddressDetailsObject;
+}
+
+export interface CheckAddressesMineResponseData {
+  success: boolean;
+  addresses: WalletAddressMap;
+}
+
+export interface NewAddressesResponseData {
+  success: boolean;
+  addresses: AddressInfoObject[];
+}
+
+export interface ShieldedAddressesResponseData {
+  success: boolean;
+  addresses: ShieldedAddressRow[];
+}
+
+export interface ShieldedNewAddressesResponseData {
+  success: boolean;
+  addresses: AddressInfoObject[]; // unused shielded addresses
+  spendAddresses: AddressInfoObject[]; // their on-chain spend addresses
+  legacyAddresses: AddressInfoObject[]; // unused legacy addresses
+}
+
+export interface BalanceResponseData {
+  success: boolean;
+  balances: GetBalanceObject[];
+  status?: string;
+}
+
+export interface SplitBalanceAmount {
+  transparent: OutputValueType;
+  shielded: OutputValueType;
+  total: OutputValueType;
+}
+
+export interface SplitWalletServiceBalance {
+  unlocked: SplitBalanceAmount;
+  locked: SplitBalanceAmount;
+}
+
+export interface GetSplitBalanceObject extends Omit<GetBalanceObject, 'balance'> {
+  balance: SplitWalletServiceBalance;
+}
+
+export interface SplitBalanceResponseData {
+  success: boolean;
+  balances: GetSplitBalanceObject[];
+  status?: string;
+}
+
+export interface TokenDetailsResponseData {
+  success: boolean;
+  details: TokenDetailsObject;
+}
+
+export interface TokenDetailsAuthoritiesObject {
+  mint: boolean;
+  melt: boolean;
+}
+
+export interface TokenDetailsObject {
+  tokenInfo: TokenInfo;
+  totalSupply: OutputValueType;
+  totalTransactions: number;
+  authorities: TokenDetailsAuthoritiesObject;
+}
+
+export interface HistoryResponseData {
+  success: boolean;
+  history: HistoryResponseObject[];
+}
+
+export interface TxProposalCreateResponseData {
+  success: boolean;
+  txProposalId: string; // Id of the tx proposal
+  inputs: TxProposalInputs[]; // Inputs data of the tx proposal
+}
+
+export interface TxProposalInputs {
+  txId: string; // tx id of the input
+  index: number; // index of the input
+  addressPath: string; // derivation path of the output address being spent
+}
+
+export interface TxProposalOutputs {
+  address: string; // output address
+  value: OutputValueType; // output value
+  token: string; // output token
+  timelock: number | null; // output timelock
+}
+
+export interface TxProposalUpdateResponseData {
+  success: boolean;
+  txProposalId: string; // Id of the tx proposal
+  txHex: string; // Hex of the serialized tx
+}
+
+export interface TxProposalDeleteResponseData {
+  success: boolean;
+  txProposalId: string; // Id of the tx proposal
+}
+
+export interface RequestError {
+  success: boolean;
+  error: string; // Error code
+}
+
+export interface InputRequestObject {
+  txId: string; // tx id of the input
+  index: number; // index of the input
+}
+
+export interface SendManyTxOptionsParam {
+  inputs: InputRequestObject[] | undefined;
+  changeAddress: string | undefined;
+}
+
+export interface SendTxOptionsParam {
+  token: string | undefined;
+  changeAddress: string | undefined;
+}
+
+export interface GetTxOutputsOptions {
+  tokenId?: string;
+  authority?: OutputValueType | null;
+  skipSpent?: boolean;
+  maxOutputs?: number;
+  addresses?: string[] | null;
+  totalAmount?: OutputValueType;
+  smallerThan?: number | string; // a string carries values beyond Number.MAX_SAFE_INTEGER
+  biggerThan?: number | string;
+  count?: number;
+  ignoreLocked?: boolean;
+  txId?: string;
+  index?: number;
+  kind?: 'transparent' | 'shielded';
+}
+
+export interface TxOutputResponseData {
+  success: boolean;
+  txOutputs: Utxo[];
+}
+
+export interface TransparentUtxo {
+  kind?: 'transparent'; // absent on utxos built locally and on older servers
+  txId: string; // output transaction id
+  index: number; // output index
+  tokenId: string; // output token
+  address: string; // output address
+  value: OutputValueType; // output value
+  authorities: OutputValueType; // 0 for no authority, 1 for mint authority and 2 for melt authority
+  timelock: number | null; // output timelock
+  heightlock: number | null; // output heightlock
+  locked: boolean; // if output is locked
+  addressPath: string; // path to generate output address
+  txProposalId?: string | null; // tx proposal holding this output, if any
+}
+
+interface ShieldedUtxoBase extends Omit<TransparentUtxo, 'kind'> {
+  kind: 'shielded';
+  recoveryState: string; // server-side recovery state, always 'recovered' when returned
+  shieldedIndex: number; // derivation index of the shielded address
+  ctAddress: string; // shielded address that received the output
+  commitment: string; // hex
+  ephemeralPubkey: string; // hex
+  rangeProof: string; // hex
+  script: string; // hex
+}
+
+export interface AmountShieldedUtxo extends ShieldedUtxoBase {
+  mode: 1;
+  tokenData: number;
+}
+
+export interface FullShieldedUtxo extends ShieldedUtxoBase {
+  mode: 2;
+  assetCommitment: string; // hex
+  surjectionProof: string; // hex
+}
+
+export type ShieldedUtxo = AmountShieldedUtxo | FullShieldedUtxo;
+
+/**
+ * An unspent output as returned by `GET wallet/tx_outputs`. `index` is the
+ * absolute output index: transparent outputs first, then shielded ones.
+ */
+export type Utxo = TransparentUtxo | ShieldedUtxo;
+
+export interface AuthorityTxOutput {
+  txId: string; // output transaction id
+  index: number; // output index
+  address: string; // output address
+  authorities: OutputValueType; // output authorities
+}
+
+export interface AuthTokenResponseData {
+  success: boolean;
+  token: string; // jwt token
+}
+
+export interface OutputRequestObj {
+  address: string; // output address
+  value: OutputValueType; // output value
+  token: string; // output token
+  timelock?: number | null; // output timelock
+  shielded?: ShieldedOutputMode; // send to the shielded address in this mode
+}
+
+export interface DataScriptOutputRequestObj {
+  type: 'data'; // output type
+  data: string; // data to store in the output script
+}
+
+// This is the output object to be used in the SendTransactionWalletService class
+export interface OutputSendTransaction {
+  type: string; // output type (in this case will be 'data')
+  value: OutputValueType; // output value. Optional because we add fixed value of 1 to the output.
+  token: string; // output token. Optional because we add fixed value of HTR token to the output.
+  address?: string; // output address. required for p2pkh or p2sh
+  timelock?: number | null; // output timelock
+  data?: string; // data to store in the output script. required for data script.
+  shielded?: ShieldedOutputMode; // shielded output mode, for a shielded address
+}
+
+export interface InputRequestObj {
+  txId: string; // transaction id of the output being spent
+  index: number; // index of the output being spent using this input
+}
+
+export interface TokensResponseData {
+  success: boolean;
+  tokens: string[];
+}
+
+export interface SendTransactionEvents {
+  success: boolean;
+  sendTransaction: SendTransactionWalletService;
+}
+
+export interface SendTransactionResponse {
+  success: boolean;
+  transaction: Transaction;
+}
+
+export interface WalletAddressMap {
+  [address: string]: boolean;
+}
+
+export interface TokenMap {
+  [token: string]: {
+    version: TokenVersion;
+    amount: OutputValueType;
+  }; // For each token we have the version and amount
+}
+
+export interface TransactionFullObject {
+  tx_id: string;
+  version: number;
+  timestamp: number;
+  is_voided: boolean;
+  inputs: Input[];
+  outputs: Output[];
+  parents: string[];
+}
+
+export interface IStopWalletParams {
+  cleanStorage?: boolean;
+  cleanAddresses?: boolean;
+}
+
+export interface WalletServiceDelegateAuthorityOptions {
+  anotherAuthorityAddress: string | null;
+  createAnother: boolean;
+  pinCode: string | null;
+}
+
+export interface WalletServiceDestroyAuthorityOptions {
+  pinCode: string | null;
+}
+
+export interface IHathorWallet {
+  start(options: { pinCode: string; password: string; waitReady?: boolean }): Promise<void>;
+  startReadOnly(options?: { skipAddressFetch?: boolean }): Promise<void>;
+  getReadOnlyAuthToken(): Promise<string>;
+  setShieldedCryptoProvider(provider?: IShieldedCryptoProvider): void;
+  setExternalTxSigningMethod(method: EcdsaTxSign | null): void;
+  setExternalPrivateKeyMethod(getPrivKey: PrivateKeyProvider | null): void;
+  hasExternalPrivateKeyMethod(): boolean;
+  getAllAddresses(opts?: IAddressChainOptions): AsyncGenerator<GetAddressesObject>;
+  getBalance(token: string | null): Promise<GetBalanceObject[]>;
+  getTokens(): Promise<string[]>;
+  getTxHistory(options: {
+    token_id?: string;
+    count?: number;
+    skip?: number;
+  }): Promise<GetHistoryObject[]>;
+  sendManyOutputsTransaction(
+    outputs: OutputRequestObj[],
+    options: {
+      inputs?: InputRequestObj[];
+      changeAddress?: string;
+      changeShieldedMode?: ChangeOutputMode | null;
+    }
+  ): Promise<Transaction>;
+  sendTransaction(
+    address: string,
+    value: OutputValueType,
+    options: {
+      token?: string;
+      changeAddress?: string;
+      changeShieldedMode?: ChangeOutputMode | null;
+    }
+  ): Promise<Transaction>;
+  stop(params?: IStopWalletParams): void;
+  getAddressAtIndex(index: number, opts?: IAddressChainOptions): Promise<string>;
+  getAddressIndex(address: string): Promise<number | null>;
+  getCurrentAddress(
+    options?: {
+      markAsUsed: boolean;
+    },
+    opts?: IAddressChainOptions
+  ): AddressInfoObject | Promise<AddressInfoObject>; // FIXME: Should have a single return type
+  getNextAddress(opts?: IAddressChainOptions): AddressInfoObject | Promise<AddressInfoObject>; // FIXME: Should have a single return type;
+  getAddressPrivKey(pinCode: string, addressIndex: number): Promise<bitcore.PrivateKey>;
+  signMessageWithAddress(message: string, index: number, pinCode?: string): Promise<string>;
+  prepareCreateNewToken(
+    name: string,
+    symbol: string,
+    amount: OutputValueType,
+    options
+  ): Promise<CreateTokenTransaction>;
+  createNewToken(
+    name: string,
+    symbol: string,
+    amount: OutputValueType,
+    options
+  ): Promise<Transaction>;
+  createNFT(
+    name: string,
+    symbol: string,
+    amount: OutputValueType,
+    data: string,
+    options
+  ): Promise<Transaction>;
+  prepareMintTokensData(token: string, amount: OutputValueType, options): Promise<Transaction>;
+  mintTokens(token: string, amount: OutputValueType, options): Promise<Transaction>;
+  prepareMeltTokensData(token: string, amount: OutputValueType, options): Promise<Transaction>;
+  meltTokens(token: string, amount: OutputValueType, options): Promise<Transaction>;
+  getDepositAmount(mintAmount: OutputValueType): OutputValueType;
+  getWithdrawAmount(meltAmount: OutputValueType): OutputValueType;
+  prepareDelegateAuthorityData(
+    token: string,
+    type: string,
+    address: string,
+    options: WalletServiceDelegateAuthorityOptions
+  ): Promise<Transaction>;
+  delegateAuthority(
+    token: string,
+    type: string,
+    address: string,
+    options: WalletServiceDelegateAuthorityOptions
+  ): Promise<Transaction>;
+  prepareDestroyAuthorityData(
+    token: string,
+    type: string,
+    count: number,
+    options: WalletServiceDestroyAuthorityOptions
+  ): Promise<Transaction>;
+  destroyAuthority(
+    token: string,
+    type: string,
+    count: number,
+    options: WalletServiceDestroyAuthorityOptions
+  ): Promise<Transaction>;
+  getFullHistory(): TransactionFullObject[] | Promise<unknown>; // FIXME: Should have a single return type;
+  getTxBalance(tx: IHistoryTx, optionsParams): Promise<{ [tokenId: string]: OutputValueType }>;
+  onConnectionChangedState(newState: ConnectionState): void;
+  getTokenDetails(tokenId: string): Promise<TokenDetailsObject>;
+  getVersionData(): Promise<FullNodeVersionData>;
+  checkAddressesMine(addresses: string[]): Promise<WalletAddressMap>;
+  getFullTxById(txId: string): Promise<FullNodeTxResponse>;
+  getTxConfirmationData(txId: string): Promise<FullNodeTxConfirmationDataResponse>;
+  graphvizNeighborsQuery(txId: string, graphType: string, maxLevel: number): Promise<string>;
+  checkPin(pin: string): Promise<boolean>;
+  checkPassword(password: string): Promise<boolean>;
+  checkPinAndPassword(pin: string, password: string): Promise<boolean>;
+  changeServer(newServer: string): Promise<void>;
+  getServerUrl(): string;
+  getNetwork(): string;
+  getAddressPathForIndex(index: number, opts?: IAddressChainOptions): Promise<string>;
+  sendManyOutputsSendTransaction(
+    outputs: Array<OutputRequestObj | DataScriptOutputRequestObj>,
+    options?: { inputs?: InputRequestObj[]; changeAddress?: string; pinCode?: string }
+  ): Promise<SendTransactionWalletService>;
+  createNanoContractTransaction(
+    method: string,
+    address: string,
+    data: CreateNanoTxData,
+    options?: CreateNanoTxOptions
+  ): Promise<SendTransactionWalletService>;
+  createAndSendNanoContractTransaction(
+    method: string,
+    address: string,
+    data: CreateNanoTxData,
+    options?: CreateNanoTxOptions
+  ): Promise<Transaction>;
+  createNanoContractCreateTokenTransaction(
+    method: string,
+    address: string,
+    data: CreateNanoTxData,
+    createTokenOptions: CreateTokenOptionsInput,
+    options?: Omit<CreateNanoTxOptions, 'changeAddress'>
+  ): Promise<SendTransactionWalletService>;
+  createAndSendNanoContractCreateTokenTransaction(
+    method: string,
+    address: string,
+    data: CreateNanoTxData,
+    createTokenOptions: CreateTokenOptionsInput,
+    options?: Omit<CreateNanoTxOptions, 'changeAddress'>
+  ): Promise<Transaction>;
+  getNanoHeaderSeqnum(address: string): Promise<number>;
+  isAddressMine(address: string): Promise<boolean>;
+  getUtxosForAmount(
+    amount: OutputValueType,
+    options?: {
+      token?: string;
+      filter_address?: string;
+    }
+  ): Promise<{ utxos: Utxo[]; changeAmount: OutputValueType }>;
+  getUtxos(options?: {
+    token?: string;
+    authorities?: number;
+    max_utxos?: number;
+    filter_address?: string;
+    amount_smaller_than?: number;
+    amount_bigger_than?: number;
+    max_amount?: number;
+    only_available_utxos?: boolean;
+  }): Promise<{
+    total_amount_available: bigint;
+    total_utxos_available: bigint;
+    total_amount_locked: bigint;
+    total_utxos_locked: bigint;
+    utxos: {
+      address: string;
+      amount: bigint;
+      tx_id: string;
+      locked: boolean;
+      index: number;
+    }[];
+  }>;
+  getNetworkObject();
+  getPrivateKeyFromAddress(address: string, options: { pinCode?: string });
+  hasTxOutsideFirstAddress(): Promise<boolean>;
+  pinCode?: string | null;
+  storage: IStorage;
+  signTx(tx: Transaction, options: { pinCode?: string | null }): Promise<Transaction>;
+  setNanoHeaderCaller(nanoHeader: NanoContractHeader, address: string): Promise<void>;
+  getAddressMode(): Promise<WalletAddressMode>;
+  enableMultiAddressMode(): Promise<void>;
+  enableSingleAddressMode(): Promise<void>;
+}
+
+export interface ISendTransaction {
+  run(
+    until?: 'prepare-tx' | 'sign-tx' | 'mine-tx' | null,
+    pin?: string | null
+  ): Promise<Transaction>;
+  runFromMining(until?: 'mine-tx' | null): Promise<Transaction>;
+  prepareTx(): Promise<Transaction>;
+  signTx(pin?: string | null): Promise<Transaction>;
+  releaseUtxos(): Promise<void>;
+  readonly transaction: Transaction | null;
+  readonly fullTxData: IDataTx | null;
+}
+
+export interface MineTxSuccessData {
+  nonce: number;
+  weight: number;
+  timestamp: number;
+  parents: string[];
+}
+
+export interface DecodedOutput {
+  type: string;
+  address: string;
+  timelock: number | null;
+}
+
+export interface TxOutput {
+  value: OutputValueType;
+  script: string;
+  token: string;
+  decoded: DecodedOutput;
+  token_data: number;
+  locked: boolean;
+  index: number;
+  tokenData: number;
+  decodedScript: null;
+}
+
+export interface TxInput {
+  // eslint-disable-next-line camelcase
+  tx_id: string;
+  index: number;
+  value: OutputValueType;
+  // eslint-disable-next-line camelcase
+  token_data: number;
+  token: string;
+  decoded: DecodedOutput;
+}
+
+/**
+ * Represents the Buffer-like script object in websocket transactions.
+ */
+export type WsBufferScript = {
+  type: 'Buffer';
+  data: number[];
+};
+
+/**
+ * Represents the decoded part of a websocket transaction input.
+ */
+export type WsTxInputDecoded = {
+  type: string;
+  address: string;
+  timelock?: number | null;
+};
+
+/**
+ * Represents a websocket transaction input.
+ */
+export type WsTxInput = {
+  tx_id: string;
+  index: number;
+  value: bigint;
+  token_data: number;
+  script: WsBufferScript;
+  token: string;
+  decoded: WsTxInputDecoded;
+};
+
+/**
+ * Represents the decoded part of a websocket transaction output.
+ */
+export type WsTxOutputDecoded = {
+  type?: string | null;
+  address?: string;
+  timelock?: number | null;
+};
+
+/**
+ * Represents a websocket transaction output.
+ */
+export type WsTxOutput = {
+  value: bigint;
+  token_data: number;
+  script: WsBufferScript;
+  decodedScript?: unknown | null; // Use 'unknown' as type-safe alternative to any
+  token: string;
+  locked: boolean;
+  index: number;
+  decoded: WsTxOutputDecoded;
+};
+
+export interface WsTransaction {
+  // eslint-disable-next-line camelcase
+  tx_id: string;
+  nonce: number;
+  timestamp: number;
+  // eslint-disable-next-line camelcase
+  signal_bits: number;
+  version: number;
+  weight: number;
+  parents: string[];
+  inputs: WsTxInput[];
+  outputs: WsTxOutput[];
+  height?: number | null;
+  // eslint-disable-next-line camelcase
+  token_name?: string | null;
+  // eslint-disable-next-line camelcase
+  token_symbol?: string | null;
+  // Shielded outputs carry no value or crypto material on the websocket, only
+  // the on-chain address they pay (shielded-capable servers only).
+  // eslint-disable-next-line camelcase
+  shielded_outputs?: {
+    mode: number;
+    token_data?: number;
+    decoded: { address?: string } | null; // null when the script is not a standard type
+  }[];
+  addresses?: string[]; // every address the tx involves
+}
+
+/**
+ * Fields of `POST wallet/init` that register the wallet's shielded keys. The
+ * wallet-service requires all of them together.
+ */
+export interface ShieldedRegistrationFields {
+  scanXpriv: string; // scan chain xpriv at m/44'/280'/1'/0
+  spendXpub: string; // spend chain xpub at m/44'/280'/2'/0 (never the private key)
+  firstCtAddress: string; // shielded address at index 0
+  spendXpubSignature: string; // spend key signs timestamp + walletId + spendXpub
+  ctAddressSignature: string; // auth key signs timestamp + walletId + firstCtAddress
+}
+
+export interface CreateWalletAuthData {
+  xpub: bitcore.HDPublicKey;
+  xpubkeySignature: string;
+  authXpub: string;
+  authXpubkeySignature: string;
+  timestampNow: number;
+  firstAddress: string;
+  authDerivedPrivKey: bitcore.HDPrivateKey;
+  shielded: ShieldedRegistrationFields | null; // null when the wallet has no shielded keys
+}
+
+export interface FullNodeVersionData {
+  timestamp: number;
+  version: string;
+  network: string;
+  minWeight: number;
+  minTxWeight: number;
+  minTxWeightCoefficient: number;
+  minTxWeightK: number;
+  /** @deprecated Prefer the numerator/denominator fraction below (integer precision). Optional: fullnodes will stop sending it. */
+  tokenDepositPercentage?: number;
+  /** Token deposit percentage numerator (parts per billion). Absent on older fullnodes. */
+  tokenDepositPercentageNumerator?: number;
+  /** Token deposit percentage denominator (parts per billion). Absent on older fullnodes. */
+  tokenDepositPercentageDenominator?: number;
+  rewardSpendMinBlocks: number;
+  maxNumberInputs: number;
+  maxNumberOutputs: number;
+  /** The wallet-service accepts shielded key registration; absent means it does not. */
+  shieldedOutputsEnabled?: boolean;
+}
+
+export interface TxByIdTokenData {
+  txId: string;
+  timestamp: number;
+  version: number;
+  voided: boolean;
+  height?: number | null;
+  weight: number;
+  balance: bigint;
+  tokenId: string;
+  tokenName: string;
+  tokenSymbol: string;
+}
+
+export interface TxByIdTokensResponseData {
+  success: boolean;
+  txTokens: TxByIdTokenData[];
+}
+
+export interface WalletServiceServerUrls {
+  walletServiceBaseUrl: string;
+  walletServiceWsUrl: string;
+}
+
+export enum ConnectionState {
+  CLOSED = 0,
+  CONNECTING = 1,
+  CONNECTED = 2,
+}
+
+export enum OutputType {
+  P2PKH = 'p2pkh',
+  P2SH = 'p2sh',
+  DATA = 'data',
+}
+
+export interface FullNodeToken {
+  uid: string;
+  // Hathor will return name: null and symbol: null
+  name: string | null;
+  symbol: string | null;
+}
+
+export interface FullNodeDecodedInput {
+  type?: string | null;
+  address?: string | null;
+  timelock?: number | null;
+  value?: OutputValueType | null;
+  token_data?: number | null;
+}
+
+export interface FullNodeDecodedOutput {
+  type?: string | null;
+  address?: string | null;
+  timelock?: number | null;
+  value?: OutputValueType | null;
+  token_data?: number | null;
+}
+
+export interface FullNodeInput {
+  value: OutputValueType;
+  token_data: number;
+  script: string;
+  decoded: FullNodeDecodedInput;
+  tx_id: string;
+  index: number;
+  token?: string | null;
+  spent_by?: string | null;
+}
+
+/**
+ * An input that spends a shielded output, as the fullnode serializes it: the
+ * spent shielded output's fields, without its value.
+ */
+export interface FullNodeShieldedInput {
+  type: 'shielded';
+  commitment: string;
+  // eslint-disable-next-line camelcase
+  range_proof: string;
+  // eslint-disable-next-line camelcase
+  tx_id: string;
+  index: number;
+  [key: string]: unknown;
+}
+
+export interface FullNodeOutput {
+  value: OutputValueType;
+  token_data: number;
+  script: string;
+  decoded: FullNodeDecodedOutput;
+  token?: string | null;
+  spent_by?: string | null;
+  // Shielded entries appended by fullnode's to_json_extended() have type='shielded'
+  type?: string;
+}
+
+export interface FullNodeTx {
+  hash: string;
+  nonce: string;
+  timestamp: number;
+  version: number;
+  weight: number;
+  signal_bits?: number;
+  parents: string[];
+  inputs: (FullNodeInput | FullNodeShieldedInput)[];
+  outputs: FullNodeOutput[];
+  // eslint-disable-next-line camelcase
+  shielded_outputs?: IHistoryShieldedOutput[] | null;
+  tokens: FullNodeToken[];
+  token_name?: string | null;
+  token_symbol?: string | null;
+  raw: string;
+  // Nano contract fields
+  nc_id?: string;
+  nc_seqnum?: number;
+  nc_blueprint_id?: string;
+  nc_method?: string;
+  nc_args?: string;
+  nc_address?: string;
+  nc_context?: {
+    actions: Array<{
+      type: string;
+      token_uid?: string;
+      mint?: boolean;
+      melt?: boolean;
+    }>;
+    caller_id: string;
+    timestamp?: number | null;
+  };
+}
+
+export interface FullNodeMeta {
+  hash: string;
+  spent_outputs: Array<[number, Array<string>]>;
+  received_by: string[];
+  children: string[];
+  conflict_with: string[];
+  voided_by: string[];
+  twins: string[];
+  accumulated_weight: number;
+  accumulated_weight_raw?: string;
+  score: number;
+  score_raw?: string;
+  min_height?: number;
+  height: number;
+  feature_activation_bit_counts?: unknown[];
+  validation?: string;
+  first_block?: string | null;
+  first_block_height?: number | null;
+  // Nano contract fields
+  nc_block_root_id?: string | null;
+  nc_calls?: Array<{
+    blueprint_id: string;
+    contract_id: string;
+    method_name: string;
+    index_updates: Array<{
+      type: string;
+      token_uid?: string;
+      sub_type?: string;
+      mint?: boolean;
+      melt?: boolean;
+    }>;
+  }>;
+  nc_execution?: string;
+}
+
+export interface FullNodeTxResponse {
+  tx: FullNodeTx;
+  meta: FullNodeMeta;
+  success: boolean;
+  message?: string;
+  spent_outputs?: Record<string, string>;
+}
+
+export interface FullNodeTxConfirmationDataResponse {
+  success: boolean;
+  accumulated_weight: number;
+  accumulated_bigger: boolean;
+  // Optional on the fullnode contract too (TransactionAccWeightSuccess in
+  // src/api/schemas/txApi.ts): only present once the tx has a first_block.
+  stop_value?: number;
+  confirmation_level: number;
+}
+
+export interface HasTxOutsideFirstAddressResponseData {
+  success: boolean;
+  hasTransactions: boolean;
+}

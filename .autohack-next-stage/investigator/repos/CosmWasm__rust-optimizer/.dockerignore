@@ -1,0 +1,3 @@
+# Files that should not be copied into the container as part of
+# `ADD bob_the_builder bob_the_builder`
+bob_the_builder/target

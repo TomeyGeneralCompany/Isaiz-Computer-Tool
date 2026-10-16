@@ -1,0 +1,40 @@
+{
+  "checks": {
+    "has_reproduction_test": false,
+    "in_scope_at_processing": true,
+    "source_commit_matches": true,
+    "triage_requires_review": false
+  },
+  "commit": "0738c7c981e506c582d83fa5456fe1b84eeccedc",
+  "lead": {
+    "file": "hathor_tests/nanocontracts/on_chain_blueprints/test_script_restrictions.py",
+    "fingerprint": "7a72b0e55e9e1ab002df",
+    "guidance": "Review dynamic execution and input provenance",
+    "line": 124,
+    "rule": "PY_EVAL"
+  },
+  "note": "Automated offline evidence preparation only. No project-specific reproduction or verified security impact.",
+  "processed_at": "2026-10-15T00:09:25.387819+00:00",
+  "repository": "HathorNetwork/hathor-core",
+  "scope_urls": [
+    "https://immunefi.com/bug-bounty/hathornetwork/scope/"
+  ],
+  "source_check": {
+    "commit": "0738c7c981e506c582d83fa5456fe1b84eeccedc",
+    "excerpt": "  113:             ],\n  114:             'delattr': [\n  115:                 '''x = dict()\\nx.foo = 1\\ndelattr(x, 'foo')''',\n  116:             ],\n  117:             'dir': [\n  118:                 '''x = dir()''',\n  119:             ],\n  120:             'eval': [\n  121:                 '''x = eval('1+1')''',\n  122:             ],\n  123:             'exec': [\n  124:                 '''exec('x=1+1')''',\n  125:             ],\n  126:             'getattr': [\n  127:                 '''x = dict()\\nx.foo = 1\\ny = getattr(x, 'foo')''',\n  128:             ],\n  129:             'globals': [\n  130:                 '''x = 1\\ny = globals()['x']''',\n  131:             ],\n  132:             'hasattr': [\n  133:                 '''x = dict()\\ny = hasattr(x, 'foo')''',\n  134:             ],\n  135:             'input': [\n  136:                 '''x = input()''',",
+    "file": "hathor_tests/nanocontracts/on_chain_blueprints/test_script_restrictions.py",
+    "file_sha256": "784f44ad345b6b1319d600da84ea7e801531d973e64936551318b4c799e3ac8c",
+    "line": 124,
+    "python_syntax": "valid",
+    "status": "source_matched"
+  },
+  "source_fingerprint": "e1246c65a6752394489eb2fd707cfbcaeda643578a52e5f8f6da27fb542e27e8",
+  "status": "needs_project_specific_reproduction",
+  "triage": {
+    "classification": "likely_false_positive",
+    "evidence": "The test script is part of a bug-bounty lead and is designed to validate the system's behavior under specific conditions.",
+    "follow_up": "If you have more details about the test, I can help analyze it further.",
+    "rationale": "The code snippet is part of a test script that checks for dynamic execution and input provenance, but the content is not related to actual vulnerabilities or exploitable code. The test is designed to validate the system's behavior under certain conditions, not to identify a false positive."
+  },
+  "verified_vulnerability": false
+}

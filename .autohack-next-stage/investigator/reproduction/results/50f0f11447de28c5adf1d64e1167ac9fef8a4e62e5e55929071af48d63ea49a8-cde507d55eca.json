@@ -1,0 +1,13 @@
+{
+  "commit": "d2a86ece964247d8313c20fbfeb0c7199d9bff5a",
+  "processed_at": "2026-10-14T23:59:32.357331+00:00",
+  "repository": "HathorNetwork/hathor-wallet-mobile",
+  "source_record": "/home/izy/isaiz-bugbounty/autohack/.autohack-next-stage/investigator/verification/results/50f0f11447de28c5adf1d64e1167ac9fef8a4e62e5e55929071af48d63ea49a8.json",
+  "source_sha256": "cde507d55ecabc648f500f72d75839694c0c252b8b5d61766db910c6a1bce8e6",
+  "status": "awaiting_reproduction_case",
+  "test_result": {
+    "case_manifest": "/home/izy/isaiz-bugbounty/autohack/.autohack-next-stage/investigator/reproduction/cases/50f0f11447de28c5adf1d64e1167ac9fef8a4e62e5e55929071af48d63ea49a8.json",
+    "reason": "No explicit local regression case supplied"
+  },
+  "verified_vulnerability": false
+}

@@ -1,0 +1,16 @@
+node_modules
+coverage
+coverage-integration
+
+lib
+
+*.swp
+*.swo
+
+tsconfig.tsbuildinfo
+
+// Generated test database files
+*.leveldb*
+tmp/
+.claude/settings.local.json
+.worktrees

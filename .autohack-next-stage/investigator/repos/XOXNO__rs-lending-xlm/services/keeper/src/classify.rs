@@ -1,0 +1,338 @@
+//! Groups discovered ledger entries into the `(contract, group)` pairs that the
+//! metrics surface and the TTL inspector report.
+//!
+//! Metrics aggregate per group, never per key: account ids are never reused, so
+//! a per-key label would add a new series for every account ever opened.
+
+use stellar_xdr::{ContractId, Hash, LedgerKey, ScAddress, ScSymbol, ScVal};
+
+use crate::discovery::ContractIds;
+use crate::stellar::client::LedgerEntryQuery;
+
+/// The class of protocol state an entry holds. Mirrors the sections the TTL
+/// inspector prints, so its output and the dashboard agree.
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, PartialOrd, Ord)]
+pub enum KeyClass {
+    PerAsset,
+    Spoke,
+    PerUser,
+    Roles,
+    Governance,
+    /// Price-aggregator `Oracle(PriceKey)` rows — the per-asset and `Ref`
+    /// oracle configs.
+    Oracle,
+    /// Xoxno-oracle-adapter feed state: registries, aggregates, history and
+    /// per-signer submissions.
+    OracleFeed,
+    Instance,
+    WasmCode,
+    Other,
+}
+
+impl KeyClass {
+    /// Section heading used by the inspector.
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::PerAsset => "PER-ASSET",
+            Self::Spoke => "HUB & SPOKE",
+            Self::PerUser => "PER-USER",
+            Self::Roles => "ROLES",
+            Self::Governance => "GOVERNANCE",
+            Self::Oracle => "ORACLE",
+            Self::OracleFeed => "ORACLE FEED",
+            Self::Instance => "INSTANCE",
+            Self::WasmCode => "WASM CODE",
+            Self::Other => "OTHER",
+        }
+    }
+
+    /// Prometheus label value. Lower-case and stable — renaming one silently
+    /// breaks every saved dashboard query and alert that selects on it.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::PerAsset => "per_asset",
+            Self::Spoke => "hub_spoke",
+            Self::PerUser => "per_user",
+            Self::Roles => "roles",
+            Self::Governance => "governance",
+            Self::Oracle => "oracle",
+            Self::OracleFeed => "oracle_feed",
+            Self::Instance => "instance",
+            Self::WasmCode => "wasm_code",
+            Self::Other => "other",
+        }
+    }
+}
+
+/// Returns a stable label for the contract that holds an entry.
+///
+/// A contract-code key is `wasm_code`. An unrecognised contract gets `other_`
+/// plus its first four id bytes in hex, so it stays distinct on the dashboard.
+pub fn contract_label(
+    key: &LedgerKey,
+    ids: &ContractIds,
+    pool_id: Option<&[u8; 32]>,
+    position_nft_id: Option<&[u8; 32]>,
+) -> String {
+    let LedgerKey::ContractData(cd) = key else {
+        return "wasm_code".to_string();
+    };
+    let ScAddress::Contract(ContractId(Hash(id))) = &cd.contract else {
+        return "unknown".to_string();
+    };
+    let named = [
+        (Some(ids.controller), "controller"),
+        (ids.governance, "governance"),
+        (ids.price_aggregator, "price_aggregator"),
+        (ids.xoxno_oracle_adapter, "xoxno_oracle_adapter"),
+        (ids.flash_receiver, "flash_loan_receiver"),
+        (ids.redstone_adapter, "redstone_adapter"),
+        (ids.swap_router, "swap_router"),
+        (pool_id.copied(), "pool"),
+        (position_nft_id.copied(), "position_nft"),
+    ];
+    for (candidate, name) in named {
+        if candidate.as_ref() == Some(id) {
+            return name.to_string();
+        }
+    }
+    format!("other_{:02x}{:02x}{:02x}{:02x}", id[0], id[1], id[2], id[3])
+}
+
+/// Classifies a persistent entry by the storage-key variant it carries.
+pub fn classify_persistent(
+    row: &LedgerEntryQuery,
+    controller_id: &[u8; 32],
+    governance_id: Option<&[u8; 32]>,
+) -> KeyClass {
+    let LedgerKey::ContractData(cd) = &row.key else {
+        return KeyClass::Other;
+    };
+    let on_governance = matches!(
+        &cd.contract,
+        ScAddress::Contract(ContractId(Hash(b))) if Some(b) == governance_id
+    );
+    let on_controller = matches!(
+        &cd.contract,
+        ScAddress::Contract(ContractId(Hash(b))) if b == controller_id
+    );
+    let variant = match &cd.key {
+        ScVal::Vec(Some(v)) => v.0.first().and_then(|s| match s {
+            ScVal::Symbol(ScSymbol(s)) => Some(s.to_utf8_string_lossy()),
+            _ => None,
+        }),
+        _ => None,
+    };
+    let role_variants = [
+        "ExistingRoles",
+        "RoleAccountsCount",
+        "RoleAccounts",
+        "HasRole",
+        "RoleAdmin",
+    ];
+    match variant.as_deref() {
+        Some(v) if role_variants.contains(&v) => {
+            if on_governance {
+                KeyClass::Governance
+            } else {
+                KeyClass::Roles
+            }
+        }
+        Some("AccountMeta" | "SupplyPositions" | "BorrowPositions" | "Delegates")
+            if on_controller =>
+        {
+            KeyClass::PerUser
+        }
+        // `Owner` lives on the position NFT; see `PositionNftUserKey`.
+        Some("Owner") => KeyClass::PerUser,
+        Some("Oracle") => KeyClass::Oracle,
+        Some(
+            "AssetCount" | "FeedCount" | "AssetAt" | "FeedAt" | "AssetIndex" | "FeedMapping"
+            | "FeedOwner" | "FeedIndex" | "CurrentAggregate" | "History" | "LatestSubmission"
+            | "SignerFeeds",
+        ) => KeyClass::OracleFeed,
+        Some("Market" | "Params" | "State") => KeyClass::PerAsset,
+        Some(
+            "Hub" | "Spoke" | "SpokeAsset" | "SpokeUsage" | "SpokeFlagsEpoch" | "PositionManager"
+            | "BlendPoolAllowed",
+        ) => KeyClass::Spoke,
+        _ if on_governance => KeyClass::Governance,
+        _ => KeyClass::Other,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::keys::{AggregatorPriceKey, HubAssetKey};
+    use crate::keys::{ControllerUserKey, PoolPersistentKey, PriceAggregatorPersistentKey};
+
+    const CTRL: [u8; 32] = [1u8; 32];
+    const GOV: [u8; 32] = [2u8; 32];
+    const AGG: [u8; 32] = [3u8; 32];
+
+    fn row(key: LedgerKey) -> LedgerEntryQuery {
+        LedgerEntryQuery {
+            key,
+            value: None,
+            live_until_ledger: None,
+        }
+    }
+
+    fn ids() -> ContractIds {
+        ContractIds {
+            controller: CTRL,
+            pool_wasm_hash: [0u8; 32],
+            flash_receiver: None,
+            governance: Some(GOV),
+            xoxno_oracle_adapter: None,
+            price_aggregator: Some(AGG),
+            redstone_adapter: None,
+            swap_router: None,
+        }
+    }
+
+    #[test]
+    fn account_keys_group_as_per_user() {
+        let r = row(ControllerUserKey::AccountMeta(1)
+            .to_ledger_key(&CTRL)
+            .unwrap());
+        assert_eq!(
+            classify_persistent(&r, &CTRL, Some(&GOV)),
+            KeyClass::PerUser
+        );
+    }
+
+    /// A pool `Params` key groups as per-asset state.
+    #[test]
+    fn pool_market_keys_group_as_per_asset() {
+        let hub_asset = HubAssetKey {
+            hub_id: 1,
+            asset: [7u8; 32],
+        };
+        let r = row(PoolPersistentKey::Params(hub_asset)
+            .to_ledger_key(&[9u8; 32])
+            .unwrap());
+        assert_eq!(
+            classify_persistent(&r, &CTRL, Some(&GOV)),
+            KeyClass::PerAsset
+        );
+    }
+
+    /// Role variants exist on both the controller and governance; the contract
+    /// they sit on is what separates them.
+    #[test]
+    fn role_keys_split_by_owning_contract() {
+        use crate::keys::AccessControlPersistentKey;
+        let on_gov = row(AccessControlPersistentKey::ExistingRoles
+            .to_ledger_key(&GOV)
+            .unwrap());
+        let on_ctrl = row(AccessControlPersistentKey::ExistingRoles
+            .to_ledger_key(&CTRL)
+            .unwrap());
+        assert_eq!(
+            classify_persistent(&on_gov, &CTRL, Some(&GOV)),
+            KeyClass::Governance
+        );
+        assert_eq!(
+            classify_persistent(&on_ctrl, &CTRL, Some(&GOV)),
+            KeyClass::Roles
+        );
+    }
+
+    /// A position-NFT `Owner` key groups as per-user state, not `other`.
+    #[test]
+    fn position_nft_owner_groups_as_per_user() {
+        use crate::keys::PositionNftUserKey;
+        let nft = [0xCCu8; 32];
+        let r = row(PositionNftUserKey::Owner(1).to_ledger_key(&nft).unwrap());
+        assert_eq!(
+            classify_persistent(&r, &CTRL, Some(&GOV)),
+            KeyClass::PerUser
+        );
+    }
+
+    #[test]
+    fn hub_and_spoke_share_a_group() {
+        use crate::keys::ControllerPersistentKey;
+        let hub_asset = HubAssetKey {
+            hub_id: 1,
+            asset: [7u8; 32],
+        };
+        let pool = ScAddress::Contract(ContractId(Hash([8u8; 32])));
+        for k in [
+            ControllerPersistentKey::Hub(1),
+            ControllerPersistentKey::Spoke(1),
+            ControllerPersistentKey::SpokeAsset(1, hub_asset),
+            ControllerPersistentKey::SpokeUsage(1, hub_asset),
+            ControllerPersistentKey::SpokeFlagsEpoch(1, hub_asset),
+            ControllerPersistentKey::PositionManager(pool.clone()),
+            ControllerPersistentKey::BlendPoolAllowed(pool.clone()),
+        ] {
+            let r = row(k.to_ledger_key(&CTRL).unwrap());
+            assert_eq!(classify_persistent(&r, &CTRL, Some(&GOV)), KeyClass::Spoke);
+        }
+    }
+
+    #[test]
+    fn contract_labels_resolve_configured_ids() {
+        let agg_key = PriceAggregatorPersistentKey::Oracle(AggregatorPriceKey::Ref("BTC".into()))
+            .to_ledger_key(&AGG)
+            .unwrap();
+        assert_eq!(
+            contract_label(&agg_key, &ids(), None, None),
+            "price_aggregator"
+        );
+    }
+
+    #[test]
+    fn shipped_dependency_instances_are_named() {
+        use crate::config::KeeperConfig;
+        use crate::keys::contract_instance_key;
+
+        for network in ["mainnet", "testnet"] {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join(format!("config/{network}.yaml"));
+            let config = KeeperConfig::load(&path).unwrap();
+            let ids = ContractIds::resolve(&config.contracts).unwrap();
+            for (id, label) in [
+                (ids.redstone_adapter.unwrap(), "redstone_adapter"),
+                (ids.swap_router.unwrap(), "swap_router"),
+            ] {
+                assert_eq!(
+                    contract_label(&contract_instance_key(&id), &ids, None, None),
+                    label
+                );
+            }
+        }
+    }
+
+    /// The pool id comes from the controller instance, not the config. A pool
+    /// key is labelled `pool` when that id is passed, and `other_` when it is not.
+    #[test]
+    fn runtime_resolved_contracts_are_named() {
+        let pool = [0xEEu8; 32];
+        let key = PoolPersistentKey::Params(HubAssetKey {
+            hub_id: 1,
+            asset: [7u8; 32],
+        })
+        .to_ledger_key(&pool)
+        .unwrap();
+        assert_eq!(contract_label(&key, &ids(), Some(&pool), None), "pool");
+        assert!(contract_label(&key, &ids(), None, None).starts_with("other_"));
+    }
+
+    #[test]
+    fn unknown_contracts_keep_a_distinct_label() {
+        let a = row(ControllerUserKey::AccountMeta(1)
+            .to_ledger_key(&[0xAAu8; 32])
+            .unwrap());
+        let b = row(ControllerUserKey::AccountMeta(1)
+            .to_ledger_key(&[0xBBu8; 32])
+            .unwrap());
+        let la = contract_label(&a.key, &ids(), None, None);
+        let lb = contract_label(&b.key, &ids(), None, None);
+        assert_ne!(la, lb);
+        assert!(la.starts_with("other_"));
+    }
+}

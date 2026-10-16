@@ -1,0 +1,39 @@
+{
+  "checks": {
+    "has_reproduction_test": false,
+    "in_scope_at_processing": true,
+    "source_commit_matches": true,
+    "triage_requires_review": false
+  },
+  "commit": "0bc1dd9c49203dd45f48f0046abc4e95a50d06da",
+  "lead": {
+    "file": "contracts/interfaces/IAvocadoMultisigV1.sol",
+    "fingerprint": "2def630320426fffd86c",
+    "guidance": "Review authorization based on tx.origin",
+    "line": 113,
+    "rule": "SOL_TX_ORIGIN"
+  },
+  "note": "Automated offline evidence preparation only. No project-specific reproduction or verified security impact.",
+  "processed_at": "2026-10-15T00:09:26.198823+00:00",
+  "repository": "Instadapp/avocado-contracts-public",
+  "scope_urls": [
+    "https://immunefi.com/bug-bounty/instadapp/scope/"
+  ],
+  "source_check": {
+    "commit": "0bc1dd9c49203dd45f48f0046abc4e95a50d06da",
+    "excerpt": "  102:     ///                           the reason will be 1_2_reason.\n  103:     function cast(\n  104:         CastParams calldata params_,\n  105:         CastForwardParams calldata forwardParams_,\n  106:         SignatureParams[] calldata signaturesParams_\n  107:     ) external payable returns (bool success, string memory revertReason);\n  108: \n  109:     /// @notice                   Simulates a `cast()` call with exact same params and execution logic except for:\n  110:     ///                           - any `gasleft()` use removed to remove potential problems when estimating gas.\n  111:     ///                           - reverts on param validations removed (verify validity with `verify` instead).\n  112:     ///                           - signature validation is skipped (must be manually added to gas estimations).\n  113:     /// @dev                      tx.origin must be dead address, msg.sender must be AvoForwarder.\n  114:     /// @dev                      - set `signaturesParams_` to empty to automatically simulate with required signers length.\n  115:     ///                           - if `signaturesParams_` first element signature is not set, or if first signer is set to\n  116:     ///                             0xFFfFfFffFFfffFFfFFfFFFFFffFFFffffFfFFFfF, then gas usage burn is simulated\n  117:     ///                             for verify signature functionality. DO NOT set signature to non-empty for subsequent\n  118:     ///                             elements then; set all signatures to empty!\n  119:     ///                           - if `signaturesParams_` is set normally, signatures are verified as in actual execute\n  120:     ///                           - buffer amounts for mock smart contract signers signature verification must be added\n  121:     ///                             off-chain as this varies on a case per case basis.\n  122:     function simulateCast(\n  123:         CastParams calldata params_,\n  124:         CastForwardParams calldata forwardParams_,\n  125:         SignatureParams[] memory signaturesParams_",
+    "file": "contracts/interfaces/IAvocadoMultisigV1.sol",
+    "file_sha256": "0a3334f7491fba2ae8a9c26733475f40edf0170ab46558a4f4df4ca8d1eca592",
+    "line": 113,
+    "status": "source_matched"
+  },
+  "source_fingerprint": "d009a1b07e2d307e5bf5c5ea62e77029497b3c9ff3ba5c2e75f5ab279d48d73b",
+  "status": "needs_project_specific_reproduction",
+  "triage": {
+    "classification": "likely_false_positive",
+    "evidence": "The code snippet does not include any authorization checks for the tx.origin parameter, which is required for the contract's functionality.",
+    "follow_up": "Please review the code for proper authorization checks and ensure that all required logic is implemented.",
+    "rationale": "The code snippet does not implement proper authorization checks for the tx.origin parameter, which is required for the contract's functionality. The provided code snippet is incomplete and lacks the necessary logic to validate the origin of the transaction."
+  },
+  "verified_vulnerability": false
+}

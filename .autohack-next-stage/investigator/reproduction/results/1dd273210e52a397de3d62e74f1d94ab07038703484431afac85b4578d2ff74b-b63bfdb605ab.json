@@ -1,0 +1,13 @@
+{
+  "commit": "0738c7c981e506c582d83fa5456fe1b84eeccedc",
+  "processed_at": "2026-10-14T23:59:32.346360+00:00",
+  "repository": "HathorNetwork/hathor-core",
+  "source_record": "/home/izy/isaiz-bugbounty/autohack/.autohack-next-stage/investigator/verification/results/1dd273210e52a397de3d62e74f1d94ab07038703484431afac85b4578d2ff74b.json",
+  "source_sha256": "b63bfdb605ab15a29cd10391820c10ce711e233a48de038473788bc4524e45b6",
+  "status": "awaiting_reproduction_case",
+  "test_result": {
+    "case_manifest": "/home/izy/isaiz-bugbounty/autohack/.autohack-next-stage/investigator/reproduction/cases/1dd273210e52a397de3d62e74f1d94ab07038703484431afac85b4578d2ff74b.json",
+    "reason": "No explicit local regression case supplied"
+  },
+  "verified_vulnerability": false
+}

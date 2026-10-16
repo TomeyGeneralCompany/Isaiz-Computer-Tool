@@ -1,0 +1,14 @@
+[package]
+name = "bob_the_builder"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+
+[dependencies]
+toml = "0.4.2"
+serde = { version = "1.0.130", features = ["derive"] }
+glob = "0.3.0"

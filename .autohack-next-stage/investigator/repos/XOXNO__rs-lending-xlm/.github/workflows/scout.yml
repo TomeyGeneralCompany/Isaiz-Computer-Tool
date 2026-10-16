@@ -1,0 +1,88 @@
+name: Scout Audit
+
+on:
+  pull_request:
+    branches: [master, main, feat/*, rc/*]
+
+    paths:
+      - "contracts/**"
+      - "common/**"
+      - "interfaces/**"
+      - "tests/**"
+      - "certora/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "Makefile"
+      - ".github/workflows/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scout-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scout:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    name: Scout Audit (advisory)
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          clean: false
+
+      - name: Reset workspace, preserve target/ build cache
+        run: |
+          git reset --hard
+          git clean -ffdx -e target
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+        with:
+          toolchain: "1.95"
+          targets: wasm32v1-none
+
+      - name: Warm Scout detector build
+        continue-on-error: true
+        uses: mihaieremia/scout-audit@26779da2e72880ba77ab796ee7f71a785ba315f3 # v1.3.0
+        with:
+          contracts: contracts/defindex-strategy
+          exclude: dos-unexpected-revert-with-storage
+          output-format: json
+          output-dir: target/scout-audit-warm
+          fail-on-severity: critical
+          extra-args: "-- --locked"
+          upload-reports: false
+
+      - name: Run Scout
+
+        uses: mihaieremia/scout-audit@26779da2e72880ba77ab796ee7f71a785ba315f3 # v1.3.0
+        with:
+          # Every deployable contract in the workspace. Mocks are test
+          # doubles and are deliberately not audited. Keep in sync with the
+          # `contracts` array in .github/scripts/run_scout.sh and the
+          # `contracts/*` members of the root Cargo.toml.
+          contracts: |
+            contracts/pool
+            contracts/controller
+            contracts/governance
+            contracts/price-aggregator
+            contracts/defindex-strategy
+            contracts/position-nft
+            contracts/swap-aggregator
+            contracts/xoxno-oracle
+          exclude: dos-unexpected-revert-with-storage
+          output-format: json
+          output-dir: target/scout-audit
+          fail-on-severity: critical
+          extra-args: "-- --locked"
+          upload-reports: true
+
+      - name: Scout summary
+        if: always()
+        shell: bash
+        run: python3 scripts/scout-summary.py target/scout-audit >> "$GITHUB_STEP_SUMMARY"

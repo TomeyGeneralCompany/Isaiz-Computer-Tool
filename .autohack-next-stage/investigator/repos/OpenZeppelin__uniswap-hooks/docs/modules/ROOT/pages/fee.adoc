@@ -1,0 +1,90 @@
+= Fee
+
+Fee-related base hooks are provided in the library to allow for flexible ways to adjust or override fees for different actions, like swaps and liquidity modifications.
+
+== Dynamic
+
+xref:api:fee.adoc#BaseDynamicFee[BaseDynamicFee] allows for dynamic setting and application of LP fees. Implementers must override the xref:api:fee.adoc#BaseDynamicFee-_getFee-struct-PoolKey-[`_getFee`] function to return a fee value expressed in hundredths of a bip, based on their chosen logic. The fee is automatically applied after initialization, and can be refreshed at any time by calling the permissionless xref:api:fee.adoc#BaseDynamicFee-poke-struct-PoolKey-[`poke`] function. This allows the fee to be dynamically updated based on external data or conditions. However, since xref:api:fee.adoc#BaseDynamicFee-poke-struct-PoolKey-[`poke`] can be called by anyone, implementers must carefully consider whether their xref:api:fee.adoc#BaseDynamicFee-_getFee-struct-PoolKey-[`_getFee`] implementation relies on external states that could be manipulated by adversaries.
+
+[source,solidity]
+----
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.26;
+
+import {BaseDynamicFee, IPoolManager, PoolKey} from "@openzeppelin/uniswap-hooks/fee/BaseDynamicFee.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+
+/**
+ * @dev A hook that allows the owner to dynamically update the LP fee.
+ */
+contract DynamicLPFeeHook is BaseDynamicFee, Ownable {
+    uint24 public fee;
+
+    constructor(IPoolManager _poolManager) BaseDynamicFee(_poolManager) Ownable(msg.sender) {}
+
+    /**
+     * @inheritdoc BaseDynamicFee
+     */
+    function _getFee(PoolKey calldata) internal view override returns (uint24) {
+        return fee;
+    }
+
+    /**
+     * @notice Sets the LP fee, denominated in hundredths of a bip.
+     */
+    function setFee(uint24 _fee) external onlyOwner {
+        fee = _fee;
+    }
+}
+----
+
+The constructor checks if the pool is configured with the dynamic fee flag and reverts if not.
+
+== Override
+
+xref:api:fee.adoc#BaseOverrideFee[BaseOverrideFee] allows for dynamic setting and application of swap fees. Similar to xref:api:fee.adoc#BaseDynamicFee[BaseDynamicFee], implementers must override the xref:api:fee.adoc#BaseOverrideFee-_getFee-struct-PoolKey-[`_getFee`] function to return a fee value, which is masked with the override fee flag and passed to the `PoolManager` before a swap.
+
+This approach can be useful for time-based, volume-based, or volatility-based fees where the fee may fluctuate frequently. Because the hook runs before the swap is executed, an implementer can examine the current context (like liquidity levels or external price oracles) to decide the appropriate fee for each trade. It also doesn't require poking the hook to refresh the fee, as the fee is dynamically fetched before each swap.
+
+[source,solidity]
+----
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.26;
+
+import {BaseOverrideFee, IPoolManager, PoolKey} from "@openzeppelin/uniswap-hooks/fee/BaseOverrideFee.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+
+/**
+ * @dev A hook that allows the owner to dynamically update the swap fee.
+ */
+contract DynamicSwapFeeHook is BaseOverrideFee, Ownable {
+    uint24 public fee;
+
+    constructor(IPoolManager _poolManager) BaseOverrideFee(_poolManager) Ownable(msg.sender) {}
+
+    /**
+     * @inheritdoc BaseOverrideFee
+     */
+    function _getFee(address, PoolKey calldata, IPoolManager.SwapParams calldata, bytes calldata)
+        internal
+        view
+        override
+        returns (uint24)
+    {
+        return fee;
+    }
+
+    /**
+     * @notice Sets the swap fee, denominated in hundredths of a bip.
+     */
+    function setFee(uint24 _fee) external onlyOwner {
+        fee = _fee;
+    }
+}
+----
+
+== After Swap
+
+xref:api:fee.adoc#BaseDynamicAfterFee[BaseDynamicAfterFee] enforces a target amount on the unspecified currency of the swap. Once the swap is processed by the `PoolManager`, the hook's xref:api:base.adoc#BaseHook-_afterSwap-address-struct-PoolKey-struct-IPoolManager-SwapParams-BalanceDelta-bytes-[`_afterSwap`] method asks `_getTargetUnspecified` for the target, passing it the swap's `BalanceDelta`, and compares the realized unspecified amount with it. On exact-input swaps, any output above the target is taken as a hook fee. On exact-output swaps, any input below the target is added as a hook fee. The fee is minted to the hook as ERC-6909 claims and passed to `_afterSwapHandler`, effectively implementing a dynamic fee that is only finalized once all of the swap's internal calculations are done.
+
+Implementers should carefully consider how to mitigate the risk of attackers exploiting "just-in-time" liquidity additions to gain an outsized share of these fees.

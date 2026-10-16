@@ -1,0 +1,84 @@
+# SPDX-FileCopyrightText: Hathor Labs
+# SPDX-License-Identifier: Apache-2.0
+
+from typing import Annotated, Literal, Optional, Union
+
+from pydantic import Discriminator, NonNegativeInt, RootModel, Tag
+
+from hathor.api.asyncapi.decorators import ws_message
+from hathor.api.asyncapi.generator import MessageDirection
+from hathor.utils.pydantic import BaseModel
+
+
+@ws_message(
+    name='startStream',
+    direction=MessageDirection.RECEIVE,
+    summary='Start event streaming',
+    description='Start receiving events from the server.',
+    tags=['flow-control'],
+)
+class StartStreamRequest(BaseModel):
+    """Class that represents a client request to start streaming events.
+
+    Args:
+        type: The type of the request.
+        last_ack_event_id: The ID of the last event acknowledged by the client.
+        window_size: The amount of events the client is able to process.
+    """
+    type: Literal['START_STREAM']
+    last_ack_event_id: Optional[NonNegativeInt] = None
+    window_size: NonNegativeInt
+
+
+@ws_message(
+    name='ack',
+    direction=MessageDirection.RECEIVE,
+    summary='Acknowledge events',
+    description='Acknowledge processed events and adjust the window.',
+    tags=['flow-control'],
+)
+class AckRequest(BaseModel):
+    """Class that represents a client request to ack and event and change the window size.
+
+    Args:
+        type: The type of the request.
+        ack_event_id: The ID of the last event acknowledged by the client.
+        window_size: The amount of events the client is able to process.
+    """
+    type: Literal['ACK']
+    ack_event_id: NonNegativeInt
+    window_size: NonNegativeInt
+
+
+@ws_message(
+    name='stopStream',
+    direction=MessageDirection.RECEIVE,
+    summary='Stop event streaming',
+    description='Stop receiving events. Can be resumed later with START_STREAM.',
+    tags=['flow-control'],
+)
+class StopStreamRequest(BaseModel):
+    """Class that represents a client request to stop streaming events.
+
+    Args:
+        type: The type of the request.
+    """
+    type: Literal['STOP_STREAM']
+
+
+Request = Annotated[
+    Union[
+        Annotated[StartStreamRequest, Tag('START_STREAM')],
+        Annotated[AckRequest, Tag('ACK')],
+        Annotated[StopStreamRequest, Tag('STOP_STREAM')],
+    ],
+    Discriminator('type')
+]
+
+
+class RequestWrapper(RootModel[Request]):
+    """Class that wraps the Request union type for parsing."""
+
+    @classmethod
+    def parse_raw_request(cls, raw: bytes) -> Request:
+        return cls.model_validate_json(raw).root

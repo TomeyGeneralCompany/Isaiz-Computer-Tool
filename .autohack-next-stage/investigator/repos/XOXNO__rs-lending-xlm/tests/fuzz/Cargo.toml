@@ -1,0 +1,95 @@
+[package]
+name = "stellar-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[features]
+
+default = []
+seed-corpus = ["dep:serde_json", "dep:sha2"]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+soroban-sdk = { version = "=28.0.0", features = ["testutils"] }
+common = { path = "../../common" }
+controller = { path = "../../contracts/controller", features = ["testing"] }
+pool = { path = "../../contracts/pool" }
+price-aggregator = { path = "../../contracts/price-aggregator", features = ["testing"] }
+mock-redstone = { path = "../../mock/mock-redstone" }
+test-harness = { path = "../test-harness", features = ["testing"] }
+num-bigint = "0.4"
+num-rational = "0.4"
+num-traits = "0.2"
+
+serde_json = { version = "1", optional = true }
+sha2 = { version = "0.10", optional = true }
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "fp_math"
+path = "fuzz_targets/fp_math.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "rates_and_index"
+path = "fuzz_targets/rates_and_index.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "flow_e2e"
+path = "fuzz_targets/flow_e2e.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "flow_strategy"
+path = "fuzz_targets/flow_strategy.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fp_ops"
+path = "fuzz_targets/fp_ops.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pool_native"
+path = "fuzz_targets/pool_native.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "aggregator"
+path = "fuzz_targets/aggregator.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "seed_corpus"
+path = "src/bin/seed_corpus.rs"
+test = false
+doc = false
+bench = false
+required-features = ["seed-corpus"]
+
+[profile.release]
+debug = 1

@@ -1,0 +1,750 @@
+name: Fuzz
+
+on:
+  pull_request:
+    branches: [master, main, feat/*, rc/*]
+    # The whole code surface, not only the crates the fuzz and proptest suites
+    # reach: `mutants-diff` mutates the PR diff wherever it lands.
+    paths:
+      - "common/**"
+      - "contracts/**"
+      - "interfaces/**"
+      - "mock/**"
+      - "tests/test-harness/**"
+      - "tests/fuzz/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+  schedule:
+    - cron: "0 2 * * 1-6"
+    - cron: "0 2 * * 0"
+    - cron: "0 14 * * 1-6"
+    - cron: "0 14 * * 0"
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: "Long-running suite(s) to execute (all runs fuzz + proptest + mutants together)"
+        type: choice
+
+        options:
+          - all
+          - fuzz
+          - proptest
+          - mutants
+        default: all
+      fuzz_time:
+        description: "Seconds per function-level target"
+        required: false
+        default: "300"
+      proptest_cases:
+        description: "Cases per contract-level property test"
+        required: false
+        default: "5000"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  STELLAR_VERSION: "28.0.0"
+  CARGO_MUTANTS_VERSION: "27.1.0"
+
+  FUZZ_TIME_INPUT: ${{ github.event.inputs.fuzz_time }}
+  PROPTEST_CASES_INPUT: ${{ github.event.inputs.proptest_cases }}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  pr-fuzz:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    name: Fuzz smoke (PR)
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Isolate rustup toolchain dir
+        run: |
+          rm -rf "$RUNNER_TEMP/rustup"
+          echo "RUSTUP_HOME=$RUNNER_TEMP/rustup" >> "$GITHUB_ENV"
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+        with:
+          toolchain: "1.95"
+          targets: wasm32v1-none
+
+      - name: Install Rust nightly (for cargo-fuzz)
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+        with:
+          toolchain: nightly
+
+      - name: Install cargo-fuzz (prebuilt)
+        uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
+        with:
+          tool: cargo-fuzz
+
+      # Only build artifacts are cached, never ~/.cargo. Every self-hosted
+      # runner instance shares one CARGO_HOME. Cargo serialises on
+      # .package-cache, but actions/cache ignores that lock and unpacks over
+      # the live registry, so a concurrent build can read a half-written crate
+      # source. The registry persists on the runner and needs no cache.
+      - name: Cache cargo build artifacts
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            target
+            tests/fuzz/target
+          key: ${{ runner.os }}-fuzz-v2-${{ hashFiles('Cargo.lock', 'tests/fuzz/Cargo.lock') }}
+
+      - name: Install stellar-cli
+        run: bash .github/scripts/install-stellar-cli.sh
+
+      - name: Build pool WASM (required by contract-flow targets)
+        run: stellar contract build
+
+      # One cargo-fuzz invocation compiles every target. The timed runs then
+      # only pay incremental linking instead of a cold build per binary.
+      - name: Prebuild libFuzzer targets
+        run: make fuzz-build
+
+      - name: Function-level fuzz (30s each)
+        run: make fuzz FUZZ_TIME=30
+
+      - name: Contract-level fuzz smoke (60s each)
+        run: make fuzz-contract FUZZ_TIME=60
+
+  pr-proptest:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    name: Proptest smoke (PR)
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Isolate rustup toolchain dir
+        run: |
+          rm -rf "$RUNNER_TEMP/rustup"
+          echo "RUSTUP_HOME=$RUNNER_TEMP/rustup" >> "$GITHUB_ENV"
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+        with:
+          toolchain: "1.95"
+          targets: wasm32v1-none
+
+      - name: Cache cargo build artifacts
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            target
+          key: ${{ runner.os }}-proptest-v2-pr-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-proptest-v2-pr-
+            ${{ runner.os }}-proptest-v2-
+
+      - name: Install stellar-cli
+        run: bash .github/scripts/install-stellar-cli.sh
+
+      - name: Build pool WASM (required by test-harness)
+        run: stellar contract build
+
+      - name: Contract-level property suite
+        run: make proptest
+
+  miri:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    name: Miri pass (common fp_core)
+    runs-on: self-hosted
+
+    env:
+      RUSTUP_TOOLCHAIN: nightly
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Isolate rustup toolchain dir
+        run: |
+          rm -rf "$RUNNER_TEMP/rustup"
+          echo "RUSTUP_HOME=$RUNNER_TEMP/rustup" >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+        with:
+          toolchain: nightly
+          components: miri, rust-src
+      - run: make miri-all
+
+  mutants-diff:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    name: Mutants (PR diff) ${{ matrix.shard }}
+    runs-on: self-hosted
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Isolate rustup toolchain dir
+        run: |
+          rm -rf "$RUNNER_TEMP/rustup"
+          echo "RUSTUP_HOME=$RUNNER_TEMP/rustup" >> "$GITHUB_ENV"
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+        with:
+          toolchain: "1.95"
+          targets: wasm32v1-none
+
+      - name: Install cargo-mutants + nextest
+        uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
+        with:
+          tool: cargo-mutants@${{ env.CARGO_MUTANTS_VERSION }},cargo-nextest
+
+      - name: Setup mold (best-effort host linker)
+        run: |
+          set -u
+          MOLD_VER=2.34.1
+          MOLD_DIR="$RUNNER_TEMP/mold-${MOLD_VER}-x86_64-linux"
+          if ! curl -fsSL "https://github.com/rui314/mold/releases/download/v${MOLD_VER}/mold-${MOLD_VER}-x86_64-linux.tar.gz" | tar -xz -C "$RUNNER_TEMP"; then
+            echo "mold download failed; using default linker"
+            exit 0
+          fi
+          echo "$MOLD_DIR/bin" >> "$GITHUB_PATH"
+          echo 'fn main(){}' > "$RUNNER_TEMP/moldcheck.rs"
+          if PATH="$MOLD_DIR/bin:$PATH" rustc -C link-arg=-fuse-ld=mold -o "$RUNNER_TEMP/moldcheck" "$RUNNER_TEMP/moldcheck.rs" 2>/dev/null; then
+            echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=-C link-arg=-fuse-ld=mold" >> "$GITHUB_ENV"
+            echo "mold enabled for host builds"
+          else
+            echo "toolchain cannot link with mold (gcc < 12.1?); using default linker"
+          fi
+
+      # Only build artifacts are cached, never ~/.cargo (see pr-fuzz).
+      - name: Cache cargo build artifacts
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            target-mutants
+          key: ${{ runner.os }}-mutants-diff-v4-s${{ matrix.shard }}-${{ hashFiles('Cargo.lock', '.cargo/mutants.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-mutants-diff-v4-s${{ matrix.shard }}-
+            ${{ runner.os }}-mutants-diff-v4-
+
+      - name: Invalidate any mutant-built artifacts from the cache
+        run: git ls-files -z '*.rs' | xargs -0 touch
+
+      - name: Install stellar-cli
+        run: bash .github/scripts/install-stellar-cli.sh
+
+      - name: Compute PR diff
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: git diff "$BASE_SHA"...HEAD > pr.diff
+
+      - name: Mutate changed lines (shard ${{ matrix.shard }}/4)
+        env:
+          CARGO_BUILD_JOBS: "8"
+          CARGO_TARGET_DIR: target-mutants
+
+          NEXTEST_TEST_THREADS: "8"
+
+        run: >-
+          make mutants-diff
+          MUTANTS_RUN_MODE=--in-place
+          MUTANTS_SHARD=${{ matrix.shard }}/4
+          MUTANTS_TEST_TOOL=nextest
+
+      - name: Upload mutation results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mutants-artifacts-diff-s${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: mutants.out/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  stellar-tool:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    name: Prepare stellar-cli
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install stellar-cli
+        run: bash .github/scripts/install-stellar-cli.sh
+
+      - name: Upload stellar-cli
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: stellar-cli-${{ github.run_id }}
+          path: ${{ runner.temp }}/stellar-cli/stellar
+          overwrite: true
+
+  mutants-tool:
+    if: >-
+      (github.event_name == 'schedule' &&
+      startsWith(github.event.schedule, '0 2 ')) ||
+      (github.event_name == 'workflow_dispatch' &&
+      (inputs.suite == 'mutants' || inputs.suite == 'all'))
+    name: Prepare cargo-mutants
+    runs-on: self-hosted
+    steps:
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+        with:
+          toolchain: "1.95"
+
+      # Installs the tools once; each mutants matrix cell downloads the staged
+      # copies instead of installing them again.
+      - name: Install tools
+        uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
+        with:
+          tool: cargo-mutants@${{ env.CARGO_MUTANTS_VERSION }},sccache,cargo-nextest
+
+      - name: Stage tools
+        run: |
+          mkdir -p "$RUNNER_TEMP/cargo-mutants/bin"
+          for t in cargo-mutants sccache cargo-nextest; do
+            cp "$(command -v "$t")" "$RUNNER_TEMP/cargo-mutants/bin/$t"
+          done
+
+      # One artifact for the whole bin directory, so each matrix cell does one
+      # download.
+      - name: Upload tools
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mutants-tools-${{ github.run_id }}
+          path: ${{ runner.temp }}/cargo-mutants/bin
+          overwrite: true
+
+  wasm-fixtures:
+    # Mutants (02:00), fuzz and proptest (14:00) and every dispatch suite use
+    # these WASM fixtures. Build them once for all matrix cells.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    name: Prepare wasm fixtures
+    runs-on: self-hosted
+    needs: stellar-tool
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Isolate rustup toolchain dir
+        run: |
+          rm -rf "$RUNNER_TEMP/rustup"
+          echo "RUSTUP_HOME=$RUNNER_TEMP/rustup" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+        with:
+          toolchain: "1.95"
+          targets: wasm32v1-none
+
+      - name: Download stellar-cli
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: stellar-cli-${{ github.run_id }}
+          path: .github/tools
+
+      - name: Add stellar-cli to PATH
+        run: |
+          chmod +x .github/tools/stellar
+          echo "$PWD/.github/tools" >> "$GITHUB_PATH"
+
+      - name: Build wasm fixtures
+        env:
+          CARGO_TARGET_DIR: target-mutants
+        run: make build
+
+      - name: Stage fixtures
+        env:
+          CARGO_TARGET_DIR: target-mutants
+        run: |
+          set -euo pipefail
+          src=target-mutants/wasm32v1-none/release
+          dst="$RUNNER_TEMP/wasm-fixtures"
+          mkdir -p "$dst"
+          for w in pool controller price_aggregator position_nft; do
+            cp "$src/$w.wasm" "$dst/$w.wasm"
+          done
+          grep -aq set_swap_aggregator "$dst/controller.wasm" \
+            || { echo "controller.wasm is missing the set_swap_aggregator export" >&2; exit 1; }
+          (cd "$dst" && sha256sum ./*.wasm > SHA256SUMS)
+          cat "$dst/SHA256SUMS"
+
+      - name: Upload wasm fixtures
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wasm-fixtures-${{ github.run_id }}
+          path: ${{ runner.temp }}/wasm-fixtures/
+          overwrite: true
+
+  fuzz-long:
+    if: >-
+      (github.event_name == 'schedule' &&
+      startsWith(github.event.schedule, '0 14 ')) ||
+      (github.event_name == 'workflow_dispatch' &&
+      (inputs.suite == 'fuzz' || inputs.suite == 'all'))
+    name: Fuzz long (${{ matrix.target }})
+    runs-on: self-hosted
+    needs: [stellar-tool, wasm-fixtures]
+    timeout-minutes: 1440
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        include:
+          - target: fp_math
+            kind: function
+          - target: rates_and_index
+            kind: function
+          - target: fp_ops
+            kind: function
+          - target: flow_e2e
+            kind: contract
+          - target: flow_strategy
+            kind: contract
+          - target: pool_native
+            kind: contract
+          - target: aggregator
+            kind: contract
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Isolate rustup toolchain dir
+        run: |
+          rm -rf "$RUNNER_TEMP/rustup"
+          echo "RUSTUP_HOME=$RUNNER_TEMP/rustup" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+        with:
+          toolchain: "1.95"
+          targets: wasm32v1-none
+
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+        with:
+          toolchain: nightly
+
+      - name: Install cargo-fuzz (prebuilt)
+        uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
+        with:
+          tool: cargo-fuzz
+
+      # Only build artifacts are cached, never ~/.cargo (see pr-fuzz).
+      - name: Cache cargo build artifacts
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            target
+            tests/fuzz/target
+          key: ${{ runner.os }}-fuzz-v2-${{ matrix.target }}-${{ hashFiles('Cargo.lock', 'tests/fuzz/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-fuzz-v2-
+
+      - name: Download pool WASM fixture
+        if: matrix.kind == 'contract'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: wasm-fixtures-${{ github.run_id }}
+          path: target/wasm32v1-none/release
+
+      - name: Verify pool WASM fixture
+        if: matrix.kind == 'contract'
+        run: test -s target/wasm32v1-none/release/pool.wasm
+
+      - name: Run fuzz target
+        env:
+          FUZZ_TIME: ${{ env.FUZZ_TIME_INPUT || (github.event.schedule == '0 14 * * 0' && '7200' || '1800') }}
+          CARGO_BUILD_JOBS: "1"
+        run: make fuzz-one TARGET="${{ matrix.target }}" FUZZ_TIME="$FUZZ_TIME"
+
+      - name: Upload fuzz artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            tests/fuzz/artifacts/${{ matrix.target }}/
+
+  proptest-long:
+    if: >-
+      (github.event_name == 'schedule' &&
+      startsWith(github.event.schedule, '0 14 ')) ||
+      (github.event_name == 'workflow_dispatch' &&
+      (inputs.suite == 'proptest' || inputs.suite == 'all'))
+    name: Proptest (${{ matrix.test }})
+    runs-on: self-hosted
+    needs: [stellar-tool, wasm-fixtures]
+    timeout-minutes: 1440
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        test:
+          - prop_accounting_conservation
+          - prop_liquidation_matches_bigrational_reference
+          - prop_below_base_liquidation_matches_reference
+          - prop_valid_multiply_fits_default_budget
+          - prop_multiply_succeeds_with_safe_hf_and_clean_router
+          - prop_swap_collateral_conserves_position_delta
+          - prop_migrate_blend_reconciles_same_asset
+          - prop_migrate_blend_cap_too_low_reverts
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+        with:
+          toolchain: "1.95"
+          targets: wasm32v1-none
+
+      # Only build artifacts are cached, never ~/.cargo (see pr-fuzz).
+      - name: Cache cargo build artifacts
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            target
+          key: ${{ runner.os }}-proptest-v2-${{ matrix.test }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-proptest-v2-
+
+      - name: Download pool WASM fixture
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: wasm-fixtures-${{ github.run_id }}
+          path: target/wasm32v1-none/release
+
+      - name: Verify pool WASM fixture
+        run: test -s target/wasm32v1-none/release/pool.wasm
+
+      - name: Run proptest property
+        env:
+          PROPTEST_CASES: ${{ env.PROPTEST_CASES_INPUT || (github.event.schedule == '0 14 * * 0' && '50000' || '5000') }}
+          CARGO_BUILD_JOBS: "1"
+        run: make proptest-one TEST="${{ matrix.test }}" PROPTEST_CASES="$PROPTEST_CASES"
+
+      - name: Upload proptest regressions on failure
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: proptest-regressions-${{ matrix.test }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            tests/test-harness/tests/fuzz/*.proptest-regressions
+
+  mutants:
+    if: >-
+      (github.event_name == 'schedule' &&
+      startsWith(github.event.schedule, '0 2 ')) ||
+      (github.event_name == 'workflow_dispatch' &&
+      (inputs.suite == 'mutants' || inputs.suite == 'all'))
+    name: Mutants (${{ matrix.target }}${{ matrix.suffix || '' }})
+
+    runs-on: self-hosted
+    needs: [stellar-tool, mutants-tool, wasm-fixtures]
+
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+
+      # An upper bound on lanes, not a measurement. The "Size the worker budget
+      # to this host" step below handles host contention.
+      max-parallel: 8
+
+      # Cells are listed longest-first: GitHub dispatches matrix cells in order,
+      # and the longest cells must claim lanes first, or they start late and
+      # become the tail.
+      #
+      # Shard counts are a starting point, not a measurement. The run step
+      # writes each cell's elapsed time to the job summary; re-balance from that.
+      matrix:
+        include:
+          - target: mutants-common
+            shard: 0/4
+            suffix: "-1of4"
+          - target: mutants-common
+            shard: 1/4
+            suffix: "-2of4"
+          - target: mutants-common
+            shard: 2/4
+            suffix: "-3of4"
+          - target: mutants-common
+            shard: 3/4
+            suffix: "-4of4"
+
+          - target: mutants-controller-core
+            shard: 0/2
+            suffix: "-1of2"
+          - target: mutants-controller-core
+            shard: 1/2
+            suffix: "-2of2"
+
+          # Sharded so that neither target outlasts a mutants-common shard.
+          - target: mutants-controller-strategies
+            shard: 0/2
+            suffix: "-1of2"
+          - target: mutants-controller-strategies
+            shard: 1/2
+            suffix: "-2of2"
+          - target: mutants-controller-positions
+            shard: 0/2
+            suffix: "-1of2"
+          - target: mutants-controller-positions
+            shard: 1/2
+            suffix: "-2of2"
+
+          # Not sharded: a second cell pays a second baseline build to save only
+          # minutes.
+          - target: mutants-controller-views
+
+          - target: mutants-swap-aggregator
+          - target: mutants-aggregator
+          - target: mutants-pool
+          - target: mutants-oracle-adapter
+          - target: mutants-governance
+          - target: mutants-controller-context
+          - target: mutants-defindex-strategy
+          - target: mutants-position-nft
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Isolate rustup toolchain dir
+        run: |
+          rm -rf "$RUNNER_TEMP/rustup"
+          echo "RUSTUP_HOME=$RUNNER_TEMP/rustup" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+        with:
+          toolchain: "1.95"
+
+      - name: Download stellar-cli
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: stellar-cli-${{ github.run_id }}
+          path: .github/tools
+
+      - name: Download mutants tools
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: mutants-tools-${{ github.run_id }}
+          path: .github/tools
+
+      # No actions/cache here. cargo-mutants builds in temporary copies of the
+      # tree, and the relative CARGO_TARGET_DIR resolves inside each copy, so
+      # every run starts with an empty target dir. The only warm build state is
+      # the runner's local sccache (RUSTC_WRAPPER=sccache, 50G). The workspace
+      # target-mutants holds only the wasm fixtures. Hosted cache entries for
+      # this matrix would evict the fuzz and proptest caches.
+      - name: Download wasm fixtures
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: wasm-fixtures-${{ github.run_id }}
+          path: target-mutants/wasm32v1-none/release
+
+      - name: Add tools to PATH
+        run: |
+          chmod +x .github/tools/*
+          echo "$PWD/.github/tools" >> "$GITHUB_PATH"
+
+      - name: Configure fast host linker
+        shell: bash
+        run: |
+          if command -v mold >/dev/null 2>&1; then
+            linker=mold
+            mold --version
+          elif command -v ld.lld >/dev/null 2>&1; then
+            linker=lld
+            ld.lld --version
+          else
+            echo "Install mold (preferred) or lld on the self-hosted runner." >&2
+            exit 1
+          fi
+          command -v cc >/dev/null 2>&1 || {
+            echo "A C compiler driver (cc) is required for the fast linker." >&2
+            exit 1
+          }
+          echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=cc" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=-C link-arg=-fuse-ld=$linker" >> "$GITHUB_ENV"
+
+
+
+
+
+
+
+      - name: Size the worker budget to this host
+        run: |
+          case "$(hostname)" in
+            Ubuntu-2004-focal-64-minimal) services=4 ;;
+            v2202503260965324980)         services=3 ;;
+            *)                            services=4 ;;
+          esac
+          cores=$(nproc)
+          workers=$(( cores / services ))
+          if [ "$workers" -lt 1 ]; then workers=1; fi
+          echo "host=$(hostname) cores=$cores mem=$(free -g | awk '/^Mem:/{print $2}')GB"
+          echo "services=$services workers_per_lane=$workers in_flight=$(( services * workers ))"
+          echo "MUTANTS_JOBS=$workers" >> "$GITHUB_ENV"
+          echo "MUTANTS_JOBSERVER_TASKS=$workers" >> "$GITHUB_ENV"
+
+      - name: Run mutation target
+
+        env:
+          CARGO_BUILD_JOBS: "1"
+          CARGO_INCREMENTAL: "0"
+          CARGO_PROFILE_DEV_DEBUG: "0"
+          CARGO_PROFILE_TEST_DEBUG: "0"
+          CARGO_TARGET_DIR: target-mutants
+
+
+
+
+          MUTANTS_FIXTURES_PREBUILT: "1"
+          RUST_TEST_THREADS: "1"
+          # nextest ignores RUST_TEST_THREADS. Without this it runs one test
+          # process per core in a lane sized to share the host.
+          NEXTEST_TEST_THREADS: "1"
+          RUSTC_WRAPPER: sccache
+          SCCACHE_CACHE_SIZE: 50G
+        # nextest gives per-test timeouts, which --minimum-test-timeout needs
+        # to catch a mutant that hangs rather than fails. nextest cannot run
+        # doctests; the crates under mutation have no runnable doctests.
+        #
+        # Elapsed time goes to the job summary to re-balance the shard counts.
+        run: |
+          start=$SECONDS
+          status=0
+          make "${{ matrix.target }}" \
+            MUTANTS_SHARD="${{ matrix.shard || '' }}" \
+            MUTANTS_TEST_TOOL=nextest || status=$?
+          printf '%s%s\t%dm\n' \
+            "${{ matrix.target }}" "${{ matrix.suffix || '' }}" \
+            "$(( (SECONDS - start) / 60 ))" >> "$GITHUB_STEP_SUMMARY"
+          exit $status
+
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats
+
+      - name: Upload mutation results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mutants-artifacts-${{ matrix.target }}${{ matrix.suffix || '' }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+          path: |
+            mutants.out/
+            mutants.out.old/
+          if-no-files-found: ignore
+          retention-days: 7

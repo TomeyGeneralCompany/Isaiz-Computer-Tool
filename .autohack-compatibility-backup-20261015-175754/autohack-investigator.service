@@ -1,0 +1,16 @@
+[Unit]
+Description=AutoHack continuous bounded Immunefi source-code investigator
+After=network-online.target autohack-immunefi.service
+Wants=network-online.target
+[Service]
+Type=simple
+WorkingDirectory=/home/izy/isaiz-bugbounty/autohack
+ExecStart=/usr/bin/python3 -u /home/izy/isaiz-bugbounty/autohack/.autohack-next-stage/investigator/engine.py
+Restart=on-failure
+RestartSec=30
+CPUQuota=30%
+MemoryMax=650M
+TasksMax=80
+NoNewPrivileges=true
+[Install]
+WantedBy=default.target

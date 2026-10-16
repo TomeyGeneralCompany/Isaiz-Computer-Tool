@@ -1,0 +1,456 @@
+use common::types::SeizeMode;
+use controller::constants::{RAY, WAD};
+use test_harness::{
+    hub_asset, liquidatable_usdc_eth, usd_cents, usdc_preset, LendingTest, ALICE, LIQUIDATOR,
+};
+#[test]
+fn test_total_collateral_usd_multi_asset() {
+    let mut t = LendingTest::new().standard_two_asset().build();
+
+    t.supply(ALICE, "USDC", 10_000.0);
+    t.supply(ALICE, "ETH", 1.0);
+
+    let total = t.total_collateral(ALICE);
+
+    assert!(
+        (total - 12_000.0).abs() < 1.0,
+        "total collateral should be ~$12,000, got {}",
+        total
+    );
+}
+#[test]
+fn test_total_borrow_usd_multi_asset() {
+    let mut t = LendingTest::new().three_asset_usdc_eth_wbtc().build();
+
+    t.supply(ALICE, "USDC", 500_000.0);
+
+    t.borrow(ALICE, "ETH", 1.0);
+    t.borrow(ALICE, "WBTC", 0.01);
+
+    let total = t.total_debt(ALICE);
+
+    assert!(
+        (total - 2_600.0).abs() < 1.0,
+        "total debt should be ~$2,600, got {}",
+        total
+    );
+}
+#[test]
+fn test_collateral_amount_for_missing_token() {
+    let mut t = LendingTest::new().standard_two_asset().build();
+
+    t.supply(ALICE, "USDC", 10_000.0);
+
+    let eth_balance = t.supply_balance_raw(ALICE, "ETH");
+    assert_eq!(eth_balance, 0, "missing supply position should return 0");
+}
+#[test]
+fn test_borrow_amount_for_missing_token() {
+    let mut t = LendingTest::new().standard_two_asset().build();
+
+    t.supply(ALICE, "USDC", 10_000.0);
+    t.borrow(ALICE, "ETH", 1.0);
+
+    let usdc_borrow = t.borrow_balance_raw(ALICE, "USDC");
+    assert_eq!(usdc_borrow, 0, "missing borrow position should return 0");
+}
+#[test]
+fn test_can_be_liquidated_returns_false_for_healthy() {
+    let mut t = LendingTest::new().standard_two_asset().build();
+
+    t.supply(ALICE, "USDC", 10_000.0);
+
+    t.borrow(ALICE, "ETH", 1.5);
+
+    assert!(
+        !t.can_be_liquidated(ALICE),
+        "healthy account should not be liquidatable"
+    );
+    t.assert_healthy(ALICE);
+}
+#[test]
+fn test_can_be_liquidated_when_unhealthy() {
+    let mut t = LendingTest::new().standard_two_asset().build();
+
+    t.supply(ALICE, "USDC", 10_000.0);
+    t.borrow(ALICE, "ETH", 3.0);
+    t.assert_healthy(ALICE);
+
+    t.set_price("USDC", usd_cents(50));
+
+    assert!(
+        t.can_be_liquidated(ALICE),
+        "undercollateralized account should be liquidatable"
+    );
+}
+#[test]
+fn test_get_all_markets_multiple() {
+    let t = LendingTest::new().three_asset_usdc_eth_wbtc().build();
+
+    let ctrl = t.ctrl_client();
+    let assets = soroban_sdk::Vec::from_array(
+        &t.env,
+        [
+            hub_asset(t.resolve_asset("USDC")),
+            hub_asset(t.resolve_asset("ETH")),
+            hub_asset(t.resolve_asset("WBTC")),
+        ],
+    );
+    let markets = ctrl.get_market_indexes_detailed(&assets);
+    assert_eq!(
+        markets.len(),
+        3,
+        "should have 3 markets, got {}",
+        markets.len()
+    );
+    for row in markets.iter() {
+        assert!(row.valid, "fresh harness oracles should be valid");
+        assert!(!row.stale);
+        assert!(!row.deviation);
+        assert!(row.price_wad > 0);
+        assert!(row.price_timestamp > 0);
+    }
+}
+#[test]
+fn test_get_all_markets_single() {
+    let t = LendingTest::new().with_market(usdc_preset()).build();
+
+    let ctrl = t.ctrl_client();
+    let assets = soroban_sdk::Vec::from_array(&t.env, [hub_asset(t.resolve_asset("USDC"))]);
+    let markets = ctrl.get_market_indexes_detailed(&assets);
+    assert_eq!(
+        markets.len(),
+        1,
+        "should have 1 market, got {}",
+        markets.len()
+    );
+    let row = markets.get(0).unwrap();
+    assert!(row.valid);
+    assert_eq!(row.asset, t.resolve_asset("USDC"));
+}
+
+#[test]
+fn test_get_pool_address_is_global() {
+    let t = LendingTest::new().standard_two_asset().build();
+
+    let ctrl = t.ctrl_client();
+    let pool = ctrl.get_pool_address();
+    assert_eq!(t.get_pool_address("USDC"), pool);
+    assert_eq!(t.get_pool_address("ETH"), pool);
+}
+
+#[test]
+fn test_account_exists_view() {
+    let mut t = LendingTest::new().with_market(usdc_preset()).build();
+
+    assert!(!t.account_exists(999_999), "bogus id should not exist");
+
+    t.supply(ALICE, "USDC", 1_000.0);
+    let account_id = t.resolve_account_id(ALICE);
+    assert!(
+        t.account_exists(account_id),
+        "account should exist after supply"
+    );
+
+    t.withdraw_all(ALICE, "USDC");
+
+    assert!(
+        !t.account_exists(account_id),
+        "account should be gone after full close"
+    );
+}
+
+#[test]
+fn test_get_account_owner_correct() {
+    let mut t = LendingTest::new().with_market(usdc_preset()).build();
+
+    t.supply(ALICE, "USDC", 1_000.0);
+    let account_id = t.resolve_account_id(ALICE);
+    let alice_addr = t.users.get(ALICE).unwrap().address.clone();
+
+    let owner = t.get_account_owner(account_id);
+    assert_eq!(
+        owner, alice_addr,
+        "account owner should match Alice's address"
+    );
+}
+#[test]
+fn test_get_spoke_category_view() {
+    let t = LendingTest::new().stablecoin_spoke_two_asset().build();
+
+    let ctrl = t.ctrl_client();
+    let usdc = t.resolve_asset("USDC");
+    let cfg = ctrl.get_spoke_asset(&2u32, &hub_asset(usdc.clone()));
+
+    assert_eq!(cfg.loan_to_value, 9700, "spoke ltv should be 9700");
+    assert_eq!(
+        cfg.liquidation_threshold, 9800,
+        "spoke threshold should be 9800"
+    );
+    assert_eq!(cfg.liquidation_bonus, 200, "spoke bonus should be 200");
+}
+#[test]
+fn test_get_position_limits_default() {
+    let t = LendingTest::new().with_market(usdc_preset()).build();
+
+    let limits = t.get_position_limits();
+    let cap = common::constants::POSITION_LIMIT_MAX;
+    assert_eq!(
+        limits.max_supply_positions, cap,
+        "default max supply must equal POSITION_LIMIT_MAX"
+    );
+    assert_eq!(
+        limits.max_borrow_positions, cap,
+        "default max borrow must equal POSITION_LIMIT_MAX"
+    );
+}
+#[test]
+fn test_get_position_limits_custom() {
+    let t = LendingTest::new()
+        .with_market(usdc_preset())
+        .with_position_limits(4, 3)
+        .build();
+
+    let limits = t.get_position_limits();
+    assert_eq!(
+        limits.max_supply_positions, 4,
+        "custom max supply should be 4"
+    );
+    assert_eq!(
+        limits.max_borrow_positions, 3,
+        "custom max borrow should be 3"
+    );
+}
+#[test]
+fn test_liquidation_estimate_matches_execution_on_an_insolvent_over_offer() {
+    const KEPT_ETH_UNITS: i128 = 23_809_523;
+    let mut t = liquidatable_usdc_eth();
+
+    let account_id = t.resolve_account_id(ALICE);
+    let payments =
+        soroban_sdk::Vec::from_array(&t.env, [(hub_asset(t.resolve_asset("ETH")), 3_0000000)]);
+    let (estimate, hf) = {
+        let ctrl = t.ctrl_client();
+        (
+            ctrl.get_liquidation_estimate(&account_id, &payments, &SeizeMode::Transfer),
+            ctrl.get_health_factor(&account_id),
+        )
+    };
+
+    assert!(hf < WAD, "HF should be < 1.0 WAD, got {}", hf);
+    assert!(hf > 0, "HF should be positive, got {}", hf);
+
+    assert_eq!(
+        estimate.bonus_rate_bps, 500,
+        "an insolvent account pays the base bonus"
+    );
+    assert_eq!(
+        estimate.max_payment_wad,
+        KEPT_ETH_UNITS * 2_000 * 100_000_000_000,
+        "floor($5 000 / 1.05) kept in whole ETH units"
+    );
+    let refund = estimate
+        .refunds
+        .get(0)
+        .expect("the trimmed ETH is refunded");
+    assert_eq!(refund.amount, 3_0000000 - KEPT_ETH_UNITS);
+
+    let usdc = t.resolve_asset("USDC");
+    let seized = estimate
+        .seized_collaterals
+        .iter()
+        .find(|p| p.asset == usdc)
+        .expect("USDC is the only collateral, so the plan must name it")
+        .amount;
+    let fee = estimate
+        .protocol_fees
+        .iter()
+        .find(|p| p.asset == usdc)
+        .expect("the fee leg must name the same asset")
+        .amount;
+    assert_eq!(
+        seized, 100_000_000_000,
+        "the backed quote seizes the whole $5 000 of USDC at $0.50"
+    );
+    assert_eq!(
+        fee,
+        (seized - 95_238_092_000) * 1_200 / 10_000,
+        "the fee is the 12% protocol cut of the bonus"
+    );
+
+    let collateral_before = t.supply_balance_raw(ALICE, "USDC");
+    let revenue_before = t.snapshot_revenue("USDC");
+    t.get_or_create_user(LIQUIDATOR);
+    let usdc_before = t.token_balance_raw(LIQUIDATOR, "USDC");
+    let eth_before = t.token_balance_raw(LIQUIDATOR, "ETH");
+
+    t.liquidate(LIQUIDATOR, ALICE, "ETH", 3.0);
+
+    assert_eq!(
+        eth_before + 3_0000000 - t.token_balance_raw(LIQUIDATOR, "ETH"),
+        KEPT_ETH_UNITS,
+        "only the backed ETH is pulled"
+    );
+    assert_eq!(
+        t.token_balance_raw(LIQUIDATOR, "USDC") - usdc_before,
+        seized - fee,
+        "the liquidator must receive exactly the estimated seizure net of the fee"
+    );
+    assert_eq!(collateral_before, seized, "no collateral is left unseized");
+    assert_eq!(
+        t.snapshot_revenue("USDC") - revenue_before,
+        fee,
+        "only the fee reaches revenue"
+    );
+    assert!(
+        t.find_account_id(ALICE).is_none(),
+        "bad-debt cleanup socializes the residual debt and removes the account"
+    );
+}
+#[test]
+fn test_get_market_index_view() {
+    let t = LendingTest::new().with_market(usdc_preset()).build();
+
+    let asset = t.resolve_asset("USDC");
+    let ctrl = t.ctrl_client();
+    let assets = soroban_sdk::Vec::from_array(&t.env, [hub_asset(asset)]);
+    let index = ctrl.get_market_indexes_detailed(&assets).get(0).unwrap();
+
+    let ray = RAY;
+
+    assert_eq!(
+        index.supply_index, ray,
+        "fresh supply index should be 1.0 RAY"
+    );
+    assert_eq!(
+        index.borrow_index, ray,
+        "fresh borrow index should be 1.0 RAY"
+    );
+}
+#[test]
+fn test_get_active_accounts_multiple() {
+    let mut t = LendingTest::new().with_market(usdc_preset()).build();
+
+    t.supply(ALICE, "USDC", 1_000.0);
+    let id1 = t.resolve_account_id(ALICE);
+
+    let id2 = t.create_account(ALICE);
+
+    let accounts = t.get_active_accounts(ALICE);
+    assert_eq!(accounts.len(), 2, "Alice should have 2 accounts");
+    assert!(
+        (accounts.get(0).unwrap() == id1 && accounts.get(1).unwrap() == id2)
+            || (accounts.get(0).unwrap() == id2 && accounts.get(1).unwrap() == id1),
+        "should contain both account IDs"
+    );
+}
+#[test]
+fn test_get_asset_config_view() {
+    let t = LendingTest::new().with_market(usdc_preset()).build();
+
+    let config = t.get_asset_config("USDC");
+    assert_eq!(config.loan_to_value, 7500, "LTV should be 7500");
+    assert_eq!(
+        config.liquidation_threshold, 8000,
+        "threshold should be 8000"
+    );
+    assert_eq!(config.liquidation_bonus, 500, "bonus should be 500");
+    assert!(
+        config.is_collateralizable,
+        "USDC should be collateralizable"
+    );
+    assert!(config.is_borrowable, "USDC should be borrowable");
+}
+#[test]
+fn test_pool_address_view() {
+    let t = LendingTest::new().with_market(usdc_preset()).build();
+
+    let pool_addr = t.get_pool_address("USDC");
+    let expected = t.resolve_market("USDC").pool.clone();
+    assert_eq!(pool_addr, expected, "pool address should match");
+}
+#[test]
+fn test_collateral_amount_for_token_happy() {
+    let mut t = LendingTest::new().standard_two_asset().build();
+
+    t.supply(ALICE, "USDC", 10_000.0);
+
+    let account_id = t.resolve_account_id(ALICE);
+    let usdc = t.resolve_asset("USDC");
+    let amount = t
+        .ctrl_client()
+        .get_collateral_amount(&account_id, &hub_asset(usdc.clone()));
+
+    let expected = 10_000i128 * 10_000_000;
+    assert!(
+        (amount - expected).abs() < expected / 10_000,
+        "collateral_amount_for_token should be ~{} raw units, got {}",
+        expected,
+        amount
+    );
+}
+#[test]
+fn test_borrow_amount_for_token_happy() {
+    let mut t = LendingTest::new().standard_two_asset().build();
+
+    t.supply(ALICE, "USDC", 100_000.0);
+    t.borrow(ALICE, "ETH", 2.0);
+
+    let account_id = t.resolve_account_id(ALICE);
+    let eth = t.resolve_asset("ETH");
+    let amount = t
+        .ctrl_client()
+        .get_borrow_amount(&account_id, &hub_asset(eth.clone()));
+
+    let expected = 2i128 * 10_000_000;
+    assert!(
+        (amount - expected).abs() < expected / 10_000,
+        "borrow_amount_for_token should be ~{} raw units, got {}",
+        expected,
+        amount
+    );
+}
+#[test]
+fn test_liquidation_collateral_available_happy() {
+    let mut t = LendingTest::new().standard_two_asset().build();
+
+    t.supply(ALICE, "USDC", 10_000.0);
+    t.supply(ALICE, "ETH", 1.0);
+    t.borrow(ALICE, "ETH", 0.5);
+
+    let account_id = t.resolve_account_id(ALICE);
+    let weighted = t.ctrl_client().get_liquidation_collateral(&account_id);
+
+    let expected = 9_600.0;
+    let weighted_usd = weighted as f64 / WAD as f64;
+    assert!(
+        (weighted_usd - expected).abs() < 1.0,
+        "liquidation_collateral_available should be ~${}, got ${}",
+        expected,
+        weighted_usd
+    );
+}
+#[test]
+fn test_ltv_collateral_in_usd_happy() {
+    let mut t = LendingTest::new().standard_two_asset().build();
+
+    t.supply(ALICE, "USDC", 10_000.0);
+    t.supply(ALICE, "ETH", 1.0);
+
+    let account_id = t.resolve_account_id(ALICE);
+    let ltv_wad = t.ctrl_client().get_ltv_collateral_usd(&account_id);
+
+    let expected = 9_000.0;
+    let ltv_usd = ltv_wad as f64 / WAD as f64;
+    assert!(
+        ltv_usd > 0.0,
+        "ltv_collateral_in_usd should be positive, got {}",
+        ltv_usd
+    );
+    assert!(
+        (ltv_usd - expected).abs() < 1.0,
+        "ltv_collateral_in_usd should be ~${}, got ${}",
+        expected,
+        ltv_usd
+    );
+}

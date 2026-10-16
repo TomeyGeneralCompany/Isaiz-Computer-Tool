@@ -1,0 +1,19 @@
+[Unit]
+Description=AutoHack autonomous isolated security research engine
+After=default.target
+[Service]
+Type=simple
+Environment=AUTOHACK_ROOT=/home/izy/isaiz-bugbounty/autohack
+ExecStart=/usr/bin/python3 /home/izy/isaiz-bugbounty/autohack/.autohack-next-stage/research-engine/worker.py
+Restart=always
+RestartSec=15
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/izy/isaiz-bugbounty/autohack/.autohack-next-stage/research-engine
+CPUQuota=65%
+MemoryMax=900M
+TasksMax=128
+[Install]
+WantedBy=default.target

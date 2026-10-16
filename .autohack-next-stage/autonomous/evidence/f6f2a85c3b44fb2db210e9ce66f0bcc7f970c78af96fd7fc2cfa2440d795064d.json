@@ -1,0 +1,40 @@
+{
+  "checks": {
+    "has_reproduction_test": false,
+    "in_scope_at_processing": true,
+    "source_commit_matches": true,
+    "triage_requires_review": false
+  },
+  "commit": "0738c7c981e506c582d83fa5456fe1b84eeccedc",
+  "lead": {
+    "file": "hathorlib/hathorlib/nanocontracts/metered_exec.py",
+    "fingerprint": "817cbe3bdb9cbf94842d",
+    "guidance": "Review dynamic execution and input provenance",
+    "line": 93,
+    "rule": "PY_EVAL"
+  },
+  "note": "Automated offline evidence preparation only. No project-specific reproduction or verified security impact.",
+  "processed_at": "2026-10-15T00:09:28.190255+00:00",
+  "repository": "HathorNetwork/hathor-core",
+  "scope_urls": [
+    "https://immunefi.com/bug-bounty/hathornetwork/scope/"
+  ],
+  "source_check": {
+    "commit": "0738c7c981e506c582d83fa5456fe1b84eeccedc",
+    "excerpt": "   82:         code = compile(\n   83:             source='__result__ = __func__(*__args__)',\n   84:             filename='<blueprint>',\n   85:             mode='exec',\n   86:             flags=0,\n   87:             dont_inherit=True,\n   88:             optimize=0,\n   89:             _feature_version=PYTHON_CODE_COMPAT_VERSION[1],\n   90:         )\n   91: \n   92:         try:\n   93:             exec(code, env)\n   94:         except NCFail:\n   95:             raise\n   96:         except BaseException as e:\n   97:             # Convert any other exception to NCFail.\n   98:             raise NCFail from e\n   99: \n  100:         return cast(_T, env['__result__'])",
+    "file": "hathorlib/hathorlib/nanocontracts/metered_exec.py",
+    "file_sha256": "74888a38f66d7bc91088fb454db859bb6093ed20f77c1064cf5c98f96797d229",
+    "line": 93,
+    "python_syntax": "valid",
+    "status": "source_matched"
+  },
+  "source_fingerprint": "2b41f41ebd75f6e272a054a868f7672a3a4dbc540dfeeb1988eb04faaf0edbf1",
+  "status": "needs_project_specific_reproduction",
+  "triage": {
+    "classification": "likely_false_positive",
+    "evidence": "The code snippet is part of a static analysis rule for dynamic execution and input provenance, but the implementation is incomplete and lacks proper handling of exceptions.",
+    "follow_up": "If you have more information or context, please provide it to help us refine our analysis.",
+    "rationale": "The code snippet is part of a static analysis rule for dynamic execution and input provenance, but the implementation is incomplete and lacks proper handling of exceptions. The code is not properly validated or tested for potential issues, making it a likely false positive."
+  },
+  "verified_vulnerability": false
+}

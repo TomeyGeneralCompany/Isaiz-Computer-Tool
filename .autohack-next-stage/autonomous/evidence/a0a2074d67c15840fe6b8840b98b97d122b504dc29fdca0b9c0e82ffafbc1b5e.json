@@ -1,0 +1,39 @@
+{
+  "checks": {
+    "has_reproduction_test": false,
+    "in_scope_at_processing": true,
+    "source_commit_matches": true,
+    "triage_requires_review": false
+  },
+  "commit": "ba75f1ad2a182d3f8e6e49a8dce224e421361419",
+  "lead": {
+    "file": "scripts/win-ev-sign.js",
+    "fingerprint": "a3bbd1b1cc218fcefee7",
+    "guidance": "Review command construction and input provenance",
+    "line": 34,
+    "rule": "JS_CHILD_EXEC"
+  },
+  "note": "Automated offline evidence preparation only. No project-specific reproduction or verified security impact.",
+  "processed_at": "2026-10-15T00:09:27.210946+00:00",
+  "repository": "HathorNetwork/hathor-wallet",
+  "scope_urls": [
+    "https://immunefi.com/bug-bounty/hathornetwork/scope/"
+  ],
+  "source_check": {
+    "commit": "ba75f1ad2a182d3f8e6e49a8dce224e421361419",
+    "excerpt": "   23:     \"--add-exports jdk.crypto.cryptoki/sun.security.pkcs11=ALL-UNNAMED\",\n   24:     \"--add-exports jdk.crypto.cryptoki/sun.security.pkcs11.wrapper=ALL-UNNAMED\",\n   25:     \"--add-opens java.base/java.security=ALL-UNNAMED\",\n   26:     \"-jar jsign-4.2.jar\",\n   27:     \"--storetype YUBIKEY\",\n   28:     `--certfile \"${CERTIFICATE_FILE}\"`,\n   29:     `--storepass \"${TOKEN_PASSWORD}\"`,\n   30:     `--alias \"${CERTIFICATE_NAME}\"`,\n   31:     `\"${configuration.path}\"`\n   32:   ];\n   33: \n   34:   require(\"child_process\").execSync(\n   35:     cmdline.join(\" \"),\n   36:     {\n   37:       stdio: \"inherit\"\n   38:     }\n   39:   );\n   40: };",
+    "file": "scripts/win-ev-sign.js",
+    "file_sha256": "cb7c97d850d112016b677025867448efc364cd8b1b5d46d2ba2a6bf0d2b26521",
+    "line": 34,
+    "status": "source_matched"
+  },
+  "source_fingerprint": "a3d66084817e96b157ba5607c94fad50ed30dd6cc30cbb76eebf20f7916587cd",
+  "status": "needs_project_specific_reproduction",
+  "triage": {
+    "classification": "likely_false_positive",
+    "evidence": "The code snippet is part of a wallet signing process, but the command construction and input provenance are not verified.",
+    "follow_up": "If you have more context or a verified feature, please provide it, and I can help refine the classification.",
+    "rationale": "The code snippet appears to be part of a command-line interface (CLI) setup for a wallet signing process, but the command construction and input provenance are not verified. The presence of placeholders like ${CERTIFICATE_FILE} and ${TOKEN_PASSWORD} indicates potential for misuse or injection, which could lead to vulnerabilities. However, the specific implementation details are not provided, making it unclear if this is a false positive or a legitimate feature."
+  },
+  "verified_vulnerability": false
+}

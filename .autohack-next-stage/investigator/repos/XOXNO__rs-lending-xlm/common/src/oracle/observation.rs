@@ -1,0 +1,114 @@
+//! Shared helpers for validating and converting oracle price observations:
+//! staleness and future-timestamp checks, `U256`-to-`i128` conversion, and
+//! decimal/WAD scaling.
+
+use crate::constants::{MS_PER_SECOND, WAD_DECIMALS};
+use crate::errors::{GenericError, OracleError};
+use crate::math::fp_core::try_mul_div_half_up;
+use soroban_sdk::{assert_with_error, panic_with_error, Env, U256};
+
+/// Maximum number of seconds a feed timestamp may exceed the current time
+/// before [`check_not_future_at`] and [`is_future_at`] treat it as being in
+/// the future.
+pub const MAX_FUTURE_SKEW_SECONDS: u64 = 60;
+
+pub const MAX_TWAP_RECORDS: u32 = 12;
+
+pub const MIN_PRICE_STALE_SECONDS: u64 = 60;
+/// Largest staleness budget an oracle may declare (26 h). It exceeds the 24 h
+/// heartbeat of the slowest consumed feed, so a feed that publishes only on its
+/// heartbeat does not read as stale.
+pub const MAX_PRICE_STALE_SECONDS: u64 = 93_600;
+
+pub const MIN_ORACLE_RESOLUTION_SECONDS: u32 = 60;
+
+pub const MIN_ORACLE_DECIMALS: u32 = 1;
+pub const MAX_ORACLE_DECIMALS: u32 = 18;
+
+pub const MAX_SINGLE_SOURCE_SANITY_BAND_BPS: i128 = 1_000;
+
+/// Largest timestamp gap between two market-nature legs of a blended price
+/// before the blend is marked stale.
+///
+/// A TWAP leg carries the timestamp of the oldest sample in its window.
+pub const MAX_LEG_AGE_SPREAD_SECONDS: u64 = 3_600;
+
+/// Widest band an LP source may declare, as `(max-min)/(max+min)` in BPS,
+/// rounded up.
+///
+/// 8182 bps is the width of a 10x range in LP fair value.
+pub const MAX_LP_SANITY_BAND_BPS: i128 = 8_182;
+
+/// Scales a positive price reported with `decimals` precision up to
+/// `WAD_DECIMALS`. Returns `None` if `price` is not positive, `decimals`
+/// exceeds `WAD_DECIMALS`, or the scaling multiplication overflows.
+pub fn try_normalize_positive_price(price: i128, decimals: u32) -> Option<i128> {
+    if price <= 0 || decimals > WAD_DECIMALS {
+        return None;
+    }
+    let factor = 10i128.checked_pow(WAD_DECIMALS - decimals)?;
+    price.checked_mul(factor)
+}
+
+/// Returns whether `feed_ts` is older than `max_stale` seconds relative to
+/// `now_secs`. Returns `false` when `feed_ts` is at or after `now_secs`.
+pub fn is_stale(now_secs: u64, feed_ts: u64, max_stale: u64) -> bool {
+    now_secs > feed_ts && (now_secs - feed_ts) > max_stale
+}
+
+/// Panics with `OracleError::PriceFeedStale` if `feed_ts` exceeds
+/// `now_secs + MAX_FUTURE_SKEW_SECONDS`, and with `GenericError::MathOverflow`
+/// if that addition overflows `u64`.
+pub fn check_not_future_at(env: &Env, now_secs: u64, feed_ts: u64) {
+    let max_future_ts = now_secs
+        .checked_add(MAX_FUTURE_SKEW_SECONDS)
+        .unwrap_or_else(|| panic_with_error!(env, GenericError::MathOverflow));
+    assert_with_error!(env, feed_ts <= max_future_ts, OracleError::PriceFeedStale);
+}
+
+/// Returns whether `feed_ts` exceeds `now_secs + MAX_FUTURE_SKEW_SECONDS`.
+/// Returns `false` if that addition overflows `u64`.
+pub fn is_future_at(now_secs: u64, feed_ts: u64) -> bool {
+    match now_secs.checked_add(MAX_FUTURE_SKEW_SECONDS) {
+        Some(max_future_ts) => feed_ts > max_future_ts,
+        None => false,
+    }
+}
+
+/// Converts `value` to `i128`. Panics with `GenericError::MathOverflow` if
+/// `value` does not fit in `u128` or exceeds `i128::MAX`.
+pub fn u256_to_i128(env: &Env, value: &U256) -> i128 {
+    try_u256_to_i128(value).unwrap_or_else(|| panic_with_error!(env, GenericError::MathOverflow))
+}
+
+/// Converts `value` to `i128`. Returns `None` if `value` does not fit in
+/// `u128` or exceeds `i128::MAX`.
+pub fn try_u256_to_i128(value: &U256) -> Option<i128> {
+    let raw = value.to_u128()?;
+    (raw <= i128::MAX as u128).then_some(raw as i128)
+}
+
+/// Scales a non-negative token amount into WAD (`10^18`) base units.
+///
+/// Fails with `OracleError::InvalidPrice` when `amount` is negative,
+/// `decimals > WAD_DECIMALS`, or the product overflows.
+pub(crate) fn try_amount_to_wad(
+    env: &Env,
+    amount: i128,
+    decimals: u32,
+) -> Result<i128, OracleError> {
+    let scale = WAD_DECIMALS
+        .checked_sub(decimals)
+        .and_then(|exp| 10i128.checked_pow(exp))
+        .ok_or(OracleError::InvalidPrice)?;
+    try_mul_div_half_up(env, amount, scale, 1).ok_or(OracleError::InvalidPrice)
+}
+
+/// Converts a millisecond timestamp to whole seconds via integer division.
+pub fn millis_to_seconds(timestamp_ms: u64) -> u64 {
+    timestamp_ms / MS_PER_SECOND
+}
+
+#[cfg(test)]
+#[path = "../../tests/oracle/observation.rs"]
+mod tests;

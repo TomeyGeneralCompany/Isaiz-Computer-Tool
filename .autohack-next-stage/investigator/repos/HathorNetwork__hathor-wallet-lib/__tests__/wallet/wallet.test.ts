@@ -1,0 +1,5473 @@
+/**
+ * Copyright (c) Hathor Labs and its affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */
+
+import { Message } from 'bitcore-lib';
+import Mnemonic from 'bitcore-mnemonic';
+import { mockAxiosAdapter } from '../__mock_helpers__/axios-adapter.mock';
+import HathorWalletServiceWallet from '../../src/wallet/wallet';
+import Network from '../../src/models/network';
+import NanoContractTransactionBuilder from '../../src/nano_contracts/builder';
+import {
+  GetAddressesObject,
+  WsTransaction,
+  CreateWalletAuthData,
+  AddressInfoObject,
+} from '../../src/wallet/types';
+import config from '../../src/config';
+import {
+  buildSuccessTxByIdTokenDataResponse,
+  buildWalletToAuthenticateApiCall,
+  defaultWalletSeed,
+} from '../__mock_helpers__/wallet-service.fixtures';
+import {
+  TxNotFoundError,
+  SendTxError,
+  UninitializedWalletError,
+  WalletRequestError,
+  UtxoError,
+} from '../../src/errors';
+import SendTransactionWalletService from '../../src/wallet/sendTransactionWalletService';
+import transaction from '../../src/utils/transaction';
+import {
+  TOKEN_MELT_MASK,
+  TOKEN_MINT_MASK,
+  WALLET_SERVICE_AUTH_DERIVATION_PATH,
+  NATIVE_TOKEN_UID,
+} from '../../src/constants';
+import { MemoryStore, Storage } from '../../src/storage';
+import walletApi from '../../src/wallet/api/walletApi';
+import walletUtils from '../../src/utils/wallet';
+import { decryptData, verifyMessage } from '../../src/utils/crypto';
+import { AuthorityType, IHistoryTx, IWalletAccessData, TokenVersion } from '../../src/types';
+import { mockGetToken } from '../__mock_helpers__/get-token.mock';
+import { Fee } from '../../src/utils/fee';
+
+// Mock SendTransactionWalletService class so we don't try to send actual transactions
+// TODO: We should refactor the way we use classes from inside other classes. Using dependency injection would facilitate unit tests a lot and avoid mocks like this.
+jest.mock('../../src/wallet/sendTransactionWalletService', () => {
+  const ActualSendTransactionWalletService = jest.requireActual(
+    '../../src/wallet/sendTransactionWalletService'
+  ).default;
+
+  return jest.fn().mockImplementation((...args) => {
+    const instance = new ActualSendTransactionWalletService(...args);
+
+    // Mock all methods except run with appropriate return values
+    const mockTransaction = {
+      getDataToSignHash: jest.fn().mockReturnValue(Buffer.from('mock-hash')),
+      inputs: [], // Mock empty inputs so the for loop doesn't execute
+      prepareToSend: jest.fn(),
+    };
+    instance.prepareTx = jest.fn().mockImplementation(() => {
+      instance.transaction = mockTransaction;
+      instance.utxosAddressPath = [];
+      instance._currentStep = 'prepared';
+      return Promise.resolve(mockTransaction);
+    });
+    instance.runFromMining = jest.fn().mockResolvedValue({});
+
+    return instance;
+  });
+});
+
+const addressPath = "m/280'/280'/0/1/0";
+
+const MOCK_TX = {
+  tx_id: '0009bc9bf8eab19c41a2aa9b9369d3b6a90ff12072729976634890d35788d5d7',
+  nonce: 194,
+  timestamp: 1640451232,
+  version: 1,
+  weight: 8.000001,
+  parents: [
+    '00000e0dada0a1512c61778cad7075e8a2c7109eb35d63199f3c986ead092684',
+    '0000000090a41f17769a5acae74f98c96b0c3041c5149a9e6bbfb2d32d85997c',
+  ],
+  inputs: [],
+  outputs: [],
+};
+
+afterEach(() => {
+  jest.clearAllMocks();
+});
+
+/**
+ * Helper functions to setup mocks for fee token tests
+ */
+const setupFeeTokenMocks = {
+  /**
+   * Setup API mocks for fee token operations (mint/melt)
+   * @param addresses - Array of addresses
+   * @param tokenId - Token ID
+   * @param authorityMask - Authority mask (TOKEN_MINT_MASK or TOKEN_MELT_MASK)
+   * @param tokenName - Token name (default: 'Fee Token')
+   * @param tokenSymbol - Token symbol (default: 'FBT')
+   */
+  setupApiMocks: (
+    addresses: string[],
+    tokenId: string,
+    authorityMask: bigint,
+    tokenName = 'Fee Token',
+    tokenSymbol = 'FBT'
+  ) => {
+    mockAxiosAdapter.onPost('wallet/addresses/check_mine').reply(200, {
+      success: true,
+      addresses: {
+        [addresses[2]]: true,
+      },
+    });
+
+    jest.spyOn(walletApi, 'getAddressDetails').mockResolvedValue({
+      data: {
+        index: 2,
+        address: addresses[2],
+        transactions: 0,
+        seqnum: 0,
+      },
+    });
+
+    jest.spyOn(walletApi, 'getTxOutputs').mockResolvedValue({
+      success: true,
+      txOutputs: [
+        {
+          txId: '002abde4018935e1bbde9600ef79c637adf42385fb1816ec284d702b7bb9ef5f',
+          index: 0,
+          tokenId,
+          address: addresses[2],
+          value: authorityMask,
+          authorities: authorityMask,
+          timelock: null,
+          heightlock: null,
+          locked: false,
+          addressPath: "m/280'/280'/0/1/2",
+        },
+      ],
+    });
+
+    jest.spyOn(walletApi, 'getTokenDetails').mockResolvedValue({
+      success: true,
+      name: tokenName,
+      symbol: tokenSymbol,
+      version: TokenVersion.FEE,
+    });
+  },
+
+  /**
+   * Setup wallet mocks for fee token operations
+   * @param wallet - Wallet instance
+   * @param seed - Wallet seed
+   * @param network - Network instance
+   * @param tokenId - Token ID
+   * @param authorityType - 'mint' or 'melt'
+   * @param addresses - Array of addresses
+   * @param tokenName - Token name (default: 'Fee Token')
+   * @param tokenSymbol - Token symbol (default: 'FBT')
+   */
+  setupWalletMocks: (
+    wallet: HathorWalletServiceWallet,
+    seed: string,
+    network: Network,
+    tokenId: string,
+    authorityType: AuthorityType,
+    addresses: string[],
+    tokenName = 'Fee Token',
+    tokenSymbol = 'FBT'
+  ) => {
+    const code = new Mnemonic(seed);
+    const xpriv = code.toHDPrivateKey('', network.getNetwork());
+    const authorityMask = authorityType === 'mint' ? TOKEN_MINT_MASK : TOKEN_MELT_MASK;
+
+    jest.spyOn(wallet.storage, 'getMainXPrivKey').mockReturnValue(Promise.resolve(xpriv.xprivkey));
+    jest.spyOn(wallet, 'getInputData').mockImplementation(() => Buffer.alloc(0));
+    jest.spyOn(wallet.storage, 'getToken').mockImplementation(mockGetToken);
+    jest.spyOn(wallet, 'getAddressIndex').mockResolvedValue(0);
+    jest.spyOn(wallet, 'getTokenDetails').mockResolvedValue({
+      tokenInfo: {
+        id: tokenId,
+        name: tokenName,
+        symbol: tokenSymbol,
+        version: TokenVersion.FEE,
+      },
+      totalSupply: 1000n,
+      totalTransactions: 1,
+      authorities: {
+        mint: authorityType === 'mint',
+        melt: authorityType === 'melt',
+      },
+    });
+
+    if (authorityType === 'mint') {
+      jest.spyOn(wallet, 'getMintAuthority').mockResolvedValue([
+        {
+          txId: '002abde4018935e1bbde9600ef79c637adf42385fb1816ec284d702b7bb9ef5f',
+          index: 0,
+          address: addresses[2],
+          authorities: authorityMask,
+        },
+      ]);
+    } else {
+      jest.spyOn(wallet, 'getMeltAuthority').mockResolvedValue([
+        {
+          txId: '002abde4018935e1bbde9600ef79c637adf42385fb1816ec284d702b7bb9ef5f',
+          index: 0,
+          address: addresses[2],
+          authorities: authorityMask,
+        },
+      ]);
+    }
+  },
+
+  /**
+   * Setup complete mocks for fee token tests (API + Wallet)
+   * @param wallet - Wallet instance
+   * @param seed - Wallet seed
+   * @param network - Network instance
+   * @param tokenId - Token ID
+   * @param authorityType - 'mint' or 'melt'
+   * @param addresses - Array of addresses
+   */
+  setupCompleteMocks: (
+    wallet: HathorWalletServiceWallet,
+    seed: string,
+    network: Network,
+    tokenId: string,
+    authorityType: AuthorityType,
+    addresses: string[]
+  ) => {
+    const authorityMask = authorityType === 'mint' ? TOKEN_MINT_MASK : TOKEN_MELT_MASK;
+    setupFeeTokenMocks.setupApiMocks(addresses, tokenId, authorityMask);
+    setupFeeTokenMocks.setupWalletMocks(wallet, seed, network, tokenId, authorityType, addresses);
+  },
+};
+
+test('getAddressAtIndex', async () => {
+  const requestPassword = jest.fn();
+  const network = new Network('testnet');
+  const seed = defaultWalletSeed;
+  const wallet = new HathorWalletServiceWallet({
+    requestPassword,
+    seed,
+    network,
+    passphrase: '',
+    xpriv: null,
+    xpub: null,
+  });
+
+  const address = {
+    address: 'address1',
+    index: 0,
+    transactions: 50,
+  };
+
+  const spy = jest.spyOn(walletApi, 'getAddresses');
+
+  // We should return only the address property on success
+  spy.mockImplementationOnce(() =>
+    Promise.resolve({
+      success: true,
+      addresses: [address],
+    })
+  );
+
+  const addressAtIndex = await wallet.getAddressAtIndex(0);
+  expect(addressAtIndex).toStrictEqual(address.address);
+
+  // We should fail if no addresses were returned
+  spy.mockImplementationOnce(() =>
+    Promise.resolve({
+      success: false,
+      addresses: [],
+    })
+  );
+
+  await expect(wallet.getAddressAtIndex(0)).rejects.toThrow('Error getting wallet addresses.');
+});
+
+describe('onNewTx', () => {
+  const requestPassword = jest.fn();
+  const network = new Network('testnet');
+  const seed = defaultWalletSeed;
+
+  it('should call getNewAddresses if an output address is in newAddresses', async () => {
+    const wallet = new HathorWalletServiceWallet({
+      requestPassword,
+      seed,
+      network,
+    });
+
+    const testAddress = 'testAddress1';
+    // @ts-expect-error: Monkey-patching wallet instance
+    wallet.newAddresses = [
+      { address: testAddress, index: 0, addressPath: "m/0'/0/0" },
+    ] as AddressInfoObject[];
+
+    const getNewAddressesSpy = jest
+      // @ts-expect-error: Monkey-patching wallet instance
+      .spyOn(wallet, 'getNewAddresses')
+      .mockResolvedValue(undefined);
+
+    const newTx: WsTransaction = {
+      tx_id: 'tx1',
+      nonce: 0,
+      timestamp: 0,
+      signal_bits: 0,
+      version: 1,
+      weight: 1,
+      parents: [],
+      inputs: [],
+      outputs: [
+        {
+          value: 100n,
+          token_data: 0,
+          script: { type: 'Buffer', data: [] },
+          token: '00',
+          decoded: {
+            type: 'P2PKH',
+            address: testAddress,
+            timelock: null,
+          },
+          locked: false,
+          index: 0,
+        },
+      ],
+    };
+
+    await wallet.onNewTx(newTx);
+
+    expect(getNewAddressesSpy).toHaveBeenCalled();
+  });
+
+  it('should not call getNewAddresses if no output address is in newAddresses', async () => {
+    const wallet = new HathorWalletServiceWallet({
+      requestPassword,
+      seed,
+      network,
+    });
+
+    // @ts-expect-error: Monkey-patching newAddresses
+    wallet.newAddresses = [
+      { address: 'otherAddress', index: 0, addressPath: "m/0'/0/0" },
+    ] as AddressInfoObject[];
+
+    const getNewAddressesSpy = jest.spyOn(wallet, 'getNewAddresses').mockResolvedValue(undefined);
+
+    const newTx: WsTransaction = {
+      tx_id: 'tx2',
+      nonce: 0,
+      timestamp: 0,
+      signal_bits: 0,
+      version: 1,
+      weight: 1,
+      parents: [],
+      inputs: [],
+      outputs: [
+        {
+          value: 100n,
+          token_data: 0,
+          script: { type: 'Buffer', data: [] },
+          token: '00',
+          decoded: {
+            type: 'P2PKH',
+            address: 'someRandomAddress',
+            timelock: null,
+          },
+          locked: false,
+          index: 0,
+        },
+      ],
+    };
+
+    await wallet.onNewTx(newTx);
+
+    expect(getNewAddressesSpy).not.toHaveBeenCalled();
+  });
+});
+
+test('getTxBalance', async () => {
+  const requestPassword = jest.fn();
+  const network = new Network('testnet');
+  const seed = defaultWalletSeed;
+  const wallet = new HathorWalletServiceWallet({
+    requestPassword,
+    seed,
+    network,
+    passphrase: '',
+    xpriv: null,
+    xpub: null,
+  });
+
+  async function* getAllAddressesMock() {
+    const addresses: GetAddressesObject[] = [
+      {
+        address: 'address0',
+        index: 0,
+        transactions: 0,
+      },
+      {
+        address: 'address1',
+        index: 1,
+        transactions: 0,
+      },
+      {
+        address: 'address2',
+        index: 2,
+        transactions: 0,
+      },
+    ];
+
+    for (const address of addresses) {
+      yield address;
+    }
+  }
+
+  jest.spyOn(wallet, 'getAllAddresses').mockImplementation(getAllAddressesMock);
+
+  let tx: WsTransaction = {
+    ...MOCK_TX,
+    inputs: [
+      {
+        value: 500n,
+        token_data: 1,
+        script: 'dqkULlKfmt6XYPwnJfnUCAVf+fzVkNCIrA==',
+        token: 'token1',
+        decoded: {
+          type: 'P2PKH',
+          address: 'address0',
+          timelock: null,
+        },
+        tx_id: '002abde4018935e1bbde9600ef79c637adf42385fb1816ec284d702b7bb9ef5f',
+        index: 0,
+      },
+    ],
+    outputs: [
+      {
+        value: 200n,
+        token_data: 1,
+        token: 'token1',
+        script: 'dqkULlKfmt6XYPwnJfnUCAVf+fzVkNCIrA==',
+        spent_by: null,
+        decoded: {
+          type: 'P2PKH',
+          address: 'address1',
+          timelock: null,
+        },
+      },
+      {
+        value: 300n,
+        token_data: 1,
+        token: 'token1',
+        script: 'dqkULlKfmt6XYPwnJfnUCAVf+fzVkNCIrA==',
+        spent_by: null,
+        decoded: {
+          type: 'P2PKH',
+          address: 'other-address',
+          timelock: null,
+        },
+      },
+    ],
+  };
+
+  let balance = await wallet.getTxBalance(tx);
+
+  expect(balance.token1).toStrictEqual(-300n);
+
+  tx = {
+    ...MOCK_TX,
+    inputs: [
+      {
+        value: 500n,
+        token_data: 1,
+        script: 'dqkULlKfmt6XYPwnJfnUCAVf+fzVkNCIrA==',
+        token: 'token1',
+        decoded: {
+          type: 'P2PKH',
+          address: 'address0',
+          timelock: null,
+        },
+        tx_id: '002abde4018935e1bbde9600ef79c637adf42385fb1816ec284d702b7bb9ef5f',
+        index: 0,
+      },
+    ],
+    outputs: [
+      {
+        value: 200n,
+        token_data: 1,
+        token: 'token1',
+        script: 'dqkULlKfmt6XYPwnJfnUCAVf+fzVkNCIrA==',
+        spent_by: null,
+        decoded: {
+          type: 'P2PKH',
+          address: 'address1',
+          timelock: null,
+        },
+      },
+      {
+        value: 300n,
+        token_data: 1,
+        token: 'token1',
+        script: 'dqkULlKfmt6XYPwnJfnUCAVf+fzVkNCIrA==',
+        spent_by: null,
+        decoded: {
+          type: 'P2PKH',
+          address: 'address2',
+          timelock: null,
+        },
+      },
+    ],
+  };
+
+  balance = await wallet.getTxBalance(tx);
+  expect(balance.token1).toStrictEqual(0n);
+
+  // multiple tokens in the same transaction
+  tx = {
+    ...MOCK_TX,
+    inputs: [
+      {
+        value: 500n,
+        token_data: 1,
+        script: 'dqkULlKfmt6XYPwnJfnUCAVf+fzVkNCIrA==',
+        token: 'token1',
+        decoded: {
+          type: 'P2PKH',
+          address: 'address0',
+          timelock: null,
+        },
+        tx_id: '002abde4018935e1bbde9600ef79c637adf42385fb1816ec284d702b7bb9ef5f',
+        index: 0,
+      },
+      {
+        value: 10n,
+        token_data: 1,
+        script: 'dqkULlKfmt6XYPwnJfnUCAVf+fzVkNCIrA==',
+        token: 'token2',
+        decoded: {
+          type: 'P2PKH',
+          address: 'address0',
+          timelock: null,
+        },
+        tx_id: '002abde4018935e1bbde9600ef79c637adf42385fb1816ec284d702b7bb9ef5f',
+        index: 2,
+      },
+    ],
+    outputs: [
+      {
+        value: 200n,
+        token_data: 1,
+        token: 'token1',
+        script: 'dqkULlKfmt6XYPwnJfnUCAVf+fzVkNCIrA==',
+        spent_by: null,
+        decoded: {
+          type: 'P2PKH',
+          address: 'address1',
+          timelock: null,
+        },
+      },
+      {
+        value: 300n,
+        token_data: 1,
+        token: 'token1',
+        script: 'dqkULlKfmt6XYPwnJfnUCAVf+fzVkNCIrA==',
+        spent_by: null,
+        decoded: {
+          type: 'P2PKH',
+          address: 'address2',
+          timelock: null,
+        },
+      },
+      {
+        // change
+        value: 5n,
+        token_data: 1,
+        token: 'token2',
+        script: 'dqkULlKfmt6XYPwnJfnUCAVf+fzVkNCIrA==',
+        spent_by: null,
+        decoded: {
+          type: 'P2PKH',
+          address: 'address2',
+          timelock: null,
+        },
+      },
+      {
+        value: 5n,
+        token_data: 1,
+        token: 'token2',
+        script: 'dqkULlKfmt6XYPwnJfnUCAVf+fzVkNCIrA==',
+        spent_by: null,
+        decoded: {
+          type: 'P2PKH',
+          address: 'other-address',
+          timelock: null,
+        },
+      },
+    ],
+  };
+
+  balance = await wallet.getTxBalance(tx);
+  expect(balance.token1).toStrictEqual(0n);
+  expect(balance.token2).toStrictEqual(-5n);
+});
+
+test('getTxBalance with authority outputs', async () => {
+  const requestPassword = jest.fn();
+  const network = new Network('testnet');
+  const seed = defaultWalletSeed;
+  const wallet = new HathorWalletServiceWallet({
+    requestPassword,
+    seed,
+    network,
+    passphrase: '',
+    xpriv: null,
+    xpub: null,
+  });
+
+  async function* getAllAddressesMock() {
+    const addresses: GetAddressesObject[] = [
+      {
+        address: 'address0',
+        index: 0,
+        transactions: 0,
+      },
+      {
+        address: 'address1',
+        index: 1,
+        transactions: 0,
+      },
+    ];
+
+    for (const address of addresses) {
+      yield address;
+    }
+  }
+
+  jest.spyOn(wallet, 'getAllAddresses').mockImplementation(getAllAddressesMock);
+
+  const tx: IHistoryTx = {
+    tx_id: '002abde4018935e1bbde9600ef79c637adf42385fb1816ec284d702b7bb9ef5f',
+    version: 1,
+    weight: 1,
+    timestamp: 1234567890,
+    is_voided: false,
+    inputs: [
+      {
+        tx_id: '002abde4018935e1bbde9600ef79c637adf42385fb1816ec284d702b7bb9ef5f',
+        index: 0,
+        token: 'token1',
+        token_data: 129, // Melt authority
+        script: 'dqkULlKfmt6XYPwnJfnUCAVf+fzVkNCIrA==',
+        decoded: {
+          type: 'P2PKH',
+          address: 'address0',
+        },
+        value: 1n,
+      },
+    ],
+    outputs: [
+      {
+        token: 'token1',
+        token_data: 130, // Mint authority
+        script: 'dqkULlKfmt6XYPwnJfnUCAVf+fzVkNCIrA==',
+        value: 1n,
+        decoded: {
+          type: 'P2PKH',
+          address: 'address1',
+        },
+        spent_by: null,
+      },
+    ],
+    parents: [],
+    height: undefined,
+  };
+
+  // Without includeAuthorities, balance should be empty
+  let balance = await wallet.getTxBalance(tx);
+  expect(balance).toStrictEqual({});
+
+  // With includeAuthorities, balance should be 0 (mint authority gained, melt authority lost)
+  balance = await wallet.getTxBalance(tx, { includeAuthorities: true });
+  expect(balance.token1).toStrictEqual(0n);
+});
+
+test('checkAddressesMine', async () => {
+  const wallet = buildWalletToAuthenticateApiCall();
+  jest.spyOn(wallet, 'isReady').mockReturnValue(true);
+
+  const addr1 = 'WdSD7aytFEZ5Hp8quhqu3wUCsyyGqcneMu';
+  const addr2 = 'WbjNdAGBWAkCS2QVpqmacKXNy8WVXatXNM';
+  const addr3 = 'WR1i8USJWQuaU423fwuFQbezfevmT4vFWX';
+
+  mockAxiosAdapter.onPost('wallet/addresses/check_mine').reply(200, {
+    success: true,
+    addresses: {
+      [addr1]: true,
+      [addr2]: false,
+      [addr3]: false,
+    },
+  });
+
+  const walletAddressMap = await wallet.checkAddressesMine([addr1, addr2, addr3]);
+
+  expect(walletAddressMap[addr1]).toStrictEqual(true);
+  expect(walletAddressMap[addr2]).toStrictEqual(false);
+  expect(walletAddressMap[addr3]).toStrictEqual(false);
+
+  mockAxiosAdapter.onPost('wallet/addresses/check_mine').reply(400, {
+    success: false,
+  });
+
+  await expect(wallet.checkAddressesMine([addr1, addr2, addr3])).rejects.toThrow(
+    'Error checking wallet addresses.'
+  );
+});
+
+test('checkAddressesMine with empty array', async () => {
+  const wallet = buildWalletToAuthenticateApiCall();
+  jest.spyOn(wallet, 'isReady').mockReturnValue(true);
+
+  // Should return empty object without making API call
+  const walletAddressMap = await wallet.checkAddressesMine([]);
+
+  expect(walletAddressMap).toStrictEqual({});
+});
+
+test('generateCreateWalletAuthData should return correct auth data', async () => {
+  const requestPassword = jest.fn();
+
+  jest.spyOn(Date, 'now').mockImplementation(() => 10000);
+
+  const network = new Network('testnet');
+  const seed = defaultWalletSeed;
+  const pin = '123456';
+  const wallet = new HathorWalletServiceWallet({
+    requestPassword,
+    seed,
+    network,
+    passphrase: '',
+    xpriv: null,
+    xpub: null,
+  });
+
+  const accessData = walletUtils.generateAccessDataFromSeed(seed, {
+    pin,
+    password: pin,
+    networkName: network.name,
+  });
+  const authData: CreateWalletAuthData = await wallet.generateCreateWalletAuthData(accessData, pin);
+  const timestampNow = Math.floor(Date.now() / 1000); // in seconds
+
+  // these are deterministic, so we can avoid using the lib's methods to generate them
+  const xpub =
+    'xpub6D2LLyX98BCEkbTHsE14kgP6atagb9TR3ZBvHYQrT9yEUDYeHVBmrnnyWo3u2cADp4upagFyuu5msxtosceN1FykN22oa41o3fMEJmFG766';
+  const walletId = '83f704d8b24d4f9cc252b080b008280bf4b3342065f7b4baee43fd0ec7186db7';
+  const authXpub =
+    'xpub6AyEt1FdSvP2mXsZfJ4SLHbMugNMQVNdtkhzWoF6nQSSXcstiqEZDXd4Jg7XBscM2K9YMt2ubWXChYXMTAPS99E8Wot1tcMtyfJhhKLZLok';
+  const firstAddress = 'WR1i8USJWQuaU423fwuFQbezfevmT4vFWX';
+  const xpubAddress = 'WdSD7aytFEZ5Hp8quhqu3wUCsyyGqcneMu';
+  const authXpubAddress = 'WbjNdAGBWAkCS2QVpqmacKXNy8WVXatXNM';
+
+  const xpubMessage = new Message(String(timestampNow).concat(walletId).concat(xpubAddress));
+  const authXpubMessage = new Message(
+    String(timestampNow).concat(walletId).concat(authXpubAddress)
+  );
+
+  expect(authData.xpub).toBe(xpub);
+  expect(authData.authXpub).toBe(authXpub);
+  expect(authData.timestampNow).toBe(timestampNow);
+  expect(authData.firstAddress).toBe(firstAddress);
+  expect(xpubMessage.verify(xpubAddress, authData.xpubkeySignature)).toBe(true);
+  expect(authXpubMessage.verify(authXpubAddress, authData.authXpubkeySignature)).toBe(true);
+});
+
+test('generateCreateWalletAuthData should derive correct auth data from the seed', async () => {
+  const requestPassword = jest.fn();
+
+  jest.spyOn(Date, 'now').mockImplementation(() => 10000);
+
+  const network = new Network('testnet');
+  const seed = defaultWalletSeed;
+  const pin = '123456';
+  const wallet = new HathorWalletServiceWallet({
+    requestPassword,
+    seed,
+    network,
+    passphrase: '',
+    xpriv: null,
+    xpub: null,
+  });
+
+  const authData: CreateWalletAuthData = await wallet.generateCreateWalletAuthData(
+    {} as IWalletAccessData,
+    pin
+  );
+  const timestampNow = Math.floor(Date.now() / 1000); // in seconds
+
+  // these are deterministic, so we can avoid using the lib's methods to generate them
+  const xpub =
+    'xpub6D2LLyX98BCEkbTHsE14kgP6atagb9TR3ZBvHYQrT9yEUDYeHVBmrnnyWo3u2cADp4upagFyuu5msxtosceN1FykN22oa41o3fMEJmFG766';
+  const walletId = '83f704d8b24d4f9cc252b080b008280bf4b3342065f7b4baee43fd0ec7186db7';
+  const authXpub =
+    'xpub6AyEt1FdSvP2mXsZfJ4SLHbMugNMQVNdtkhzWoF6nQSSXcstiqEZDXd4Jg7XBscM2K9YMt2ubWXChYXMTAPS99E8Wot1tcMtyfJhhKLZLok';
+  const firstAddress = 'WR1i8USJWQuaU423fwuFQbezfevmT4vFWX';
+  const xpubAddress = 'WdSD7aytFEZ5Hp8quhqu3wUCsyyGqcneMu';
+  const authXpubAddress = 'WbjNdAGBWAkCS2QVpqmacKXNy8WVXatXNM';
+
+  const xpubMessage = new Message(String(timestampNow).concat(walletId).concat(xpubAddress));
+  const authXpubMessage = new Message(
+    String(timestampNow).concat(walletId).concat(authXpubAddress)
+  );
+
+  expect(authData.xpub).toBe(xpub);
+  expect(authData.authXpub).toBe(authXpub);
+  expect(authData.timestampNow).toBe(timestampNow);
+  expect(authData.firstAddress).toBe(firstAddress);
+  expect(xpubMessage.verify(xpubAddress, authData.xpubkeySignature)).toBe(true);
+  expect(authXpubMessage.verify(authXpubAddress, authData.authXpubkeySignature)).toBe(true);
+});
+
+test('getTxById', async () => {
+  const wallet = buildWalletToAuthenticateApiCall();
+  jest.spyOn(wallet, 'isReady').mockReturnValue(true);
+
+  mockAxiosAdapter.reset();
+  mockAxiosAdapter
+    .onGet('wallet/transactions/123')
+    .replyOnce(200, buildSuccessTxByIdTokenDataResponse())
+    .onGet('wallet/transactions/123')
+    .replyOnce(400, {
+      success: false,
+      error: 'invalid-payload',
+      details: [{ message: 'vida', path: ['txId'] }],
+    });
+
+  const successCall = wallet.getTxById('123');
+
+  await expect(successCall).resolves.toStrictEqual({
+    success: true,
+    txTokens: [
+      {
+        txId: 'txId1',
+        timestamp: 10,
+        version: 3,
+        balance: 10n,
+        height: 1,
+        tokenId: 'token1',
+        tokenName: 'Token 1',
+        tokenSymbol: 'T1',
+        voided: false,
+        weight: 65.4321,
+      },
+      {
+        balance: 7n,
+        height: 1,
+        timestamp: 10,
+        tokenId: 'token2',
+        tokenName: 'Token 2',
+        tokenSymbol: 'T2',
+        txId: 'txId1',
+        version: 3,
+        voided: false,
+        weight: 65.4321,
+      },
+    ],
+  });
+
+  const invalidCall = wallet.getTxById('123');
+
+  await expect(invalidCall).rejects.toThrow('Error getting transaction by its id.');
+});
+
+test('prepareMintTokens', async () => {
+  const addresses = [
+    'WdSD7aytFEZ5Hp8quhqu3wUCsyyGqcneMu',
+    'WbjNdAGBWAkCS2QVpqmacKXNy8WVXatXNM',
+    'WR1i8USJWQuaU423fwuFQbezfevmT4vFWX',
+  ];
+
+  mockAxiosAdapter.onPost('wallet/addresses/check_mine').reply(200, {
+    success: true,
+    addresses: {
+      WR1i8USJWQuaU423fwuFQbezfevmT4vFWX: true,
+    },
+  });
+
+  // Mock getAddressDetails for address index resolution
+  jest.spyOn(walletApi, 'getAddressDetails').mockResolvedValue({
+    data: {
+      index: 2,
+      address: addresses[2],
+    },
+  });
+
+  jest.spyOn(walletApi, 'getTxOutputs').mockResolvedValue({
+    txOutputs: [
+      {
+        txId: '002abde4018935e1bbde9600ef79c637adf42385fb1816ec284d702b7bb9ef5f',
+        index: 0,
+        tokenId: '01',
+        address: addresses[2],
+        value: 1n,
+        authorities: TOKEN_MINT_MASK,
+        timelock: null,
+        heightlock: null,
+        locked: false,
+        addressPath: "m/44'/280'/0'/0/2",
+      },
+    ],
+  });
+
+  const requestPassword = jest.fn();
+  const network = new Network('testnet');
+  const seed =
+    'purse orchard camera cloud piece joke hospital mechanic timber horror shoulder rebuild you decrease garlic derive rebuild random naive elbow depart okay parrot cliff';
+  const wallet = new HathorWalletServiceWallet({
+    requestPassword,
+    seed,
+    network,
+    passphrase: '',
+    xpriv: null,
+    xpub: null,
+  });
+
+  expect(wallet.getNetwork()).toEqual('testnet');
+
+  const code = new Mnemonic(seed);
+  const xpriv = code.toHDPrivateKey('', network.getNetwork());
+
+  wallet.setState('Ready');
+
+  const getUtxosMock = async params => {
+    if (params.tokenId === '00') {
+      return {
+        utxos: [
+          {
+            txId: '002abde4018935e1bbde9600ef79c637adf42385fb1816ec284d702b7bb9ef5d',
+            index: 0,
+            tokenId: '00',
+            address: addresses[0],
+            value: 1n,
+            authorities: 0n,
+            timelock: null,
+            heightlock: null,
+            locked: false,
+            addressPath,
+          },
+        ],
+        changeAmount: 0n,
+      };
+    }
+    return {
+      utxos: [
+        {
+          txId: '002abde4018935e1bbde9600ef79c637adf42385fb1816ec284d702b7bb9ef5f',
+          index: 0,
+          tokenId: '01',
+          address: addresses[0],
+          value: 1n,
+          authorities: TOKEN_MINT_MASK,
+          timelock: null,
+          heightlock: null,
+          locked: false,
+          addressPath,
+        },
+      ],
+      changeAmount: 0n,
+    };
+  };
+  const getInputDataMock = (xp: string, dtsh: Buffer) => Buffer.alloc(0);
+
+  const spy1 = jest.spyOn(wallet, 'getUtxosForAmount').mockImplementation(getUtxosMock);
+  const spy2 = jest
+    .spyOn(wallet.storage, 'getMainXPrivKey')
+    .mockReturnValue(Promise.resolve(xpriv.xprivkey));
+  const spy3 = jest.spyOn(wallet, 'getInputData').mockImplementation(getInputDataMock);
+  jest.spyOn(wallet.storage, 'getToken').mockImplementation(mockGetToken);
+  jest.spyOn(wallet, 'getTokenDetails').mockImplementation(async token => {
+    const { uid, ...mockData } = await mockGetToken(token);
+    return {
+      tokenInfo: { id: uid, ...mockData },
+    };
+  });
+
+  // error because of wrong authority output address
+  await expect(
+    wallet.prepareMintTokensData('01', 100n, {
+      address: addresses[1],
+      createAnotherMint: true,
+      mintAuthorityAddress: 'abc',
+      pinCode: '123456',
+    })
+  ).rejects.toThrow(SendTxError);
+
+  // error because of wrong authority output address
+  await expect(
+    wallet.prepareMintTokensData('01', 100n, {
+      address: addresses[1],
+      createAnotherMint: true,
+      mintAuthorityAddress: 'abc',
+      allowExternalMintAuthorityAddress: true,
+      pinCode: '123456',
+    })
+  ).rejects.toThrow(SendTxError);
+
+  // mint data without sign the transaction
+  const mintDataNotSigned = await wallet.prepareMintTokensData('01', 100n, {
+    address: addresses[1],
+    mintAuthorityAddress: addresses[2],
+    pinCode: '123456',
+    signTx: false,
+  });
+  expect(mintDataNotSigned.inputs).toEqual([
+    expect.objectContaining({
+      data: null,
+    }),
+    expect.objectContaining({
+      data: null,
+    }),
+  ]);
+
+  // mint data with correct address for authority output
+  const mintData = await wallet.prepareMintTokensData('01', 100n, {
+    address: addresses[1],
+    createAnotherMint: true,
+    mintAuthorityAddress: addresses[2],
+    pinCode: '123456',
+  });
+
+  expect(mintDataNotSigned.inputs).toEqual([
+    expect.objectContaining({
+      data: expect.any(Object),
+    }),
+    expect.objectContaining({
+      data: expect.any(Object),
+    }),
+  ]);
+  expect(mintData.outputs).toHaveLength(2);
+
+  const authorityOutputs = mintData.outputs.filter(o =>
+    transaction.isAuthorityOutput({ token_data: o.tokenData })
+  );
+
+  expect(authorityOutputs).toHaveLength(1);
+  const authorityOutput = authorityOutputs[0];
+  expect(authorityOutput.value).toEqual(TOKEN_MINT_MASK);
+  const p2pkh = authorityOutput.parseScript(network);
+  // Validate that the authority output was sent to the correct address
+  expect(p2pkh.address.base58).toEqual(addresses[2]);
+
+  // Clear mocks
+  spy1.mockRestore();
+  spy2.mockRestore();
+  spy3.mockRestore();
+});
+
+test('prepareMintTokensData - fee token without enough HTR', async () => {
+  const addresses = [
+    'WdSD7aytFEZ5Hp8quhqu3wUCsyyGqcneMu',
+    'WbjNdAGBWAkCS2QVpqmacKXNy8WVXatXNM',
+    'WR1i8USJWQuaU423fwuFQbezfevmT4vFWX',
+  ];
+
+  mockAxiosAdapter.onPost('wallet/addresses/check_mine').reply(200, {
+    success: true,
+    addresses: {
+      [addresses[2]]: true,
+    },
+  });
+
+  jest.spyOn(walletApi, 'getAddressDetails').mockResolvedValue({
+    data: {
+      index: 2,
+      address: addresses[2],
+      transactions: 0,
+      seqnum: 0,
+    },
+  });
+
+  jest.spyOn(walletApi, 'getTxOutputs').mockResolvedValue({
+    success: true,
+    txOutputs: [
+      {
+        txId: '002abde4018935e1bbde9600ef79c637adf42385fb1816ec284d702b7bb9ef5f',
+        index: 0,
+        tokenId: 'fbt',
+        address: addresses[2],
+        value: TOKEN_MINT_MASK,
+        authorities: TOKEN_MINT_MASK,
+        timelock: null,
+        heightlock: null,
+        locked: false,
+        addressPath: "m/280'/280'/0/1/2",
+      },
+    ],
+  });
+
+  jest.spyOn(walletApi, 'getTokenDetails').mockResolvedValue({
+    success: true,
+    name: 'Fee Token',
+    symbol: 'FBT',
+    version: TokenVersion.FEE,
+  });
+
+  const requestPassword = jest.fn();
+  const network = new Network('testnet');
+  const seed =
+    'purse orchard camera cloud piece joke hospital mechanic timber horror shoulder rebuild you decrease garlic derive rebuild random naive elbow depart okay parrot cliff';
+  const wallet = new HathorWalletServiceWallet({
+    requestPassword,
+    seed,
+    network,
+    passphrase: '',
+    xpriv: null,
+    xpub: null,
+  });
+  wallet.setState('Ready');
+
+  const code = new Mnemonic(seed);
+  const xpriv = code.toHDPrivateKey('', network.getNetwork());
+
+  jest.spyOn(wallet.storage, 'getMainXPrivKey').mockReturnValue(Promise.resolve(xpriv.xprivkey));
+  jest.spyOn(wallet, 'getInputData').mockImplementation(() => Buffer.alloc(0));
+  jest.spyOn(wallet.storage, 'getToken').mockImplementation(mockGetToken);
+  jest.spyOn(wallet, 'getAddressIndex').mockResolvedValue(0);
+  jest.spyOn(wallet, 'getTokenDetails').mockResolvedValue({
+    tokenInfo: {
+      id: 'fbt',
+      name: 'Fee Token',
+      symbol: 'FBT',
+      version: TokenVersion.FEE,
+    },
+    totalSupply: 1000n,
+    totalTransactions: 1,
+    authorities: {
+      mint: true,
+      melt: false,
+    },
+  });
+  jest.spyOn(wallet, 'getMintAuthority').mockResolvedValue([
+    {
+      txId: '002abde4018935e1bbde9600ef79c637adf42385fb1816ec284d702b7bb9ef5f',
+      index: 0,
+      address: addresses[2],
+      authorities: TOKEN_MINT_MASK,
+    },
+  ]);
+
+  const _spyGetUtxos = jest.spyOn(wallet, 'getUtxos').mockImplementation(async () => ({
+    utxos: [],
+    changeAmount: 0n,
+  }));
+  const _spyGetUtxosForAmount = jest
+    .spyOn(wallet, 'getUtxosForAmount')
+    .mockImplementation(async () => ({
+      utxos: [],
+      changeAmount: 0n,
+    }));
+
+  await expect(
+    wallet.prepareMintTokensData('fbt', 100n, {
+      address: addresses[1],
+      createAnotherMint: true,
+      mintAuthorityAddress: addresses[2],
+      pinCode: '123456',
+    })
+  ).rejects.toThrow(UtxoError);
+
+  _spyGetUtxos.mockRestore();
+  _spyGetUtxosForAmount.mockRestore();
+});
+
+test('prepareMintTokensData - fee token with change, mint, and melt authority outputs', async () => {
+  const addresses = [
+    'WdSD7aytFEZ5Hp8quhqu3wUCsyyGqcneMu',
+    'WbjNdAGBWAkCS2QVpqmacKXNy8WVXatXNM',
+    'WR1i8USJWQuaU423fwuFQbezfevmT4vFWX',
+  ];
+
+  const requestPassword = jest.fn();
+  const network = new Network('testnet');
+  const seed =
+    'purse orchard camera cloud piece joke hospital mechanic timber horror shoulder rebuild you decrease garlic derive rebuild random naive elbow depart okay parrot cliff';
+  const wallet = new HathorWalletServiceWallet({
+    requestPassword,
+    seed,
+    network,
+    passphrase: '',
+    xpriv: null,
+    xpub: null,
+  });
+  wallet.setState('Ready');
+
+  // Setup fee token mocks
+  setupFeeTokenMocks.setupCompleteMocks(wallet, seed, network, '02', 'mint', addresses);
+  jest
+    .spyOn(wallet, 'checkAddressesMine')
+    .mockReturnValue(Promise.resolve({ [addresses[2]]: true }));
+
+  jest.spyOn(wallet, 'getUtxos').mockImplementation(async params => {
+    if (params?.tokenId === NATIVE_TOKEN_UID) {
+      return {
+        utxos: [
+          {
+            txId: '002abde4018935e1bbde9600ef79c637adf42385fb1816ec284d702b7bb9ef5d',
+            index: 0,
+            tokenId: NATIVE_TOKEN_UID,
+            address: addresses[0],
+            value: 10n,
+            authorities: 0n,
+            timelock: null,
+            heightlock: null,
+            locked: false,
+            addressPath: "m/280'/280'/0/1/0",
+          },
+        ],
+        changeAmount: 9n,
+      };
+    }
+    return {
+      utxos: [
+        {
+          txId: '002abde4018935e1bbde9600ef79c637adf42385fb1816ec284d702b7bb9ef5d',
+          index: 0,
+          tokenId: '02',
+          address: addresses[0],
+          value: 1n,
+          authorities: params?.authority || 0n,
+          timelock: null,
+          heightlock: null,
+          locked: false,
+          addressPath: "m/280'/280'/0/1/0",
+        },
+      ],
+      changeAmount: 0n,
+    };
+  });
+
+  jest.spyOn(wallet, 'getUtxosForAmount').mockImplementation(async (amount, params) => {
+    if (params?.token === NATIVE_TOKEN_UID) {
+      return {
+        utxos: [
+          {
+            txId: '002abde4018935e1bbde9600ef79c637adf42385fb1816ec284d702b7bb9ef5d',
+            index: 0,
+            tokenId: NATIVE_TOKEN_UID,
+            address: addresses[0],
+            value: 10n,
+            authorities: 0n,
+            timelock: null,
+            heightlock: null,
+            locked: false,
+            addressPath: "m/280'/280'/0/1/0",
+          },
+        ],
+        changeAmount: 9n,
+      };
+    }
+    return {
+      utxos: [
+        {
+          txId: '002abde4018935e1bbde9600ef79c637adf42385fb1816ec284d702b7bb9ef5d',
+          index: 0,
+          tokenId: '02',
+          address: addresses[0],
+          value: 1n,
+          authorities: 0n,
+          timelock: null,
+          heightlock: null,
+          locked: false,
+          addressPath: "m/280'/280'/0/1/0",
+        },
+      ],
+      changeAmount: 0n,
+    };
+  });
+
+  const result = await wallet.prepareMintTokensData('02', 1000n, {
+    address: addresses[1],
+    createAnotherMint: true,
+    mintAuthorityAddress: addresses[2],
+    changeAddress: addresses[2],
+    pinCode: '123456',
+    signTx: false,
+  });
+
+  expect(result.inputs).toEqual([
+    expect.objectContaining({ data: expect.any(Object) }),
+    expect.objectContaining({ data: expect.any(Object) }),
+  ]);
+
+  expect(result.outputs).toHaveLength(3);
+  const authorityOutputs = result.outputs.filter(o =>
+    transaction.isAuthorityOutput({ token_data: o.tokenData })
+  );
+  expect(authorityOutputs).toHaveLength(1);
+  expect(authorityOutputs[0].value).toEqual(TOKEN_MINT_MASK);
+
+  const p2pkhMint = authorityOutputs[0].parseScript(network);
+  expect(p2pkhMint.address.base58).toBe(addresses[2]);
+});
+
+test('prepareMeltTokens', async () => {
+  const addresses = [
+    'WdSD7aytFEZ5Hp8quhqu3wUCsyyGqcneMu',
+    'WbjNdAGBWAkCS2QVpqmacKXNy8WVXatXNM',
+    'WR1i8USJWQuaU423fwuFQbezfevmT4vFWX',
+  ];
+
+  mockAxiosAdapter.onPost('wallet/addresses/check_mine').reply(200, {
+    success: true,
+    addresses: {
+      WR1i8USJWQuaU423fwuFQbezfevmT4vFWX: true,
+    },
+  });
+
+  // Mock getAddressDetails for address index resolution
+  jest.spyOn(walletApi, 'getAddressDetails').mockResolvedValue({
+    data: {
+      index: 2,
+      address: addresses[2],
+    },
+  });
+
+  jest.spyOn(walletApi, 'getTxOutputs').mockResolvedValue({
+    txOutputs: [
+      {
+        txId: '002abde4018935e1bbde9600ef79c637adf42385fb1816ec284d702b7bb9ef5f',
+        index: 0,
+        tokenId: '01',
+        address: addresses[2],
+        value: 1n,
+        authorities: TOKEN_MELT_MASK,
+        timelock: null,
+        heightlock: null,
+        locked: false,
+        addressPath: "m/44'/280'/0'/0/2",
+      },
+    ],
+  });
+
+  const requestPassword = jest.fn();
+  const network = new Network('testnet');
+  const seed =
+    'purse orchard camera cloud piece joke hospital mechanic timber horror shoulder rebuild you decrease garlic derive rebuild random naive elbow depart okay parrot cliff';
+  const wallet = new HathorWalletServiceWallet({
+    requestPassword,
+    seed,
+    network,
+    passphrase: '',
+    xpriv: null,
+    xpub: null,
+  });
+
+  const code = new Mnemonic(seed);
+  const xpriv = code.toHDPrivateKey('', network.getNetwork());
+
+  wallet.setState('Ready');
+
+  const getUtxosMock = async params => {
+    if (params.authority === TOKEN_MELT_MASK) {
+      return {
+        utxos: [
+          {
+            txId: '002abde4018935e1bbde9600ef79c637adf42385fb1816ec284d702b7bb9ef5f',
+            index: 0,
+            tokenId: '01',
+            address: addresses[0],
+            value: 1n,
+            authorities: TOKEN_MELT_MASK,
+            timelock: null,
+            heightlock: null,
+            locked: false,
+            addressPath,
+          },
+        ],
+        changeAmount: 0n,
+      };
+    }
+    return {
+      utxos: [
+        {
+          txId: '002abde4018935e1bbde9600ef79c637adf42385fb1816ec284d702b7bb9ef5d',
+          index: 0,
+          tokenId: '01',
+          address: addresses[0],
+          value: 1n,
+          authorities: 0n,
+          timelock: null,
+          heightlock: null,
+          locked: false,
+          addressPath,
+        },
+      ],
+      changeAmount: 0n,
+    };
+  };
+  const getInputDataMock = (xp: string, dtsh: Buffer) => Buffer.alloc(0);
+
+  const spy1 = jest.spyOn(wallet, 'getUtxosForAmount').mockImplementation(getUtxosMock);
+  const spy2 = jest
+    .spyOn(wallet.storage, 'getMainXPrivKey')
+    .mockReturnValue(Promise.resolve(xpriv.xprivkey));
+  const spy3 = jest.spyOn(wallet, 'getInputData').mockImplementation(getInputDataMock);
+  jest.spyOn(wallet.storage, 'getToken').mockImplementation(mockGetToken);
+  jest.spyOn(wallet, 'getTokenDetails').mockImplementation(async token => {
+    const { uid, ...mockData } = await mockGetToken(token);
+    return {
+      tokenInfo: { id: uid, ...mockData },
+    };
+  });
+
+  // error because of wrong authority output address
+  await expect(
+    wallet.prepareMeltTokensData('01', 1n, {
+      address: addresses[1],
+      createAnotherMelt: true,
+      meltAuthorityAddress: 'abc',
+      pinCode: '123456',
+    })
+  ).rejects.toThrow(SendTxError);
+
+  // error because of wrong authority output address
+  await expect(
+    wallet.prepareMeltTokensData('01', 1n, {
+      address: addresses[1],
+      createAnotherMelt: true,
+      meltAuthorityAddress: 'abc',
+      allowExternalMeltAuthorityAddress: true,
+      pinCode: '123456',
+    })
+  ).rejects.toThrow(SendTxError);
+
+  // melt data without sign the transaction
+  const meltDataNotSigned = await wallet.prepareMeltTokensData('01', 100n, {
+    address: addresses[1],
+    meltAuthorityAddress: addresses[2],
+    pinCode: '123456',
+    signTx: false,
+  });
+  expect(meltDataNotSigned.inputs).toEqual([
+    expect.objectContaining({
+      data: null,
+    }),
+    expect.objectContaining({
+      data: null,
+    }),
+  ]);
+
+  // melt data with correct address for authority output
+  const meltData = await wallet.prepareMeltTokensData('01', 1n, {
+    address: addresses[1],
+    createAnotherMelt: true,
+    meltAuthorityAddress: addresses[2],
+    pinCode: '123456',
+  });
+
+  expect(meltDataNotSigned.inputs).toEqual([
+    expect.objectContaining({
+      data: expect.any(Object),
+    }),
+    expect.objectContaining({
+      data: expect.any(Object),
+    }),
+  ]);
+  expect(meltData.outputs).toHaveLength(1);
+
+  const authorityOutputs = meltData.outputs.filter(o =>
+    transaction.isAuthorityOutput({ token_data: o.tokenData })
+  );
+
+  expect(authorityOutputs).toHaveLength(1);
+  const authorityOutput = authorityOutputs[0];
+  expect(authorityOutput.value).toEqual(TOKEN_MELT_MASK);
+  const p2pkh = authorityOutput.parseScript(network);
+  // Validate that the authority output was sent to the correct address
+  expect(p2pkh.address.base58).toEqual(addresses[2]);
+
+  // Clear mocks
+  spy1.mockRestore();
+  spy2.mockRestore();
+  spy3.mockRestore();
+});
+
+test('prepareMeltTokensData - fee token without enough HTR', async () => {
+  const addresses = [
+    'WdSD7aytFEZ5Hp8quhqu3wUCsyyGqcneMu',
+    'WbjNdAGBWAkCS2QVpqmacKXNy8WVXatXNM',
+    'WR1i8USJWQuaU423fwuFQbezfevmT4vFWX',
+  ];
+
+  mockAxiosAdapter.onPost('wallet/addresses/check_mine').reply(200, {
+    success: true,
+    addresses: {
+      [addresses[2]]: true,
+    },
+  });
+
+  jest.spyOn(walletApi, 'getAddressDetails').mockResolvedValue({
+    data: {
+      index: 2,
+      address: addresses[2],
+      transactions: 0,
+      seqnum: 0,
+    },
+  });
+
+  jest.spyOn(walletApi, 'getTxOutputs').mockResolvedValue({
+    success: true,
+    txOutputs: [
+      {
+        txId: '002abde4018935e1bbde9600ef79c637adf42385fb1816ec284d702b7bb9ef5f',
+        index: 0,
+        tokenId: 'fbt',
+        address: addresses[2],
+        value: TOKEN_MELT_MASK,
+        authorities: TOKEN_MELT_MASK,
+        timelock: null,
+        heightlock: null,
+        locked: false,
+        addressPath: "m/280'/280'/0/1/2",
+      },
+    ],
+  });
+
+  jest.spyOn(walletApi, 'getTokenDetails').mockResolvedValue({
+    success: true,
+    name: 'Fee Token',
+    symbol: 'FBT',
+    version: TokenVersion.FEE,
+  });
+
+  const requestPassword = jest.fn();
+  const network = new Network('testnet');
+  const seed =
+    'purse orchard camera cloud piece joke hospital mechanic timber horror shoulder rebuild you decrease garlic derive rebuild random naive elbow depart okay parrot cliff';
+  const wallet = new HathorWalletServiceWallet({
+    requestPassword,
+    seed,
+    network,
+    passphrase: '',
+    xpriv: null,
+    xpub: null,
+  });
+  wallet.setState('Ready');
+
+  const code = new Mnemonic(seed);
+  const xpriv = code.toHDPrivateKey('', network.getNetwork());
+
+  jest.spyOn(wallet.storage, 'getMainXPrivKey').mockReturnValue(Promise.resolve(xpriv.xprivkey));
+  jest.spyOn(wallet, 'getInputData').mockImplementation(() => Buffer.alloc(0));
+  jest.spyOn(wallet.storage, 'getToken').mockImplementation(mockGetToken);
+  jest.spyOn(wallet, 'getAddressIndex').mockResolvedValue(0);
+  jest.spyOn(wallet, 'getTokenDetails').mockResolvedValue({
+    tokenInfo: {
+      id: 'fbt',
+      name: 'Fee Token',
+      symbol: 'FBT',
+      version: TokenVersion.FEE,
+    },
+    totalSupply: 1000n,
+    totalTransactions: 1,
+    authorities: {
+      mint: false,
+      melt: true,
+    },
+  });
+  jest.spyOn(wallet, 'getMeltAuthority').mockResolvedValue([
+    {
+      txId: '002abde4018935e1bbde9600ef79c637adf42385fb1816ec284d702b7bb9ef5f',
+      index: 0,
+      address: addresses[2],
+      authorities: TOKEN_MELT_MASK,
+    },
+  ]);
+
+  const _spyGetUtxos = jest.spyOn(wallet, 'getUtxos').mockImplementation(async () => ({
+    utxos: [],
+    changeAmount: 0n,
+  }));
+  const _spyGetUtxosForAmount = jest
+    .spyOn(wallet, 'getUtxosForAmount')
+    .mockImplementation(async (amount, params) => {
+      // Return tokens for melting
+      if (params?.token === 'fbt') {
+        return {
+          utxos: [
+            {
+              txId: '002abde4018935e1bbde9600ef79c637adf42385fb1816ec284d702b7bb9ef5d',
+              index: 0,
+              tokenId: 'fbt',
+              address: addresses[0],
+              value: 100n,
+              authorities: 0n,
+              timelock: null,
+              heightlock: null,
+              locked: false,
+              addressPath: "m/280'/280'/0/1/0",
+            },
+          ],
+          changeAmount: 0n,
+        };
+      }
+      // Return empty for HTR (to trigger the error)
+      return {
+        utxos: [],
+        changeAmount: 0n,
+      };
+    });
+
+  await expect(
+    wallet.prepareMeltTokensData('fbt', 100n, {
+      address: addresses[1],
+      createAnotherMint: true,
+      meltAuthorityAddress: addresses[2],
+      pinCode: '123456',
+    })
+  ).rejects.toThrow(UtxoError);
+
+  _spyGetUtxos.mockRestore();
+  _spyGetUtxosForAmount.mockRestore();
+});
+
+test('prepareMeltTokensData - fee token with change and melt authority outputs', async () => {
+  const addresses = [
+    'WdSD7aytFEZ5Hp8quhqu3wUCsyyGqcneMu',
+    'WbjNdAGBWAkCS2QVpqmacKXNy8WVXatXNM',
+    'WR1i8USJWQuaU423fwuFQbezfevmT4vFWX',
+  ];
+
+  mockAxiosAdapter.onPost('wallet/addresses/check_mine').reply(200, {
+    success: true,
+    addresses: {
+      [addresses[2]]: true,
+    },
+  });
+
+  jest.spyOn(walletApi, 'getAddressDetails').mockResolvedValue({
+    data: {
+      index: 2,
+      address: addresses[2],
+      transactions: 0,
+      seqnum: 0,
+    },
+  });
+
+  jest.spyOn(walletApi, 'getTxOutputs').mockResolvedValue({
+    success: true,
+    txOutputs: [
+      {
+        txId: '002abde4018935e1bbde9600ef79c637adf42385fb1816ec284d702b7bb9ef5f',
+        index: 0,
+        tokenId: '02',
+        address: addresses[2],
+        value: TOKEN_MELT_MASK,
+        authorities: TOKEN_MELT_MASK,
+        timelock: null,
+        heightlock: null,
+        locked: false,
+        addressPath: "m/280'/280'/0/1/2",
+      },
+    ],
+  });
+
+  jest.spyOn(walletApi, 'getTokenDetails').mockResolvedValue({
+    success: true,
+    name: 'Fee Token',
+    symbol: 'FBT',
+    version: TokenVersion.FEE,
+  });
+
+  const requestPassword = jest.fn();
+  const network = new Network('testnet');
+  const seed =
+    'purse orchard camera cloud piece joke hospital mechanic timber horror shoulder rebuild you decrease garlic derive rebuild random naive elbow depart okay parrot cliff';
+  const wallet = new HathorWalletServiceWallet({
+    requestPassword,
+    seed,
+    network,
+    passphrase: '',
+    xpriv: null,
+    xpub: null,
+  });
+  wallet.setState('Ready');
+
+  jest.spyOn(wallet, 'getUtxos').mockImplementation(async params => {
+    if (params?.tokenId === NATIVE_TOKEN_UID) {
+      return {
+        utxos: [
+          {
+            txId: '002abde4018935e1bbde9600ef79c637adf42385fb1816ec284d702b7bb9ef5d',
+            index: 0,
+            tokenId: NATIVE_TOKEN_UID,
+            address: addresses[0],
+            value: 10n,
+            authorities: 0n,
+            timelock: null,
+            heightlock: null,
+            locked: false,
+            addressPath: "m/280'/280'/0/1/0",
+          },
+        ],
+        changeAmount: 9n,
+      };
+    }
+    return {
+      utxos: [
+        {
+          txId: '002abde4018935e1bbde9600ef79c637adf42385fb1816ec284d702b7bb9ef5d',
+          index: 0,
+          tokenId: '02',
+          address: addresses[0],
+          value: 2000n,
+          authorities: params?.authority || 0n,
+          timelock: null,
+          heightlock: null,
+          locked: false,
+          addressPath: "m/280'/280'/0/1/0",
+        },
+      ],
+      changeAmount: 1000n,
+    };
+  });
+
+  jest.spyOn(wallet, 'getUtxosForAmount').mockImplementation(async (amount, params) => {
+    if (params?.token === '00') {
+      return {
+        utxos: [
+          {
+            txId: '002abde4018935e1bbde9600ef79c637adf42385fb1816ec284d702b7bb9ef5d',
+            index: 0,
+            tokenId: NATIVE_TOKEN_UID,
+            address: addresses[0],
+            value: 10n,
+            authorities: 0n,
+            timelock: null,
+            heightlock: null,
+            locked: false,
+            addressPath: "m/280'/280'/0/1/0",
+          },
+        ],
+        changeAmount: 9n,
+      };
+    }
+    return {
+      utxos: [
+        {
+          txId: '002abde4018935e1bbde9600ef79c637adf42385fb1816ec284d702b7bb9ef5d',
+          index: 0,
+          tokenId: '02',
+          address: addresses[0],
+          value: amount,
+          authorities: 0n,
+          timelock: null,
+          heightlock: null,
+          locked: false,
+          addressPath: "m/280'/280'/0/1/0",
+        },
+      ],
+      changeAmount: params?.token === '02' ? 1000n : 0n,
+    };
+  });
+
+  const code = new Mnemonic(
+    'purse orchard camera cloud piece joke hospital mechanic timber horror shoulder rebuild you decrease garlic derive rebuild random naive elbow depart okay parrot cliff'
+  );
+  const xpriv = code.toHDPrivateKey('', network.getNetwork());
+
+  jest.spyOn(wallet.storage, 'getMainXPrivKey').mockReturnValue(Promise.resolve(xpriv.xprivkey));
+  jest.spyOn(wallet, 'getInputData').mockImplementation(() => Buffer.alloc(0));
+  jest.spyOn(wallet.storage, 'getToken').mockImplementation(mockGetToken);
+  jest
+    .spyOn(wallet, 'checkAddressesMine')
+    .mockReturnValue(Promise.resolve({ [addresses[2]]: true }));
+  jest.spyOn(wallet, 'getTokenDetails').mockResolvedValue({
+    tokenInfo: {
+      id: '02',
+      name: 'Fee Token',
+      symbol: 'FBT',
+      version: TokenVersion.FEE,
+    },
+    totalSupply: 1000n,
+    totalTransactions: 1,
+    authorities: {
+      mint: false,
+      melt: true,
+    },
+  });
+  jest.spyOn(wallet, 'getAddressIndex').mockResolvedValue(0);
+  jest.spyOn(wallet, 'getMeltAuthority').mockResolvedValue([
+    {
+      txId: '002abde4018935e1bbde9600ef79c637adf42385fb1816ec284d702b7bb9ef5f',
+      index: 0,
+      address: addresses[2],
+      authorities: TOKEN_MELT_MASK,
+    },
+  ]);
+
+  const result = await wallet.prepareMeltTokensData('02', 1000n, {
+    address: addresses[1],
+    createAnotherMint: true,
+    meltAuthorityAddress: addresses[2],
+    changeAddress: addresses[2],
+    pinCode: '123456',
+    signTx: false,
+  });
+
+  expect(result.inputs).toEqual([
+    expect.objectContaining({ data: expect.any(Object) }),
+    expect.objectContaining({ data: expect.any(Object) }),
+    expect.objectContaining({ data: expect.any(Object) }),
+  ]);
+
+  expect(result.outputs).toHaveLength(3);
+  const authorityOutputs = result.outputs.filter(o =>
+    transaction.isAuthorityOutput({ token_data: o.tokenData })
+  );
+  expect(authorityOutputs).toHaveLength(1);
+  expect(authorityOutputs[0].value).toEqual(TOKEN_MELT_MASK);
+
+  const p2pkhMelt = authorityOutputs[0].parseScript(network);
+  expect(p2pkhMelt.address.base58).toBe(addresses[2]);
+});
+
+test('prepareDelegateAuthorityData', async () => {
+  const addresses = [
+    'WdSD7aytFEZ5Hp8quhqu3wUCsyyGqcneMu',
+    'WbjNdAGBWAkCS2QVpqmacKXNy8WVXatXNM',
+    'WR1i8USJWQuaU423fwuFQbezfevmT4vFWX',
+  ];
+
+  mockAxiosAdapter.onPost('wallet/addresses/check_mine').reply(200, {
+    success: true,
+    addresses: {
+      WR1i8USJWQuaU423fwuFQbezfevmT4vFWX: true,
+    },
+  });
+
+  // Mock getAddressDetails for address index resolution
+  jest.spyOn(walletApi, 'getAddressDetails').mockResolvedValue({
+    data: {
+      index: 2,
+      address: addresses[2],
+    },
+  });
+
+  jest.spyOn(walletApi, 'getTxOutputs').mockResolvedValue({
+    txOutputs: [
+      {
+        txId: '002abde4018935e1bbde9600ef79c637adf42385fb1816ec284d702b7bb9ef5f',
+        index: 0,
+        tokenId: '01',
+        address: addresses[2],
+        value: 1n,
+        authorities: TOKEN_MINT_MASK,
+        timelock: null,
+        heightlock: null,
+        locked: false,
+        addressPath: "m/44'/280'/0'/0/2",
+      },
+    ],
+  });
+
+  const requestPassword = jest.fn();
+  const network = new Network('testnet');
+  const seed =
+    'purse orchard camera cloud piece joke hospital mechanic timber horror shoulder rebuild you decrease garlic derive rebuild random naive elbow depart okay parrot cliff';
+  const wallet = new HathorWalletServiceWallet({
+    requestPassword,
+    seed,
+    network,
+    passphrase: '',
+    xpriv: null,
+    xpub: null,
+  });
+
+  const code = new Mnemonic(seed);
+  const xpriv = code.toHDPrivateKey('', network.getNetwork());
+
+  wallet.setState('Ready');
+
+  const getUtxosMock = async () => ({
+    utxos: [
+      {
+        txId: '002abde4018935e1bbde9600ef79c637adf42385fb1816ec284d702b7bb9ef5f',
+        index: 0,
+        tokenId: '00',
+        address: addresses[0],
+        value: 1n,
+        authorities: 1n,
+        timelock: null,
+        heightlock: null,
+        locked: false,
+        addressPath,
+      },
+    ],
+    changeAmount: 4n,
+  });
+  const getInputDataMock = (xp: string, dtsh: Buffer) => Buffer.alloc(0);
+
+  const spy1 = jest.spyOn(wallet, 'getUtxosForAmount').mockImplementation(getUtxosMock);
+  const spy2 = jest
+    .spyOn(wallet.storage, 'getMainXPrivKey')
+    .mockReturnValue(Promise.resolve(xpriv.xprivkey));
+  const spy3 = jest.spyOn(wallet, 'getInputData').mockImplementation(getInputDataMock);
+
+  // createAnother option should create another authority utxo to the given address
+  const delegate1 = await wallet.prepareDelegateAuthorityData('00', 'mint', addresses[1], {
+    anotherAuthorityAddress: addresses[2],
+    createAnother: true,
+    pinCode: '123456',
+  });
+
+  expect(delegate1.outputs).toHaveLength(2);
+
+  // if we don't pass createAnother, we should not create another authority utxo
+  const delegate2 = await wallet.prepareDelegateAuthorityData('00', 'mint', addresses[1], {
+    anotherAuthorityAddress: addresses[2],
+    createAnother: false,
+    pinCode: '123456',
+  });
+
+  expect(delegate2.outputs).toHaveLength(1);
+
+  await expect(
+    wallet.prepareDelegateAuthorityData('00', 'mint', addresses[1], {
+      anotherAuthorityAddress: 'invalid-address',
+      createAnother: true,
+      pinCode: '123456',
+    })
+  ).rejects.toThrow('Address invalid-address is not valid.');
+
+  await expect(
+    wallet.prepareDelegateAuthorityData('00', 'mint', addresses[1], {
+      anotherAuthorityAddress: addresses[2],
+      createAnother: false,
+      pinCode: null,
+    })
+  ).rejects.toThrow('PIN not specified in prepareDelegateAuthorityData options');
+
+  // Clear mocks
+  spy1.mockRestore();
+  spy2.mockRestore();
+  spy3.mockRestore();
+});
+
+test('prepareDelegateAuthorityData should fail if type is invalid', async () => {
+  const requestPassword = jest.fn();
+  const network = new Network('testnet');
+  const seed =
+    'purse orchard camera cloud piece joke hospital mechanic timber horror shoulder rebuild you decrease garlic derive rebuild random naive elbow depart okay parrot cliff';
+  const wallet = new HathorWalletServiceWallet({
+    requestPassword,
+    seed,
+    network,
+    passphrase: '',
+    xpriv: null,
+    xpub: null,
+  });
+
+  wallet.setState('Ready');
+
+  // createAnother option should create another authority utxo to the given address
+  await expect(
+    wallet.prepareDelegateAuthorityData('00', 'explode', 'addr1', {
+      anotherAuthorityAddress: 'addr2',
+      createAnother: true,
+      pinCode: '123456',
+    })
+  ).rejects.toThrow('Type options are mint and melt for delegate authority method.');
+});
+
+test('delegateAuthority should throw if wallet is not ready', async () => {
+  const requestPassword = jest.fn();
+  const network = new Network('testnet');
+  const seed =
+    'purse orchard camera cloud piece joke hospital mechanic timber horror shoulder rebuild you decrease garlic derive rebuild random naive elbow depart okay parrot cliff';
+  const wallet = new HathorWalletServiceWallet({
+    requestPassword,
+    seed,
+    network,
+    passphrase: '',
+    xpriv: null,
+    xpub: null,
+  });
+
+  await expect(
+    wallet.delegateAuthority('00', 'mint', 'address1', {
+      createAnother: false,
+      anotherAuthorityAddress: null,
+      pinCode: '123456',
+    })
+  ).rejects.toThrow('Wallet not ready');
+});
+
+test('prepareDestroyAuthority', async () => {
+  const addresses = [
+    'WdSD7aytFEZ5Hp8quhqu3wUCsyyGqcneMu',
+    'WbjNdAGBWAkCS2QVpqmacKXNy8WVXatXNM',
+    'WR1i8USJWQuaU423fwuFQbezfevmT4vFWX',
+  ];
+
+  mockAxiosAdapter.onPost('wallet/addresses/check_mine').reply(200, {
+    success: true,
+    addresses: {
+      WR1i8USJWQuaU423fwuFQbezfevmT4vFWX: true,
+    },
+  });
+
+  // Mock getAddressDetails for address index resolution
+  jest.spyOn(walletApi, 'getAddressDetails').mockResolvedValue({
+    data: {
+      index: 2,
+      address: addresses[2],
+    },
+  });
+
+  jest.spyOn(walletApi, 'getTxOutputs').mockResolvedValue({
+    txOutputs: [
+      {
+        txId: '002abde4018935e1bbde9600ef79c637adf42385fb1816ec284d702b7bb9ef5f',
+        index: 0,
+        tokenId: '01',
+        address: addresses[2],
+        value: 1n,
+        authorities: TOKEN_MINT_MASK,
+        timelock: null,
+        heightlock: null,
+        locked: false,
+        addressPath: "m/44'/280'/0'/0/2",
+      },
+    ],
+  });
+
+  const requestPassword = jest.fn();
+  const network = new Network('testnet');
+  const seed =
+    'purse orchard camera cloud piece joke hospital mechanic timber horror shoulder rebuild you decrease garlic derive rebuild random naive elbow depart okay parrot cliff';
+  const wallet = new HathorWalletServiceWallet({
+    requestPassword,
+    seed,
+    network,
+    passphrase: '',
+    xpriv: null,
+    xpub: null,
+  });
+
+  const code = new Mnemonic(seed);
+  const xpriv = code.toHDPrivateKey('', network.getNetwork());
+
+  wallet.setState('Ready');
+
+  const getUtxosMock = async () => ({
+    utxos: [
+      {
+        txId: '002abde4018935e1bbde9600ef79c637adf42385fb1816ec284d702b7bb9ef5f',
+        index: 0,
+        tokenId: '002abde4018935e1bbde9600ef79c637adf42385fb1816ec284d702b7bb9ef5f',
+        address: addresses[0],
+        value: 1n,
+        authorities: 1n,
+        timelock: null,
+        heightlock: null,
+        locked: false,
+        addressPath,
+      },
+    ],
+    changeAmount: 4n,
+  });
+  const getInputDataMock = () => Buffer.from([]);
+
+  const spy1 = jest.spyOn(wallet, 'getUtxosForAmount').mockImplementation(getUtxosMock);
+  const spy2 = jest
+    .spyOn(wallet.storage, 'getMainXPrivKey')
+    .mockReturnValue(Promise.resolve(xpriv.xprivkey));
+  const spy3 = jest.spyOn(wallet, 'getInputData').mockImplementation(getInputDataMock);
+
+  // createAnother option should create another authority utxo to the given address
+  const delegate1 = await wallet.prepareDestroyAuthorityData('00', 'mint', 1, {
+    pinCode: '123456',
+  });
+
+  expect(delegate1.outputs).toHaveLength(0);
+  expect(delegate1.inputs).toHaveLength(1);
+  expect(delegate1.inputs[0].hash).toStrictEqual(
+    '002abde4018935e1bbde9600ef79c637adf42385fb1816ec284d702b7bb9ef5f'
+  );
+
+  // Clear mocks
+  spy1.mockRestore();
+  spy2.mockRestore();
+  spy3.mockRestore();
+});
+
+test('destroyAuthority should throw if wallet is not ready', async () => {
+  const requestPassword = jest.fn();
+  const network = new Network('testnet');
+  const seed =
+    'purse orchard camera cloud piece joke hospital mechanic timber horror shoulder rebuild you decrease garlic derive rebuild random naive elbow depart okay parrot cliff';
+  const wallet = new HathorWalletServiceWallet({
+    requestPassword,
+    seed,
+    network,
+    passphrase: '',
+    xpriv: null,
+    xpub: null,
+  });
+
+  await expect(
+    wallet.destroyAuthority('00', 'mint', 1, {
+      pinCode: '123456',
+    })
+  ).rejects.toThrow('Wallet not ready');
+});
+
+test('getFullTxById', async () => {
+  const requestPassword = jest.fn();
+  const network = new Network('testnet');
+  const seed = defaultWalletSeed;
+  const wallet = new HathorWalletServiceWallet({
+    requestPassword,
+    seed,
+    network,
+    passphrase: '',
+    xpriv: null,
+    xpub: null,
+  });
+
+  wallet.setState('Ready');
+
+  config.setWalletServiceBaseUrl('https://wallet-service.testnet.hathor.network/');
+
+  mockAxiosAdapter.onGet('wallet/proxy/transactions/tx1').reply(200, {
+    success: true,
+    tx: {
+      hash: 'tx1',
+      nonce: '0',
+      timestamp: 1234567890,
+      version: 1,
+      weight: 1,
+      parents: [],
+      inputs: [],
+      outputs: [],
+      tokens: [],
+      token_name: null,
+      token_symbol: null,
+      raw: '0x',
+    },
+    meta: {
+      hash: 'tx1',
+      received_by: [],
+      children: [],
+      conflict_with: [],
+      first_block: null,
+      height: 0,
+      voided_by: [],
+      spent_outputs: [],
+      received_timestamp: null,
+      is_voided: false,
+      verification_status: 'verified',
+      twins: [],
+      accumulated_weight: 0,
+      score: 0,
+    },
+  });
+
+  const proxiedTx = await wallet.getFullTxById('tx1');
+
+  expect(proxiedTx.tx.hash).toStrictEqual('tx1');
+
+  mockAxiosAdapter.onGet('wallet/proxy/transactions/tx2').reply(400, {});
+  await expect(wallet.getFullTxById('tx2')).rejects.toThrow(
+    'Error getting transaction by its id from the proxied fullnode.'
+  );
+
+  mockAxiosAdapter
+    .onGet('wallet/proxy/transactions/tx3')
+    .reply(200, { success: false, message: 'Transaction not found' });
+  await expect(wallet.getFullTxById('tx3')).rejects.toThrow(TxNotFoundError);
+});
+
+test('getTxConfirmationData', async () => {
+  const requestPassword = jest.fn();
+  const network = new Network('testnet');
+  const seed = defaultWalletSeed;
+  const wallet = new HathorWalletServiceWallet({
+    requestPassword,
+    seed,
+    network,
+    passphrase: '',
+    xpriv: null,
+    xpub: null,
+  });
+
+  wallet.setState('Ready');
+
+  config.setWalletServiceBaseUrl('https://wallet-service.testnet.hathor.network/');
+
+  const mockData = {
+    success: true,
+    accumulated_weight: 67.45956109191802,
+    accumulated_bigger: true,
+    stop_value: 67.45416781056525,
+    confirmation_level: 1,
+  };
+
+  mockAxiosAdapter.onGet('wallet/proxy/transactions/tx1/confirmation_data').reply(200, mockData);
+
+  const proxiedConfirmationData = await wallet.getTxConfirmationData('tx1');
+
+  expect(proxiedConfirmationData).toStrictEqual(mockData);
+
+  mockAxiosAdapter.onGet('wallet/proxy/transactions/tx1/confirmation_data').reply(400, '');
+  await expect(wallet.getTxConfirmationData('tx1')).rejects.toThrow(
+    'Error getting transaction confirmation data by its id from the proxied fullnode.'
+  );
+
+  mockAxiosAdapter
+    .onGet('wallet/proxy/transactions/tx2/confirmation_data')
+    .reply(200, { success: false, message: 'Transaction not found' });
+  await expect(wallet.getTxConfirmationData('tx2')).rejects.toThrow(TxNotFoundError);
+});
+
+test('graphvizNeighborsQuery', async () => {
+  const requestPassword = jest.fn();
+  const network = new Network('testnet');
+  const seed = defaultWalletSeed;
+  const wallet = new HathorWalletServiceWallet({
+    requestPassword,
+    seed,
+    network,
+    passphrase: '',
+    xpriv: null,
+    xpub: null,
+  });
+
+  wallet.setState('Ready');
+
+  config.setWalletServiceBaseUrl('https://wallet-service.testnet.hathor.network/');
+
+  const mockData = 'digraph {}';
+
+  mockAxiosAdapter
+    .onGet('wallet/proxy/graphviz/neighbours?txId=tx1&graphType=test&maxLevel=1')
+    .reply(200, mockData);
+
+  const proxiedGraphvizResponse = await wallet.graphvizNeighborsQuery('tx1', 'test', 1);
+
+  expect(proxiedGraphvizResponse).toStrictEqual(mockData);
+
+  mockAxiosAdapter
+    .onGet('wallet/proxy/graphviz/neighbours?txId=tx1&graphType=test&maxLevel=1')
+    .reply(500, '');
+  // Axios will throw on 500 status code
+  await expect(wallet.graphvizNeighborsQuery('tx1', 'test', 1)).rejects.toThrow(
+    'Request failed with status code 500'
+  );
+
+  mockAxiosAdapter
+    .onGet('wallet/proxy/graphviz/neighbours?txId=tx2&graphType=test&maxLevel=1')
+    .reply(200, { success: false, message: 'Transaction not found' });
+  await expect(wallet.graphvizNeighborsQuery('tx2', 'test', 1)).rejects.toThrow(TxNotFoundError);
+});
+
+test('instantiate a new wallet without web socket initialization', async () => {
+  /**
+   * New wallet without web socket initialization
+   */
+  const requestPassword = jest.fn();
+  const network = new Network('testnet');
+  const seed =
+    'purse orchard camera cloud piece joke hospital mechanic timber horror shoulder rebuild you decrease garlic derive rebuild random naive elbow depart okay parrot cliff';
+  const wallet = new HathorWalletServiceWallet({
+    requestPassword,
+    seed,
+    network,
+    passphrase: '',
+    xpriv: null,
+    xpub: null,
+    enableWs: false,
+  });
+  expect(wallet.isWsEnabled()).toBe(false);
+  expect(wallet.isReady()).toBe(false);
+
+  /**
+   * Wallet change its state to ready
+   */
+  // @ts-expect-error -- getNewAddress is a private method, so invisible for this typing
+  const spyOnGetNewAddress = jest.spyOn(wallet, 'getNewAddresses').mockImplementation(() => {
+    return Promise.resolve();
+  });
+  const spyOnSetupConnection = jest.spyOn(wallet, 'setupConnection');
+
+  // get original method implementation for the private method onWalletReady
+  wallet.walletId = 'wallet-id';
+  const onWalletReadyImplementation = jest
+    // @ts-expect-error -- onWalletReady is a private method that's invisible to the wallet type
+    .spyOn(wallet, 'onWalletReady')
+    .getMockImplementation();
+  // call method binding to the wallet instance
+  await onWalletReadyImplementation?.call(wallet);
+
+  expect(spyOnGetNewAddress).toHaveBeenCalledTimes(1);
+  expect(spyOnSetupConnection).toHaveBeenCalledTimes(0);
+  expect(wallet.isReady()).toBeTruthy();
+});
+
+test('sendTransaction', async () => {
+  // Initialize wallet
+  const wallet = buildWalletToAuthenticateApiCall();
+  jest.spyOn(wallet, 'isReady').mockReturnValue(true);
+
+  // Mock the storage isReadonly method to prevent UninitializedWalletError
+  wallet.storage = {
+    isReadonly: jest.fn().mockResolvedValue(false),
+    hasTxSignatureMethod: jest.fn().mockReturnValue(false),
+    getMainXPrivKey: jest.fn().mockResolvedValue('mock-xpriv-key'),
+  } as Partial<typeof wallet.storage>;
+
+  // Mock wallet methods needed by signTx
+  wallet.getInputData = jest.fn().mockReturnValue(Buffer.from('mock-input-data'));
+
+  // Send transaction
+  await wallet.sendTransaction('WYLW8ujPemSuLJwbeNvvH6y7nakaJ6cEwT', 10, { pinCode: '1234' });
+
+  // Assertions
+  expect(SendTransactionWalletService).toHaveBeenCalledWith(expect.any(HathorWalletServiceWallet), {
+    changeAddress: undefined,
+    inputs: [],
+    outputs: [
+      { address: 'WYLW8ujPemSuLJwbeNvvH6y7nakaJ6cEwT', token: '00', type: 'p2pkh', value: 10 },
+    ],
+    pin: '1234',
+  });
+
+  // Verify that getMainXPrivKey was called with the pin (this covers line 532)
+  expect(wallet.storage.getMainXPrivKey).toHaveBeenCalledWith('1234');
+});
+
+test('createTokens', async () => {
+  const addresses = [
+    'WdSD7aytFEZ5Hp8quhqu3wUCsyyGqcneMu',
+    'WbjNdAGBWAkCS2QVpqmacKXNy8WVXatXNM',
+    'WR1i8USJWQuaU423fwuFQbezfevmT4vFWX',
+  ];
+
+  mockAxiosAdapter.onPost('wallet/addresses/check_mine').reply(200, {
+    success: true,
+    addresses: {
+      WR1i8USJWQuaU423fwuFQbezfevmT4vFWX: true,
+    },
+  });
+
+  const requestPassword = jest.fn();
+  const network = new Network('testnet');
+  const seed =
+    'purse orchard camera cloud piece joke hospital mechanic timber horror shoulder rebuild you decrease garlic derive rebuild random naive elbow depart okay parrot cliff';
+  const wallet = new HathorWalletServiceWallet({
+    requestPassword,
+    seed,
+    network,
+    passphrase: '',
+    xpriv: null,
+    xpub: null,
+  });
+
+  const code = new Mnemonic(seed);
+  const xpriv = code.toHDPrivateKey('', network.getNetwork());
+
+  wallet.setState('Ready');
+
+  const getUtxosMock = async () => {
+    return {
+      utxos: [
+        {
+          txId: '002abde4018935e1bbde9600ef79c637adf42385fb1816ec284d702b7bb9ef5d',
+          index: 0,
+          tokenId: '00',
+          address: addresses[0],
+          value: 1n,
+          authorities: 0n,
+          timelock: null,
+          heightlock: null,
+          locked: false,
+          addressPath,
+        },
+      ],
+      changeAmount: 0n,
+    };
+  };
+  const getInputDataMock = (xp: string, dtsh: Buffer) => Buffer.alloc(0);
+
+  const getCurrentAddressDataMock = () => {
+    return {
+      address: addresses[0],
+    };
+  };
+
+  const spy1 = jest.spyOn(wallet, 'getUtxosForAmount').mockImplementation(getUtxosMock);
+  const spy2 = jest
+    .spyOn(wallet.storage, 'getMainXPrivKey')
+    .mockReturnValue(Promise.resolve(xpriv.xprivkey));
+  const spy3 = jest.spyOn(wallet, 'getInputData').mockImplementation(getInputDataMock);
+  const spy4 = jest
+    .spyOn(wallet, 'getCurrentAddress')
+    .mockImplementation(getCurrentAddressDataMock);
+
+  // error because of wrong authority output address
+  await expect(
+    wallet.prepareCreateNewToken('Test Token', 'TST', 100n, {
+      address: addresses[1],
+      createMint: true,
+      mintAuthorityAddress: 'abc',
+      pinCode: '123456',
+    })
+  ).rejects.toThrow(SendTxError);
+
+  // error because of wrong authority output address
+  await expect(
+    wallet.prepareCreateNewToken('Test Token', 'TST', 100n, {
+      address: addresses[1],
+      createMelt: true,
+      meltAuthorityAddress: 'abc',
+      pinCode: '123456',
+    })
+  ).rejects.toThrow(SendTxError);
+
+  // error because of invalid external authority output address
+  await expect(
+    wallet.prepareCreateNewToken('Test Token', 'TST', 100n, {
+      address: addresses[1],
+      createMint: true,
+      mintAuthorityAddress: 'abc',
+      allowExternalMintAuthorityAddress: true,
+      pinCode: '123456',
+    })
+  ).rejects.toThrow(SendTxError);
+
+  // error because of invalid external authority output address
+  await expect(
+    wallet.prepareCreateNewToken('Test Token', 'TST', 100n, {
+      address: addresses[1],
+      createMelt: true,
+      meltAuthorityAddress: 'abc',
+      allowExternalMeltAuthorityAddress: true,
+      pinCode: '123456',
+    })
+  ).rejects.toThrow(SendTxError);
+
+  // create token without sign the transaction
+  const tokenDataNotSigned = await wallet.prepareCreateNewToken('Test Token', 'TST', 100n, {
+    address: addresses[1],
+    mintAuthorityAddress: addresses[2],
+    pinCode: '123456',
+    signTx: false,
+  });
+  expect(tokenDataNotSigned.inputs).toEqual([
+    expect.objectContaining({
+      data: null,
+    }),
+  ]);
+
+  // create token with correct address for authority output
+  const tokenData = await wallet.prepareCreateNewToken('Test Token', 'TST', 100n, {
+    address: addresses[1],
+    createMint: true,
+    mintAuthorityAddress: addresses[2],
+    pinCode: '123456',
+  });
+
+  expect(tokenData.inputs).toEqual([
+    expect.objectContaining({
+      data: expect.any(Object),
+    }),
+  ]);
+  expect(tokenData.outputs).toHaveLength(3);
+
+  const authorityOutputs = tokenData.outputs.filter(o =>
+    transaction.isAuthorityOutput({ token_data: o.tokenData })
+  );
+
+  const mintAuthority = authorityOutputs.filter(o => o.value === TOKEN_MINT_MASK);
+
+  expect(authorityOutputs).toHaveLength(2);
+  expect(mintAuthority[0].value).toEqual(TOKEN_MINT_MASK);
+  const p2pkh = mintAuthority[0].parseScript(network);
+  // Validate that the authority output was sent to the correct address
+  expect(p2pkh.address.base58).toEqual(addresses[2]);
+
+  // create token with correct address for authority output
+  const tokenData2 = await wallet.prepareCreateNewToken('Test Token', 'TST', 100n, {
+    address: addresses[1],
+    createMint: false,
+    createMelt: true,
+    meltAuthorityAddress: addresses[2],
+    pinCode: '123456',
+  });
+
+  expect(tokenData2.outputs).toHaveLength(2);
+
+  const authorityOutputs2 = tokenData2.outputs.filter(o =>
+    transaction.isAuthorityOutput({ token_data: o.tokenData })
+  );
+
+  expect(authorityOutputs2).toHaveLength(1);
+  const authorityOutput = authorityOutputs2[0];
+  expect(authorityOutput.value).toEqual(TOKEN_MELT_MASK);
+  const p2pkh2 = authorityOutput.parseScript(network);
+  // Validate that the authority output was sent to the correct address
+  expect(p2pkh2.address.base58).toEqual(addresses[2]);
+
+  // Clear mocks
+  spy1.mockRestore();
+  spy2.mockRestore();
+  spy3.mockRestore();
+  spy4.mockRestore();
+});
+
+test('prepareCreateNewToken - fee token with mint authority and change outputs', async () => {
+  const addresses = [
+    'WdSD7aytFEZ5Hp8quhqu3wUCsyyGqcneMu',
+    'WbjNdAGBWAkCS2QVpqmacKXNy8WVXatXNM',
+    'WR1i8USJWQuaU423fwuFQbezfevmT4vFWX',
+  ];
+
+  const requestPassword = jest.fn();
+  const network = new Network('testnet');
+  const seed =
+    'purse orchard camera cloud piece joke hospital mechanic timber horror shoulder rebuild you decrease garlic derive rebuild random naive elbow depart okay parrot cliff';
+  const wallet = new HathorWalletServiceWallet({
+    requestPassword,
+    seed,
+    network,
+    passphrase: '',
+    xpriv: null,
+    xpub: null,
+  });
+  wallet.setState('Ready');
+
+  const _spyGetUtxos = jest.spyOn(wallet, 'getUtxos').mockImplementation(async () => ({
+    utxos: [
+      {
+        txId: '002abde4018935e1bbde9600ef79c637adf42385fb1816ec284d702b7bb9ef5d',
+        index: 0,
+        tokenId: '00',
+        address: addresses[0],
+        value: 10n,
+        authorities: 0n,
+        timelock: null,
+        heightlock: null,
+        locked: false,
+        addressPath: "m/280'/280'/0/1/0",
+      },
+    ],
+    changeAmount: 9n,
+  }));
+
+  const _spyGetUtxosForAmount = jest
+    .spyOn(wallet, 'getUtxosForAmount')
+    .mockImplementation(async amount => ({
+      utxos: [
+        {
+          txId: '002abde4018935e1bbde9600ef79c637adf42385fb1816ec284d702b7bb9ef5d',
+          index: 0,
+          tokenId: '00',
+          address: addresses[0],
+          value: 10n,
+          authorities: 0n,
+          timelock: null,
+          heightlock: null,
+          locked: false,
+          addressPath: "m/280'/280'/0/1/0",
+        },
+      ],
+      changeAmount: 9n,
+    }));
+
+  const code = new Mnemonic(
+    'purse orchard camera cloud piece joke hospital mechanic timber horror shoulder rebuild you decrease garlic derive rebuild random naive elbow depart okay parrot cliff'
+  );
+  const xpriv = code.toHDPrivateKey('', network.getNetwork());
+
+  jest.spyOn(wallet.storage, 'getMainXPrivKey').mockReturnValue(Promise.resolve(xpriv.xprivkey));
+  jest.spyOn(wallet, 'getInputData').mockImplementation(() => Buffer.alloc(0));
+  jest.spyOn(wallet, 'getCurrentAddress').mockImplementation(() => ({
+    address: addresses[0],
+    index: 0,
+    addressPath: "m/280'/280'/0/1/0",
+  }));
+
+  const result = await wallet.prepareCreateNewToken('Test Token', 'TSTF', 1000n, {
+    address: addresses[1],
+    createMintAuthority: true,
+    mintAuthorityAddress: addresses[2],
+    pinCode: '123456',
+    tokenVersion: TokenVersion.FEE,
+  });
+
+  expect(result.inputs).toEqual([expect.objectContaining({ data: expect.any(Object) })]);
+  expect(result.outputs).toHaveLength(4);
+
+  const authorityOutputs = result.outputs.filter(o =>
+    transaction.isAuthorityOutput({ token_data: o.tokenData })
+  );
+  expect(authorityOutputs).toHaveLength(2);
+
+  const mintAuth = authorityOutputs.find(o => o.value === TOKEN_MINT_MASK);
+  expect(mintAuth).toBeDefined();
+  const p2pkh = mintAuth?.parseScript(network);
+  expect(p2pkh?.address?.base58).toBe(addresses[2]);
+
+  _spyGetUtxos.mockRestore();
+  _spyGetUtxosForAmount.mockRestore();
+});
+
+test('prepareCreateNewToken - fee token without enough HTR for fee', async () => {
+  const addresses = [
+    'WdSD7aytFEZ5Hp8quhqu3wUCsyyGqcneMu',
+    'WbjNdAGBWAkCS2QVpqmacKXNy8WVXatXNM',
+    'WR1i8USJWQuaU423fwuFQbezfevmT4vFWX',
+  ];
+
+  const requestPassword = jest.fn();
+  const network = new Network('testnet');
+  const seed =
+    'purse orchard camera cloud piece joke hospital mechanic timber horror shoulder rebuild you decrease garlic derive rebuild random naive elbow depart okay parrot cliff';
+  const wallet = new HathorWalletServiceWallet({
+    requestPassword,
+    seed,
+    network,
+    passphrase: '',
+    xpriv: null,
+    xpub: null,
+  });
+  wallet.setState('Ready');
+
+  jest.spyOn(wallet, 'getCurrentAddress').mockImplementation(() => ({
+    address: addresses[0],
+    index: 0,
+    addressPath: "m/280'/280'/0/1/0",
+  }));
+
+  const _spyGetUtxos = jest.spyOn(wallet, 'getUtxos').mockImplementation(async () => ({
+    utxos: [],
+    changeAmount: 0n,
+  }));
+
+  const _spyGetUtxosForAmount = jest
+    .spyOn(wallet, 'getUtxosForAmount')
+    .mockImplementation(async () => ({
+      utxos: [],
+      changeAmount: 0n,
+    }));
+
+  jest.spyOn(Fee, 'calculateTokenCreationTxFee').mockReturnValue(1000n);
+
+  await expect(
+    wallet.prepareCreateNewToken('Test Token', 'TSTF', 1000n, {
+      address: addresses[1],
+      createMintAuthority: true,
+      mintAuthorityAddress: addresses[2],
+      pinCode: '123456',
+      tokenVersion: TokenVersion.FEE,
+    })
+  ).rejects.toThrow('No utxos available to fill the request. Token: HTR - Amount: 1000.');
+
+  _spyGetUtxos.mockRestore();
+  _spyGetUtxosForAmount.mockRestore();
+});
+
+test('createNFTs', async () => {
+  const addresses = [
+    'WdSD7aytFEZ5Hp8quhqu3wUCsyyGqcneMu',
+    'WbjNdAGBWAkCS2QVpqmacKXNy8WVXatXNM',
+    'WR1i8USJWQuaU423fwuFQbezfevmT4vFWX',
+  ];
+
+  mockAxiosAdapter.onPost('wallet/addresses/check_mine').reply(200, {
+    success: true,
+    addresses: {
+      WR1i8USJWQuaU423fwuFQbezfevmT4vFWX: true,
+    },
+  });
+
+  const requestPassword = jest.fn();
+  const network = new Network('testnet');
+  const seed =
+    'purse orchard camera cloud piece joke hospital mechanic timber horror shoulder rebuild you decrease garlic derive rebuild random naive elbow depart okay parrot cliff';
+  const wallet = new HathorWalletServiceWallet({
+    requestPassword,
+    seed,
+    network,
+    passphrase: '',
+    xpriv: null,
+    xpub: null,
+  });
+
+  const code = new Mnemonic(seed);
+  const xpriv = code.toHDPrivateKey('', network.getNetwork());
+
+  wallet.setState('Ready');
+
+  const getUtxosMock = async () => {
+    return {
+      utxos: [
+        {
+          txId: '002abde4018935e1bbde9600ef79c637adf42385fb1816ec284d702b7bb9ef5d',
+          index: 0,
+          tokenId: '00',
+          address: addresses[0],
+          value: 1n,
+          authorities: 0n,
+          timelock: null,
+          heightlock: null,
+          locked: false,
+          addressPath,
+        },
+      ],
+      changeAmount: 0n,
+    };
+  };
+  const getInputDataMock = (xp: string, dtsh: Buffer) => Buffer.alloc(0);
+
+  const getCurrentAddressDataMock = async () => ({
+    address: addresses[0],
+  });
+
+  const spy1 = jest.spyOn(wallet, 'getUtxosForAmount').mockImplementation(getUtxosMock);
+  const spy2 = jest
+    .spyOn(wallet.storage, 'getMainXPrivKey')
+    .mockReturnValue(Promise.resolve(xpriv.xprivkey));
+  const spy3 = jest.spyOn(wallet, 'getInputData').mockImplementation(getInputDataMock);
+  const spy4 = jest
+    .spyOn(wallet, 'getCurrentAddress')
+    .mockImplementation(getCurrentAddressDataMock);
+
+  // error because of wrong authority output address
+  await expect(
+    wallet.prepareCreateNewToken('Test Token', 'TST', 100n, {
+      address: addresses[1],
+      createMint: true,
+      mintAuthorityAddress: 'abc',
+      pinCode: '123456',
+      data: ['data'],
+      isCreateNFT: true,
+    })
+  ).rejects.toThrow(SendTxError);
+
+  // error because of wrong authority output address
+  await expect(
+    wallet.prepareCreateNewToken('Test Token', 'TST', 100n, {
+      address: addresses[1],
+      createMint: true,
+      mintAuthorityAddress: 'abc',
+      pinCode: '123456',
+      data: ['data'],
+      isCreateNFT: true,
+    })
+  ).rejects.toThrow(SendTxError);
+
+  // create token with correct address for authority output
+  const tokenData = await wallet.prepareCreateNewToken('Test Token', 'TST', 100n, {
+    address: addresses[1],
+    createMint: true,
+    mintAuthorityAddress: addresses[2],
+    createMelt: false,
+    pinCode: '123456',
+    data: ['data'],
+    isCreateNFT: true,
+  });
+
+  // Token minted, mint authority, and data output
+  expect(tokenData.outputs).toHaveLength(3);
+
+  const authorityOutputs = tokenData.outputs.filter(o =>
+    transaction.isAuthorityOutput({ token_data: o.tokenData })
+  );
+
+  const authorityOutput = authorityOutputs[0];
+
+  expect(authorityOutputs).toHaveLength(1);
+  expect(authorityOutput.value).toEqual(TOKEN_MINT_MASK);
+  const p2pkh = authorityOutput.parseScript(network);
+  // Validate that the authority output was sent to the correct address
+  expect(p2pkh.address.base58).toEqual(addresses[2]);
+
+  // create token with correct address for authority output
+  const tokenData2 = await wallet.prepareCreateNewToken('Test Token', 'TST', 100n, {
+    address: addresses[1],
+    createMint: false,
+    createMelt: true,
+    meltAuthorityAddress: addresses[2],
+    pinCode: '123456',
+    data: ['data'],
+    isCreateNFT: true,
+  });
+
+  // Token minted, melt authority, and data output
+  expect(tokenData2.outputs).toHaveLength(3);
+
+  const authorityOutputs2 = tokenData2.outputs.filter(o =>
+    transaction.isAuthorityOutput({ token_data: o.tokenData })
+  );
+
+  expect(authorityOutputs2).toHaveLength(1);
+  const authorityOutput2 = authorityOutputs2[0];
+  expect(authorityOutput2.value).toEqual(TOKEN_MELT_MASK);
+  const p2pkh2 = authorityOutput2.parseScript(network);
+  // Validate that the authority output was sent to the correct address
+  expect(p2pkh2.address.base58).toEqual(addresses[2]);
+
+  // Clear mocks
+  spy1.mockRestore();
+  spy2.mockRestore();
+  spy3.mockRestore();
+  spy4.mockRestore();
+});
+
+test('start', async () => {
+  const requestPassword = jest.fn();
+  const network = new Network('testnet');
+  const seed = defaultWalletSeed;
+  let store = new MemoryStore();
+  let storage = new Storage(store);
+  const accessData = walletUtils.generateAccessDataFromSeed(seed, {
+    networkName: 'testnet',
+    password: '1234',
+    pin: '1234',
+  });
+
+  jest
+    .spyOn(HathorWalletServiceWallet.prototype, 'pollForWalletStatus')
+    .mockImplementation(() => Promise.resolve());
+  jest.spyOn(HathorWalletServiceWallet.prototype, 'setupConnection').mockImplementation(jest.fn());
+  jest
+    .spyOn(HathorWalletServiceWallet.prototype, 'renewAuthToken')
+    .mockImplementation(async function mockRenew(this: HathorWalletServiceWallet) {
+      this.authToken = 'mocked-token';
+    });
+  jest
+    .spyOn(walletApi, 'getNewAddresses')
+    .mockImplementation(() => Promise.resolve({ success: true, addresses: [] }));
+  jest.spyOn(walletApi, 'createWallet').mockImplementation(() =>
+    Promise.resolve({
+      success: true,
+      status: {
+        walletId: 'id',
+        xpubkey: 'xpub',
+        status: 'creating',
+        maxGap: 20,
+        createdAt: 0,
+        readyAt: 0,
+      },
+    })
+  );
+
+  let wallet = new HathorWalletServiceWallet({
+    requestPassword,
+    seed,
+    network,
+    storage,
+  });
+  await wallet.start({ pinCode: '1234', password: '1234' });
+  // it should generate the same accessData
+  // we test with the xpubkey since the encrypted keys use different salts so they will not match
+  await expect(wallet.storage.getAccessData()).resolves.toMatchObject({
+    xpubkey: accessData.xpubkey,
+  });
+  await wallet.stop();
+
+  await storage.cleanStorage(true, true, true);
+  await storage.saveAccessData(accessData);
+  wallet = new HathorWalletServiceWallet({
+    requestPassword,
+    seed,
+    network,
+    passphrase: '',
+    storage,
+  });
+  await wallet.start({ pinCode: '1234', password: '1234' });
+  // If the accessData was generated the words would not match
+  // This is because it would be encrypted with a different salt
+  await expect(wallet.storage.getAccessData()).resolves.toMatchObject({
+    words: accessData.words,
+  });
+  await wallet.stop();
+
+  // Starting with xpriv
+  await storage.cleanStorage(true, true, true);
+  const code = new Mnemonic(seed);
+  const xpriv = code.toHDPrivateKey('', new Network('testnet'));
+  const authxpriv = xpriv.deriveChild(WALLET_SERVICE_AUTH_DERIVATION_PATH).xprivkey;
+  const acctKey = decryptData(accessData.acctPathKey!, '1234');
+  store = new MemoryStore();
+  storage = new Storage(store);
+  wallet = new HathorWalletServiceWallet({
+    requestPassword,
+    xpriv: acctKey,
+    authxpriv,
+    network,
+    passphrase: '',
+    storage,
+  });
+  await wallet.start({ pinCode: '1234', password: '1234' });
+  await expect(wallet.storage.getAccessData()).resolves.toMatchObject({
+    xpubkey: accessData.xpubkey,
+    authKey: expect.anything(),
+  });
+  await wallet.stop();
+
+  // Check we throw an error when giving an invalid authxpriv
+  expect(() => {
+    return new HathorWalletServiceWallet({
+      requestPassword,
+      xpriv: acctKey,
+      authxpriv: 'invalid-xprivkey',
+      network,
+      passphrase: '',
+      storage,
+    });
+  }).toThrow('authxpriv parameter is an invalid hd privatekey');
+
+  expect(wallet.getServerUrl()).toBe(config.getServerUrl());
+});
+
+test('getAddressPrivKey', async () => {
+  const requestPassword = jest.fn();
+  const network = new Network('testnet');
+  const seed = defaultWalletSeed;
+  const store = new MemoryStore();
+  const storage = new Storage(store);
+
+  jest
+    .spyOn(HathorWalletServiceWallet.prototype, 'pollForWalletStatus')
+    .mockImplementation(() => Promise.resolve());
+  jest.spyOn(HathorWalletServiceWallet.prototype, 'setupConnection').mockImplementation(jest.fn());
+  jest
+    .spyOn(HathorWalletServiceWallet.prototype, 'renewAuthToken')
+    .mockImplementation(async function mockRenew(this: HathorWalletServiceWallet) {
+      this.authToken = 'mocked-token';
+    });
+  jest
+    .spyOn(walletApi, 'getNewAddresses')
+    .mockImplementation(() => Promise.resolve({ success: true, addresses: [] }));
+  jest.spyOn(walletApi, 'createWallet').mockImplementation(() =>
+    Promise.resolve({
+      success: true,
+      status: {
+        walletId: 'id',
+        xpubkey: 'xpub',
+        status: 'creating',
+        maxGap: 20,
+        createdAt: 0,
+        readyAt: 0,
+      },
+    })
+  );
+
+  const wallet = new HathorWalletServiceWallet({
+    requestPassword,
+    seed,
+    network,
+    storage,
+  });
+  await wallet.start({ pinCode: '1234', password: '1234' });
+
+  expect(
+    [
+      await wallet.getAddressPrivKey('1234', 1),
+      await wallet.getAddressPrivKey('1234', 2),
+      await wallet.getAddressPrivKey('1234', 3),
+      await wallet.getAddressPrivKey('1234', 4),
+      // We need to pass the network because bitcore-lib forces bitcoin network
+    ].map(hdPrivKey => hdPrivKey.privateKey.toAddress(network.getNetwork()).toString())
+  ).toStrictEqual([
+    'WgSpcCwYAbtt31S2cqU7hHJkUHdac2EPWG',
+    'WPfG7P4YQDJ4MpwTS6qrfGW4fvYvAhPpV7',
+    'WUgjC47cFz5z9Uag92MKdnL8XgHdCfscNx',
+    'WPRp9yj7Tjj9praWMy1whXuUc5zi1TdQtm',
+  ]);
+});
+
+test('signMessageWithAddress', async () => {
+  const requestPassword = jest.fn();
+  const network = new Network('testnet');
+  const seed = defaultWalletSeed;
+  const store = new MemoryStore();
+  const storage = new Storage(store);
+
+  jest
+    .spyOn(HathorWalletServiceWallet.prototype, 'pollForWalletStatus')
+    .mockImplementation(() => Promise.resolve());
+  jest.spyOn(HathorWalletServiceWallet.prototype, 'setupConnection').mockImplementation(jest.fn());
+  jest
+    .spyOn(HathorWalletServiceWallet.prototype, 'renewAuthToken')
+    .mockImplementation(async function mockRenew(this: HathorWalletServiceWallet) {
+      this.authToken = 'mocked-token';
+    });
+  jest
+    .spyOn(walletApi, 'getNewAddresses')
+    .mockImplementation(() => Promise.resolve({ success: true, addresses: [] }));
+  jest.spyOn(walletApi, 'createWallet').mockImplementation(() =>
+    Promise.resolve({
+      success: true,
+      status: {
+        walletId: 'id',
+        xpubkey: 'xpub',
+        status: 'creating',
+        maxGap: 20,
+        createdAt: 0,
+        readyAt: 0,
+      },
+    })
+  );
+
+  const wallet = new HathorWalletServiceWallet({
+    requestPassword,
+    seed,
+    network,
+    storage,
+  });
+
+  await wallet.start({ pinCode: '1234', password: '1234' });
+
+  const message = 'sign-me-please';
+  const addressIndex = 2;
+  const address = 'WPfG7P4YQDJ4MpwTS6qrfGW4fvYvAhPpV7';
+  const signedMessage = await wallet.signMessageWithAddress(message, addressIndex, '1234');
+
+  expect(verifyMessage(message, signedMessage, address)).toBeTruthy();
+});
+
+describe('getUtxos', () => {
+  let wallet: HathorWalletServiceWallet;
+  const seed = defaultWalletSeed;
+
+  beforeEach(() => {
+    wallet = new HathorWalletServiceWallet({
+      requestPassword: async () => 'test-pin',
+      seed,
+      network: new Network('testnet'),
+    });
+
+    // Mock wallet methods
+    wallet.failIfWalletNotReady = jest.fn();
+
+    jest.clearAllMocks();
+  });
+
+  it('should return UTXOs when token parameter is provided', async () => {
+    const mockUtxos = [
+      {
+        txId: 'tx1',
+        index: 0,
+        value: 100n,
+        address: 'WP1rVhxzT3YTWg8VbBKkacLqLU2LrouWDx',
+        token: '00', // NATIVE_TOKEN_UID
+        authorities: 0,
+        addressPath: "m/44'/280'/0'/0/0",
+      },
+    ];
+
+    jest.spyOn(walletApi, 'getTxOutputs').mockResolvedValue({
+      txOutputs: mockUtxos,
+    });
+
+    const result = await wallet.getUtxos({
+      token: '00',
+      max_utxos: 10,
+    });
+
+    expect(result).toEqual({
+      total_amount_available: 100n,
+      total_utxos_available: 1n,
+      total_amount_locked: 0n,
+      total_utxos_locked: 0n,
+      utxos: [
+        {
+          address: 'WP1rVhxzT3YTWg8VbBKkacLqLU2LrouWDx',
+          amount: 100n,
+          tx_id: 'tx1',
+          locked: false,
+          index: 0,
+        },
+      ],
+    });
+    expect(walletApi.getTxOutputs).toHaveBeenCalledWith(wallet, {
+      tokenId: '00',
+      authority: undefined,
+      addresses: undefined,
+      totalAmount: undefined,
+      smallerThan: undefined,
+      biggerThan: undefined,
+      maxOutputs: 10,
+      ignoreLocked: true,
+      skipSpent: true,
+      kind: 'transparent',
+    });
+  });
+
+  it('should handle custom token requests', async () => {
+    const customTokenId =
+      '01a7a04b2c3b7b1b9b8a8e8f8e8f8e8f8e8f8e8f8e8f8e8f8e8f8e8f8e8f8e8f8e8f8e8f';
+    const mockUtxos = [
+      {
+        txId: 'tx1',
+        index: 0,
+        value: 50n,
+        address: 'WP1rVhxzT3YTWg8VbBKkacLqLU2LrouWDx',
+        token: customTokenId,
+        authorities: 0,
+        addressPath: "m/44'/280'/0'/0/0",
+      },
+    ];
+
+    jest.spyOn(walletApi, 'getTxOutputs').mockResolvedValue({
+      txOutputs: mockUtxos,
+    });
+
+    const result = await wallet.getUtxos({
+      token: customTokenId,
+      max_utxos: 1,
+    });
+
+    expect(result).toEqual({
+      total_amount_available: 50n,
+      total_utxos_available: 1n,
+      total_amount_locked: 0n,
+      total_utxos_locked: 0n,
+      utxos: [
+        {
+          address: 'WP1rVhxzT3YTWg8VbBKkacLqLU2LrouWDx',
+          amount: 50n,
+          tx_id: 'tx1',
+          locked: false,
+          index: 0,
+        },
+      ],
+    });
+    expect(walletApi.getTxOutputs).toHaveBeenCalledWith(wallet, {
+      tokenId: customTokenId,
+      authority: undefined,
+      addresses: undefined,
+      totalAmount: undefined,
+      smallerThan: undefined,
+      biggerThan: undefined,
+      maxOutputs: 1,
+      ignoreLocked: true,
+      skipSpent: true,
+      kind: 'transparent',
+    });
+  });
+
+  it('should apply amount filters using api filtering', async () => {
+    const mockUtxosSmallerThan200 = [
+      {
+        txId: 'tx1',
+        index: 0,
+        value: 50n,
+        address: 'WP1rVhxzT3YTWg8VbBKkacLqLU2LrouWDx',
+        token: '00',
+        authorities: 0,
+        addressPath: "m/44'/280'/0'/0/0",
+      },
+      {
+        txId: 'tx2',
+        index: 1,
+        value: 150n,
+        address: 'WPynsVhyU6nP7RSZAkqfijEutC88KgAyFc',
+        token: '00',
+        authorities: 0,
+        addressPath: "m/44'/280'/0'/0/1",
+      },
+    ];
+
+    const mockUtxosBiggerThan100 = [
+      {
+        txId: 'tx2',
+        index: 1,
+        value: 150n,
+        address: 'WPynsVhyU6nP7RSZAkqfijEutC88KgAyFc',
+        token: '00',
+        authorities: 0,
+        addressPath: "m/44'/280'/0'/0/1",
+      },
+      {
+        txId: 'tx3',
+        index: 2,
+        value: 250n,
+        address: 'WPynsVhyU6nP7RSZAkqfijEutC88KgAyFc',
+        token: '00',
+        authorities: 0,
+        addressPath: "m/44'/280'/0'/0/2",
+      },
+    ];
+
+    const getTxOutputsSpy = jest.spyOn(walletApi, 'getTxOutputs');
+
+    // Mock the first call (amount_smaller_than: 200)
+    getTxOutputsSpy.mockResolvedValueOnce({
+      txOutputs: mockUtxosSmallerThan200,
+    });
+
+    // Test amount_smaller_than filter
+    const result1 = await wallet.getUtxos({
+      token: '00',
+      amount_smaller_than: 200,
+      max_utxos: 10,
+    });
+
+    expect(result1.utxos).toHaveLength(2);
+    expect(result1).toEqual({
+      total_amount_available: 200n,
+      total_utxos_available: 2n,
+      total_amount_locked: 0n,
+      total_utxos_locked: 0n,
+      utxos: [
+        {
+          address: 'WP1rVhxzT3YTWg8VbBKkacLqLU2LrouWDx',
+          amount: 50n,
+          tx_id: 'tx1',
+          locked: false,
+          index: 0,
+        },
+        {
+          address: 'WPynsVhyU6nP7RSZAkqfijEutC88KgAyFc',
+          amount: 150n,
+          tx_id: 'tx2',
+          locked: false,
+          index: 1,
+        },
+      ],
+    });
+
+    expect(getTxOutputsSpy).toHaveBeenCalledWith(wallet, {
+      tokenId: '00',
+      authority: undefined,
+      addresses: undefined,
+      totalAmount: undefined,
+      smallerThan: 200,
+      biggerThan: undefined,
+      maxOutputs: 10,
+      ignoreLocked: true,
+      skipSpent: true,
+      kind: 'transparent',
+    });
+
+    // Mock the second call (amount_bigger_than: 100)
+    getTxOutputsSpy.mockResolvedValueOnce({
+      txOutputs: mockUtxosBiggerThan100,
+    });
+
+    // Test amount_bigger_than filter
+    const result2 = await wallet.getUtxos({
+      token: '00',
+      amount_bigger_than: 100,
+      max_utxos: 10,
+    });
+
+    expect(result2.utxos).toHaveLength(2);
+    expect(result2).toEqual({
+      total_amount_available: 400n,
+      total_utxos_available: 2n,
+      total_amount_locked: 0n,
+      total_utxos_locked: 0n,
+      utxos: [
+        {
+          address: 'WPynsVhyU6nP7RSZAkqfijEutC88KgAyFc',
+          amount: 150n,
+          tx_id: 'tx2',
+          locked: false,
+          index: 1,
+        },
+        {
+          address: 'WPynsVhyU6nP7RSZAkqfijEutC88KgAyFc',
+          amount: 250n,
+          tx_id: 'tx3',
+          locked: false,
+          index: 2,
+        },
+      ],
+    });
+
+    expect(getTxOutputsSpy).toHaveBeenCalledWith(wallet, {
+      tokenId: '00',
+      authority: undefined,
+      addresses: undefined,
+      totalAmount: undefined,
+      smallerThan: undefined,
+      biggerThan: 100,
+      maxOutputs: 10,
+      ignoreLocked: true,
+      skipSpent: true,
+      kind: 'transparent',
+    });
+  });
+
+  it('should return empty UtxoDetails when no UTXOs are found', async () => {
+    jest.spyOn(walletApi, 'getTxOutputs').mockResolvedValue({
+      txOutputs: [],
+    });
+
+    const result = await wallet.getUtxos({
+      token: '00',
+      max_utxos: 10,
+    });
+
+    expect(result).toEqual({
+      total_amount_available: 0n,
+      total_utxos_available: 0n,
+      total_amount_locked: 0n,
+      total_utxos_locked: 0n,
+      utxos: [],
+    });
+  });
+
+  it('should handle getUtxosForAmount for backward compatibility', async () => {
+    const mockUtxos = [
+      {
+        txId: 'tx1',
+        index: 0,
+        value: 200n,
+        address: 'WP1rVhxzT3YTWg8VbBKkacLqLU2LrouWDx',
+        token: '00',
+        authorities: 0,
+        addressPath: "m/44'/280'/0'/0/0",
+      },
+    ];
+
+    jest.spyOn(walletApi, 'getTxOutputs').mockResolvedValue({
+      txOutputs: mockUtxos,
+    });
+
+    // Test totalAmount that doesn't exceed available UTXOs
+    const result = await wallet.getUtxosForAmount(150n, {
+      token: '00',
+    });
+
+    expect(result).toEqual({
+      utxos: mockUtxos,
+      changeAmount: 50n,
+    });
+  });
+
+  it('should throw error for negative amount', async () => {
+    await expect(wallet.getUtxosForAmount(-10n, {})).rejects.toThrow(
+      'Total amount must be a positive integer.'
+    );
+  });
+
+  it('should throw error for zero amount', async () => {
+    await expect(wallet.getUtxosForAmount(0n, {})).rejects.toThrow(
+      'Total amount must be a positive integer.'
+    );
+  });
+
+  it('should throw error when no UTXOs available', async () => {
+    jest.spyOn(walletApi, 'getTxOutputs').mockResolvedValue({
+      txOutputs: [],
+    });
+
+    await expect(wallet.getUtxosForAmount(100n, {})).rejects.toThrow(
+      "Don't have enough utxos to fill total amount."
+    );
+  });
+
+  it('should throw error when UTXOs are insufficient', async () => {
+    const mockUtxos = [
+      {
+        txId: 'tx1',
+        index: 0,
+        value: 50n,
+        address: 'WP1rVhxzT3YTWg8VbBKkacLqLU2LrouWDx',
+        token: '00',
+        authorities: 0,
+        addressPath: "m/44'/280'/0'/0/0",
+      },
+    ];
+
+    jest.spyOn(walletApi, 'getTxOutputs').mockResolvedValue({
+      txOutputs: mockUtxos,
+    });
+
+    await expect(wallet.getUtxosForAmount(100n, {})).rejects.toThrow(
+      "Don't have enough utxos to fill total amount."
+    );
+  });
+});
+
+describe('getAddressDetails', () => {
+  let wallet: HathorWalletServiceWallet;
+  const seed = defaultWalletSeed;
+
+  beforeEach(() => {
+    wallet = new HathorWalletServiceWallet({
+      requestPassword: async () => 'test-pin',
+      seed,
+      network: new Network('testnet'),
+    });
+
+    wallet.failIfWalletNotReady = jest.fn();
+    jest.clearAllMocks();
+  });
+
+  it('should return address details successfully', async () => {
+    const address = 'WP1rVhxzT3YTWg8VbBKkacLqLU2LrouWDx';
+    const mockResponse = {
+      success: true,
+      data: {
+        address,
+        index: 1,
+        transactions: 5,
+        seqnum: 10,
+      },
+    };
+
+    jest.spyOn(walletApi, 'getAddressDetails').mockResolvedValue(mockResponse);
+
+    const result = await wallet.getAddressDetails(address);
+
+    expect(result).toEqual(mockResponse.data);
+    expect(walletApi.getAddressDetails).toHaveBeenCalledWith(wallet, address);
+  });
+
+  it('should handle API errors gracefully', async () => {
+    const address = 'WP1rVhxzT3YTWg8VbBKkacLqLU2LrouWDx';
+
+    jest.spyOn(walletApi, 'getAddressDetails').mockRejectedValue(new Error('API Error'));
+
+    await expect(wallet.getAddressDetails(address)).rejects.toThrow('API Error');
+  });
+});
+
+describe('HathorWalletServiceWallet constructor validation', () => {
+  const network = new Network('testnet');
+
+  it('should throw error if no seed, xpriv or xpub is provided', () => {
+    expect(() => {
+      // eslint-disable-next-line no-new
+      new HathorWalletServiceWallet({
+        requestPassword: jest.fn(),
+        network,
+      });
+    }).toThrow('You must explicitly provide the seed, xpriv or the xpub.');
+  });
+
+  it('should throw error if both seed and xpriv are provided', () => {
+    expect(() => {
+      // eslint-disable-next-line no-new
+      new HathorWalletServiceWallet({
+        requestPassword: jest.fn(),
+        seed: 'test seed',
+        xpriv: 'test-xpriv',
+        network,
+      });
+    }).toThrow('You cannot provide both a seed and an xpriv.');
+  });
+
+  it('should throw error if xpriv is used with passphrase', () => {
+    expect(() => {
+      // eslint-disable-next-line no-new
+      new HathorWalletServiceWallet({
+        requestPassword: jest.fn(),
+        xpriv: 'test-xpriv',
+        passphrase: 'test-passphrase',
+        network,
+      });
+    }).toThrow("You can't use xpriv with passphrase.");
+  });
+
+  it('should throw error if xpriv is provided without authxpriv', () => {
+    expect(() => {
+      // eslint-disable-next-line no-new
+      new HathorWalletServiceWallet({
+        requestPassword: jest.fn(),
+        xpriv: 'test-xpriv',
+        network,
+      });
+    }).toThrow('You must provide both the account path xpriv and auth path xpriv.');
+  });
+});
+
+describe('HathorWalletServiceWallet server configuration', () => {
+  let wallet: HathorWalletServiceWallet;
+  const network = new Network('testnet');
+  const seed = defaultWalletSeed;
+
+  beforeEach(() => {
+    wallet = new HathorWalletServiceWallet({
+      requestPassword: jest.fn(),
+      seed,
+      network,
+      storage: new Storage(new MemoryStore()),
+    });
+  });
+
+  it('should change server URL', async () => {
+    const newServer = 'https://new-wallet-service.test.com';
+    const storeSpy = jest.spyOn(wallet.storage.store, 'setItem');
+    const configSpy = jest.spyOn(config, 'setWalletServiceBaseUrl');
+
+    await wallet.changeServer(newServer);
+
+    expect(storeSpy).toHaveBeenCalledWith('wallet:wallet_service:base_server', newServer);
+    expect(configSpy).toHaveBeenCalledWith(newServer);
+  });
+
+  it('should change WebSocket server URL', async () => {
+    const newServer = 'wss://new-ws-wallet-service.test.com';
+    const storeSpy = jest.spyOn(wallet.storage.store, 'setItem');
+    const configSpy = jest.spyOn(config, 'setWalletServiceBaseWsUrl');
+
+    await wallet.changeWsServer(newServer);
+
+    expect(storeSpy).toHaveBeenCalledWith('wallet:wallet_service:ws_server', newServer);
+    expect(configSpy).toHaveBeenCalledWith(newServer);
+  });
+
+  it('should get stored server URLs from storage', async () => {
+    const baseUrl = 'https://stored-wallet-service.test.com';
+    const wsUrl = 'wss://stored-ws-wallet-service.test.com';
+
+    jest
+      .spyOn(wallet.storage.store, 'getItem')
+      .mockResolvedValueOnce(baseUrl)
+      .mockResolvedValueOnce(wsUrl);
+
+    const result = await wallet.getServerUrlsFromStorage();
+
+    expect(result).toEqual({
+      walletServiceBaseUrl: baseUrl,
+      walletServiceWsUrl: wsUrl,
+    });
+  });
+});
+
+describe('pollForWalletStatus', () => {
+  const network = new Network('testnet');
+  const seed = defaultWalletSeed;
+  let wallet: HathorWalletServiceWallet;
+
+  beforeEach(() => {
+    jest.restoreAllMocks();
+    wallet = new HathorWalletServiceWallet({
+      requestPassword: jest.fn(),
+      seed,
+      network,
+      storage: new Storage(new MemoryStore()),
+    });
+  });
+
+  it('should resolve immediately when status is ready on first poll', async () => {
+    jest.spyOn(walletApi, 'getWalletStatus').mockResolvedValue({
+      success: true,
+      status: {
+        walletId: 'test-id',
+        xpubkey: 'test-xpub',
+        status: 'ready',
+        maxGap: 20,
+        createdAt: Date.now(),
+        readyAt: Date.now(),
+      },
+    });
+
+    await expect(wallet.pollForWalletStatus()).resolves.toBeUndefined();
+    expect(walletApi.getWalletStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it('should poll until status becomes ready', async () => {
+    const creatingResponse = {
+      success: true,
+      status: {
+        walletId: 'test-id',
+        xpubkey: 'test-xpub',
+        status: 'creating',
+        maxGap: 20,
+        createdAt: Date.now(),
+        readyAt: null,
+      },
+    };
+    const readyResponse = {
+      success: true,
+      status: { ...creatingResponse.status, status: 'ready', readyAt: Date.now() },
+    };
+
+    jest
+      .spyOn(walletApi, 'getWalletStatus')
+      .mockResolvedValueOnce(creatingResponse)
+      .mockResolvedValueOnce(creatingResponse)
+      .mockResolvedValueOnce(readyResponse);
+
+    await expect(wallet.pollForWalletStatus()).resolves.toBeUndefined();
+    expect(walletApi.getWalletStatus).toHaveBeenCalledTimes(3);
+  });
+
+  it('should reject when status is an error state', async () => {
+    jest.spyOn(walletApi, 'getWalletStatus').mockResolvedValue({
+      success: true,
+      status: {
+        walletId: 'test-id',
+        xpubkey: 'test-xpub',
+        status: 'error',
+        maxGap: 20,
+        createdAt: Date.now(),
+        readyAt: null,
+      },
+    });
+
+    await expect(wallet.pollForWalletStatus()).rejects.toThrow(WalletRequestError);
+    expect(walletApi.getWalletStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it('should reject when max poll attempts are exceeded', async () => {
+    jest.useFakeTimers();
+
+    try {
+      jest.spyOn(walletApi, 'getWalletStatus').mockResolvedValue({
+        success: true,
+        status: {
+          walletId: 'test-id',
+          xpubkey: 'test-xpub',
+          status: 'creating',
+          maxGap: 20,
+          createdAt: Date.now(),
+          readyAt: null,
+        },
+      });
+
+      const promise = wallet.pollForWalletStatus();
+      // Catch the rejection early to prevent unhandled rejection during timer advancement
+      const caught = promise.catch((err: Error) => err);
+
+      // Advance through all 60 polling intervals
+      for (let i = 0; i < 60; i++) {
+        await jest.advanceTimersByTimeAsync(1000);
+      }
+
+      const error = await caught;
+      expect(error).toBeInstanceOf(WalletRequestError);
+      expect(error.message).toContain('Wallet status polling timed out');
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('should retry WalletRequestError from getWalletStatus (transient)', async () => {
+    const creatingResponse = {
+      success: true,
+      status: {
+        walletId: 'test-id',
+        xpubkey: 'test-xpub',
+        status: 'creating',
+        maxGap: 20,
+        createdAt: Date.now(),
+        readyAt: null,
+      },
+    };
+    const readyResponse = {
+      success: true,
+      status: { ...creatingResponse.status, status: 'ready', readyAt: Date.now() },
+    };
+
+    jest
+      .spyOn(walletApi, 'getWalletStatus')
+      .mockRejectedValueOnce(new WalletRequestError('Server error'))
+      .mockResolvedValueOnce(creatingResponse)
+      .mockResolvedValueOnce(readyResponse);
+
+    await expect(wallet.pollForWalletStatus()).resolves.toBeUndefined();
+    expect(walletApi.getWalletStatus).toHaveBeenCalledTimes(3);
+  });
+
+  it('should propagate non-WalletRequestError immediately', async () => {
+    jest.spyOn(walletApi, 'getWalletStatus').mockRejectedValue(new Error('Bad key'));
+
+    await expect(wallet.pollForWalletStatus()).rejects.toThrow('Bad key');
+    expect(walletApi.getWalletStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it('should include last transient error as cause when timing out', async () => {
+    jest.useFakeTimers();
+
+    try {
+      jest
+        .spyOn(walletApi, 'getWalletStatus')
+        .mockRejectedValue(new WalletRequestError('Persistent server error'));
+
+      const promise = wallet.pollForWalletStatus();
+      const caught = promise.catch((err: Error) => err);
+
+      for (let i = 0; i < 60; i++) {
+        await jest.advanceTimersByTimeAsync(1000);
+      }
+
+      const error = await caught;
+      expect(error).toBeInstanceOf(WalletRequestError);
+      expect(error.message).toContain('Wallet status polling timed out');
+      const cause = (error as WalletRequestError).cause as { source: WalletRequestError };
+      expect(cause.source).toBeInstanceOf(WalletRequestError);
+      expect(cause.source.message).toBe('Persistent server error');
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('should include last wallet state as cause when timing out without errors', async () => {
+    jest.useFakeTimers();
+
+    const creatingResponse = {
+      success: true,
+      status: {
+        walletId: 'test-id',
+        xpubkey: 'test-xpub',
+        status: 'creating',
+        maxGap: 20,
+        createdAt: Date.now(),
+        readyAt: null,
+      },
+    };
+
+    try {
+      jest.spyOn(walletApi, 'getWalletStatus').mockResolvedValue(creatingResponse);
+
+      const promise = wallet.pollForWalletStatus();
+      const caught = promise.catch((err: Error) => err);
+
+      for (let i = 0; i < 60; i++) {
+        await jest.advanceTimersByTimeAsync(1000);
+      }
+
+      const error = await caught;
+      expect(error).toBeInstanceOf(WalletRequestError);
+      expect(error.message).toContain('Wallet status polling timed out');
+      const cause = (error as WalletRequestError).cause as {
+        state: typeof creatingResponse.status;
+      };
+      expect(cause.state).toEqual(creatingResponse.status);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('should execute polls sequentially (no stacking)', async () => {
+    let concurrentCalls = 0;
+    let maxConcurrent = 0;
+    let callCount = 0;
+
+    jest.spyOn(walletApi, 'getWalletStatus').mockImplementation(async () => {
+      callCount++;
+      concurrentCalls++;
+      maxConcurrent = Math.max(maxConcurrent, concurrentCalls);
+      // Simulate a slow response
+      await new Promise(resolve => {
+        setTimeout(resolve, 10);
+      });
+      concurrentCalls--;
+
+      return {
+        success: true,
+        status: {
+          walletId: 'test-id',
+          xpubkey: 'test-xpub',
+          status: callCount >= 3 ? 'ready' : 'creating',
+          maxGap: 20,
+          createdAt: Date.now(),
+          readyAt: null,
+        },
+      };
+    });
+
+    await wallet.pollForWalletStatus();
+
+    expect(callCount).toBeGreaterThanOrEqual(3);
+    // Verify no concurrent calls happened
+    expect(maxConcurrent).toBe(1);
+  });
+});
+
+describe('validateAndRenewAuthToken', () => {
+  const network = new Network('testnet');
+  const seed = defaultWalletSeed;
+  let wallet: HathorWalletServiceWallet;
+
+  beforeEach(() => {
+    jest.restoreAllMocks();
+    wallet = new HathorWalletServiceWallet({
+      requestPassword: jest.fn(),
+      seed,
+      network,
+      storage: new Storage(new MemoryStore()),
+    });
+    wallet.walletId = 'test-wallet-id';
+  });
+
+  it('should renew token proactively when usePassword is provided and token is valid', async () => {
+    // Set a valid (non-expired) token so we enter the else-if(usePassword) branch
+    const futureExp = Math.floor(Date.now() / 1000) + 3600;
+    const fakePayload = Buffer.from(JSON.stringify({ exp: futureExp })).toString('base64');
+    wallet.authToken = `header.${fakePayload}.signature`;
+
+    // Derive a real auth xpriv from the test seed so HDPrivateKey.fromString succeeds
+    const accessData = walletUtils.generateAccessDataFromSeed(seed, {
+      networkName: 'testnet',
+      password: 'pass',
+      pin: 'pin',
+    });
+    const authKey = decryptData(accessData.authKey!, 'pin');
+
+    const renewSpy = jest
+      .spyOn(wallet, 'renewAuthToken')
+      .mockImplementation(async function mockRenew(this: HathorWalletServiceWallet) {
+        this.authToken = 'renewed-token';
+      });
+    jest.spyOn(wallet.storage, 'getAuthPrivKey').mockResolvedValue(authKey);
+
+    await wallet.validateAndRenewAuthToken('myPassword');
+
+    // The proactive renewal path should be taken
+    expect(renewSpy).toHaveBeenCalledTimes(1);
+    expect(wallet.storage.getAuthPrivKey).toHaveBeenCalledWith('myPassword');
+  });
+
+  it('should retry renewAuthToken on transient WalletRequestError', async () => {
+    // This guards the integration-test failure surfaced by PR CI: on a
+    // pre-existing ready wallet the interceptor's first auth call can hit a
+    // brief wallet-service settling window and fail with a transient error.
+    // The helper should retry within the same validateAndRenewAuthToken call
+    // instead of bubbling the first failure up to the caller.
+    wallet.authToken = null;
+
+    const accessData = walletUtils.generateAccessDataFromSeed(seed, {
+      networkName: 'testnet',
+      password: 'pass',
+      pin: 'pin',
+    });
+    const authKey = decryptData(accessData.authKey!, 'pin');
+
+    const renewSpy = jest
+      .spyOn(wallet, 'renewAuthToken')
+      .mockRejectedValueOnce(new WalletRequestError('transient', { cause: { status: 400 } }))
+      .mockImplementationOnce(async function mockRenew(this: HathorWalletServiceWallet) {
+        this.authToken = 'renewed-after-retry';
+      });
+    jest.spyOn(wallet.storage, 'getAuthPrivKey').mockResolvedValue(authKey);
+
+    jest.useFakeTimers();
+    try {
+      const pending = wallet.validateAndRenewAuthToken('myPassword');
+      // Drain the retry interval (WALLET_STATUS_POLLING_INTERVAL = 1000ms) so
+      // the second attempt fires without burning a real second on the wall clock.
+      await jest.advanceTimersByTimeAsync(1000);
+      await pending;
+    } finally {
+      jest.useRealTimers();
+    }
+
+    expect(renewSpy).toHaveBeenCalledTimes(2);
+    expect(wallet.authToken).toBe('renewed-after-retry');
+  });
+});
+
+/**
+ * These tests lock in the contract change introduced by this PR:
+ *
+ *   renewAuthToken() MUST propagate errors instead of silently swallowing them.
+ *
+ * The previous implementation wrapped the body in a try/catch that set
+ * `this.authToken = null` on any failure. That silent catch was the root cause
+ * of 403 race conditions — a background renewal could null a valid token mid-flight.
+ * With every caller awaiting, suppressing errors would only mask bugs.
+ * These tests make a future refactor that reintroduces the catch fail loudly.
+ */
+describe('renewAuthToken contract', () => {
+  const network = new Network('testnet');
+  const seed = defaultWalletSeed;
+  let wallet: HathorWalletServiceWallet;
+  const fakePrivKey = { xpubkey: 'dummy-xpubkey' } as unknown as Parameters<
+    HathorWalletServiceWallet['renewAuthToken']
+  >[0];
+
+  beforeEach(() => {
+    jest.restoreAllMocks();
+    wallet = new HathorWalletServiceWallet({
+      requestPassword: jest.fn(),
+      seed,
+      network,
+      storage: new Storage(new MemoryStore()),
+    });
+    wallet.walletId = 'test-wallet-id';
+    // signMessage requires a real HDPrivateKey — stub it out; this suite only
+    // cares about the behaviour surrounding the createAuthToken call.
+    jest.spyOn(wallet, 'signMessage').mockReturnValue('fake-signature');
+  });
+
+  it('should set authToken when createAuthToken succeeds', async () => {
+    jest.spyOn(walletApi, 'createAuthToken').mockResolvedValue({
+      success: true,
+      token: 'fresh-token',
+    });
+
+    await wallet.renewAuthToken(fakePrivKey, 1234567890);
+
+    expect(wallet.authToken).toBe('fresh-token');
+  });
+
+  it('should propagate WalletRequestError from createAuthToken', async () => {
+    const apiError = new WalletRequestError('Error requesting auth token.', {
+      cause: { status: 400, data: {} },
+    });
+    jest.spyOn(walletApi, 'createAuthToken').mockRejectedValue(apiError);
+
+    await expect(wallet.renewAuthToken(fakePrivKey, 1234567890)).rejects.toBe(apiError);
+  });
+
+  it('should NOT null out an existing authToken when renewal throws', async () => {
+    // This is the critical regression guard. Prior behaviour set
+    // `this.authToken = null` in the catch block, turning a transient renewal
+    // failure into a permanent 403 for the next authenticated request.
+    wallet.authToken = 'pre-existing-valid-token';
+    jest
+      .spyOn(walletApi, 'createAuthToken')
+      .mockRejectedValue(new WalletRequestError('boom', { cause: { status: 503 } }));
+
+    await expect(wallet.renewAuthToken(fakePrivKey, 1234567890)).rejects.toThrow('boom');
+
+    expect(wallet.authToken).toBe('pre-existing-valid-token');
+  });
+
+  it('should propagate non-WalletRequestError (e.g., programming errors)', async () => {
+    jest.spyOn(walletApi, 'createAuthToken').mockRejectedValue(new TypeError('unexpected'));
+
+    await expect(wallet.renewAuthToken(fakePrivKey, 1234567890)).rejects.toBeInstanceOf(TypeError);
+  });
+
+  it('should throw when called before walletId is set', async () => {
+    wallet.walletId = '';
+    const createSpy = jest.spyOn(walletApi, 'createAuthToken');
+
+    await expect(wallet.renewAuthToken(fakePrivKey, 1234567890)).rejects.toThrow(
+      'Wallet not ready yet.'
+    );
+    expect(createSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('HathorWalletServiceWallet start method error conditions', () => {
+  const network = new Network('testnet');
+  const seed = defaultWalletSeed;
+  let wallet: HathorWalletServiceWallet;
+
+  beforeEach(() => {
+    wallet = new HathorWalletServiceWallet({
+      requestPassword: jest.fn(),
+      seed,
+      network,
+      storage: new Storage(new MemoryStore()),
+    });
+  });
+
+  it('should throw error if pinCode is not provided', async () => {
+    await expect(wallet.start({})).rejects.toThrow(
+      'Pin code is required when starting the wallet.'
+    );
+  });
+
+  it('should handle UninitializedWalletError during access data loading', async () => {
+    jest
+      .spyOn(wallet.storage, 'getAccessData')
+      .mockRejectedValueOnce(new UninitializedWalletError('Wallet not initialized'));
+
+    await expect(wallet.start({ pinCode: '123' })).rejects.toThrow(
+      'Password is required when starting the wallet from the seed.'
+    );
+  });
+
+  it('should throw error if seed/xprivkey is missing during wallet creation', async () => {
+    const walletWithoutSeed = new HathorWalletServiceWallet({
+      requestPassword: jest.fn(),
+      xpub: 'test-xpub',
+      network,
+      storage: new Storage(new MemoryStore()),
+    });
+
+    jest
+      .spyOn(walletWithoutSeed.storage, 'getAccessData')
+      .mockRejectedValueOnce(new UninitializedWalletError('Wallet not initialized'));
+    jest.spyOn(walletApi, 'createWallet').mockRejectedValue(new Error('Test error'));
+
+    await expect(walletWithoutSeed.start({ pinCode: '123', password: '123' })).rejects.toThrow(
+      'WalletService facade initialized without seed or xprivkey'
+    );
+  });
+
+  it('should throw error if wallet status is not ready after creation', async () => {
+    jest
+      .spyOn(wallet.storage, 'getAccessData')
+      .mockRejectedValueOnce(new UninitializedWalletError('Wallet not initialized'));
+    jest.spyOn(wallet, 'renewAuthToken').mockImplementation(async function mockRenew(
+      this: HathorWalletServiceWallet
+    ) {
+      this.authToken = 'mocked-token';
+    });
+    jest.spyOn(walletApi, 'createWallet').mockResolvedValue({
+      success: true,
+      status: {
+        walletId: 'test-id',
+        xpubkey: 'test-xpub',
+        status: 'error',
+        maxGap: 20,
+        createdAt: Date.now(),
+        readyAt: Date.now(),
+      },
+    });
+
+    await expect(wallet.start({ pinCode: '123', password: '123' })).rejects.toThrow(
+      WalletRequestError
+    );
+  });
+
+  describe('waitReady parameter', () => {
+    it('should return immediately after wallet creation when waitReady is false', async () => {
+      jest
+        .spyOn(wallet.storage, 'getAccessData')
+        .mockRejectedValueOnce(new UninitializedWalletError('Wallet not initialized'));
+      jest.spyOn(wallet, 'renewAuthToken').mockImplementation(async function mockRenew(
+        this: HathorWalletServiceWallet
+      ) {
+        this.authToken = 'mocked-token';
+      });
+
+      const mockWalletId = 'test-wallet-id';
+      jest.spyOn(walletApi, 'createWallet').mockResolvedValue({
+        success: true,
+        status: {
+          walletId: mockWalletId,
+          xpubkey: 'test-xpub',
+          status: 'creating',
+          maxGap: 20,
+          createdAt: Date.now(),
+          readyAt: null,
+        },
+      });
+
+      const pollForWalletStatusSpy = jest.spyOn(wallet, 'pollForWalletStatus');
+      // @ts-expect-error - Accessing private method for testing
+      const onWalletReadySpy = jest.spyOn(wallet, 'onWalletReady');
+
+      await wallet.start({ pinCode: '123', password: '123', waitReady: false });
+
+      // Verify wallet was not polled for status
+      expect(pollForWalletStatusSpy).not.toHaveBeenCalled();
+
+      // Verify onWalletReady was not called
+      expect(onWalletReadySpy).not.toHaveBeenCalled();
+
+      // Verify walletId was set
+      expect(wallet.walletId).toBe(mockWalletId);
+
+      // Verify wallet is not ready
+      expect(wallet.isReady()).toBe(false);
+    });
+
+    it('should wait for wallet to be ready when waitReady is true (default)', async () => {
+      jest
+        .spyOn(wallet.storage, 'getAccessData')
+        .mockRejectedValueOnce(new UninitializedWalletError('Wallet not initialized'));
+      jest.spyOn(wallet, 'renewAuthToken').mockImplementation(async function mockRenew(
+        this: HathorWalletServiceWallet
+      ) {
+        this.authToken = 'mocked-token';
+      });
+
+      const mockWalletId = 'test-wallet-id';
+      jest.spyOn(walletApi, 'createWallet').mockResolvedValue({
+        success: true,
+        status: {
+          walletId: mockWalletId,
+          xpubkey: 'test-xpub',
+          status: 'ready',
+          maxGap: 20,
+          createdAt: Date.now(),
+          readyAt: Date.now(),
+        },
+      });
+
+      jest.spyOn(walletApi, 'getNewAddresses').mockResolvedValue({
+        success: true,
+        addresses: [
+          {
+            address: 'test-address',
+            index: 0,
+            addressPath: "m/44'/280'/0'/0/0",
+          },
+        ],
+      });
+
+      // @ts-expect-error - Accessing private method for testing
+      const onWalletReadySpy = jest.spyOn(wallet, 'onWalletReady').mockResolvedValue(undefined);
+
+      await wallet.start({ pinCode: '123', password: '123', waitReady: true });
+
+      // Verify onWalletReady was called
+      expect(onWalletReadySpy).toHaveBeenCalled();
+
+      // Verify walletId was set
+      expect(wallet.walletId).toBe(mockWalletId);
+    });
+
+    it('should wait for wallet to be ready when waitReady is not specified (default behavior)', async () => {
+      jest
+        .spyOn(wallet.storage, 'getAccessData')
+        .mockRejectedValueOnce(new UninitializedWalletError('Wallet not initialized'));
+      jest.spyOn(wallet, 'renewAuthToken').mockImplementation(async function mockRenew(
+        this: HathorWalletServiceWallet
+      ) {
+        this.authToken = 'mocked-token';
+      });
+
+      const mockWalletId = 'test-wallet-id';
+      jest.spyOn(walletApi, 'createWallet').mockResolvedValue({
+        success: true,
+        status: {
+          walletId: mockWalletId,
+          xpubkey: 'test-xpub',
+          status: 'ready',
+          maxGap: 20,
+          createdAt: Date.now(),
+          readyAt: Date.now(),
+        },
+      });
+
+      jest.spyOn(walletApi, 'getNewAddresses').mockResolvedValue({
+        success: true,
+        addresses: [
+          {
+            address: 'test-address',
+            index: 0,
+            addressPath: "m/44'/280'/0'/0/0",
+          },
+        ],
+      });
+
+      // @ts-expect-error - Accessing private method for testing
+      const onWalletReadySpy = jest.spyOn(wallet, 'onWalletReady').mockResolvedValue(undefined);
+
+      // Call start without waitReady parameter
+      await wallet.start({ pinCode: '123', password: '123' });
+
+      // Verify onWalletReady was called (default behavior)
+      expect(onWalletReadySpy).toHaveBeenCalled();
+
+      // Verify walletId was set
+      expect(wallet.walletId).toBe(mockWalletId);
+    });
+
+    it('should poll for wallet status when waitReady is true and wallet is creating', async () => {
+      jest
+        .spyOn(wallet.storage, 'getAccessData')
+        .mockRejectedValueOnce(new UninitializedWalletError('Wallet not initialized'));
+      jest.spyOn(wallet, 'renewAuthToken').mockImplementation(async function mockRenew(
+        this: HathorWalletServiceWallet
+      ) {
+        this.authToken = 'mocked-token';
+      });
+
+      const mockWalletId = 'test-wallet-id';
+      jest.spyOn(walletApi, 'createWallet').mockResolvedValue({
+        success: true,
+        status: {
+          walletId: mockWalletId,
+          xpubkey: 'test-xpub',
+          status: 'creating',
+          maxGap: 20,
+          createdAt: Date.now(),
+          readyAt: null,
+        },
+      });
+
+      const pollForWalletStatusSpy = jest
+        .spyOn(wallet, 'pollForWalletStatus')
+        .mockResolvedValue(undefined);
+
+      jest.spyOn(walletApi, 'getNewAddresses').mockResolvedValue({
+        success: true,
+        addresses: [
+          {
+            address: 'test-address',
+            index: 0,
+            addressPath: "m/44'/280'/0'/0/0",
+          },
+        ],
+      });
+
+      // @ts-expect-error - Accessing private method for testing
+      jest.spyOn(wallet, 'onWalletReady').mockResolvedValue(undefined);
+
+      await wallet.start({ pinCode: '123', password: '123', waitReady: true });
+
+      // Verify wallet was polled for status
+      expect(pollForWalletStatusSpy).toHaveBeenCalled();
+    });
+
+    it('should not poll for wallet status when waitReady is false and wallet is creating', async () => {
+      jest
+        .spyOn(wallet.storage, 'getAccessData')
+        .mockRejectedValueOnce(new UninitializedWalletError('Wallet not initialized'));
+      jest.spyOn(wallet, 'renewAuthToken').mockImplementation(async function mockRenew(
+        this: HathorWalletServiceWallet
+      ) {
+        this.authToken = 'mocked-token';
+      });
+
+      const mockWalletId = 'test-wallet-id';
+      jest.spyOn(walletApi, 'createWallet').mockResolvedValue({
+        success: true,
+        status: {
+          walletId: mockWalletId,
+          xpubkey: 'test-xpub',
+          status: 'creating',
+          maxGap: 20,
+          createdAt: Date.now(),
+          readyAt: null,
+        },
+      });
+
+      const pollForWalletStatusSpy = jest.spyOn(wallet, 'pollForWalletStatus');
+
+      await wallet.start({ pinCode: '123', password: '123', waitReady: false });
+
+      // Verify wallet was NOT polled for status
+      expect(pollForWalletStatusSpy).not.toHaveBeenCalled();
+
+      // Wallet should still be in LOADING state
+      expect(wallet.isReady()).toBe(false);
+    });
+
+    it('should clear sensitive data regardless of waitReady value', async () => {
+      jest
+        .spyOn(wallet.storage, 'getAccessData')
+        .mockRejectedValueOnce(new UninitializedWalletError('Wallet not initialized'));
+      jest.spyOn(wallet, 'renewAuthToken').mockImplementation(async function mockRenew(
+        this: HathorWalletServiceWallet
+      ) {
+        this.authToken = 'mocked-token';
+      });
+
+      jest.spyOn(walletApi, 'createWallet').mockResolvedValue({
+        success: true,
+        status: {
+          walletId: 'test-wallet-id',
+          xpubkey: 'test-xpub',
+          status: 'creating',
+          maxGap: 20,
+          createdAt: Date.now(),
+          readyAt: null,
+        },
+      });
+
+      const clearSensitiveDataSpy = jest.spyOn(wallet, 'clearSensitiveData');
+
+      await wallet.start({ pinCode: '123', password: '123', waitReady: false });
+
+      // Verify sensitive data was cleared
+      expect(clearSensitiveDataSpy).toHaveBeenCalled();
+    });
+
+    it('should call pollForWalletStatus when waitReady is true and status is creating', async () => {
+      jest
+        .spyOn(wallet.storage, 'getAccessData')
+        .mockRejectedValueOnce(new UninitializedWalletError('Wallet not initialized'));
+      jest.spyOn(wallet, 'renewAuthToken').mockImplementation(async function mockRenew(
+        this: HathorWalletServiceWallet
+      ) {
+        this.authToken = 'mocked-token';
+      });
+
+      const mockWalletId = 'test-wallet-id';
+      jest.spyOn(walletApi, 'createWallet').mockResolvedValue({
+        success: true,
+        status: {
+          walletId: mockWalletId,
+          xpubkey: 'test-xpub',
+          status: 'creating',
+          maxGap: 20,
+          createdAt: Date.now(),
+          readyAt: null,
+        },
+      });
+
+      jest.spyOn(walletApi, 'getNewAddresses').mockResolvedValue({
+        success: true,
+        addresses: [
+          {
+            address: 'test-address',
+            index: 0,
+            addressPath: "m/44'/280'/0'/0/0",
+          },
+        ],
+      });
+
+      const pollForWalletStatusSpy = jest
+        .spyOn(wallet, 'pollForWalletStatus')
+        .mockResolvedValue(undefined);
+      // @ts-expect-error - Accessing private method for testing
+      const onWalletReadySpy = jest.spyOn(wallet, 'onWalletReady').mockResolvedValue(undefined);
+
+      await wallet.start({ pinCode: '123', password: '123', waitReady: true });
+
+      // Verify pollForWalletStatus was called
+      expect(pollForWalletStatusSpy).toHaveBeenCalled();
+      // Verify onWalletReady was called
+      expect(onWalletReadySpy).toHaveBeenCalled();
+      // Verify walletId was set
+      expect(wallet.walletId).toBe(mockWalletId);
+    });
+
+    it('should not call pollForWalletStatus when waitReady is false and status is creating', async () => {
+      jest
+        .spyOn(wallet.storage, 'getAccessData')
+        .mockRejectedValueOnce(new UninitializedWalletError('Wallet not initialized'));
+      jest.spyOn(wallet, 'renewAuthToken').mockImplementation(async function mockRenew(
+        this: HathorWalletServiceWallet
+      ) {
+        this.authToken = 'mocked-token';
+      });
+
+      const mockWalletId = 'test-wallet-id';
+      jest.spyOn(walletApi, 'createWallet').mockResolvedValue({
+        success: true,
+        status: {
+          walletId: mockWalletId,
+          xpubkey: 'test-xpub',
+          status: 'creating',
+          maxGap: 20,
+          createdAt: Date.now(),
+          readyAt: null,
+        },
+      });
+
+      const pollForWalletStatusSpy = jest.spyOn(wallet, 'pollForWalletStatus');
+      // @ts-expect-error - Accessing private method for testing
+      const onWalletReadySpy = jest.spyOn(wallet, 'onWalletReady');
+
+      await wallet.start({ pinCode: '123', password: '123', waitReady: false });
+
+      // Verify pollForWalletStatus was NOT called
+      expect(pollForWalletStatusSpy).not.toHaveBeenCalled();
+      // Verify onWalletReady was NOT called
+      expect(onWalletReadySpy).not.toHaveBeenCalled();
+      // Verify walletId was set
+      expect(wallet.walletId).toBe(mockWalletId);
+    });
+
+    it('should propagate errors from onWalletReady through start()', async () => {
+      jest
+        .spyOn(wallet.storage, 'getAccessData')
+        .mockRejectedValueOnce(new UninitializedWalletError('Wallet not initialized'));
+
+      jest.spyOn(walletApi, 'createWallet').mockResolvedValue({
+        success: true,
+        status: {
+          walletId: 'test-wallet-id',
+          xpubkey: 'test-xpub',
+          status: 'ready',
+          maxGap: 20,
+          createdAt: Date.now(),
+          readyAt: Date.now(),
+        },
+      });
+
+      // Errors during onWalletReady (e.g. address fetch, auth renewal via
+      // the axios interceptor) should propagate through start() rather than
+      // being swallowed.
+      // @ts-expect-error - Accessing private method for testing
+      jest
+        .spyOn(wallet, 'onWalletReady')
+        .mockRejectedValue(new WalletRequestError('Auth invalid signature'));
+
+      await expect(wallet.start({ pinCode: '123', password: '123' })).rejects.toThrow(
+        'Auth invalid signature'
+      );
+    });
+
+    it('should not explicitly call validateAndRenewAuthToken during start', async () => {
+      jest
+        .spyOn(wallet.storage, 'getAccessData')
+        .mockRejectedValueOnce(new UninitializedWalletError('Wallet not initialized'));
+      jest.spyOn(wallet, 'renewAuthToken').mockImplementation(async function mockRenew(
+        this: HathorWalletServiceWallet
+      ) {
+        this.authToken = 'mocked-token';
+      });
+
+      jest.spyOn(walletApi, 'createWallet').mockResolvedValue({
+        success: true,
+        status: {
+          walletId: 'test-wallet-id',
+          xpubkey: 'test-xpub',
+          status: 'creating',
+          maxGap: 20,
+          createdAt: Date.now(),
+          readyAt: null,
+        },
+      });
+
+      const validateSpy = jest
+        .spyOn(wallet, 'validateAndRenewAuthToken')
+        .mockResolvedValue(undefined);
+      jest.spyOn(wallet, 'pollForWalletStatus').mockResolvedValue(undefined);
+      // @ts-expect-error - Accessing private method for testing
+      jest.spyOn(wallet, 'onWalletReady').mockResolvedValue(undefined);
+
+      await wallet.start({ pinCode: '123', password: '123' });
+
+      // Auth token renewal is handled by the axios interceptor (via
+      // axiosInstance), not by start() directly. start() should NOT call
+      // validateAndRenewAuthToken explicitly.
+      expect(validateSpy).not.toHaveBeenCalled();
+    });
+
+    it('should set walletId exactly once from createWallet response', async () => {
+      jest
+        .spyOn(wallet.storage, 'getAccessData')
+        .mockRejectedValueOnce(new UninitializedWalletError('Wallet not initialized'));
+      jest.spyOn(wallet, 'renewAuthToken').mockImplementation(async function mockRenew(
+        this: HathorWalletServiceWallet
+      ) {
+        this.authToken = 'mocked-token';
+      });
+
+      const mockWalletId = 'unique-wallet-id';
+      jest.spyOn(walletApi, 'createWallet').mockResolvedValue({
+        success: true,
+        status: {
+          walletId: mockWalletId,
+          xpubkey: 'test-xpub',
+          status: 'ready',
+          maxGap: 20,
+          createdAt: Date.now(),
+          readyAt: Date.now(),
+        },
+      });
+
+      // @ts-expect-error - Accessing private method for testing
+      jest.spyOn(wallet, 'onWalletReady').mockResolvedValue(undefined);
+
+      await wallet.start({ pinCode: '123', password: '123' });
+
+      expect(wallet.walletId).toBe(mockWalletId);
+    });
+  });
+});
+
+describe('HathorWalletServiceWallet additional methods', () => {
+  let wallet: HathorWalletServiceWallet;
+  const network = new Network('testnet');
+  const seed = defaultWalletSeed;
+
+  beforeEach(() => {
+    wallet = new HathorWalletServiceWallet({
+      requestPassword: jest.fn(),
+      seed,
+      network,
+    });
+    wallet.setState('Ready');
+  });
+
+  it('should get auth token', () => {
+    wallet.authToken = 'test-auth-token';
+    expect(wallet.getAuthToken()).toBe('test-auth-token');
+  });
+
+  it('should return null when no auth token is set', () => {
+    wallet.authToken = null;
+    expect(wallet.getAuthToken()).toBeNull();
+  });
+
+  it('should get version data', async () => {
+    const mockVersionData = {
+      version: '1.0.0',
+      network: 'testnet',
+      minWeight: 14,
+      minTxWeight: 14,
+      maxTxWeight: 100,
+      maxOutputsPerTx: 255,
+    };
+
+    jest.spyOn(walletApi, 'getVersionData').mockResolvedValue(mockVersionData);
+
+    const result = await wallet.getVersionData();
+
+    expect(result).toEqual(mockVersionData);
+    expect(walletApi.getVersionData).toHaveBeenCalledWith(wallet);
+  });
+
+  it('should get balance for all tokens', async () => {
+    const mockBalance = [
+      { token_id: 'token1', balance: { available: 100n, locked: 0n } },
+      { token_id: 'token2', balance: { available: 200n, locked: 10n } },
+    ];
+
+    jest.spyOn(walletApi, 'getBalances').mockResolvedValue({
+      success: true,
+      balances: mockBalance,
+    });
+
+    const result = await wallet.getBalance();
+    expect(walletApi.getBalances).toHaveBeenCalledWith(wallet, null);
+    expect(result).toEqual(mockBalance);
+  });
+
+  it('should get balance for specific token', async () => {
+    const mockBalance = [{ token_id: 'token1', balance: { available: 100n, locked: 0n } }];
+
+    jest.spyOn(walletApi, 'getBalances').mockResolvedValue({
+      success: true,
+      balances: mockBalance,
+    });
+
+    const result = await wallet.getBalance('token1');
+    expect(walletApi.getBalances).toHaveBeenCalledWith(wallet, 'token1');
+    expect(result).toEqual(mockBalance);
+  });
+
+  it('should get tokens list', async () => {
+    const mockTokens = ['token1', 'token2', 'token3'];
+
+    jest.spyOn(walletApi, 'getTokens').mockResolvedValue({
+      success: true,
+      tokens: mockTokens,
+    });
+
+    const result = await wallet.getTokens();
+    expect(walletApi.getTokens).toHaveBeenCalledWith(wallet);
+    expect(result).toEqual(mockTokens);
+  });
+
+  it('should get transaction history with default options', async () => {
+    const mockHistory = [
+      { tx_id: 'tx1', timestamp: Date.now(), balance: 100n },
+      { tx_id: 'tx2', timestamp: Date.now(), balance: 200n },
+    ];
+
+    jest.spyOn(walletApi, 'getHistory').mockResolvedValue({
+      success: true,
+      history: mockHistory,
+    });
+
+    const result = await wallet.getTxHistory();
+    expect(walletApi.getHistory).toHaveBeenCalledWith(wallet, {});
+    expect(result).toEqual(mockHistory);
+  });
+
+  it('should get transaction history with specific options', async () => {
+    const mockHistory = [{ tx_id: 'tx1', timestamp: Date.now(), balance: 100n }];
+    const options = { token_id: 'token1', count: 10, skip: 5 };
+
+    jest.spyOn(walletApi, 'getHistory').mockResolvedValue({
+      success: true,
+      history: mockHistory,
+    });
+
+    const result = await wallet.getTxHistory(options);
+    expect(walletApi.getHistory).toHaveBeenCalledWith(wallet, options);
+    expect(result).toEqual(mockHistory);
+  });
+});
+
+describe('HathorWalletServiceWallet address methods', () => {
+  let wallet: HathorWalletServiceWallet;
+  const network = new Network('testnet');
+  const seed = defaultWalletSeed;
+
+  beforeEach(() => {
+    wallet = new HathorWalletServiceWallet({
+      requestPassword: jest.fn(),
+      seed,
+      network,
+    });
+    wallet.setState('Ready');
+    wallet.newAddresses = [
+      { address: 'address1', index: 0, info: '' },
+      { address: 'address2', index: 1, info: '' },
+      { address: 'address3', index: 2, info: '' },
+    ];
+    wallet.indexToUse = 0;
+  });
+
+  it('should get current address without marking as used', () => {
+    const result = wallet.getCurrentAddress();
+
+    expect(result.address).toBe('address1');
+    expect(result.index).toBe(0);
+    expect(wallet.indexToUse).toBe(0);
+  });
+
+  it('should get current address and mark as used', () => {
+    const result = wallet.getCurrentAddress({ markAsUsed: true });
+
+    expect(result.address).toBe('address1');
+    expect(result.index).toBe(0);
+    expect(wallet.indexToUse).toBe(1);
+  });
+
+  it('should return GAP_LIMIT_REACHED when index exceeds available addresses', () => {
+    wallet.indexToUse = 5; // Beyond the 3 addresses available
+
+    const result = wallet.getCurrentAddress();
+
+    expect(result.address).toBe('address3');
+    expect(result.info).toBe('GAP_LIMIT_REACHED');
+  });
+
+  it('should get next address by marking current as used', () => {
+    const result = wallet.getNextAddress();
+
+    expect(result.address).toBe('address2');
+    expect(result.index).toBe(1);
+    expect(wallet.indexToUse).toBe(1);
+  });
+
+  it('should get address index for existing address', async () => {
+    jest.spyOn(wallet, 'getAddressDetails').mockResolvedValue({
+      success: true,
+      index: 5,
+      transactions: 3,
+    });
+
+    const result = await wallet.getAddressIndex('test-address');
+
+    expect(result).toBe(5);
+    expect(wallet.getAddressDetails).toHaveBeenCalledWith('test-address');
+  });
+
+  it('should return null for non-existent address', async () => {
+    jest.spyOn(wallet, 'getAddressDetails').mockRejectedValue(new Error('Address not found'));
+
+    const result = await wallet.getAddressIndex('non-existent-address');
+
+    expect(result).toBeNull();
+  });
+
+  it('should check if address is mine', async () => {
+    jest.spyOn(wallet, 'checkAddressesMine').mockResolvedValue({
+      'test-address': true,
+    });
+
+    const result = await wallet.isAddressMine('test-address');
+
+    expect(result).toBe(true);
+    expect(wallet.checkAddressesMine).toHaveBeenCalledWith(['test-address']);
+  });
+
+  it('should return false if address is not mine', async () => {
+    jest.spyOn(wallet, 'checkAddressesMine').mockResolvedValue({
+      'test-address': false,
+    });
+
+    const result = await wallet.isAddressMine('test-address');
+
+    expect(result).toBe(false);
+  });
+});
+
+describe('HathorWalletServiceWallet private key and nano methods', () => {
+  let wallet: HathorWalletServiceWallet;
+  const network = new Network('testnet');
+  const seed = defaultWalletSeed;
+
+  beforeEach(() => {
+    wallet = new HathorWalletServiceWallet({
+      requestPassword: jest.fn(),
+      seed,
+      network,
+    });
+    wallet.setState('Ready');
+  });
+
+  describe('getPrivateKeyFromAddress', () => {
+    it('should throw error for readonly wallet', async () => {
+      jest.spyOn(wallet.storage, 'isReadonly').mockResolvedValue(true);
+
+      await expect(wallet.getPrivateKeyFromAddress('address')).rejects.toThrow(
+        'getPrivateKeyFromAddress'
+      );
+    });
+
+    it('should throw error when address does not belong to wallet', async () => {
+      jest.spyOn(wallet.storage, 'isReadonly').mockResolvedValue(false);
+      jest.spyOn(wallet, 'getAddressIndex').mockResolvedValue(null);
+
+      await expect(wallet.getPrivateKeyFromAddress('WInvalidAddress')).rejects.toThrow(
+        'Address WInvalidAddress does not belong to this wallet'
+      );
+    });
+
+    it('should return private key for valid address', async () => {
+      const mockPrivateKey = { privateKey: 'mock-private-key' };
+
+      jest.spyOn(wallet.storage, 'isReadonly').mockResolvedValue(false);
+      jest.spyOn(wallet, 'getAddressIndex').mockResolvedValue(5);
+      jest.spyOn(wallet, 'getAddressPrivKey').mockResolvedValue(mockPrivateKey);
+
+      const result = await wallet.getPrivateKeyFromAddress('WValidAddress', { pinCode: '123' });
+
+      expect(result).toBe('mock-private-key');
+      expect(wallet.getAddressPrivKey).toHaveBeenCalledWith('123', 5);
+    });
+  });
+
+  describe('getNanoHeaderSeqnum', () => {
+    it('should return incremented seqnum from address details', async () => {
+      jest.spyOn(walletApi, 'getAddressDetails').mockResolvedValue({
+        success: true,
+        data: {
+          address: 'WTestAddress',
+          index: 1,
+          transactions: 5,
+          seqnum: 10,
+        },
+      });
+
+      const result = await wallet.getNanoHeaderSeqnum('WTestAddress');
+
+      expect(result).toBe(11);
+      expect(walletApi.getAddressDetails).toHaveBeenCalledWith(wallet, 'WTestAddress');
+    });
+  });
+
+  describe('getAddressIndexIfOwned', () => {
+    it('should throw error when address does not belong to wallet', async () => {
+      jest.spyOn(wallet, 'getAddressDetails').mockResolvedValue(null);
+
+      // Access the private method through bracket notation for testing
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await expect((wallet as any).getAddressIndexIfOwned('WInvalidAddress')).rejects.toThrow(
+        'Address used to sign the transaction (WInvalidAddress) does not belong to the wallet.'
+      );
+    });
+
+    it('should return address index when address belongs to wallet', async () => {
+      jest.spyOn(wallet, 'getAddressDetails').mockResolvedValue({
+        success: true,
+        address: 'WValidAddress',
+        index: 10,
+        transactions: 5,
+        seqnum: 1,
+      });
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const result = await (wallet as any).getAddressIndexIfOwned('WValidAddress');
+      expect(result).toBe(10);
+    });
+  });
+
+  describe('getCallerAddressFromIndex', () => {
+    it('should return caller address from index', async () => {
+      const mockPrivateKey = {
+        publicKey: {
+          toAddress: jest.fn().mockReturnValue({
+            toString: jest.fn().mockReturnValue('WCallerAddress'),
+          }),
+        },
+      };
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      jest.spyOn(wallet, 'getAddressPrivKey').mockResolvedValue(mockPrivateKey as any);
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const result = await (wallet as any).getCallerAddressFromIndex('123', 5);
+      expect(result.base58).toBe('WCallerAddress');
+      expect(wallet.getAddressPrivKey).toHaveBeenCalledWith('123', 5);
+    });
+  });
+
+  describe('_getAuthorityTxOutput with filter address', () => {
+    it('should add addresses filter when filterAddress is provided', async () => {
+      const mockTxOutputs = [
+        {
+          txId: 'tx1',
+          index: 0,
+          value: 100n,
+          address: 'WFilterAddress',
+          tokenId: 'token1',
+          authorities: 1n,
+        },
+      ];
+
+      jest.spyOn(walletApi, 'getTxOutputs').mockResolvedValue({
+        success: true,
+        txOutputs: mockTxOutputs,
+      });
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const result = await (wallet as any)._getAuthorityTxOutput({
+        tokenId: 'token1',
+        authority: 1n,
+        filterAddress: 'WFilterAddress',
+      });
+
+      expect(walletApi.getTxOutputs).toHaveBeenCalledWith(wallet, {
+        tokenId: 'token1',
+        authority: 1n,
+        skipSpent: undefined,
+        maxOutputs: undefined,
+        addresses: ['WFilterAddress'],
+      });
+      expect(result).toHaveLength(1);
+    });
+  });
+
+  describe('createNFT', () => {
+    it('should set data and isCreateNFT options', async () => {
+      const mockPreparedTx = { inputs: [], outputs: [] };
+      const mockResult = { success: true };
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      jest.spyOn(wallet, 'prepareCreateNewToken').mockResolvedValue(mockPreparedTx as any);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      jest.spyOn(wallet, 'handleSendPreparedTransaction').mockResolvedValue(mockResult as any);
+
+      await wallet.createNFT('NFT Name', 'NFT', 1n, 'nft-data');
+
+      expect(wallet.prepareCreateNewToken).toHaveBeenCalledWith(
+        'NFT Name',
+        'NFT',
+        1n,
+        expect.objectContaining({
+          data: ['nft-data'],
+          isCreateNFT: true,
+        })
+      );
+      expect(wallet.handleSendPreparedTransaction).toHaveBeenCalledWith(mockPreparedTx);
+    });
+  });
+
+  describe('getAddressPathForIndex', () => {
+    it('should return P2SH path for multisig wallet', async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      jest.spyOn(wallet.storage, 'getWalletType').mockResolvedValue('multisig' as any);
+
+      const result = await wallet.getAddressPathForIndex(5);
+
+      expect(result).toBe("m/45'/280'/0'/0/5");
+    });
+
+    it('should return P2PKH path for regular wallet', async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      jest.spyOn(wallet.storage, 'getWalletType').mockResolvedValue('p2pkh' as any);
+
+      const result = await wallet.getAddressPathForIndex(5);
+
+      expect(result).toBe("m/44'/280'/0'/0/5");
+    });
+  });
+
+  describe('createNanoContractTransaction', () => {
+    it('should throw error if wallet is not ready', async () => {
+      jest.spyOn(wallet, 'isReady').mockReturnValue(false);
+
+      await expect(
+        wallet.createNanoContractTransaction('method', 'WAddress', { args: [] })
+      ).rejects.toThrow('Wallet not ready');
+    });
+
+    it('should throw error for readonly wallet', async () => {
+      jest.spyOn(wallet, 'isReady').mockReturnValue(true);
+      jest.spyOn(wallet.storage, 'isReadonly').mockResolvedValue(true);
+
+      await expect(
+        wallet.createNanoContractTransaction('method', 'WAddress', { args: [] })
+      ).rejects.toThrow('createNanoContractTransaction');
+    });
+
+    /**
+     * This facade carries the same change-address wiring as the fullnode one,
+     * but only the fullnode side is exercised by the integration suite, so a
+     * wrong field name or a misplaced call here would ship unnoticed. Capture
+     * what reaches the builder rather than that the setter was called: it is
+     * the value landing on the builder that build() will use which matters.
+     */
+    describe.each([
+      ['forwards the transaction change address', 'WSFK832SPd6WKzpKkymj5Ya4JLnkvW2Y5A'],
+      ['leaves it unset when the caller omits it', undefined],
+    ])('%s', (_name, changeAddress) => {
+      it('reaches the builder', async () => {
+        const caller = 'WgKrTAfyjtNK5aQzx9YeQda686y7nm3DLi';
+        jest.spyOn(wallet, 'isReady').mockReturnValue(true);
+        jest.spyOn(wallet.storage, 'isReadonly').mockResolvedValue(false);
+        jest.spyOn(wallet, 'getAddressIndexIfOwned').mockResolvedValue(0);
+
+        let seen: string | null | undefined;
+        const buildSpy = jest
+          .spyOn(NanoContractTransactionBuilder.prototype, 'build')
+          .mockImplementation(async function mockBuild(this: NanoContractTransactionBuilder) {
+            seen = this.changeAddress;
+            throw new Error('stop-after-build');
+          });
+
+        await expect(
+          wallet.createNanoContractTransaction(
+            'method',
+            caller,
+            { ncId: 'a'.repeat(64), args: [], actions: [] },
+            { pinCode: '123', ...(changeAddress ? { changeAddress } : {}) }
+          )
+        ).rejects.toThrow('stop-after-build');
+
+        expect(seen).toBe(changeAddress ?? null);
+        buildSpy.mockRestore();
+      });
+    });
+  });
+
+  describe('hasTxOutsideFirstAddress', () => {
+    it('should return true when wallet has transactions outside first address', async () => {
+      jest.spyOn(walletApi, 'getHasTxOutsideFirstAddress').mockResolvedValue({
+        success: true,
+        hasTransactions: true,
+      });
+
+      const result = await wallet.hasTxOutsideFirstAddress();
+
+      expect(result).toBe(true);
+      expect(walletApi.getHasTxOutsideFirstAddress).toHaveBeenCalledWith(wallet);
+    });
+
+    it('should return false when wallet has no transactions outside first address', async () => {
+      jest.spyOn(walletApi, 'getHasTxOutsideFirstAddress').mockResolvedValue({
+        success: true,
+        hasTransactions: false,
+      });
+
+      const result = await wallet.hasTxOutsideFirstAddress();
+
+      expect(result).toBe(false);
+      expect(walletApi.getHasTxOutsideFirstAddress).toHaveBeenCalledWith(wallet);
+    });
+
+    it('should throw error if wallet is not ready', async () => {
+      jest.spyOn(wallet, 'isReady').mockReturnValue(false);
+
+      await expect(wallet.hasTxOutsideFirstAddress()).rejects.toThrow('Wallet not ready');
+    });
+
+    it('should propagate API errors', async () => {
+      jest
+        .spyOn(walletApi, 'getHasTxOutsideFirstAddress')
+        .mockRejectedValue(
+          new WalletRequestError('Error checking if wallet has transactions outside first address.')
+        );
+
+      await expect(wallet.hasTxOutsideFirstAddress()).rejects.toThrow(
+        'Error checking if wallet has transactions outside first address.'
+      );
+    });
+  });
+});
+
+/**
+ * Regression tests for signing logic in prepareMintTokensData and prepareMeltTokensData.
+ * These tests verify that the correct addressIndex is used for each input type during signing.
+ *
+ * Input structure for fee tokens:
+ * - prepareMintTokensData: [HTR inputs...] + [mint authority input]
+ * - prepareMeltTokensData: [token inputs...] + [melt authority input] + [HTR inputs...]
+ */
+describe('Input signing addressIndex tests', () => {
+  const seed =
+    'purse orchard camera cloud piece joke hospital mechanic timber horror shoulder rebuild you decrease garlic derive rebuild random naive elbow depart okay parrot cliff';
+  const network = new Network('testnet');
+  const addresses = [
+    'WdSD7aytFEZ5Hp8quhqu3wUCsyyGqcneMu',
+    'WbjNdAGBWAkCS2QVpqmacKXNy8WVXatXNM',
+    'WR1i8USJWQuaU423fwuFQbezfevmT4vFWX',
+  ];
+
+  describe('prepareMintTokensData - addressIndex order', () => {
+    it('should use correct addressIndexes for HTR inputs and mint authority input', async () => {
+      const tokenId = '0000000000000000000000000000000000000000000000000000000000000001';
+
+      mockAxiosAdapter.onPost('wallet/addresses/check_mine').reply(200, {
+        success: true,
+        addresses: { [addresses[2]]: true },
+      });
+
+      jest.spyOn(walletApi, 'getAddressDetails').mockResolvedValue({
+        data: { index: 2, address: addresses[2], transactions: 0, seqnum: 0 },
+      });
+
+      jest.spyOn(walletApi, 'getTxOutputs').mockResolvedValue({
+        success: true,
+        txOutputs: [
+          {
+            txId: '000000000000000000000000000000000000000000000000000000000000aa01',
+            index: 0,
+            tokenId,
+            address: addresses[2],
+            value: TOKEN_MINT_MASK,
+            authorities: TOKEN_MINT_MASK,
+            timelock: null,
+            heightlock: null,
+            locked: false,
+            addressPath: "m/280'/280'/0/1/2",
+          },
+        ],
+      });
+
+      jest.spyOn(walletApi, 'getTokenDetails').mockResolvedValue({
+        success: true,
+        name: 'Fee Token',
+        symbol: 'FBT',
+        version: TokenVersion.FEE,
+      });
+
+      const wallet = new HathorWalletServiceWallet({
+        requestPassword: jest.fn(),
+        seed,
+        network,
+      });
+      wallet.setState('Ready');
+
+      const code = new Mnemonic(seed);
+      const xpriv = code.toHDPrivateKey('', network.getNetwork());
+
+      jest.spyOn(wallet.storage, 'getMainXPrivKey').mockResolvedValue(xpriv.xprivkey);
+      jest.spyOn(wallet.storage, 'getToken').mockImplementation(mockGetToken);
+      jest.spyOn(wallet, 'getCurrentAddress').mockReturnValue({ address: addresses[0] });
+
+      // Mock getTokenDetails for token version
+      jest.spyOn(wallet, 'getTokenDetails').mockResolvedValue({
+        tokenInfo: {
+          id: tokenId,
+          name: 'Fee Token',
+          symbol: 'FBT',
+          version: TokenVersion.FEE,
+        },
+        totalSupply: 1000n,
+        totalTransactions: 1,
+        authorities: { mint: true, melt: false },
+      });
+
+      // Mock mint authority
+      jest.spyOn(wallet, 'getMintAuthority').mockResolvedValue([
+        {
+          txId: '000000000000000000000000000000000000000000000000000000000000aa01',
+          index: 0,
+          address: addresses[2], // authority address
+          authorities: TOKEN_MINT_MASK,
+        },
+      ]);
+
+      // Mock getAddressIndex for authority address (returns index 5)
+      const authorityAddressIndex = 5;
+      jest.spyOn(wallet, 'getAddressIndex').mockResolvedValue(authorityAddressIndex);
+
+      // HTR UTXOs with different address indexes
+      const htrUtxo1AddressIndex = 10;
+      const htrUtxo2AddressIndex = 15;
+
+      jest.spyOn(wallet, 'getUtxosForAmount').mockImplementation(async (amount, params) => {
+        if (params?.token === NATIVE_TOKEN_UID) {
+          return {
+            utxos: [
+              {
+                txId: '000000000000000000000000000000000000000000000000000000000000bb01',
+                index: 0,
+                tokenId: NATIVE_TOKEN_UID,
+                address: addresses[0],
+                value: 5n,
+                authorities: 0n,
+                timelock: null,
+                heightlock: null,
+                locked: false,
+                addressPath: `m/280'/280'/0/1/${htrUtxo1AddressIndex}`,
+              },
+              {
+                txId: '000000000000000000000000000000000000000000000000000000000000bb02',
+                index: 0,
+                tokenId: NATIVE_TOKEN_UID,
+                address: addresses[1],
+                value: 5n,
+                authorities: 0n,
+                timelock: null,
+                heightlock: null,
+                locked: false,
+                addressPath: `m/280'/280'/0/1/${htrUtxo2AddressIndex}`,
+              },
+            ],
+            changeAmount: 9n,
+          };
+        }
+        return { utxos: [], changeAmount: 0n };
+      });
+
+      // Capture addressIndexes passed to getInputData
+      const capturedAddressIndexes: number[] = [];
+      jest.spyOn(wallet, 'getInputData').mockImplementation((xp, dtsh, addressIndex) => {
+        capturedAddressIndexes.push(addressIndex);
+        return Buffer.alloc(0);
+      });
+
+      await wallet.prepareMintTokensData(tokenId, 100n, {
+        mintAuthorityAddress: addresses[2],
+        pinCode: '123456',
+        signTx: true,
+      });
+
+      // Expected order: [HTR input 1, HTR input 2, mint authority]
+      // addressIndexes: [10, 15, 5]
+      expect(capturedAddressIndexes).toHaveLength(3);
+      expect(capturedAddressIndexes[0]).toBe(htrUtxo1AddressIndex); // First HTR input
+      expect(capturedAddressIndexes[1]).toBe(htrUtxo2AddressIndex); // Second HTR input
+      expect(capturedAddressIndexes[2]).toBe(authorityAddressIndex); // Mint authority (last)
+    });
+  });
+
+  describe('prepareMeltTokensData - addressIndex order', () => {
+    it('should use correct addressIndexes for token inputs, melt authority, and HTR inputs', async () => {
+      const tokenId = '0000000000000000000000000000000000000000000000000000000000000002';
+
+      mockAxiosAdapter.onPost('wallet/addresses/check_mine').reply(200, {
+        success: true,
+        addresses: { [addresses[2]]: true },
+      });
+
+      jest.spyOn(walletApi, 'getAddressDetails').mockResolvedValue({
+        data: { index: 2, address: addresses[2], transactions: 0, seqnum: 0 },
+      });
+
+      jest.spyOn(walletApi, 'getTxOutputs').mockResolvedValue({
+        success: true,
+        txOutputs: [
+          {
+            txId: '000000000000000000000000000000000000000000000000000000000000ee01',
+            index: 0,
+            tokenId,
+            address: addresses[2],
+            value: TOKEN_MELT_MASK,
+            authorities: TOKEN_MELT_MASK,
+            timelock: null,
+            heightlock: null,
+            locked: false,
+            addressPath: "m/280'/280'/0/1/2",
+          },
+        ],
+      });
+
+      jest.spyOn(walletApi, 'getTokenDetails').mockResolvedValue({
+        success: true,
+        name: 'Fee Token',
+        symbol: 'FBT',
+        version: TokenVersion.FEE,
+      });
+
+      const wallet = new HathorWalletServiceWallet({
+        requestPassword: jest.fn(),
+        seed,
+        network,
+      });
+      wallet.setState('Ready');
+
+      const code = new Mnemonic(seed);
+      const xpriv = code.toHDPrivateKey('', network.getNetwork());
+
+      jest.spyOn(wallet.storage, 'getMainXPrivKey').mockResolvedValue(xpriv.xprivkey);
+      // Mock storage.getToken to return fee token version
+      jest.spyOn(wallet.storage, 'getToken').mockResolvedValue({
+        uid: tokenId,
+        name: 'Fee Token',
+        symbol: 'FBT',
+        version: TokenVersion.FEE,
+      });
+      jest.spyOn(wallet, 'getCurrentAddress').mockReturnValue({ address: addresses[0] });
+
+      // Mock getTokenDetails for token version
+      jest.spyOn(wallet, 'getTokenDetails').mockResolvedValue({
+        tokenInfo: {
+          id: tokenId,
+          name: 'Fee Token',
+          symbol: 'FBT',
+          version: TokenVersion.FEE,
+        },
+        totalSupply: 1000n,
+        totalTransactions: 1,
+        authorities: { mint: false, melt: true },
+      });
+
+      // Token inputs with different address indexes
+      const tokenUtxo1AddressIndex = 20;
+      const tokenUtxo2AddressIndex = 25;
+
+      // Authority address index
+      const authorityAddressIndex = 30;
+
+      // HTR inputs
+      const htrUtxo1AddressIndex = 40;
+      const htrUtxo2AddressIndex = 45;
+
+      jest.spyOn(wallet, 'getUtxosForAmount').mockImplementation(async (amount, params) => {
+        if (params?.token === tokenId) {
+          return {
+            utxos: [
+              {
+                txId: '000000000000000000000000000000000000000000000000000000000000cc01',
+                index: 0,
+                tokenId,
+                address: addresses[0],
+                value: 500n,
+                authorities: 0n,
+                timelock: null,
+                heightlock: null,
+                locked: false,
+                addressPath: `m/280'/280'/0/1/${tokenUtxo1AddressIndex}`,
+              },
+              {
+                txId: '000000000000000000000000000000000000000000000000000000000000cc02',
+                index: 0,
+                tokenId,
+                address: addresses[1],
+                value: 600n,
+                authorities: 0n,
+                timelock: null,
+                heightlock: null,
+                locked: false,
+                addressPath: `m/280'/280'/0/1/${tokenUtxo2AddressIndex}`,
+              },
+            ],
+            changeAmount: 100n,
+          };
+        }
+        if (params?.token === NATIVE_TOKEN_UID) {
+          return {
+            utxos: [
+              {
+                txId: '000000000000000000000000000000000000000000000000000000000000dd01',
+                index: 0,
+                tokenId: NATIVE_TOKEN_UID,
+                address: addresses[0],
+                value: 5n,
+                authorities: 0n,
+                timelock: null,
+                heightlock: null,
+                locked: false,
+                addressPath: `m/280'/280'/0/1/${htrUtxo1AddressIndex}`,
+              },
+              {
+                txId: '000000000000000000000000000000000000000000000000000000000000dd02',
+                index: 0,
+                tokenId: NATIVE_TOKEN_UID,
+                address: addresses[1],
+                value: 5n,
+                authorities: 0n,
+                timelock: null,
+                heightlock: null,
+                locked: false,
+                addressPath: `m/280'/280'/0/1/${htrUtxo2AddressIndex}`,
+              },
+            ],
+            changeAmount: 9n,
+          };
+        }
+        return { utxos: [], changeAmount: 0n };
+      });
+
+      // Mock melt authority
+      jest.spyOn(wallet, 'getMeltAuthority').mockResolvedValue([
+        {
+          txId: '000000000000000000000000000000000000000000000000000000000000ee01',
+          index: 0,
+          address: addresses[2],
+          authorities: TOKEN_MELT_MASK,
+        },
+      ]);
+
+      // Mock getAddressIndex for authority address
+      jest.spyOn(wallet, 'getAddressIndex').mockResolvedValue(authorityAddressIndex);
+
+      // Capture addressIndexes passed to getInputData
+      const capturedAddressIndexes: number[] = [];
+      jest.spyOn(wallet, 'getInputData').mockImplementation((xp, dtsh, addressIndex) => {
+        capturedAddressIndexes.push(addressIndex);
+        return Buffer.alloc(0);
+      });
+
+      await wallet.prepareMeltTokensData(tokenId, 1000n, {
+        meltAuthorityAddress: addresses[2],
+        changeAddress: addresses[2],
+        pinCode: '123456',
+        signTx: true,
+      });
+
+      // Expected input order for fee tokens:
+      // [token input 1, token input 2, melt authority, HTR input 1, HTR input 2]
+      // Expected addressIndexes: [20, 25, 30, 40, 45]
+      expect(capturedAddressIndexes).toHaveLength(5);
+      expect(capturedAddressIndexes[0]).toBe(tokenUtxo1AddressIndex); // First token input
+      expect(capturedAddressIndexes[1]).toBe(tokenUtxo2AddressIndex); // Second token input
+      expect(capturedAddressIndexes[2]).toBe(authorityAddressIndex); // Melt authority
+      expect(capturedAddressIndexes[3]).toBe(htrUtxo1AddressIndex); // First HTR input
+      expect(capturedAddressIndexes[4]).toBe(htrUtxo2AddressIndex); // Second HTR input
+    });
+
+    it('should use correct addressIndexes for deposit token (no HTR inputs)', async () => {
+      const tokenId = '0000000000000000000000000000000000000000000000000000000000000003';
+
+      mockAxiosAdapter.onPost('wallet/addresses/check_mine').reply(200, {
+        success: true,
+        addresses: { [addresses[2]]: true },
+      });
+
+      jest.spyOn(walletApi, 'getAddressDetails').mockResolvedValue({
+        data: { index: 2, address: addresses[2], transactions: 0, seqnum: 0 },
+      });
+
+      jest.spyOn(walletApi, 'getTxOutputs').mockResolvedValue({
+        success: true,
+        txOutputs: [
+          {
+            txId: '000000000000000000000000000000000000000000000000000000000000ee02',
+            index: 0,
+            tokenId,
+            address: addresses[2],
+            value: TOKEN_MELT_MASK,
+            authorities: TOKEN_MELT_MASK,
+            timelock: null,
+            heightlock: null,
+            locked: false,
+            addressPath: "m/280'/280'/0/1/2",
+          },
+        ],
+      });
+
+      const wallet = new HathorWalletServiceWallet({
+        requestPassword: jest.fn(),
+        seed,
+        network,
+      });
+      wallet.setState('Ready');
+
+      const code = new Mnemonic(seed);
+      const xpriv = code.toHDPrivateKey('', network.getNetwork());
+
+      jest.spyOn(wallet.storage, 'getMainXPrivKey').mockResolvedValue(xpriv.xprivkey);
+      jest.spyOn(wallet, 'getCurrentAddress').mockReturnValue({ address: addresses[0] });
+
+      // Mock storage.getToken to return DEPOSIT version
+      jest.spyOn(wallet.storage, 'getToken').mockResolvedValue({
+        uid: tokenId,
+        name: 'Deposit Token',
+        symbol: 'DBT',
+        version: TokenVersion.DEPOSIT,
+      });
+
+      // Mock getTokenDetails for token version
+      jest.spyOn(wallet, 'getTokenDetails').mockResolvedValue({
+        tokenInfo: {
+          id: tokenId,
+          name: 'Deposit Token',
+          symbol: 'DBT',
+          version: TokenVersion.DEPOSIT,
+        },
+        totalSupply: 1000n,
+        totalTransactions: 1,
+        authorities: { mint: false, melt: true },
+      });
+
+      // Token inputs with different address indexes
+      const tokenUtxoAddressIndex = 12;
+
+      // Authority address index
+      const authorityAddressIndex = 18;
+
+      jest.spyOn(wallet, 'getUtxosForAmount').mockImplementation(async (amount, params) => {
+        if (params?.token === tokenId) {
+          return {
+            utxos: [
+              {
+                txId: '000000000000000000000000000000000000000000000000000000000000ff01',
+                index: 0,
+                tokenId,
+                address: addresses[0],
+                value: 200n,
+                authorities: 0n,
+                timelock: null,
+                heightlock: null,
+                locked: false,
+                addressPath: `m/280'/280'/0/1/${tokenUtxoAddressIndex}`,
+              },
+            ],
+            changeAmount: 100n,
+          };
+        }
+        return { utxos: [], changeAmount: 0n };
+      });
+
+      // Mock melt authority
+      jest.spyOn(wallet, 'getMeltAuthority').mockResolvedValue([
+        {
+          txId: '000000000000000000000000000000000000000000000000000000000000ee02',
+          index: 0,
+          address: addresses[2],
+          authorities: TOKEN_MELT_MASK,
+        },
+      ]);
+
+      // Mock getAddressIndex for authority address
+      jest.spyOn(wallet, 'getAddressIndex').mockResolvedValue(authorityAddressIndex);
+
+      // Capture addressIndexes passed to getInputData
+      const capturedAddressIndexes: number[] = [];
+      jest.spyOn(wallet, 'getInputData').mockImplementation((xp, dtsh, addressIndex) => {
+        capturedAddressIndexes.push(addressIndex);
+        return Buffer.alloc(0);
+      });
+
+      await wallet.prepareMeltTokensData(tokenId, 100n, {
+        meltAuthorityAddress: addresses[2],
+        changeAddress: addresses[2],
+        pinCode: '123456',
+        signTx: true,
+      });
+
+      // Expected input order for deposit tokens (no HTR inputs):
+      // [token input, melt authority]
+      // Expected addressIndexes: [12, 18]
+      expect(capturedAddressIndexes).toHaveLength(2);
+      expect(capturedAddressIndexes[0]).toBe(tokenUtxoAddressIndex); // Token input
+      expect(capturedAddressIndexes[1]).toBe(authorityAddressIndex); // Melt authority (last)
+    });
+  });
+});
+
+describe('deposit/withdraw facade methods', () => {
+  const network = new Network('testnet');
+
+  const buildWallet = () =>
+    new HathorWalletServiceWallet({
+      requestPassword: jest.fn(),
+      seed: defaultWalletSeed,
+      network,
+      passphrase: '',
+      xpriv: null,
+      xpub: null,
+    });
+
+  it('delegate to the util with the fraction from storage', () => {
+    const wallet = buildWallet();
+    wallet.setState('Ready');
+    // 3% deposit percentage; deposit rounds up and withdraw rounds down for 1010.
+    jest
+      .spyOn(wallet.storage, 'getTokenDepositPercentageFraction')
+      .mockReturnValue({ numerator: 3n, denominator: 100n });
+
+    expect(wallet.getDepositAmount(1010n)).toBe(31n); // ceil(30.3)
+    expect(wallet.getWithdrawAmount(1010n)).toBe(30n); // floor(30.3)
+  });
+
+  it('throw when the wallet is not ready', () => {
+    const wallet = buildWallet(); // default state is NOT_STARTED
+    expect(() => wallet.getDepositAmount(1010n)).toThrow('Wallet not ready');
+    expect(() => wallet.getWithdrawAmount(1010n)).toThrow('Wallet not ready');
+  });
+});

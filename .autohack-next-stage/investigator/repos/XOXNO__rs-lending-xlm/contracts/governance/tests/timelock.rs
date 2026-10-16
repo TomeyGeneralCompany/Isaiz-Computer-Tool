@@ -1,0 +1,806 @@
+use soroban_sdk::testutils::{Address as _, Ledger as _};
+use soroban_sdk::{vec, Address, BytesN, Env, IntoVal, Symbol, Vec};
+use stellar_governance::timelock::OperationState;
+
+use common::errors::GenericError;
+use common::types::{AssetOracle, IndependencePolicy, OracleTolerance, PositionLimits, PriceKey};
+
+use crate::access::{CANCELLER_ROLE, EXECUTOR_ROLE, GUARDIAN_ROLE, PROPOSER_ROLE};
+use crate::constants::{
+    TIMELOCK_MAX_DELAY_LEDGERS, TIMELOCK_MIN_DELAY_LEDGERS, TIMELOCK_OPERATION_GRACE_LEDGERS,
+    TIMELOCK_RECOVERY_MIN_DELAY_LEDGERS, TIMELOCK_SENSITIVE_MIN_DELAY_LEDGERS,
+};
+use crate::op::{
+    AdminOperation, ConfigureAssetOracleArgs, EditToleranceArgs, RoleArgs, TransferOwnershipArgs,
+};
+use crate::test_support::{
+    read_controller_position_limits, register, register_with_controller, zero_salt,
+};
+use crate::timelock::{operation_delay, validate_delay_update, DelayTier};
+use crate::{Governance, GovernanceClient};
+
+fn grant_role_via_timelock(
+    env: &Env,
+    gov: &GovernanceClient<'_>,
+    admin: &Address,
+    delay: u32,
+    role: &str,
+    salt_byte: u8,
+) -> Address {
+    let account = Address::generate(env);
+    let salt = BytesN::<32>::from_array(env, &[salt_byte; 32]);
+    let grant = AdminOperation::GrantGovRole(RoleArgs {
+        account: account.clone(),
+        role: Symbol::new(env, role),
+    });
+    gov.propose(admin, &grant, &salt);
+
+    env.ledger()
+        .with_mut(|l| l.sequence_number += delay.max(TIMELOCK_SENSITIVE_MIN_DELAY_LEDGERS));
+    gov.execute_self(&Some(admin.clone()), &grant, &salt);
+    account
+}
+
+#[test]
+fn constructor_grants_timelock_roles_to_admin() {
+    let env = Env::default();
+    let (admin, _gov_id, gov) = register(&env, TIMELOCK_MIN_DELAY_LEDGERS);
+
+    assert!(gov.has_role(&admin, &Symbol::new(&env, PROPOSER_ROLE)));
+    assert!(gov.has_role(&admin, &Symbol::new(&env, EXECUTOR_ROLE)));
+    assert!(gov.has_role(&admin, &Symbol::new(&env, CANCELLER_ROLE)));
+}
+
+#[test]
+fn constructor_sets_min_delay() {
+    let env = Env::default();
+    let (_admin, _gov_id, gov) = register(&env, TIMELOCK_MIN_DELAY_LEDGERS);
+
+    assert_eq!(gov.get_min_delay(), TIMELOCK_MIN_DELAY_LEDGERS);
+}
+
+#[test]
+fn get_operation_state_unknown_is_unset() {
+    let env = Env::default();
+    let (_admin, _gov_id, gov) = register(&env, TIMELOCK_MIN_DELAY_LEDGERS);
+
+    let unknown = BytesN::<32>::from_array(&env, &[7u8; 32]);
+    assert_eq!(gov.get_operation_state(&unknown), OperationState::Unset);
+}
+
+#[test]
+fn propose_schedules_waiting_operation() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let delay = 10u32;
+    let (admin, _controller, gov) = register_with_controller(&env, delay);
+
+    let limits = PositionLimits {
+        max_supply_positions: 5,
+        max_borrow_positions: 4,
+    };
+    let salt = zero_salt(&env);
+    let id = gov.propose(&admin, &AdminOperation::SetPositionLimits(limits), &salt);
+
+    assert_eq!(gov.get_operation_state(&id), OperationState::Waiting);
+}
+
+#[test]
+fn propose_upgrade_pool_uses_sensitive_delay() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (admin, _controller, gov) = register_with_controller(&env, 10);
+    let salt = zero_salt(&env);
+    let hash = BytesN::from_array(&env, &[8u8; 32]);
+
+    let current = env.ledger().sequence();
+    let id = gov.propose(&admin, &AdminOperation::UpgradePool(hash), &salt);
+
+    assert_eq!(
+        gov.get_operation_ledger(&id),
+        current + TIMELOCK_SENSITIVE_MIN_DELAY_LEDGERS
+    );
+}
+
+#[test]
+fn propose_set_price_aggregator_uses_sensitive_delay() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (admin, _controller, gov) = register_with_controller(&env, 10);
+    let salt = zero_salt(&env);
+
+    let aggregator = env.register(controller::Controller, (admin.clone(),));
+
+    let current = env.ledger().sequence();
+    let id = gov.propose(
+        &admin,
+        &AdminOperation::SetPriceAggregator(aggregator),
+        &salt,
+    );
+
+    assert_eq!(
+        gov.get_operation_ledger(&id),
+        current + TIMELOCK_SENSITIVE_MIN_DELAY_LEDGERS
+    );
+}
+
+#[test]
+fn guardian_pauses_immediately_stranger_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (admin, controller, gov) = register_with_controller(&env, 10);
+    let stranger = Address::generate(&env);
+
+    gov.execute_immediate(&admin, &AdminOperation::Unpause);
+
+    assert!(gov.try_pause(&stranger).is_err());
+
+    gov.pause(&admin);
+    assert!(env.as_contract(&controller, || {
+        stellar_contract_utils::pausable::paused(&env)
+    }));
+}
+
+#[test]
+fn unpause_uses_standard_delay() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let delay = 10u32;
+    let (admin, _controller, gov) = register_with_controller(&env, delay);
+    let salt = zero_salt(&env);
+
+    let current = env.ledger().sequence();
+    let id = gov.propose(&admin, &AdminOperation::Unpause, &salt);
+    assert_eq!(gov.get_operation_ledger(&id), current + delay);
+    assert_eq!(gov.get_operation_state(&id), OperationState::Waiting);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #4002)")]
+fn execute_before_delay_reverts() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let delay = 10u32;
+    let (admin, controller, gov) = register_with_controller(&env, delay);
+
+    let limits = PositionLimits {
+        max_supply_positions: 5,
+        max_borrow_positions: 4,
+    };
+    let salt = zero_salt(&env);
+    let _ = gov.propose(
+        &admin,
+        &AdminOperation::SetPositionLimits(limits.clone()),
+        &salt,
+    );
+
+    gov.execute(
+        &Some(admin.clone()),
+        &controller,
+        &Symbol::new(&env, "set_position_limits"),
+        &vec![&env, limits.into_val(&env)],
+        &zero_salt(&env),
+        &salt,
+    );
+}
+
+#[test]
+fn execute_after_delay_applies_to_controller() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let delay = 10u32;
+    let (admin, controller, gov) = register_with_controller(&env, delay);
+
+    let limits = PositionLimits {
+        max_supply_positions: 4,
+        max_borrow_positions: 3,
+    };
+    let salt = zero_salt(&env);
+    let id = gov.propose(
+        &admin,
+        &AdminOperation::SetPositionLimits(limits.clone()),
+        &salt,
+    );
+    assert_eq!(gov.get_operation_state(&id), OperationState::Waiting);
+
+    env.ledger().with_mut(|l| l.sequence_number += delay);
+    assert_eq!(gov.get_operation_state(&id), OperationState::Ready);
+
+    gov.execute(
+        &Some(admin.clone()),
+        &controller,
+        &Symbol::new(&env, "set_position_limits"),
+        &vec![&env, limits.into_val(&env)],
+        &zero_salt(&env),
+        &salt,
+    );
+
+    assert_eq!(gov.get_operation_state(&id), OperationState::Unset);
+    let stored = read_controller_position_limits(&env, &controller);
+    assert_eq!(stored.max_supply_positions, 4);
+    assert_eq!(stored.max_borrow_positions, 3);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #40)")]
+fn execute_after_grace_period_reverts() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let delay = 10u32;
+    let (admin, controller, gov) = register_with_controller(&env, delay);
+
+    let limits = PositionLimits {
+        max_supply_positions: 4,
+        max_borrow_positions: 3,
+    };
+    let salt = zero_salt(&env);
+    let _id = gov.propose(
+        &admin,
+        &AdminOperation::SetPositionLimits(limits.clone()),
+        &salt,
+    );
+
+    env.ledger()
+        .with_mut(|l| l.sequence_number += delay + TIMELOCK_OPERATION_GRACE_LEDGERS + 1);
+
+    gov.execute(
+        &Some(admin.clone()),
+        &controller,
+        &Symbol::new(&env, "set_position_limits"),
+        &vec![&env, limits.into_val(&env)],
+        &zero_salt(&env),
+        &salt,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #36)")]
+fn propose_rejects_bad_input_at_schedule_time() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (admin, _controller, gov) = register_with_controller(&env, 10);
+
+    let limits = PositionLimits {
+        max_supply_positions: 0,
+        max_borrow_positions: 4,
+    };
+    let salt = zero_salt(&env);
+    gov.propose(&admin, &AdminOperation::SetPositionLimits(limits), &salt);
+}
+
+#[test]
+fn cancel_returns_operation_to_unset() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (admin, _controller, gov) = register_with_controller(&env, 10);
+
+    let limits = PositionLimits {
+        max_supply_positions: 5,
+        max_borrow_positions: 4,
+    };
+    let salt = zero_salt(&env);
+    let id = gov.propose(&admin, &AdminOperation::SetPositionLimits(limits), &salt);
+    assert_eq!(gov.get_operation_state(&id), OperationState::Waiting);
+
+    gov.cancel(&admin, &id);
+    assert_eq!(gov.get_operation_state(&id), OperationState::Unset);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #46)")]
+fn revocation_target_cannot_cancel_own_role_revocation() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let delay = 10u32;
+    let (admin, _controller, gov) = register_with_controller(&env, delay);
+    let canceller = grant_role_via_timelock(&env, &gov, &admin, delay, CANCELLER_ROLE, 1);
+
+    let salt = zero_salt(&env);
+    let id = gov.propose(
+        &admin,
+        &AdminOperation::RevokeGovRole(RoleArgs {
+            account: canceller.clone(),
+            role: Symbol::new(&env, CANCELLER_ROLE),
+        }),
+        &salt,
+    );
+    assert_eq!(gov.get_operation_state(&id), OperationState::Waiting);
+
+    gov.cancel(&canceller, &id);
+}
+
+#[test]
+fn independent_canceller_can_cancel_non_canceller_role_revocation() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let delay = 10u32;
+    let (admin, _controller, gov) = register_with_controller(&env, delay);
+    let honest_canceller = grant_role_via_timelock(&env, &gov, &admin, delay, CANCELLER_ROLE, 1);
+
+    let extra_proposer = grant_role_via_timelock(&env, &gov, &admin, delay, PROPOSER_ROLE, 2);
+
+    let revoke_salt = BytesN::<32>::from_array(&env, &[3u8; 32]);
+    let id = gov.propose(
+        &admin,
+        &AdminOperation::RevokeGovRole(RoleArgs {
+            account: extra_proposer,
+            role: Symbol::new(&env, PROPOSER_ROLE),
+        }),
+        &revoke_salt,
+    );
+    assert_eq!(gov.get_operation_state(&id), OperationState::Waiting);
+
+    gov.cancel(&honest_canceller, &id);
+    assert_eq!(gov.get_operation_state(&id), OperationState::Unset);
+}
+
+#[test]
+fn independent_canceller_can_veto_canceller_revocation() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let delay = 10u32;
+    let (admin, _controller, gov) = register_with_controller(&env, delay);
+    let target = grant_role_via_timelock(&env, &gov, &admin, delay, CANCELLER_ROLE, 1);
+    let independent = grant_role_via_timelock(&env, &gov, &admin, delay, CANCELLER_ROLE, 2);
+
+    let revoke_salt = BytesN::<32>::from_array(&env, &[3u8; 32]);
+    let id = gov.propose(
+        &admin,
+        &AdminOperation::RevokeGovRole(RoleArgs {
+            account: target,
+            role: Symbol::new(&env, CANCELLER_ROLE),
+        }),
+        &revoke_salt,
+    );
+    assert_eq!(gov.get_operation_state(&id), OperationState::Waiting);
+
+    gov.cancel(&independent, &id);
+    assert_eq!(gov.get_operation_state(&id), OperationState::Unset);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #41)")]
+fn owner_cannot_immediately_revoke_canceller() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let delay = 10u32;
+    let (admin, _controller, gov) = register_with_controller(&env, delay);
+    let canceller = grant_role_via_timelock(&env, &gov, &admin, delay, CANCELLER_ROLE, 1);
+    gov.revoke_role_immediate(&canceller, &Symbol::new(&env, CANCELLER_ROLE));
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #44)")]
+fn proposer_cannot_revoke_itself() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let delay = 10u32;
+    let (admin, _controller, gov) = register_with_controller(&env, delay);
+    let proposer = grant_role_via_timelock(&env, &gov, &admin, delay, PROPOSER_ROLE, 1);
+
+    let salt = BytesN::<32>::from_array(&env, &[3u8; 32]);
+    gov.propose(
+        &proposer,
+        &AdminOperation::RevokeGovRole(RoleArgs {
+            account: proposer.clone(),
+            role: Symbol::new(&env, PROPOSER_ROLE),
+        }),
+        &salt,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #44)")]
+fn owner_role_cannot_be_revoked() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let delay = 10u32;
+    let (admin, _controller, gov) = register_with_controller(&env, delay);
+    let proposer = grant_role_via_timelock(&env, &gov, &admin, delay, PROPOSER_ROLE, 1);
+
+    let salt = BytesN::<32>::from_array(&env, &[3u8; 32]);
+    gov.propose(
+        &proposer,
+        &AdminOperation::RevokeGovRole(RoleArgs {
+            account: admin.clone(),
+            role: Symbol::new(&env, GUARDIAN_ROLE),
+        }),
+        &salt,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #44)")]
+fn non_owner_cannot_propose_ownership_transfer() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let delay = 10u32;
+    let (admin, _controller, gov) = register_with_controller(&env, delay);
+    let proposer = grant_role_via_timelock(&env, &gov, &admin, delay, PROPOSER_ROLE, 1);
+    let new_owner = Address::generate(&env);
+
+    let salt = BytesN::<32>::from_array(&env, &[3u8; 32]);
+    gov.propose(
+        &proposer,
+        &AdminOperation::TransferGovOwnership(TransferOwnershipArgs {
+            new_owner,
+            live_until_ledger: env.ledger().sequence() + 100_000,
+        }),
+        &salt,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #44)")]
+fn non_owner_cannot_propose_controller_ownership_transfer() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let delay = 10u32;
+    let (admin, _controller, gov) = register_with_controller(&env, delay);
+    let proposer = grant_role_via_timelock(&env, &gov, &admin, delay, PROPOSER_ROLE, 1);
+    let new_owner = Address::generate(&env);
+
+    let salt = BytesN::<32>::from_array(&env, &[4u8; 32]);
+    gov.propose(
+        &proposer,
+        &AdminOperation::TransferCtrlOwnership(TransferOwnershipArgs {
+            new_owner,
+            live_until_ledger: env.ledger().sequence() + 100_000,
+        }),
+        &salt,
+    );
+}
+
+fn owner_only_operations(env: &Env) -> Vec<AdminOperation> {
+    let hash = BytesN::<32>::from_array(env, &[9u8; 32]);
+    let key = PriceKey::Token(Address::generate(env));
+    vec![
+        env,
+        AdminOperation::UpgradeGov(hash.clone()),
+        AdminOperation::UpgradeController(hash.clone()),
+        AdminOperation::UpgradePool(hash.clone()),
+        AdminOperation::UpgradePositionNft(hash.clone()),
+        AdminOperation::UpgradePriceAggregator(hash),
+        AdminOperation::MigrateController(2),
+        AdminOperation::UpdateGovDelay(TIMELOCK_MAX_DELAY_LEDGERS),
+        AdminOperation::SetPriceAggregator(Address::generate(env)),
+        AdminOperation::ConfigureAssetOracle(ConfigureAssetOracleArgs {
+            key: key.clone(),
+            oracle: AssetOracle {
+                asset_decimals: 7,
+                max_price_stale_seconds: 900,
+                sources: vec![env],
+                tolerance: OracleTolerance {
+                    upper_ratio_bps: 10_500,
+                    lower_ratio_bps: 9_524,
+                },
+                independence: IndependencePolicy::RequireDisjoint,
+                min_sanity_price_wad: 1,
+                max_sanity_price_wad: 2,
+            },
+        }),
+        AdminOperation::EditOracleTolerance(EditToleranceArgs {
+            key,
+            tolerance: 100,
+        }),
+        AdminOperation::SetSwapAggregator(Address::generate(env)),
+        AdminOperation::ApproveBlendPool(Address::generate(env)),
+        AdminOperation::SetAccumulator(Address::generate(env)),
+        AdminOperation::GrantGovRole(RoleArgs {
+            account: Address::generate(env),
+            role: Symbol::new(env, PROPOSER_ROLE),
+        }),
+    ]
+}
+
+#[test]
+fn only_the_owner_can_propose_code_price_source_and_role_operations() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let delay = 10u32;
+    let (admin, _controller, gov) = register_with_controller(&env, delay);
+    let proposer = grant_role_via_timelock(&env, &gov, &admin, delay, PROPOSER_ROLE, 1);
+    let not_authorized = Err(Ok(soroban_sdk::Error::from_contract_error(
+        GenericError::NotAuthorized as u32,
+    )));
+
+    for (i, op) in owner_only_operations(&env).iter().enumerate() {
+        let salt = BytesN::<32>::from_array(&env, &[100 + i as u8; 32]);
+        assert_eq!(
+            gov.try_propose(&proposer, &op, &salt).map(|_| ()),
+            not_authorized,
+            "a non-owner proposer scheduled {op:?}"
+        );
+        assert_ne!(
+            gov.try_propose(&admin, &op, &salt).map(|_| ()),
+            not_authorized,
+            "the owner was refused {op:?}"
+        );
+    }
+}
+
+#[test]
+fn a_non_owner_proposer_still_schedules_listing_and_limit_operations() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let delay = 10u32;
+    let (admin, _controller, gov) = register_with_controller(&env, delay);
+    let proposer = grant_role_via_timelock(&env, &gov, &admin, delay, PROPOSER_ROLE, 1);
+
+    let id = gov.propose(
+        &proposer,
+        &AdminOperation::SetPositionLimits(PositionLimits {
+            max_supply_positions: 5,
+            max_borrow_positions: 5,
+        }),
+        &BytesN::<32>::from_array(&env, &[7u8; 32]),
+    );
+    assert_eq!(gov.get_operation_state(&id), OperationState::Waiting);
+}
+
+#[test]
+fn owner_ownership_transfer_is_cancellable() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let delay = 10u32;
+    let (admin, _controller, gov) = register_with_controller(&env, delay);
+    let canceller = grant_role_via_timelock(&env, &gov, &admin, delay, CANCELLER_ROLE, 1);
+    let new_owner = Address::generate(&env);
+
+    let salt = BytesN::<32>::from_array(&env, &[3u8; 32]);
+    let id = gov.propose(
+        &admin,
+        &AdminOperation::TransferGovOwnership(TransferOwnershipArgs {
+            new_owner,
+            live_until_ledger: env.ledger().sequence() + 100_000,
+        }),
+        &salt,
+    );
+    assert_eq!(gov.get_operation_state(&id), OperationState::Waiting);
+
+    gov.cancel(&canceller, &id);
+    assert_eq!(gov.get_operation_state(&id), OperationState::Unset);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #46)")]
+fn recovery_op_is_not_cancellable_by_canceller() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let delay = 10u32;
+    let (admin, _controller, gov) = register_with_controller(&env, delay);
+    let c1 = grant_role_via_timelock(&env, &gov, &admin, delay, CANCELLER_ROLE, 1);
+    let fresh = Address::generate(&env);
+    let salt = BytesN::<32>::from_array(&env, &[8u8; 32]);
+    let id = gov.propose_canceller_reset(&soroban_sdk::vec![&env, fresh], &salt);
+    gov.cancel(&c1, &id);
+}
+
+#[test]
+fn revoking_proposer_ok_when_another_remains() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let delay = 10u32;
+    let (admin, _controller, gov) = register_with_controller(&env, delay);
+    let proposer = Symbol::new(&env, PROPOSER_ROLE);
+    let second = grant_role_via_timelock(&env, &gov, &admin, delay, PROPOSER_ROLE, 1);
+
+    let r_salt = BytesN::<32>::from_array(&env, &[2u8; 32]);
+    let revoke = AdminOperation::RevokeGovRole(RoleArgs {
+        account: second.clone(),
+        role: proposer.clone(),
+    });
+    gov.propose(&admin, &revoke, &r_salt);
+    env.ledger()
+        .with_mut(|l| l.sequence_number += delay.max(TIMELOCK_SENSITIVE_MIN_DELAY_LEDGERS));
+    gov.execute_self(&Some(admin.clone()), &revoke, &r_salt);
+    assert!(!gov.has_role(&second, &proposer));
+    assert!(gov.has_role(&admin, &proposer));
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #2000)")]
+fn non_proposer_cannot_propose() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _controller, gov) = register_with_controller(&env, 10);
+    let stranger = Address::generate(&env);
+
+    let limits = PositionLimits {
+        max_supply_positions: 5,
+        max_borrow_positions: 4,
+    };
+    let salt = zero_salt(&env);
+    gov.propose(&stranger, &AdminOperation::SetPositionLimits(limits), &salt);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #2000)")]
+fn non_executor_cannot_execute() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let delay = 10u32;
+    let (admin, controller, gov) = register_with_controller(&env, delay);
+    let stranger = Address::generate(&env);
+
+    let limits = PositionLimits {
+        max_supply_positions: 5,
+        max_borrow_positions: 4,
+    };
+    let salt = zero_salt(&env);
+    gov.propose(
+        &admin,
+        &AdminOperation::SetPositionLimits(limits.clone()),
+        &salt,
+    );
+    env.ledger().with_mut(|l| l.sequence_number += delay);
+
+    gov.execute(
+        &Some(stranger),
+        &controller,
+        &Symbol::new(&env, "set_position_limits"),
+        &vec![&env, limits.into_val(&env)],
+        &zero_salt(&env),
+        &salt,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #2000)")]
+fn non_canceller_cannot_cancel() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (admin, _controller, gov) = register_with_controller(&env, 10);
+    let stranger = Address::generate(&env);
+
+    let limits = PositionLimits {
+        max_supply_positions: 5,
+        max_borrow_positions: 4,
+    };
+    let salt = zero_salt(&env);
+    let id = gov.propose(&admin, &AdminOperation::SetPositionLimits(limits), &salt);
+
+    gov.cancel(&stranger, &id);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #39)")]
+fn constructor_rejects_zero_delay() {
+    let env = Env::default();
+    let admin = Address::generate(&env);
+    let _ = env.register(Governance, (admin, 0u32));
+}
+
+#[test]
+fn operation_delay_sensitive_uses_seven_day_floor() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _gov_id, gov) = register(&env, 10);
+
+    env.as_contract(&gov.address, || {
+        assert_eq!(
+            operation_delay(&env, DelayTier::Sensitive),
+            TIMELOCK_SENSITIVE_MIN_DELAY_LEDGERS
+        );
+    });
+}
+
+#[test]
+fn operation_delay_sensitive_respects_higher_global_min() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let higher_min = TIMELOCK_SENSITIVE_MIN_DELAY_LEDGERS + 1_000;
+    let (_admin, _gov_id, gov) = register(&env, higher_min);
+
+    env.as_contract(&gov.address, || {
+        assert_eq!(operation_delay(&env, DelayTier::Sensitive), higher_min);
+    });
+}
+
+#[test]
+fn validate_delay_update_accepts_max_cap() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _gov_id, gov) = register(&env, TIMELOCK_MIN_DELAY_LEDGERS);
+    env.as_contract(&gov.address, || {
+        validate_delay_update(&env, TIMELOCK_MAX_DELAY_LEDGERS);
+    });
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #39)")]
+fn validate_delay_update_rejects_above_max_cap() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _gov_id, gov) = register(&env, TIMELOCK_MIN_DELAY_LEDGERS);
+    env.as_contract(&gov.address, || {
+        validate_delay_update(&env, TIMELOCK_MAX_DELAY_LEDGERS + 1);
+    });
+}
+
+#[test]
+fn recovery_resets_captured_council_after_long_delay() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let delay = 10u32;
+    let (admin, _controller, gov) = register_with_controller(&env, delay);
+    let bad1 = grant_role_via_timelock(&env, &gov, &admin, delay, CANCELLER_ROLE, 1);
+    let bad2 = grant_role_via_timelock(&env, &gov, &admin, delay, CANCELLER_ROLE, 2);
+    let fresh = Address::generate(&env);
+
+    let salt = BytesN::<32>::from_array(&env, &[5u8; 32]);
+    let new_set = soroban_sdk::vec![&env, fresh.clone()];
+    let _id = gov.propose_canceller_reset(&new_set, &salt);
+
+    env.ledger()
+        .with_mut(|l| l.sequence_number += TIMELOCK_RECOVERY_MIN_DELAY_LEDGERS);
+    gov.execute_canceller_reset(&Some(admin.clone()), &new_set, &salt);
+
+    let role = Symbol::new(&env, CANCELLER_ROLE);
+    assert!(!gov.has_role(&bad1, &role));
+    assert!(!gov.has_role(&bad2, &role));
+    assert!(gov.has_role(&fresh, &role));
+    assert!(gov.has_role(&admin, &role));
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #41)")]
+fn recovery_grant_enforces_executor_canceller_separation() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let delay = 10u32;
+    let (admin, _controller, gov) = register_with_controller(&env, delay);
+    let executor = grant_role_via_timelock(&env, &gov, &admin, delay, EXECUTOR_ROLE, 1);
+
+    let salt = BytesN::<32>::from_array(&env, &[6u8; 32]);
+    let new_set = soroban_sdk::vec![&env, executor.clone()];
+    let _id = gov.propose_canceller_reset(&new_set, &salt);
+
+    env.ledger()
+        .with_mut(|l| l.sequence_number += TIMELOCK_RECOVERY_MIN_DELAY_LEDGERS);
+    gov.execute_canceller_reset(&Some(admin.clone()), &new_set, &salt);
+}
+
+/// Proposes `UpgradePriceAggregator`, waits the Sensitive delay and executes the
+/// aggregator's `#[only_owner]` `upgrade` with governance as owner. The
+/// operation ends `Unset`.
+///
+/// The hash is the aggregator's current code, so the test checks authorization
+/// and dispatch, not a code change.
+#[test]
+fn upgrade_price_aggregator_executes_against_the_aggregator() {
+    let env = Env::default();
+    env.cost_estimate().budget().reset_unlimited();
+    env.cost_estimate().disable_resource_limits();
+    env.mock_all_auths();
+    let delay = 10u32;
+    let (admin, _controller, gov) = register_with_controller(&env, delay);
+
+    let wasm_hash = crate::test_support::upload_price_aggregator_wasm(&env);
+    let agg_id = gov.deploy_price_aggregator(&wasm_hash);
+
+    let salt = zero_salt(&env);
+    let id = gov.propose(
+        &admin,
+        &AdminOperation::UpgradePriceAggregator(wasm_hash.clone()),
+        &salt,
+    );
+    assert_eq!(gov.get_operation_state(&id), OperationState::Waiting);
+
+    let sensitive_delay =
+        env.as_contract(&gov.address, || operation_delay(&env, DelayTier::Sensitive));
+    env.ledger()
+        .with_mut(|l| l.sequence_number += sensitive_delay);
+    assert_eq!(gov.get_operation_state(&id), OperationState::Ready);
+
+    gov.execute(
+        &Some(admin.clone()),
+        &agg_id,
+        &Symbol::new(&env, "upgrade"),
+        &vec![&env, wasm_hash.into_val(&env)],
+        &zero_salt(&env),
+        &salt,
+    );
+
+    assert_eq!(gov.get_operation_state(&id), OperationState::Unset);
+}

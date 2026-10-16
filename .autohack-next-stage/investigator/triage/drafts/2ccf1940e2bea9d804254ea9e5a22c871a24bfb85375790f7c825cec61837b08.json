@@ -1,0 +1,31 @@
+{
+  "repository": "Instadapp/fluid-contracts-public",
+  "commit": "9496626f71a761fc296dc3b2efbfd54c504e18f0",
+  "scope_sources": [
+    {
+      "asset_type": "smart_contract",
+      "asset_url": "https://github.com/Instadapp/fluid-contracts-public",
+      "program": "instadapp",
+      "scope_url": "https://immunefi.com/bug-bounty/instadapp/scope/"
+    }
+  ],
+  "original_report": "Instadapp__fluid-contracts-public-9496626f71a7.json",
+  "lead": {
+    "rule": "SOL_DELEGATECALL",
+    "file": "contracts/protocols/dex/factory/main.sol",
+    "line": 234,
+    "guidance": "Review delegatecall target and access control",
+    "fingerprint": "b4c34e8535c056fcb949"
+  },
+  "source_excerpt": "226: \n227:         // Dex ID for the new dex and also acts as `nonce` for CREATE\n228:         uint256 dexId_ = ++_totalDexes;\n229: \n230:         // compute dex address for dex id.\n231:         dex_ = getDexAddress(dexId_);\n232: \n233:         // deploy the dex using dex deployment logic by making .delegatecall\n234:         (bool success_, bytes memory data_) = dexDeploymentLogic_.delegatecall(dexDeploymentData_);\n235: \n236:         if (!(success_ && dex_ == _deploy(abi.decode(data_, (bytes))) && isDex(dex_))) {\n237:             revert FluidDexError(ErrorTypes.DexFactory__InvalidDexAddress);\n238:         }\n239: \n240:         emit LogDexDeployed(dex_, dexId_);\n241:     }\n242: ",
+  "triage": {
+    "classification": "needs_review",
+    "rationale": "The code appears to be part of a DexFactory contract, but there is no explicit validation of the Dex address or its validity. The current implementation does not check if the Dex address is valid or if it is already a Dex, which could lead to invalid deployments. This is a potential issue in the contract's logic, but no specific exploitability or verified vulnerability is claimed.",
+    "evidence": "The code includes a check for the Dex address's validity and its deployment logic, but no further validation is performed.",
+    "follow_up": "If you have more information or a specific context, please provide it to help further analyze the code."
+  },
+  "status": "unverified_draft",
+  "verified_vulnerability": false,
+  "generated_at": "2026-10-14T23:44:50.517588+00:00",
+  "note": "Automated static triage only. No exploitability, eligibility, or bounty award established."
+}

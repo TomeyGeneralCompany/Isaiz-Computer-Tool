@@ -1,0 +1,1396 @@
+/**
+ * Copyright (c) Hathor Labs and its affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */
+
+import Mnemonic from 'bitcore-mnemonic';
+import { crypto, util, HDPrivateKey, HDPublicKey } from 'bitcore-lib';
+import wallet from '../../src/utils/wallet';
+import {
+  XPubError,
+  InvalidWords,
+  UncompressedPubKeyError,
+  InvalidPasswdError,
+  ShieldedKeyError,
+  WalletError,
+} from '../../src/errors';
+import Network from '../../src/models/network';
+import {
+  HD_WALLET_ENTROPY,
+  HATHOR_BIP44_CODE,
+  P2SH_ACCT_PATH,
+  SHIELDED_SCAN_ACCT_PATH,
+  SHIELDED_SPEND_ACCT_PATH,
+} from '../../src/constants';
+import { hexToBuffer } from '../../src/utils/buffer';
+import { IMultisigData, WalletType, WALLET_FLAGS } from '../../src/types';
+import { checkPassword, decryptData } from '../../src/utils/crypto';
+
+test('Words', () => {
+  const words = wallet.generateWalletWords();
+  const wordsArr = words.split(' ');
+  const [lastWord] = wordsArr.slice(-1);
+  // 24 words
+  expect(wordsArr.length).toBe(24);
+  // Words are valid
+  expect(wallet.wordsValid(words).valid).toBe(true);
+
+  // With 23 words become invalid
+  const invalidArr = wordsArr.slice(0, 23);
+  expect(() => wallet.wordsValid(invalidArr.join(' '))).toThrow(InvalidWords);
+
+  // With 22 words and an invalid word, it's invalid and the invalid word will be on the error object
+  const invalidArr2 = wordsArr.slice(0, 21);
+  invalidArr2.push('i');
+  invalidArr2.push('x');
+  let err: unknown;
+  try {
+    wallet.wordsValid(invalidArr2.join(' '));
+  } catch (error) {
+    err = error;
+  }
+  expect(err).toBeInstanceOf(InvalidWords);
+  expect((err as InvalidWords).invalidWords).toStrictEqual(['i', 'x']);
+
+  // Wrong 24th word
+  const wordToPush = lastWord === 'word' ? 'guitar' : 'word';
+  invalidArr.push(wordToPush);
+  expect(() => wallet.wordsValid(invalidArr.join(' '))).toThrow(InvalidWords);
+
+  // If the wrong word does not belong to the mnemonic dictionary we return it in the list of invalidWords
+  const invalidArr3 = invalidArr.slice(0, 23);
+  invalidArr3.push('abc');
+  try {
+    wallet.wordsValid(invalidArr3.join(' '));
+  } catch (error) {
+    err = error;
+  }
+  expect(err).toBeInstanceOf(InvalidWords);
+  expect((err as InvalidWords).invalidWords).toStrictEqual(['abc']);
+
+  // The separator may have breakline and multiples spaces
+  const testWords = wordsArr.join('  \n');
+  expect(wallet.wordsValid(testWords).valid).toBe(true);
+
+  // Spaces before and after
+  const newTestWords = `  ${testWords}  `;
+  expect(wallet.wordsValid(newTestWords).valid).toBe(true);
+});
+
+test('Xpriv and xpub', () => {
+  const code = new Mnemonic(HD_WALLET_ENTROPY);
+  const network = new Network('testnet');
+  const xpriv = code.toHDPrivateKey('', network.bitcoreNetwork);
+
+  expect(wallet.getXPubKeyFromXPrivKey(xpriv.xprivkey)).toBe(xpriv.xpubkey);
+
+  const xprivAccount = xpriv.deriveNonCompliantChild(`m/44'/${HATHOR_BIP44_CODE}'/0'`);
+  const xpubAccount = xprivAccount.xpubkey;
+  const derivedXpriv = xprivAccount.deriveNonCompliantChild(0);
+
+  expect(wallet.xpubDeriveChild(xpubAccount, 0)).toBe(derivedXpriv.xpubkey);
+
+  const { chainCode } = derivedXpriv._buffers;
+  const fingerprint = derivedXpriv._buffers.parentFingerPrint;
+  const derivedXpub = wallet.xpubFromData(
+    derivedXpriv.publicKey.toBuffer(),
+    chainCode,
+    fingerprint,
+    'testnet'
+  );
+  expect(derivedXpub).toBe(derivedXpriv.xpubkey);
+
+  // getPublicKeyFromXpub without an index will return the public key at the current derivation level
+  expect(wallet.getPublicKeyFromXpub(derivedXpriv.xpubkey).toString()).toEqual(
+    derivedXpriv.publicKey.toString()
+  );
+
+  // To pubkey compressed
+  const uncompressedPubKeyHex =
+    '044f355bdcb7cc0af728ef3cceb9615d90684bb5b2ca5f859ab0f0b704075871aa385b6b1b8ead809ca67454d9683fcf2ba03456d6fe2c4abe2b07f0fbdbb2f1c1';
+  const compressedPubKey = wallet.toPubkeyCompressed(hexToBuffer(uncompressedPubKeyHex));
+  const expectedCompressedPubKeyHex =
+    '034f355bdcb7cc0af728ef3cceb9615d90684bb5b2ca5f859ab0f0b704075871aa';
+  expect(util.buffer.bufferToHex(compressedPubKey)).toBe(expectedCompressedPubKeyHex);
+
+  // Invalid uncompressed public key must throw error
+  expect(() => wallet.toPubkeyCompressed(hexToBuffer(`${uncompressedPubKeyHex}ab`))).toThrow(
+    UncompressedPubKeyError
+  );
+});
+
+test('XPub decode errors', () => {
+  expect(() => {
+    return wallet.getPublicKeyFromXpub('xpub', 0);
+  }).toThrow(XPubError);
+
+  expect(() => {
+    return wallet.xpubDeriveChild('xpub', 0);
+  }).toThrow(XPubError);
+});
+
+test('isXpubKeyValid', () => {
+  const XPUBKEY =
+    'xpub6EcBoi2vDFcCW5sPAiQpXDYYtXd1mKhUJD64tUi8CPRG1VQFDkAbL8G5gqTmSZD6oq4Yhr5PZ8pKf3Xmb3W3pGcgqzUdFNaCRKL7TZa3res';
+  expect(wallet.isXpubKeyValid(XPUBKEY)).toBe(true);
+  expect(wallet.isXpubKeyValid(`${XPUBKEY}aa`)).toBe(false);
+});
+
+test('testnet: hd derivation', () => {
+  const testnet = new Network('testnet');
+  // Seed that generate 31 byte private keys (through xpriv.privateKey.bn.toBuffer())
+  const Words31B =
+    'few hint winner dignity where paper glare manual erupt school iron panther sign whisper egg buzz opera joy cable minor slot skull zoo system';
+
+  // 10 first addresses derived from the seed above on the paths m/44'/280'/0'/0/0-9
+  const Addr31B = [
+    'WZmfUEAzZkCcUWG2XFsLRXvErswmfm6kXE',
+    'WkXzzbKenz72uThsSGp93UeyFJqkpEV5cg',
+    'WVBoPads4aWMBCNrGfLnj5zfTvqoqiJFAf',
+    'WaKXxYh1H7kRV7i8wV29YgwVy6RygDxuEq',
+    'WZtSQHGYBtu72QrRYN3giWVMZ9y61jsnie',
+    'WUkz8Qib368ssTDMQoBXXMnWJAxGKJWDPX',
+    'WhxHrL1cyQ8qHR5eaYdi2pJ1MQuMycZv8q',
+    'WcywrinkAiyVSv9kB8UchNBMLRPt5q6uF3',
+    'WQUAM7ynWeeyZAEEoBu9FyrybRmYxHQrQR',
+    'WavSG5HpmG6Nq3faEAdzsCxYRbRrzFQWRB',
+  ];
+
+  // Seed that generate 32 byte private keys (through xpriv.privateKey.bn.toBuffer())
+  const Words32B =
+    'employ name misery bring pepper drive deal journey young prefer pluck rough entire tag mouse rough belt history arm shove crouch crater lobster remember';
+
+  // 10 first addresses derived from the seed above on the paths m/44'/280'/0'/0/0-9
+  const Addr32B = [
+    'WVEp3HoztTxmaBGawkyLKcvsNNV4Nd6Z7n',
+    'WgGCFzgPE6RAwkGNBJZGTAJ9irV9vV5MjE',
+    'Wk1bJ2C886MfzjE9hVeSBoeF4T2bUpk48Y',
+    'WfeBrfT2beJB2Vq2PaMuiTiBedDhW8NSgC',
+    'Wd483JsLQN7G5MjikwXBm6bQCAagyvf4m4',
+    'WiZG9r8CKoNd7vTTnoAp86bPxQ5N6qM3no',
+    'WP6GLZPkXZh9A9ZD9n7MaJCxHX1fRE7LvP',
+    'WaUjcZ7UThBxH5wrJfb5GNnQZCzWJ3kMGH',
+    'WZgiheyfEresupQuyZvKsKdym3y755HSnT',
+    'WednacQNGATvx1S2FTTCRbi2Sjs6mzS9f6',
+  ];
+
+  // These tests will determine bitcore has not changed the implementations of derive and deriveNonCompliantChild
+  // For 31 bytes private keys
+  const xpriv31B = wallet.getXPrivKeyFromSeed(Words31B, { networkName: 'testnet' });
+  expect(xpriv31B.privateKey.bn.toBuffer().length).toBe(31);
+  const dpriv31Bd = xpriv31B.derive("m/44'/280'/0'/0");
+  const dpriv31B = xpriv31B.deriveNonCompliantChild("m/44'/280'/0'/0");
+  for (let i = 0; i < 10; i++) {
+    const addrd = dpriv31Bd.derive(i).publicKey.toAddress(testnet.bitcoreNetwork).toString();
+    const addr = dpriv31B
+      .deriveNonCompliantChild(i)
+      .publicKey.toAddress(testnet.bitcoreNetwork)
+      .toString();
+    expect(addr).toStrictEqual(addrd); // derive and deriveNonCompliant should be the same
+    expect(addr).toStrictEqual(Addr31B[i]); // and both should generate the expected address
+  }
+
+  // For 32 bytes private keys
+  const xpriv32B = wallet.getXPrivKeyFromSeed(Words32B, { networkName: 'testnet' });
+  expect(xpriv32B.privateKey.bn.toBuffer().length).toBe(32);
+  const dpriv32Bd = xpriv32B.derive("m/44'/280'/0'/0");
+  const dpriv32B = xpriv32B.deriveNonCompliantChild("m/44'/280'/0'/0");
+  for (let i = 0; i < 10; i++) {
+    const addrd = dpriv32Bd.derive(i).publicKey.toAddress(testnet.bitcoreNetwork).toString();
+    const addr = dpriv32B
+      .deriveNonCompliantChild(i)
+      .publicKey.toAddress(testnet.bitcoreNetwork)
+      .toString();
+    expect(addr).toStrictEqual(addrd);
+    expect(addr).toStrictEqual(Addr32B[i]);
+  }
+});
+
+test('testnet: hd derivation with passphrase', () => {
+  const testnet = new Network('testnet');
+  // simple passphrase
+  const passw = 'Hathor@Network';
+
+  const Words =
+    'employ name misery bring pepper drive deal journey young prefer pluck rough entire tag mouse rough belt history arm shove crouch crater lobster remember';
+
+  const Addr = [
+    'WdWYtBvHHsD476nev6YkwXPVQcFWaPVHoX',
+    'WNxy8hfHmtnaMuDrNLLkJURricGEJBtw1H',
+    'WZvuKYKXztEkfDemxRoh8qBpkWUmFN1dkw',
+    'WXeVhv7p2rnHqN2gUcJBZ99gponjw6Rq2G',
+    'WRbgHXLJAc7pLBFfU5CMRiEhAKWFYQQWYW',
+    'WNtSVKXXfFRza9vd4LbqwR52X9NHcp7RHK',
+    'WkdDpDyzr2yvkyp1EhGeeKuCAyQiDRDo1E',
+    'WhvotQQpzmWaQtXarPwjnwjrgurWW4v4YY',
+    'WfwPJKbazRfMDrNfbSfeM5ybenQmKpHrNh',
+    'Waks5ExFgsjyx8gamRbVmhZuyLTAhELkgh',
+  ];
+
+  // For 32 bytes private keys
+  const xpriv = wallet.getXPrivKeyFromSeed(Words, {
+    passphrase: passw,
+    networkName: 'testnet',
+  });
+  const dprivd = xpriv.derive("m/44'/280'/0'/0");
+  const dpriv = xpriv.deriveNonCompliantChild("m/44'/280'/0'/0");
+  for (let i = 0; i < 10; i++) {
+    const addrd = dprivd.derive(i).publicKey.toAddress(testnet.bitcoreNetwork).toString();
+    const addr = dpriv
+      .deriveNonCompliantChild(i)
+      .publicKey.toAddress(testnet.bitcoreNetwork)
+      .toString();
+
+    expect(addr).toStrictEqual(addrd);
+    expect(addr).toStrictEqual(Addr[i]);
+  }
+});
+
+test('mainnet: hd derivation', () => {
+  const mainnet = new Network('mainnet');
+  // Seed that generate 31 byte private keys (through xpriv.privateKey.bn.toBuffer())
+  const Words31B =
+    'few hint winner dignity where paper glare manual erupt school iron panther sign whisper egg buzz opera joy cable minor slot skull zoo system';
+
+  // 10 first addresses derived from the seed above on the paths m/44'/280'/0'/0/0-9
+  const Addr31B = [
+    'HHckyeLV8nuhVCfAiQspRPwH6ESe8cVuyo',
+    'HUP6W1V9N2p7vA71dRpd3Lg1UfLdJu7afi',
+    'HD2ttzoMddDSBtmzTpMGix1hhHLgRTLcuS',
+    'HJAdTxrVrATWVp7H8e2dYYxYCSvrA3uHvs',
+    'HHjXuhS2kwcC37FZjX4AiNWPnWTxVJk2Ag',
+    'HCc5dpt5c8qxt9cVbxC1XDoYXXT8v3FhjM',
+    'HRoPMkB7YSqvJ7UnmheC2gK3amQEUuZeZC',
+    'HLq3N8xEjmgaTcYtNHV6hECPZmtkhEA9r2',
+    'H8KFrY9H5hN4ZrdNzLudFqt1pnGRXUZr71',
+    'HJmXmVTKLJoTqk4iRKeUs4yaewvjUvJZiv',
+  ];
+
+  // Seed that generate 32 byte private keys (through xpriv.privateKey.bn.toBuffer())
+  const Words32B =
+    'employ name misery bring pepper drive deal journey young prefer pluck rough entire tag mouse rough belt history arm shove crouch crater lobster remember';
+
+  // 10 first addresses derived from the seed above on the paths m/44'/280'/0'/0/0-9
+  const Addr32B = [
+    'HD5uYhyVTWfrasfj8uypKUwubiyvsFp6UZ',
+    'HQ7HmQqso98FxSfWNTZkT2KBxCz2SHhSg4',
+    'HTrgoSMch94m1RdHteevBffHHoXU393C45',
+    'HPVHN5cXAh1G3CEAajNPiKjDsyiZzpeoU1',
+    'HLuDYj2pyQpM648rx6XfkxcSRX5ZaqQYfD',
+    'HSQMfGHgtr5i8crbyxBJ7xcSBkaEb7YyjU',
+    'H6wMqyZF6cQEAqxMLw7qaADzWsWY1YVYs7',
+    'HJKq7yGy2ju3HnLzVpbZGEoSnZVNoS6oUH',
+    'HHXpD599ouMxvWp4AivosBf1zQTyb2LETZ',
+    'HNUt62ZrqDB1xhqAScTgRTj4g6MyEwrWDM',
+  ];
+
+  // These tests will determine bitcore has not changed the implementations of derive and deriveNonCompliantChild
+  // For 31 bytes private keys
+  const xpriv31B = wallet.getXPrivKeyFromSeed(Words31B, { networkName: 'mainnet' });
+  expect(xpriv31B.privateKey.bn.toBuffer().length).toBe(31);
+  const dpriv31Bd = xpriv31B.derive("m/44'/280'/0'/0");
+  const dpriv31B = xpriv31B.deriveNonCompliantChild("m/44'/280'/0'/0");
+  for (let i = 0; i < 10; i++) {
+    const addrd = dpriv31Bd.derive(i).publicKey.toAddress(mainnet.bitcoreNetwork).toString();
+    const addr = dpriv31B
+      .deriveNonCompliantChild(i)
+      .publicKey.toAddress(mainnet.bitcoreNetwork)
+      .toString();
+    expect(addr).toStrictEqual(addrd); // derive and deriveNonCompliant should be the same
+    expect(addr).toStrictEqual(Addr31B[i]); // and both should generate the expected address
+  }
+
+  // For 32 bytes private keys
+  const xpriv32B = wallet.getXPrivKeyFromSeed(Words32B, { networkName: 'mainnet' });
+  expect(xpriv32B.privateKey.bn.toBuffer().length).toBe(32);
+  const dpriv32Bd = xpriv32B.derive("m/44'/280'/0'/0");
+  const dpriv32B = xpriv32B.deriveNonCompliantChild("m/44'/280'/0'/0");
+  for (let i = 0; i < 10; i++) {
+    const addrd = dpriv32Bd.derive(i).publicKey.toAddress(mainnet.bitcoreNetwork).toString();
+    const addr = dpriv32B
+      .deriveNonCompliantChild(i)
+      .publicKey.toAddress(mainnet.bitcoreNetwork)
+      .toString();
+    expect(addr).toStrictEqual(addrd);
+    expect(addr).toStrictEqual(Addr32B[i]);
+  }
+});
+
+test('mainnet: hd derivation with passphrase', () => {
+  const mainnet = new Network('mainnet');
+  // simple passphrase
+  const passw = 'Hathor@Network';
+
+  const Words =
+    'employ name misery bring pepper drive deal journey young prefer pluck rough entire tag mouse rough belt history arm shove crouch crater lobster remember';
+
+  const Addr = [
+    'HMMePc5mruv97oBo7FZEwPQXdxkP7CkyrV',
+    'H6p4e7pnLwVfNbczZVMEJLStwxm6uEKXm8',
+    'HHmzpxV2Zvwqfv3v9apB8hCryrydsk6Xmz',
+    'HFVbDLHJbuVNr4RpfmJfZ1Aj4AHcQd3Zrh',
+    'H9SmnwVnjepuLseofECqRaFjPg188ykCHY',
+    'H6jXzjh2EJ95arKmFVcKwH64kVsAERFFWd',
+    'HUUKKe9VR5h1mgD9RrH8eBvEQKuaghP11Q',
+    'HRmuPpaKZpDfRavj3YxDnoktvGMP2FmJGh',
+    'HPnUojm5ZUNSEYmonbg8Lwzdt8udu1Y2eK',
+    'HJbxaf7kFvT4xq5ixabymZaxCgx3E758ZJ',
+  ];
+
+  // For 32 bytes private keys
+  const xpriv = wallet.getXPrivKeyFromSeed(Words, {
+    passphrase: passw,
+    networkName: 'mainnet',
+  });
+  const dprivd = xpriv.derive("m/44'/280'/0'/0");
+  const dpriv = xpriv.deriveNonCompliantChild("m/44'/280'/0'/0");
+  for (let i = 0; i < 10; i++) {
+    const addrd = dprivd.derive(i).publicKey.toAddress(mainnet.bitcoreNetwork).toString();
+    const addr = dpriv
+      .deriveNonCompliantChild(i)
+      .publicKey.toAddress(mainnet.bitcoreNetwork)
+      .toString();
+
+    expect(addr).toStrictEqual(addrd);
+    expect(addr).toStrictEqual(Addr[i]);
+  }
+});
+
+test('createP2SHRedeemScript', () => {
+  const xpubs = [
+    'xpub6BnoFhDySfUAaJQveYx1YvB8YcLdnnGdz19twSXRh6byEfZSWS4ewinKVDVJcvp6m17mAkQiBuhUgytwS561AkyCFXTvSjRXatueS2E4s3K',
+    'xpub6ChkMiCikMrqKCQtZqzuVJCnfsaBKMsnTerc1o6XFU6GrZqbG1HqyWsHapksyp8iq68LkzU94fqk6rjzF1NPbKzTL6okbTvFp9GJVhxsZD2',
+    'xpub6BvZyQQRCQ37AKuxfTMUWSU929fkqQPwmTbTBSvgq2FSUgbc5FPGYYuv2FzcpBNtE8qyjU7kRktibZrwZ7VgiBTCvJ7B6gE9FKuZr869Rzd',
+  ];
+  const numSignatures = 2;
+
+  const redeemScript0 =
+    '5221027105a304d7f3935b64824303687cf96a2400a29a9a69fcfc286a090e71f5acf92102374bba4d4a3d19222db84b5334527fe49e746e3aeac7d18ae14c9ac5a1c1bd0721027892436f6b36eb31edaee157cfa029b1735525626cf7247eb17de5a3db2427ad53ae';
+  expect(wallet.createP2SHRedeemScript(xpubs, numSignatures, 0).toString('hex')).toBe(
+    redeemScript0
+  );
+
+  const redeemScript1 =
+    '522103483dd29818452ddcc11eaa04e00a84f0d733102caa1b124b349c7d4e8f6226972103262d9d3d2339298a0fdee45553ca60765a3486c872271dd1b56e6224ee7ec0d621027af464c0c85f656544bb0b34b3e3e525b7b76a9ab9faa3bbec8d0ceeed62647b53ae';
+  expect(wallet.createP2SHRedeemScript(xpubs, numSignatures, 1).toString('hex')).toBe(
+    redeemScript1
+  );
+});
+
+test('getP2SHInputData', () => {
+  const signature = Buffer.alloc(20);
+
+  // Multisig 2/3
+  const redeemScript0 =
+    '5221027105a304d7f3935b64824303687cf96a2400a29a9a69fcfc286a090e71f5acf92102374bba4d4a3d19222db84b5334527fe49e746e3aeac7d18ae14c9ac5a1c1bd0721027892436f6b36eb31edaee157cfa029b1735525626cf7247eb17de5a3db2427ad53ae';
+  const sig0 =
+    '1400000000000000000000000000000000000000001400000000000000000000000000000000000000004c695221027105a304d7f3935b64824303687cf96a2400a29a9a69fcfc286a090e71f5acf92102374bba4d4a3d19222db84b5334527fe49e746e3aeac7d18ae14c9ac5a1c1bd0721027892436f6b36eb31edaee157cfa029b1735525626cf7247eb17de5a3db2427ad53ae';
+
+  // Create a valid input data
+  expect(
+    wallet
+      .getP2SHInputData([signature, signature], Buffer.from(redeemScript0, 'hex'))
+      .toString('hex')
+  ).toBe(sig0);
+
+  // Create a valid input data with another script
+  const redeemScript1 =
+    '522103483dd29818452ddcc11eaa04e00a84f0d733102caa1b124b349c7d4e8f6226972103262d9d3d2339298a0fdee45553ca60765a3486c872271dd1b56e6224ee7ec0d621027af464c0c85f656544bb0b34b3e3e525b7b76a9ab9faa3bbec8d0ceeed62647b53ae';
+  const sig1 =
+    '1400000000000000000000000000000000000000001400000000000000000000000000000000000000004c69522103483dd29818452ddcc11eaa04e00a84f0d733102caa1b124b349c7d4e8f6226972103262d9d3d2339298a0fdee45553ca60765a3486c872271dd1b56e6224ee7ec0d621027af464c0c85f656544bb0b34b3e3e525b7b76a9ab9faa3bbec8d0ceeed62647b53ae';
+  expect(
+    wallet
+      .getP2SHInputData([signature, signature], Buffer.from(redeemScript1, 'hex'))
+      .toString('hex')
+  ).toBe(sig1);
+
+  // The script is a Multisig 2/3
+  // Test passing less than numSignatures
+  expect(() => wallet.getP2SHInputData([signature], Buffer.from(redeemScript0, 'hex'))).toThrow();
+  // Test passing more than maxSignatures
+  expect(() =>
+    wallet.getP2SHInputData(
+      [signature, signature, signature, signature],
+      Buffer.from(redeemScript0, 'hex')
+    )
+  ).toThrow();
+});
+
+test('get multisig xpub', () => {
+  const seed =
+    'mutual property noodle reason reform leisure roof foil siren basket decide above offer rate outdoor board input depend sort twenty little veteran code plunge';
+  const xpriv =
+    'htpr4yPomy8kcy5uFnvKpExM7fUHTVZbS3aBbUmeKQAKSAX1SnYzTCvzzoJtVavt9HU5USsCUXubKZYPwskPLdXaTwStUuMu8q3G8Mpwnbd3uFf';
+  const xpub =
+    'xpub6BnoFhDySfUAaJQveYx1YvB8YcLdnnGdz19twSXRh6byEfZSWS4ewinKVDVJcvp6m17mAkQiBuhUgytwS561AkyCFXTvSjRXatueS2E4s3K';
+
+  // From xpriv
+  expect(wallet.getMultiSigXPubFromXPriv(HDPrivateKey(xpriv))).toBe(xpub);
+
+  // From words
+  expect(wallet.getMultiSigXPubFromWords(seed)).toBe(xpub);
+});
+
+test('access data from xpub', () => {
+  const xpubkeyChange =
+    'xpub6EvdxHF4vBs38uFrs6UuN8Zu78LDoqLrskMffXk531wy7xMFb7X9Ntxb9dGL2kbYdKJ1d83dqAifQS2Wzcq2DxJf7HPDPvMZMtNQxyBzAWn';
+  const xpubChange = HDPublicKey.fromString(xpubkeyChange);
+  const xpubkeyAcct =
+    'xpub6C95ufyyhEr2ntyGGfeHjyvxffmNZQ7WugyChhu1Fzor1tMUc4K2MUdwkcJoTzjVkg46hurWWU9gvZoivLiDk6MdsKukz3JiX5Fib2BDa2T';
+  const xpubAcct = HDPublicKey.fromString(xpubkeyAcct);
+
+  // We support using the account xpub to generate the access data
+  expect(wallet.generateAccessDataFromXpub(xpubkeyAcct)).toMatchObject({
+    xpubkey: xpubAcct.derive(0).xpubkey,
+    walletType: WalletType.P2PKH,
+    walletFlags: WALLET_FLAGS.READONLY,
+    multisigData: undefined,
+  });
+
+  // We support using the change xpub to generate the access data
+  expect(wallet.generateAccessDataFromXpub(xpubkeyChange)).toMatchObject({
+    xpubkey: xpubChange.xpubkey,
+    walletType: WalletType.P2PKH,
+    walletFlags: WALLET_FLAGS.READONLY,
+    multisigData: undefined,
+  });
+
+  // We support starting the wallet in hardware mode
+  expect(wallet.generateAccessDataFromXpub(xpubkeyChange, { hardware: true })).toMatchObject({
+    xpubkey: xpubChange.xpubkey,
+    walletType: WalletType.P2PKH,
+    walletFlags: WALLET_FLAGS.READONLY | WALLET_FLAGS.HARDWARE,
+    multisigData: undefined,
+  });
+
+  expect(
+    wallet.generateAccessDataFromXpub(xpubkeyAcct, {
+      multisig: { numSignatures: 2, pubkeys: [xpubkeyAcct, xpubkeyChange] },
+    })
+  ).toMatchObject({
+    xpubkey: xpubAcct.derive(0).xpubkey,
+    walletType: WalletType.MULTISIG,
+    walletFlags: WALLET_FLAGS.READONLY,
+    multisigData: {
+      numSignatures: 2,
+      pubkeys: [xpubkeyAcct, xpubkeyChange],
+      pubkey: xpubAcct.publicKey.toString('hex'),
+    },
+  });
+
+  // We cannot start a multisig wallet with a change path xpub.
+  expect(() => {
+    return wallet.generateAccessDataFromXpub(xpubkeyChange, {
+      multisig: { numSignatures: 2, pubkeys: [xpubkeyAcct, xpubkeyChange] },
+    });
+  }).toThrow('Cannot create a multisig wallet with a change path xpub');
+
+  // Unsupported xpub derivation depth.
+  expect(() => {
+    return wallet.generateAccessDataFromXpub(xpubChange.derive(0).xpubkey);
+  }).toThrow('Invalid xpub');
+});
+
+describe('shielded keys of an xpub-only wallet', () => {
+  const seed =
+    'upon tennis increase embark dismiss diamond monitor face magnet jungle scout salute rural master shoulder cry juice jeans radar present close meat antenna mind';
+
+  test.each(['testnet', 'mainnet'])(
+    'derives from the root the %s shielded keys of the seed record',
+    networkName => {
+      const record = wallet.generateAccessDataFromSeed(seed, {
+        pin: '123',
+        password: '456',
+        networkName,
+      });
+      const root = wallet.getXPrivKeyFromSeed(seed, { networkName });
+      const expected = { scanXpubkey: record.scanXpubkey, spendXpubkey: record.spendXpubkey };
+
+      // The key the record encrypts, whatever network its xpriv is serialized for
+      const recordScanKey = new HDPrivateKey(decryptData(record.scanMainKey!, '123'));
+
+      expect(wallet.deriveShieldedXpubs(root)).toEqual(expected);
+      expect(wallet.deriveShieldedXpubs(root.xprivkey)).toEqual(expected);
+      const scanKey = new HDPrivateKey(wallet.deriveShieldedScanXPrivKey(root));
+      expect(scanKey.privateKey.toString()).toBe(recordScanKey.privateKey.toString());
+      expect(scanKey.xpubkey).toBe(record.scanXpubkey);
+      expect(scanKey.network.name).toBe(`htr-${networkName}`);
+
+      // A root serialized for another network gives the keys of `networkName`
+      const otherRoot = wallet.getXPrivKeyFromSeed(seed, {
+        networkName: networkName === 'testnet' ? 'mainnet' : 'testnet',
+      });
+      expect(wallet.deriveShieldedXpubs(otherRoot, networkName)).toEqual(expected);
+      expect(wallet.deriveShieldedScanXPrivKey(otherRoot.xprivkey, networkName)).toBe(
+        scanKey.xprivkey
+      );
+    }
+  );
+
+  test('derives only from a root key', () => {
+    const account = wallet.getXPrivKeyFromSeed(seed).deriveNonCompliantChild("m/44'/280'/0'");
+    expect(() => wallet.deriveShieldedXpubs(account)).toThrow(/root key/);
+    expect(() => wallet.deriveShieldedScanXPrivKey(account.xprivkey)).toThrow(/root key/);
+  });
+
+  test('keeps the shielded xpubs on the access data from xpub', () => {
+    const root = wallet.getXPrivKeyFromSeed(seed);
+    const xpubs = wallet.deriveShieldedXpubs(root);
+    const accountXpub = root.deriveNonCompliantChild("m/44'/280'/0'").xpubkey;
+
+    const accessData = wallet.generateAccessDataFromXpub(accountXpub, xpubs);
+
+    expect(accessData).toMatchObject({
+      walletType: WalletType.P2PKH,
+      walletFlags: WALLET_FLAGS.READONLY,
+      ...xpubs,
+    });
+    expect(accessData.scanMainKey).toBeUndefined();
+    expect(accessData.spendMainKey).toBeUndefined();
+    expect(wallet.hasShieldedXpubs(accessData)).toBe(true);
+    // Without them, the record is as before
+    expect(wallet.generateAccessDataFromXpub(accountXpub)).not.toHaveProperty('scanXpubkey');
+    expect(wallet.generateAccessDataFromXpub(accountXpub)).not.toHaveProperty('spendXpubkey');
+  });
+
+  test('refuses one shielded xpub without the other, and a key that is not an xpub', () => {
+    const root = wallet.getXPrivKeyFromSeed(seed);
+    const { scanXpubkey, spendXpubkey } = wallet.deriveShieldedXpubs(root);
+    const accountXpub = root.deriveNonCompliantChild("m/44'/280'/0'").xpubkey;
+
+    expect(() => wallet.generateAccessDataFromXpub(accountXpub, { scanXpubkey })).toThrow(
+      'The shielded scan and spend xpubs must be given together.'
+    );
+    expect(() => wallet.generateAccessDataFromXpub(accountXpub, { spendXpubkey })).toThrow(
+      'The shielded scan and spend xpubs must be given together.'
+    );
+    expect(() =>
+      wallet.generateAccessDataFromXpub(accountXpub, { scanXpubkey: 'invalid', spendXpubkey })
+    ).toThrow();
+  });
+
+  test('gives a multisig record no shielded xpubs', () => {
+    const root = wallet.getXPrivKeyFromSeed(seed);
+    const xpubs = wallet.deriveShieldedXpubs(root);
+    const accountXpub = root.deriveNonCompliantChild("m/45'/280'/0'").xpubkey;
+
+    const accessData = wallet.generateAccessDataFromXpub(accountXpub, {
+      multisig: { numSignatures: 1, pubkeys: [accountXpub] },
+      ...xpubs,
+    });
+
+    expect(accessData.walletType).toBe(WalletType.MULTISIG);
+    expect(accessData.scanXpubkey).toBeUndefined();
+    expect(accessData.spendXpubkey).toBeUndefined();
+  });
+});
+
+test('access data from xpriv', () => {
+  const xprivkeyRoot =
+    'htpr4yPomy8kcy5uFJFugmAscbbeih6Cir9ZVaTCSKaCmbAgos8Ymq5BxVDpddzdfbwEnofgFJG3qkMbGS9RMexgju6C2Z9K63c5kJdkWZAwcf2';
+  const xpubkeyRoot =
+    'xpub661MyMwAqRbcG4KieRwAbL25xy8KCWuDFnzruk9iLGu5PiQ4ZfptSGiuWnNvSXN17jarnZixcKehHLtZi8xRsAnS5bEFaFGiWxUNXVPJtgx';
+
+  const xprivkeyAcct =
+    'htpr55XXiHBZUnLKn8uTJzszmFWXRPjG5jMs9URYEHKVhK5TS35xpDZKsh8rsTKfU5YPvC4XzWzDWbCCX3xmeSpeEQqK98cRkvz9MmVnWpFFBYb';
+  const xpubkeyAcct =
+    'xpub6C95ufyyhEr2ntyGGfeHjyvxffmNZQ7WugyChhu1Fzor1tMUc4K2MUdwkcJoTzjVkg46hurWWU9gvZoivLiDk6MdsKukz3JiX5Fib2BDa2T';
+
+  const xpubkeyChange =
+    'xpub6EvdxHF4vBs38uFrs6UuN8Zu78LDoqLrskMffXk531wy7xMFb7X9Ntxb9dGL2kbYdKJ1d83dqAifQS2Wzcq2DxJf7HPDPvMZMtNQxyBzAWn';
+  const xprivkeyChange =
+    'htpr58K5ktSehjML89C3uRicPQ9TrrJ7LAbD7Xp1C7AZULDaY75joGmSu7TWGWqb31noixGt9ehSyspRVdFBhCZiJpB1RiuSosUkFw7QezVbECo';
+
+  const xprivRoot = HDPrivateKey.fromString(xprivkeyRoot);
+  const xpubChange = HDPublicKey.fromString(xpubkeyChange);
+
+  // P2PKH from derived will use the derived key
+  expect(wallet.generateAccessDataFromXpriv(xprivkeyChange, { pin: '123' })).toMatchObject({
+    xpubkey: xpubChange.xpubkey,
+    mainKey: expect.objectContaining({
+      data: expect.any(String),
+      hash: expect.any(String),
+      salt: expect.any(String),
+      iterations: expect.any(Number),
+      pbkdf2Hasher: expect.any(String),
+    }),
+    walletType: WalletType.P2PKH,
+    walletFlags: 0,
+    multisigData: undefined,
+  });
+
+  // P2PKH with root xprivkeys will be derived to change level
+  expect(wallet.generateAccessDataFromXpriv(xprivkeyRoot, { pin: '321' })).toMatchObject({
+    xpubkey: xpubChange.xpubkey,
+    mainKey: expect.anything(),
+    walletType: WalletType.P2PKH,
+    walletFlags: 0,
+    multisigData: undefined,
+  });
+
+  // Multisig from root will be derived to the P2SH paths
+  // xpubkey and mainKey will use change path since its the expected path on the utilities
+  // pubkey from the multisigData will be on the p2sh account level
+  expect(
+    wallet.generateAccessDataFromXpriv(xprivkeyRoot, {
+      pin: '123',
+      multisig: {
+        numSignatures: 2,
+        pubkeys: [xpubkeyRoot, xpubkeyAcct, xpubkeyChange],
+      },
+    })
+  ).toMatchObject({
+    xpubkey: xprivRoot.deriveNonCompliantChild(`${P2SH_ACCT_PATH}/0`).xpubkey,
+    walletType: WalletType.MULTISIG,
+    mainKey: expect.anything(),
+    walletFlags: 0,
+    multisigData: {
+      numSignatures: 2,
+      pubkeys: [xpubkeyRoot, xpubkeyAcct, xpubkeyChange],
+      pubkey: xprivRoot.deriveNonCompliantChild(P2SH_ACCT_PATH).publicKey.toString('hex'),
+    },
+  });
+
+  // Cannot start a multisig wallet with a derived xprivkey
+  expect(() => {
+    return wallet.generateAccessDataFromXpriv(xprivkeyAcct, {
+      pin: '123',
+      multisig: {
+        numSignatures: 2,
+        pubkeys: [xpubkeyRoot, xpubkeyAcct, xpubkeyChange],
+      },
+    });
+  }).toThrow();
+});
+
+test('access data from xpriv — shielded key chains', () => {
+  const seed =
+    'upon tennis increase embark dismiss diamond monitor face magnet jungle scout salute rural master shoulder cry juice jeans radar present close meat antenna mind';
+  // Root xpriv of the seed above (same pair used by 'access data from seed').
+  const xprivkeyRoot =
+    'htpr4yPomy8kcy5uFJFugmAscbbeih6Cir9ZVaTCSKaCmbAgos8Ymq5BxVDpddzdfbwEnofgFJG3qkMbGS9RMexgju6C2Z9K63c5kJdkWZAwcf2';
+  const xprivkeyChange =
+    'htpr58K5ktSehjML89C3uRicPQ9TrrJ7LAbD7Xp1C7AZULDaY75joGmSu7TWGWqb31noixGt9ehSyspRVdFBhCZiJpB1RiuSosUkFw7QezVbECo';
+
+  const xprivRoot = HDPrivateKey.fromString(xprivkeyRoot);
+
+  // Root import: the depth-0 arm of the guard — shielded keys MUST be
+  // derived, at exactly the documented paths.
+  const fromRoot = wallet.generateAccessDataFromXpriv(xprivkeyRoot, { pin: '123' });
+  // Shielded chains use the COMPLIANT deriveChild (bitcore's correct method):
+  // this key material is new, with no deployed wallet to stay bug-compatible
+  // with, unlike the legacy chains above which stay on deriveNonCompliantChild.
+  expect(fromRoot.scanXpubkey).toBe(
+    xprivRoot.deriveChild(SHIELDED_SCAN_ACCT_PATH).deriveChild(0).xpubkey
+  );
+  expect(fromRoot.spendXpubkey).toBe(
+    xprivRoot.deriveChild(SHIELDED_SPEND_ACCT_PATH).deriveChild(0).xpubkey
+  );
+  expect(checkPassword(fromRoot.scanMainKey!, '123')).toBe(true);
+  expect(checkPassword(fromRoot.spendMainKey!, '123')).toBe(true);
+
+  // Change-level import: the depth>0 arm — hardened accounts 1'/2' cannot
+  // be derived from a non-root key, so the fields must be ABSENT (the
+  // invariant documented on IWalletAccessData).
+  const fromChange = wallet.generateAccessDataFromXpriv(xprivkeyChange, { pin: '123' });
+  expect(fromChange.scanXpubkey).toBeUndefined();
+  expect(fromChange.scanMainKey).toBeUndefined();
+  expect(fromChange.spendXpubkey).toBeUndefined();
+  expect(fromChange.spendMainKey).toBeUndefined();
+
+  // Cross-check: a seed import and a root-xpriv import of the SAME wallet
+  // must yield identical shielded keys (guards the compliant/non-compliant
+  // derivation asymmetry this stack is sensitive to).
+  const fromSeed = wallet.generateAccessDataFromSeed(seed, {
+    pin: '123',
+    password: '456',
+    networkName: 'testnet',
+  });
+  expect(fromRoot.scanXpubkey).toBe(fromSeed.scanXpubkey);
+  expect(fromRoot.spendXpubkey).toBe(fromSeed.spendXpubkey);
+});
+
+test('access data from seed', () => {
+  const seed =
+    'upon tennis increase embark dismiss diamond monitor face magnet jungle scout salute rural master shoulder cry juice jeans radar present close meat antenna mind';
+  const xprivkeyRoot =
+    'htpr4yPomy8kcy5uFJFugmAscbbeih6Cir9ZVaTCSKaCmbAgos8Ymq5BxVDpddzdfbwEnofgFJG3qkMbGS9RMexgju6C2Z9K63c5kJdkWZAwcf2';
+
+  const xpubkeyAcct =
+    'xpub6C95ufyyhEr2ntyGGfeHjyvxffmNZQ7WugyChhu1Fzor1tMUc4K2MUdwkcJoTzjVkg46hurWWU9gvZoivLiDk6MdsKukz3JiX5Fib2BDa2T';
+  const xpubkeyChange =
+    'xpub6EvdxHF4vBs38uFrs6UuN8Zu78LDoqLrskMffXk531wy7xMFb7X9Ntxb9dGL2kbYdKJ1d83dqAifQS2Wzcq2DxJf7HPDPvMZMtNQxyBzAWn';
+
+  const xprivRoot = HDPrivateKey.fromString(xprivkeyRoot);
+  const xpubChange = HDPublicKey.fromString(xpubkeyChange);
+
+  // P2PKH from seed
+  expect(
+    wallet.generateAccessDataFromSeed(seed, { pin: '123', password: '456', networkName: 'testnet' })
+  ).toMatchObject({
+    xpubkey: xpubChange.xpubkey,
+    mainKey: expect.objectContaining({
+      data: expect.any(String),
+      hash: expect.any(String),
+      salt: expect.any(String),
+      iterations: expect.any(Number),
+      pbkdf2Hasher: expect.any(String),
+    }),
+    authKey: expect.objectContaining({
+      data: expect.any(String),
+      hash: expect.any(String),
+      salt: expect.any(String),
+      iterations: expect.any(Number),
+      pbkdf2Hasher: expect.any(String),
+    }),
+    walletType: WalletType.P2PKH,
+    walletFlags: 0,
+    multisigData: undefined,
+  });
+
+  // Multisig from seed will be derived to the P2SH paths
+  // xpubkey and mainKey will use change path since its the expected path on the utilities
+  // pubkey from the multisigData will be on the p2sh account level
+  expect(
+    wallet.generateAccessDataFromSeed(seed, {
+      pin: '123',
+      password: '567',
+      networkName: 'testnet',
+      multisig: {
+        numSignatures: 2,
+        pubkeys: [xpubkeyAcct, xpubkeyChange],
+      },
+    })
+  ).toMatchObject({
+    xpubkey: xprivRoot.deriveNonCompliantChild(`${P2SH_ACCT_PATH}/0`).xpubkey,
+    walletType: WalletType.MULTISIG,
+    mainKey: expect.anything(),
+    authKey: expect.anything(),
+    walletFlags: 0,
+    multisigData: {
+      numSignatures: 2,
+      pubkeys: [xpubkeyAcct, xpubkeyChange],
+      pubkey: xprivRoot.deriveNonCompliantChild(P2SH_ACCT_PATH).publicKey.toString('hex'),
+    },
+  });
+});
+
+test('change pin and password', async () => {
+  const seed =
+    'upon tennis increase embark dismiss diamond monitor face magnet jungle scout salute rural master shoulder cry juice jeans radar present close meat antenna mind';
+  const accessData = wallet.generateAccessDataFromSeed(seed, {
+    pin: '123',
+    password: '456',
+    networkName: 'testnet',
+  });
+
+  // Check the pin and password were used correctly
+  expect(checkPassword(accessData.words, '456')).toEqual(true);
+  expect(checkPassword(accessData.mainKey, '123')).toEqual(true);
+  expect(checkPassword(accessData.authKey, '123')).toEqual(true);
+  expect(checkPassword(accessData.scanMainKey!, '123')).toEqual(true);
+  expect(checkPassword(accessData.spendMainKey!, '123')).toEqual(true);
+
+  expect(() => wallet.changeEncryptionPin(accessData, 'invalid-pin', '321')).toThrow(
+    InvalidPasswdError
+  );
+  expect(() => wallet.changeEncryptionPassword(accessData, 'invalid-passwd', '456')).toThrow(
+    InvalidPasswdError
+  );
+
+  const pinChangedAccessData = wallet.changeEncryptionPin(accessData, '123', '321');
+  expect(checkPassword(pinChangedAccessData.words, '456')).toEqual(true);
+  expect(checkPassword(pinChangedAccessData.mainKey, '321')).toEqual(true);
+  expect(checkPassword(pinChangedAccessData.authKey, '321')).toEqual(true);
+  // Shielded scan/spend keys must be re-encrypted under the new pin…
+  expect(checkPassword(pinChangedAccessData.scanMainKey!, '321')).toEqual(true);
+  expect(checkPassword(pinChangedAccessData.spendMainKey!, '321')).toEqual(true);
+  expect(checkPassword(pinChangedAccessData.scanMainKey!, '123')).toEqual(false);
+  expect(checkPassword(pinChangedAccessData.spendMainKey!, '123')).toEqual(false);
+  // …and decrypt to the SAME xprivs as before (re-encryption, not re-derivation;
+  // also catches an oldPin/newPin swap or a scan/spend copy-paste mix-up).
+  expect(decryptData(pinChangedAccessData.scanMainKey!, '321')).toEqual(
+    decryptData(accessData.scanMainKey!, '123')
+  );
+  expect(decryptData(pinChangedAccessData.spendMainKey!, '321')).toEqual(
+    decryptData(accessData.spendMainKey!, '123')
+  );
+  expect(decryptData(pinChangedAccessData.scanMainKey!, '321')).not.toEqual(
+    decryptData(pinChangedAccessData.spendMainKey!, '321')
+  );
+
+  const passwdChangedAccessData = wallet.changeEncryptionPassword(accessData, '456', '654');
+  expect(checkPassword(passwdChangedAccessData.words, '654')).toEqual(true);
+  expect(checkPassword(passwdChangedAccessData.mainKey, '123')).toEqual(true);
+  expect(checkPassword(passwdChangedAccessData.authKey, '123')).toEqual(true);
+  // Password change must NOT touch the pin-encrypted shielded keys.
+  expect(checkPassword(passwdChangedAccessData.scanMainKey!, '123')).toEqual(true);
+  expect(checkPassword(passwdChangedAccessData.spendMainKey!, '123')).toEqual(true);
+
+  const bothChangedAccessData = wallet.changeEncryptionPassword(pinChangedAccessData, '456', '654');
+  expect(checkPassword(bothChangedAccessData.words, '654')).toEqual(true);
+  expect(checkPassword(bothChangedAccessData.mainKey, '321')).toEqual(true);
+  expect(checkPassword(bothChangedAccessData.authKey, '321')).toEqual(true);
+  expect(checkPassword(bothChangedAccessData.scanMainKey!, '321')).toEqual(true);
+  expect(checkPassword(bothChangedAccessData.spendMainKey!, '321')).toEqual(true);
+});
+
+test('getWalletIdFromXpub', () => {
+  // The walletId is the sha256d of a given string in hex format
+  const str = 'change-path-xpub';
+  const expected = crypto.Hash.sha256sha256(Buffer.from(str)).toString('hex');
+  expect(wallet.getWalletIdFromXPub(str)).toEqual(expected);
+});
+
+test('getXprivFromData', () => {
+  const words =
+    'upon tennis increase embark dismiss diamond monitor face magnet jungle scout salute rural master shoulder cry juice jeans radar present close meat antenna mind';
+  const hdPrivKey = wallet.getXPrivKeyFromSeed(words, { networkName: 'testnet' });
+  const buffers = hdPrivKey._buffers;
+  const xpriv = wallet.xprivFromData(
+    buffers.privateKey,
+    buffers.chainCode,
+    buffers.parentFingerPrint,
+    buffers.depth,
+    buffers.childIndex,
+    'testnet'
+  );
+  expect(xpriv).toEqual(hdPrivKey.xprivkey);
+});
+
+describe('hasShieldedXpubs', () => {
+  const full = wallet.generateAccessDataFromSeed(
+    'upon tennis increase embark dismiss diamond monitor face magnet jungle scout salute rural master shoulder cry juice jeans radar present close meat antenna mind',
+    { pin: '123', password: '456', networkName: 'testnet' }
+  );
+
+  test('is true only when the record carries both the scan and the spend xpub', () => {
+    expect(wallet.hasShieldedXpubs(full)).toBe(true);
+    expect(wallet.hasShieldedXpubs({ ...full, scanXpubkey: undefined })).toBe(false);
+    expect(wallet.hasShieldedXpubs({ ...full, spendXpubkey: undefined })).toBe(false);
+    expect(
+      wallet.hasShieldedXpubs({ ...full, scanXpubkey: undefined, spendXpubkey: undefined })
+    ).toBe(false);
+    expect(wallet.hasShieldedXpubs({ ...full, scanXpubkey: '', spendXpubkey: '' })).toBe(false);
+  });
+
+  test('is false for a wallet that has no access data', () => {
+    expect(wallet.hasShieldedXpubs(null)).toBe(false);
+  });
+});
+
+describe('multisig wallets have no shielded keys', () => {
+  const seed =
+    'upon tennis increase embark dismiss diamond monitor face magnet jungle scout salute rural master shoulder cry juice jeans radar present close meat antenna mind';
+  // Root xpriv of the seed above.
+  const xprivkeyRoot =
+    'htpr4yPomy8kcy5uFJFugmAscbbeih6Cir9ZVaTCSKaCmbAgos8Ymq5BxVDpddzdfbwEnofgFJG3qkMbGS9RMexgju6C2Z9K63c5kJdkWZAwcf2';
+  const multisig: IMultisigData = {
+    pubkeys: [new HDPrivateKey(), new HDPrivateKey(), new HDPrivateKey()].map(k => k.xpubkey),
+    numSignatures: 2,
+  };
+  const SHIELDED_FIELDS = ['scanXpubkey', 'scanMainKey', 'spendXpubkey', 'spendMainKey'];
+  const walletTypes = [
+    { walletType: WalletType.P2PKH, walletMultisig: undefined, hasKeys: true },
+    { walletType: WalletType.MULTISIG, walletMultisig: multisig, hasKeys: false },
+  ];
+
+  function shieldedFieldsOf(accessData: object): string[] {
+    return SHIELDED_FIELDS.filter(field => field in accessData);
+  }
+
+  test.each(walletTypes)(
+    '$walletType access data from a seed',
+    ({ walletType, walletMultisig, hasKeys }) => {
+      const accessData = wallet.generateAccessDataFromSeed(seed, {
+        pin: '123',
+        password: '456',
+        networkName: 'testnet',
+        multisig: walletMultisig,
+      });
+
+      expect(accessData.walletType).toBe(walletType);
+      expect(shieldedFieldsOf(accessData)).toEqual(hasKeys ? SHIELDED_FIELDS : []);
+      expect(wallet.hasShieldedXpubs(accessData)).toBe(hasKeys);
+    }
+  );
+
+  test.each(walletTypes)(
+    '$walletType access data from a root xpriv',
+    ({ walletType, walletMultisig, hasKeys }) => {
+      const accessData = wallet.generateAccessDataFromXpriv(xprivkeyRoot, {
+        pin: '123',
+        multisig: walletMultisig,
+      });
+
+      expect(accessData.walletType).toBe(walletType);
+      expect(shieldedFieldsOf(accessData)).toEqual(hasKeys ? SHIELDED_FIELDS : []);
+      expect(wallet.hasShieldedXpubs(accessData)).toBe(hasKeys);
+    }
+  );
+
+  test('read-only multisig access data from an account xpub', () => {
+    const accountXpub = wallet.getMultiSigXPubFromWords(seed, { networkName: 'testnet' });
+    const accessData = wallet.generateAccessDataFromXpub(accountXpub, { multisig });
+
+    expect(accessData.walletType).toBe(WalletType.MULTISIG);
+    expect(shieldedFieldsOf(accessData)).toEqual([]);
+  });
+
+  test('a multisig record that an older version gave shielded keys has no shielded xpubs', () => {
+    // Older versions derived the shielded keys of every wallet created from a
+    // seed or a root xpriv, multisig included: the keys of this seed's own root.
+    const p2pkh = wallet.generateAccessDataFromSeed(seed, {
+      pin: '123',
+      password: '456',
+      networkName: 'testnet',
+    });
+    const olderMultisig = {
+      ...wallet.generateAccessDataFromSeed(seed, {
+        pin: '123',
+        password: '456',
+        networkName: 'testnet',
+        multisig,
+      }),
+      scanXpubkey: p2pkh.scanXpubkey,
+      scanMainKey: p2pkh.scanMainKey,
+      spendXpubkey: p2pkh.spendXpubkey,
+      spendMainKey: p2pkh.spendMainKey,
+    };
+
+    expect(wallet.hasShieldedXpubs(p2pkh)).toBe(true);
+    expect(wallet.hasShieldedXpubs(olderMultisig)).toBe(false);
+  });
+});
+
+describe('migrateShieldedAccessData', () => {
+  const seed =
+    'upon tennis increase embark dismiss diamond monitor face magnet jungle scout salute rural master shoulder cry juice jeans radar present close meat antenna mind';
+
+  function makePreShieldedRecord() {
+    // Freshly-generated record, then strip the four shielded fields to
+    // simulate a persisted record from a pre-shielded wallet-lib version.
+    const full = wallet.generateAccessDataFromSeed(seed, {
+      pin: '123',
+      password: '456',
+      networkName: 'testnet',
+    });
+    const { scanXpubkey, scanMainKey, spendXpubkey, spendMainKey, ...preShielded } = full;
+    // Ensure the stripping actually matched the current schema so this test
+    // fails loudly if the fields are renamed.
+    expect(scanXpubkey).toBeDefined();
+    expect(scanMainKey).toBeDefined();
+    expect(spendXpubkey).toBeDefined();
+    expect(spendMainKey).toBeDefined();
+    return preShielded;
+  }
+
+  test('M.1 — no-op when record already has all four shielded fields', () => {
+    const full = wallet.generateAccessDataFromSeed(seed, {
+      pin: '123',
+      password: '456',
+      networkName: 'testnet',
+    });
+    const before = { ...full };
+    const migrated = wallet.migrateShieldedAccessData(full, {
+      pin: '123',
+      password: '456',
+      networkName: 'testnet',
+    });
+    expect(migrated).toBe(false);
+    // Fields must be byte-identical — nothing should have been touched.
+    expect(full.scanXpubkey).toBe(before.scanXpubkey);
+    expect(full.scanMainKey).toEqual(before.scanMainKey);
+    expect(full.spendXpubkey).toBe(before.spendXpubkey);
+    expect(full.spendMainKey).toEqual(before.spendMainKey);
+  });
+
+  test('M.2 — no-op when xpub-only (no words to derive from)', () => {
+    // xpub-only records don't carry `words`, so migration has nothing to
+    // decrypt. This includes read-only view wallets that never had a seed.
+    const preShielded = makePreShieldedRecord();
+    delete preShielded.words;
+    const migrated = wallet.migrateShieldedAccessData(preShielded, {
+      pin: '123',
+      password: '456',
+      networkName: 'testnet',
+    });
+    expect(migrated).toBe(false);
+    expect(preShielded.scanXpubkey).toBeUndefined();
+    expect(preShielded.scanMainKey).toBeUndefined();
+    expect(preShielded.spendXpubkey).toBeUndefined();
+    expect(preShielded.spendMainKey).toBeUndefined();
+  });
+
+  test('M.3 — migrates pre-shielded record with the same derivation as fresh-create', () => {
+    const preShielded = makePreShieldedRecord();
+    const migrated = wallet.migrateShieldedAccessData(preShielded, {
+      pin: '123',
+      password: '456',
+      networkName: 'testnet',
+    });
+    expect(migrated).toBe(true);
+
+    const fresh = wallet.generateAccessDataFromSeed(seed, {
+      pin: '123',
+      password: '456',
+      networkName: 'testnet',
+    });
+
+    // xpubs are deterministic (no random salt) — must match byte-for-byte so
+    // a migrated wallet and a freshly-created wallet derive identical
+    // shielded addresses at every index.
+    expect(preShielded.scanXpubkey).toBe(fresh.scanXpubkey);
+    expect(preShielded.spendXpubkey).toBe(fresh.spendXpubkey);
+
+    // mainKeys use a random salt — they will not be byte-identical, but
+    // they must be valid encrypted blobs that decrypt with the same PIN.
+    expect(preShielded.scanMainKey).toBeDefined();
+    expect(preShielded.spendMainKey).toBeDefined();
+    expect(checkPassword(preShielded.scanMainKey!, '123')).toBe(true);
+    expect(checkPassword(preShielded.spendMainKey!, '123')).toBe(true);
+  });
+
+  test('M.4 — idempotent: calling again after migration is a no-op', () => {
+    const record = makePreShieldedRecord();
+    wallet.migrateShieldedAccessData(record, {
+      pin: '123',
+      password: '456',
+      networkName: 'testnet',
+    });
+    const afterFirst = { ...record };
+    const second = wallet.migrateShieldedAccessData(record, {
+      pin: '123',
+      password: '456',
+      networkName: 'testnet',
+    });
+    expect(second).toBe(false);
+    expect(record.scanXpubkey).toBe(afterFirst.scanXpubkey);
+    expect(record.scanMainKey).toEqual(afterFirst.scanMainKey);
+    expect(record.spendXpubkey).toBe(afterFirst.spendXpubkey);
+    expect(record.spendMainKey).toEqual(afterFirst.spendMainKey);
+  });
+
+  test('M.5 — wrong password throws and leaves the record untouched', () => {
+    const record = makePreShieldedRecord();
+    let caught: unknown;
+    try {
+      wallet.migrateShieldedAccessData(record, {
+        pin: '123',
+        password: 'wrong-password',
+        networkName: 'testnet',
+      });
+    } catch (e) {
+      caught = e;
+    }
+    // We wrap decryptData's failure in a specific message so operators
+    // know to provide the wallet password (not PIN). The original
+    // InvalidPasswdError stays available via .cause.
+    expect(caught).toBeInstanceOf(Error);
+    expect(caught).toBeInstanceOf(ShieldedKeyError);
+    expect((caught as ShieldedKeyError).errorCode).toBe('shielded-wrong-password');
+    expect((caught as Error).message).toMatch(/wallet password \(not PIN\)/);
+    expect((caught as Error & { cause?: unknown }).cause).toBeInstanceOf(InvalidPasswdError);
+    // Critical: no fields should have been assigned before the throw. If
+    // decryptData throws, we must not leave a half-migrated record.
+    expect(record.scanXpubkey).toBeUndefined();
+    expect(record.scanMainKey).toBeUndefined();
+    expect(record.spendXpubkey).toBeUndefined();
+    expect(record.spendMainKey).toBeUndefined();
+  });
+
+  test('M.6 — wrong PIN throws and leaves the record untouched', () => {
+    // Without the mainKey cross-check, a mismatched PIN silently produces
+    // scan/spend blobs encrypted under a different pin than the rest of the
+    // record — the wallet then fails to decrypt its shielded keys on every
+    // unlock with no hint that migration was the cause.
+    const record = makePreShieldedRecord();
+    let caught: unknown;
+    try {
+      wallet.migrateShieldedAccessData(record, {
+        pin: 'wrong-pin',
+        password: '456',
+        networkName: 'testnet',
+      });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect(caught).toBeInstanceOf(ShieldedKeyError);
+    expect((caught as ShieldedKeyError).errorCode).toBe('shielded-wrong-pin');
+    expect((caught as Error).message).toMatch(/PIN does not match the wallet mainKey/);
+    expect((caught as Error & { cause?: unknown }).cause).toBeInstanceOf(InvalidPasswdError);
+    expect(record.scanXpubkey).toBeUndefined();
+    expect(record.scanMainKey).toBeUndefined();
+    expect(record.spendXpubkey).toBeUndefined();
+    expect(record.spendMainKey).toBeUndefined();
+  });
+
+  test('M.7 — passphrase wallet: migration with the original passphrase matches fresh-create', () => {
+    const passphrase = 'my-bip39-passphrase';
+    const full = wallet.generateAccessDataFromSeed(seed, {
+      pin: '123',
+      password: '456',
+      passphrase,
+      networkName: 'testnet',
+    });
+    const {
+      scanXpubkey,
+      scanMainKey: _scanMainKey,
+      spendXpubkey,
+      spendMainKey: _spendMainKey,
+      ...preShielded
+    } = full;
+    expect(scanXpubkey).toBeDefined();
+
+    const migrated = wallet.migrateShieldedAccessData(preShielded, {
+      pin: '123',
+      password: '456',
+      passphrase,
+      networkName: 'testnet',
+    });
+    expect(migrated).toBe(true);
+    // Same passphrase -> same shielded root -> identical keys to fresh-create.
+    expect(preShielded.scanXpubkey).toBe(scanXpubkey);
+    expect(preShielded.spendXpubkey).toBe(spendXpubkey);
+  });
+
+  test('M.8 — passphrase wallet: a different passphrase throws and leaves the record untouched', () => {
+    // BIP39 passphrases cannot be checked on their own (any passphrase yields a
+    // valid seed), but the root a passphrase gives must derive the record's own
+    // legacy xpub. A different one does not, so nothing is written.
+    const passphrase = 'my-bip39-passphrase';
+    const full = wallet.generateAccessDataFromSeed(seed, {
+      pin: '123',
+      password: '456',
+      passphrase,
+      networkName: 'testnet',
+    });
+    const { scanXpubkey, ...preShielded } = full;
+    delete preShielded.scanMainKey;
+    delete preShielded.spendXpubkey;
+    delete preShielded.spendMainKey;
+    const before = JSON.parse(JSON.stringify(preShielded));
+
+    let caught: unknown;
+    try {
+      wallet.migrateShieldedAccessData(preShielded, {
+        pin: '123',
+        password: '456',
+        passphrase: 'a-different-passphrase',
+        networkName: 'testnet',
+      });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(ShieldedKeyError);
+    expect((caught as ShieldedKeyError).errorCode).toBe('shielded-passphrase-mismatch');
+    expect(JSON.parse(JSON.stringify(preShielded))).toEqual(before);
+    expect(scanXpubkey).toBeDefined();
+  });
+
+  test('M.9 — partial record (some shielded fields missing) is healed by re-derivation', () => {
+    // A partial state can only arise from an interrupted write or manual
+    // tampering, but the re-derive path must heal it deterministically:
+    // same seed -> same keys, so overwriting the surviving fields is safe.
+    const full = wallet.generateAccessDataFromSeed(seed, {
+      pin: '123',
+      password: '456',
+      networkName: 'testnet',
+    });
+    const partial = { ...full };
+    delete partial.scanMainKey;
+    delete partial.spendXpubkey;
+
+    const migrated = wallet.migrateShieldedAccessData(partial, {
+      pin: '123',
+      password: '456',
+      networkName: 'testnet',
+    });
+    expect(migrated).toBe(true);
+    // All four fields repopulated, and the xpubs equal the original record's.
+    expect(partial.scanXpubkey).toBe(full.scanXpubkey);
+    expect(partial.spendXpubkey).toBe(full.spendXpubkey);
+    expect(checkPassword(partial.scanMainKey!, '123')).toBe(true);
+    expect(checkPassword(partial.spendMainKey!, '123')).toBe(true);
+    // The re-derived xprivs decrypt to the same values as the originals.
+    expect(decryptData(partial.scanMainKey!, '123')).toEqual(decryptData(full.scanMainKey!, '123'));
+    expect(decryptData(partial.spendMainKey!, '123')).toEqual(
+      decryptData(full.spendMainKey!, '123')
+    );
+  });
+
+  test('replaceShieldedKeys derives again the four fields of a record that has them', () => {
+    const full = wallet.generateAccessDataFromSeed(seed, {
+      pin: '123',
+      password: '456',
+      networkName: 'testnet',
+    });
+    // The scan key and scan xpub of another seed, under the same PIN.
+    const other = wallet.generateAccessDataFromSeed(wallet.generateWalletWords(), {
+      pin: '123',
+      password: '456',
+      networkName: 'testnet',
+    });
+    const damaged = { ...full, scanXpubkey: other.scanXpubkey, scanMainKey: other.scanMainKey };
+
+    const migrated = wallet.migrateShieldedAccessData(damaged, {
+      pin: '123',
+      password: '456',
+      networkName: 'testnet',
+      replaceShieldedKeys: true,
+    });
+
+    expect(migrated).toBe(true);
+    expect(damaged.scanXpubkey).toBe(full.scanXpubkey);
+    expect(damaged.spendXpubkey).toBe(full.spendXpubkey);
+    expect(decryptData(damaged.scanMainKey!, '123')).toEqual(decryptData(full.scanMainKey!, '123'));
+    expect(decryptData(damaged.spendMainKey!, '123')).toEqual(
+      decryptData(full.spendMainKey!, '123')
+    );
+  });
+
+  test('replaceShieldedKeys runs the same checks: a wrong password throws and leaves the record untouched', () => {
+    const full = wallet.generateAccessDataFromSeed(seed, {
+      pin: '123',
+      password: '456',
+      networkName: 'testnet',
+    });
+    const before = JSON.parse(JSON.stringify(full));
+
+    let caught: unknown;
+    try {
+      wallet.migrateShieldedAccessData(full, {
+        pin: '123',
+        password: 'not-the-password',
+        networkName: 'testnet',
+        replaceShieldedKeys: true,
+      });
+    } catch (e) {
+      caught = e;
+    }
+
+    expect(caught).toMatchObject({ errorCode: 'shielded-wrong-password' });
+    expect(JSON.parse(JSON.stringify(full))).toEqual(before);
+  });
+
+  describe("the root the passphrase gives must derive the record's legacy xpub", () => {
+    const multisig: IMultisigData = {
+      pubkeys: [new HDPrivateKey(), new HDPrivateKey(), new HDPrivateKey()].map(k => k.xpubkey),
+      numSignatures: 2,
+    };
+
+    function preShieldedRecord({
+      passphrase,
+      walletMultisig,
+    }: {
+      passphrase: string;
+      walletMultisig?: IMultisigData;
+    }) {
+      const full = wallet.generateAccessDataFromSeed(seed, {
+        pin: '123',
+        password: '456',
+        passphrase,
+        multisig: walletMultisig,
+        networkName: 'testnet',
+      });
+      const {
+        scanXpubkey: _scanXpubkey,
+        scanMainKey: _scanMainKey,
+        spendXpubkey: _spendXpubkey,
+        spendMainKey: _spendMainKey,
+        ...preShielded
+      } = full;
+      return { full, preShielded };
+    }
+
+    // The P2PKH record, with and without a passphrase, is migrated by the tests
+    // above. A multisig record is never migrated: shielded keys from its root
+    // would be one participant's single-signature keys.
+    test.each([
+      { created: '', given: '' },
+      { created: 'my-bip39-passphrase', given: 'my-bip39-passphrase' },
+      { created: 'my-bip39-passphrase', given: '' },
+      { created: '', given: 'my-bip39-passphrase' },
+    ])(
+      'multisig record created with passphrase "$created", given "$given": derives and writes nothing',
+      ({ created, given }) => {
+        const { preShielded } = preShieldedRecord({
+          passphrase: created,
+          walletMultisig: multisig,
+        });
+        const before = JSON.parse(JSON.stringify(preShielded));
+
+        const migrated = wallet.migrateShieldedAccessData(preShielded, {
+          pin: '123',
+          password: '456',
+          passphrase: given,
+          networkName: 'testnet',
+        });
+
+        expect(migrated).toBe(false);
+        expect(JSON.parse(JSON.stringify(preShielded))).toEqual(before);
+        expect(preShielded.scanXpubkey).toBeUndefined();
+        expect(preShielded.spendXpubkey).toBeUndefined();
+      }
+    );
+
+    test('a record whose xpubkey was serialized with other version bytes migrates', () => {
+      const { full, preShielded } = preShieldedRecord({ passphrase: '' });
+      // The same key and chain code, with Bitcoin testnet version bytes.
+      const {
+        checksum: _checksum,
+        xpubkey: _xpubkey,
+        ...fields
+      } = new HDPublicKey(full.xpubkey).toObject();
+      const reserialized = new HDPublicKey({ ...fields, network: 'testnet' }).xpubkey;
+      expect(reserialized.startsWith('tpub')).toBe(true);
+      preShielded.xpubkey = reserialized;
+
+      const migrated = wallet.migrateShieldedAccessData(preShielded, {
+        pin: '123',
+        password: '456',
+        networkName: 'testnet',
+      });
+
+      expect(migrated).toBe(true);
+      expect(preShielded.scanXpubkey).toBe(full.scanXpubkey);
+    });
+
+    // A P2PKH record given another non-empty passphrase is covered above.
+    test.each([
+      { created: 'my-bip39-passphrase', given: '' },
+      { created: '', given: 'my-bip39-passphrase' },
+    ])(
+      'P2PKH record created with passphrase "$created", given "$given": throws shielded-passphrase-mismatch and writes nothing',
+      ({ created, given }) => {
+        const { full, preShielded } = preShieldedRecord({ passphrase: created });
+        const before = JSON.parse(JSON.stringify(preShielded));
+
+        let caught: unknown;
+        try {
+          wallet.migrateShieldedAccessData(preShielded, {
+            pin: '123',
+            password: '456',
+            passphrase: given,
+            networkName: 'testnet',
+          });
+        } catch (e) {
+          caught = e;
+        }
+
+        expect(caught).toBeInstanceOf(ShieldedKeyError);
+        expect(caught).toBeInstanceOf(WalletError);
+        expect((caught as ShieldedKeyError).errorCode).toBe('shielded-passphrase-mismatch');
+        expect(JSON.parse(JSON.stringify(preShielded))).toEqual(before);
+        // The error carries no key material or seed words.
+        const { message } = caught as Error;
+        for (const secret of [seed, full.xpubkey, full.scanXpubkey!, full.spendXpubkey!]) {
+          expect(message).not.toContain(secret);
+        }
+      }
+    );
+  });
+});

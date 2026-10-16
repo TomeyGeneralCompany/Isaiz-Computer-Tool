@@ -1,0 +1,39 @@
+{
+  "checks": {
+    "has_reproduction_test": false,
+    "in_scope_at_processing": true,
+    "source_commit_matches": true,
+    "triage_requires_review": true
+  },
+  "commit": "d2a86ece964247d8313c20fbfeb0c7199d9bff5a",
+  "lead": {
+    "file": "scripts/update_translations.js",
+    "fingerprint": "37d86f040e0a5a272225",
+    "guidance": "Review command construction and input provenance",
+    "line": 89,
+    "rule": "JS_CHILD_EXEC"
+  },
+  "note": "Automated offline evidence preparation only. No project-specific reproduction or verified security impact.",
+  "processed_at": "2026-10-15T00:09:26.536340+00:00",
+  "repository": "HathorNetwork/hathor-wallet-mobile",
+  "scope_urls": [
+    "https://immunefi.com/bug-bounty/hathornetwork/scope/"
+  ],
+  "source_check": {
+    "commit": "d2a86ece964247d8313c20fbfeb0c7199d9bff5a",
+    "excerpt": "   78:  */\n   79: function checkPotOutdated() {\n   80:   console.log(`⏳ Checking if pot file is outdated...`);\n   81: \n   82:   let isPotOutdated = false;\n   83:   const myTmpDir = fs.mkdtempSync(path.join(tmpdir(), 'check_pot-'));\n   84:   temporaryDirs.push(myTmpDir); // Cleanup will be done on process.exit()\n   85:   try {\n   86:     // Extract the strings from the source code\n   87:     execSync(`npx ttag extract -o ${myTmpDir}/pot ./src/`, { stdio: 'inherit' });\n   88:     // Generate the `.po` files\n   89:     execSync(`msgen -o ${myTmpDir}/po ${myTmpDir}/pot`, { stdio: 'inherit' });\n   90:     // Check if the `.pot` file is outdated\n   91:     execSync(`msgcmp ${myTmpDir}/po ./locale/texts.pot`, { stdio: 'inherit' });\n   92:   } catch (error) {\n   93:     isPotOutdated = true;\n   94:     console.error('❌ Error checking pot file, or pot file outdated:', error);\n   95:   }\n   96: \n   97:   return isPotOutdated;\n   98: }\n   99: \n  100: /**\n  101:  * Merges the `.pot` file with the translations in the `.po` files in each of the `locale` folders.",
+    "file": "scripts/update_translations.js",
+    "file_sha256": "5b7a433427ae4630a64aeeb32af18a70e63b9d04894feaddb579d8d164e7b22a",
+    "line": 89,
+    "status": "source_matched"
+  },
+  "source_fingerprint": "e2dd70902900640d5f81496fb0726270441a0a27488b173ae077de704c9be6f7",
+  "status": "needs_project_specific_reproduction",
+  "triage": {
+    "classification": "needs_review",
+    "evidence": "The code lacks proper validation of the source file's existence and integrity, which could lead to incorrect results.",
+    "follow_up": "If the source file is properly validated, the code could be improved to handle potential outdated `.pot` files. However, without proper validation, the result may be incorrect.",
+    "rationale": "The code checks for a potential outdated `.pot` file by comparing against a source file, but the logic is incomplete and lacks proper validation of the source file's integrity. The code may not handle cases where the source file is not present or the comparison is incorrect."
+  },
+  "verified_vulnerability": false
+}

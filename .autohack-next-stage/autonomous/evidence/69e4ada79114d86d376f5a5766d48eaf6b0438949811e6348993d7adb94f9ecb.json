@@ -1,0 +1,39 @@
+{
+  "checks": {
+    "has_reproduction_test": false,
+    "in_scope_at_processing": true,
+    "source_commit_matches": true,
+    "triage_requires_review": false
+  },
+  "commit": "d2a86ece964247d8313c20fbfeb0c7199d9bff5a",
+  "lead": {
+    "file": "scripts/update_translations.js",
+    "fingerprint": "819b4f80c00d0af82b64",
+    "guidance": "Review command construction and input provenance",
+    "line": 122,
+    "rule": "JS_CHILD_EXEC"
+  },
+  "note": "Automated offline evidence preparation only. No project-specific reproduction or verified security impact.",
+  "processed_at": "2026-10-15T00:09:26.403932+00:00",
+  "repository": "HathorNetwork/hathor-wallet-mobile",
+  "scope_urls": [
+    "https://immunefi.com/bug-bounty/hathornetwork/scope/"
+  ],
+  "source_check": {
+    "commit": "d2a86ece964247d8313c20fbfeb0c7199d9bff5a",
+    "excerpt": "  111:     const subfolderPath = path.join(localeDir, subfolder);\n  112:     if (!fs.existsSync(subfolderPath)) {\n  113:       fs.mkdirSync(subfolderPath, { recursive: true });\n  114:     }\n  115:     const poFile = path.join(subfolderPath, 'texts.po');\n  116:     // Create the file if it does not exist\n  117:     if (!fs.existsSync(poFile)) {\n  118:       fs.writeFileSync(poFile, '');\n  119:     }\n  120: \n  121:     // Merge the `.pot` file with the existing translations\n  122:     execSync(`msgmerge ${poFile} ${potFile} -o ${poFile}`, { stdio: 'inherit' });\n  123:   });\n  124: }\n  125: \n  126: /**\n  127:  * Checks if all `.po` files have all messages from the `.pot` file.\n  128:  * Allows untranslated messages if `strict` is false.\n  129:  * @param {string[]} strictLanguages - Does not allow untranslated messages for those languages.\n  130:  * @returns {boolean} True if an error happened or if there are any missing i18n lines\n  131:  */\n  132: function checkPoTranslations(strictLanguages) {\n  133:   console.log(`⏳ Checking translations...`);\n  134: ",
+    "file": "scripts/update_translations.js",
+    "file_sha256": "5b7a433427ae4630a64aeeb32af18a70e63b9d04894feaddb579d8d164e7b22a",
+    "line": 122,
+    "status": "source_matched"
+  },
+  "source_fingerprint": "8b6dbf609065ae3b2841e9e10fc19930bd407508957cd714801c59e8a82a064e",
+  "status": "needs_project_specific_reproduction",
+  "triage": {
+    "classification": "likely_false_positive",
+    "evidence": "No false positive claims made in the code.",
+    "follow_up": "If you have more details, please provide the code and the issue you're encountering, and I can help analyze it further.",
+    "rationale": "The code checks for existing `.po` files and merges them with a `.pot` file, but there's no indication of potential issues with the merging process or the presence of untranslated messages. The code is likely correct and not a false positive."
+  },
+  "verified_vulnerability": false
+}

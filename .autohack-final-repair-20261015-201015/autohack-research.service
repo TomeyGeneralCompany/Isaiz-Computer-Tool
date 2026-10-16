@@ -1,0 +1,17 @@
+[Unit]
+Description=AutoHack authorized repository change research queue
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/izy/isaiz-bugbounty/autohack
+ExecStart=/home/izy/isaiz-bugbounty/autohack/.autohack-next-stage/start.sh
+Restart=on-failure
+RestartSec=15
+CPUQuota=35%
+MemoryMax=400M
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,11 @@
+{
+  "commit": "598d3905a6f4ebe68a52c79d461bedb7246fa187",
+  "detail": {},
+  "input_hash": "23973b0e001f7cc2f161459c585005822d65264299fddbe7bd5c1860e13277ad",
+  "processed_at": "2026-10-15T20:04:51.309568+00:00",
+  "repository": "OpenZeppelin/openzeppelin-contracts",
+  "source_draft": "/home/izy/isaiz-bugbounty/autohack/.autohack-next-stage/investigator/triage/drafts/2569be85e62c5d915a6eb37bc48101b9b970326d676d7b6521b5ac1765f9e846.json",
+  "status": "out_of_scope",
+  "submitted": false,
+  "verified_vulnerability": false
+}

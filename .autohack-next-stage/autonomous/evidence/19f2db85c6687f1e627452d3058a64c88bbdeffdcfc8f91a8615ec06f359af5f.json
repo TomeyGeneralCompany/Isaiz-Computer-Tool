@@ -1,0 +1,39 @@
+{
+  "checks": {
+    "has_reproduction_test": false,
+    "in_scope_at_processing": true,
+    "source_commit_matches": true,
+    "triage_requires_review": true
+  },
+  "commit": "0bc1dd9c49203dd45f48f0046abc4e95a50d06da",
+  "lead": {
+    "file": "contracts/AvocadoMultisig/AvocadoMultisigSecondary.sol",
+    "fingerprint": "8b9ff446dd03fa8b9a43",
+    "guidance": "Review authorization based on tx.origin",
+    "line": 752,
+    "rule": "SOL_TX_ORIGIN"
+  },
+  "note": "Automated offline evidence preparation only. No project-specific reproduction or verified security impact.",
+  "processed_at": "2026-10-15T00:09:25.498646+00:00",
+  "repository": "Instadapp/avocado-contracts-public",
+  "scope_urls": [
+    "https://immunefi.com/bug-bounty/instadapp/scope/"
+  ],
+  "source_check": {
+    "commit": "0bc1dd9c49203dd45f48f0046abc4e95a50d06da",
+    "excerpt": "  741:         }\n  742: \n  743:         if (success_) {\n  744:             emit CastExecuted(params_.source, msg.sender, signers_, params_.metadata);\n  745:         } else {\n  746:             emit CastFailed(params_.source, msg.sender, signers_, revertReason_, params_.metadata);\n  747:         }\n  748:     }\n  749: \n  750:     /// @dev SIMULATES: executes `actions_` with respective target, calldata, operation etc.\n  751:     //\n  752:     // this is called by _callTargets() and executeOperation() in AvocadoMultisig.sol when the tx.origin is dead address.\n  753:     // making this public and calling via delegateCall reduces code duplication and simplifies simulation logic.\n  754:     function _simulateExecuteActions(\n  755:         Action[] memory actions_,\n  756:         uint256 id_,\n  757:         bool isFlashloanCallback_\n  758:     ) external onlyDelegateCall {\n  759:         // reset _transientAllowHash immediately to avert reentrancy etc. & get the gas refund (4800)\n  760:         _resetTransientStorage();\n  761: \n  762:         uint256 storageSlot0Snapshot_; // avoImpl, nonce, initialized vars\n  763:         uint256 storageSlot1Snapshot_; // signers related variables\n  764:         // delegate call = ids 1 and 21",
+    "file": "contracts/AvocadoMultisig/AvocadoMultisigSecondary.sol",
+    "file_sha256": "6b09cbb01d6ab420f6a7043a6e326428ac4dee44badc5ac4c55051af0961930c",
+    "line": 752,
+    "status": "source_matched"
+  },
+  "source_fingerprint": "5528683b6cef8085e7043ba9aadc66347630f65aa4c9d019b720e69ff927e649",
+  "status": "needs_project_specific_reproduction",
+  "triage": {
+    "classification": "needs_review",
+    "evidence": "The code snippet shows authorization logic but does not implement it. This could lead to issues with the multisig system.",
+    "follow_up": "If you have more information, please provide it to help further analyze the code.",
+    "rationale": "The code appears to be part of a contract for a multisig system, but there is no indication of authorization checks being performed. The SOL_TX_ORIGIN rule is not being applied, which could lead to potential security issues. However, this is a static analysis result and not a verified vulnerability."
+  },
+  "verified_vulnerability": false
+}

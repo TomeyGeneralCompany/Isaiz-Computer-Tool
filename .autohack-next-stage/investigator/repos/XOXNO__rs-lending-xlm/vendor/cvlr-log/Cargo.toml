@@ -1,0 +1,24 @@
+
+
+
+
+
+
+
+
+[package]
+name = "cvlr-log"
+description = "Logging in Certora Calltrace"
+version = "0.6.1"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/Certora/cvlr"
+
+[features]
+default = ["mathint"]
+rt = ["cvlr-mathint/rt"]
+mathint = ["dep:cvlr-mathint"]
+no-loc = []
+
+[dependencies]
+cvlr-mathint = { version = "=0.6.1", optional = true }

@@ -1,0 +1,31 @@
+{
+  "repository": "HathorNetwork/hathor-wallet-mobile",
+  "commit": "d2a86ece964247d8313c20fbfeb0c7199d9bff5a",
+  "scope_sources": [
+    {
+      "asset_type": "websites_and_applications",
+      "asset_url": "https://github.com/HathorNetwork/hathor-wallet-mobile",
+      "program": "hathornetwork",
+      "scope_url": "https://immunefi.com/bug-bounty/hathornetwork/scope/"
+    }
+  ],
+  "original_report": "HathorNetwork__hathor-wallet-mobile-d2a86ece9642.json",
+  "lead": {
+    "rule": "JS_CHILD_EXEC",
+    "file": "scripts/update_translations.js",
+    "line": 211,
+    "guidance": "Review command construction and input provenance",
+    "fingerprint": "04540ffa68e29e2f436e"
+  },
+  "source_excerpt": "203:   } catch (error) {\n204:     console.error('\u274c Error checking for changes:', error);\n205:     return true;\n206:   }\n207: \n208:   if (hasChanges) {\n209:     // Print the full diff to the console\n210:     console.warn(`\u2757 Changes found in the translation files. Please review them.`);\n211:     execSync('git  --no-pager diff', { stdio: 'inherit' });\n212:   }\n213:   return hasChanges;\n214: }\n215: \n216: /**\n217:  * Compiles the translations by generating JSON files from the `.po` files.\n218:  */\n219: function generateJsonFromPos() {",
+  "triage": {
+    "classification": "likely_false_positive",
+    "rationale": "The code is not checking for changes in the repository, and the source code does not provide evidence of a false positive. The rule is about command construction and input provenance, but the code does not contain any false positive indicators.",
+    "evidence": "No false positive evidence is provided in the source code.",
+    "follow_up": "If you have more information, please provide it to help with further analysis."
+  },
+  "status": "unverified_draft",
+  "verified_vulnerability": false,
+  "generated_at": "2026-10-14T23:37:40.675265+00:00",
+  "note": "Automated static triage only. No exploitability, eligibility, or bounty award established."
+}

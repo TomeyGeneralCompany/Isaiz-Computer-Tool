@@ -1,0 +1,39 @@
+{
+  "checks": {
+    "has_reproduction_test": false,
+    "in_scope_at_processing": true,
+    "source_commit_matches": true,
+    "triage_requires_review": true
+  },
+  "commit": "8891f73d17887e272a5317065961269aee94f7cd",
+  "lead": {
+    "file": "contracts/Timelock.sol",
+    "fingerprint": "63a36ecf22a95884e254",
+    "guidance": "Review delegatecall target and access control",
+    "line": 125,
+    "rule": "SOL_DELEGATECALL"
+  },
+  "note": "Automated offline evidence preparation only. No project-specific reproduction or verified security impact.",
+  "processed_at": "2026-10-15T00:09:27.302478+00:00",
+  "repository": "Instadapp/inst-governance",
+  "scope_urls": [
+    "https://immunefi.com/bug-bounty/instadapp/scope/"
+  ],
+  "source_check": {
+    "commit": "8891f73d17887e272a5317065961269aee94f7cd",
+    "excerpt": "  114:     function executePayload(address target, string memory signature, bytes memory data) public returns (bytes memory) {\n  115:         require(msg.sender == address(this), \"Timelock::executePayload: Call must come from Timelock.\");\n  116:         bytes memory callData;\n  117: \n  118:         if (bytes(signature).length == 0) {\n  119:             callData = data;\n  120:         } else {\n  121:             callData = abi.encodePacked(bytes4(keccak256(bytes(signature))), data);\n  122:         }\n  123: \n  124:         // solium-disable-next-line security/no-call-value\n  125:         (bool success, bytes memory returnData) = target.delegatecall(callData);\n  126:         require(success, \"Timelock::executePayload: Transaction execution reverted.\");\n  127: \n  128:         return returnData;\n  129:     }\n  130: \n  131:     function getBlockTimestamp() internal view returns (uint) {\n  132:         // solium-disable-next-line security/no-block-members\n  133:         return block.timestamp;\n  134:     }\n  135: }",
+    "file": "contracts/Timelock.sol",
+    "file_sha256": "9171fd0f1a5c1b5cbb3894b9802a4cb46f2da8d2b1e5742046c1bdcce0704548",
+    "line": 125,
+    "status": "source_matched"
+  },
+  "source_fingerprint": "d0f8a4beb500e6a7449054ccdc73e64ad115e9927b10dd04398bb853a8da800f",
+  "status": "needs_project_specific_reproduction",
+  "triage": {
+    "classification": "needs_review",
+    "evidence": "The code includes a check for signature length and uses solium-disable-next-line for security, but no further analysis is provided.",
+    "follow_up": "If you have more context or a different rule, please provide it for further review.",
+    "rationale": "The code appears to be using a delegatecall with a potential issue where the signature length is not checked, which could lead to invalid delegate calls. However, there is insufficient context to determine if this is a false positive or a likely issue."
+  },
+  "verified_vulnerability": false
+}

@@ -1,0 +1,352 @@
+//! Tests for the `resolve_op` arms, the `resolve_oracle` key variants and the
+//! `apply_self_op` rejection path.
+//!
+//! Each resolve case pins the target contract, the function and the delay tier.
+//! A `Sensitive` operation resolved as `Standard` executes after a shorter delay.
+extern crate std;
+
+use super::*;
+
+use crate::test_support::register_governance;
+use common::constants::RAY;
+use common::types::{HubAssetKey, IndependencePolicy, MarketParamsRaw, OracleTolerance};
+use price_aggregator::PriceAggregatorClient as SeedClient;
+use soroban_sdk::testutils::Address as _;
+use soroban_sdk::{symbol_short, BytesN, String as SorobanString};
+
+/// A governance instance with a native controller registered, plus that
+/// controller's address. `resolve_op` reads the controller out of instance
+/// storage, so every call below runs inside `env.as_contract(&gov_id, ..)`.
+fn gov_with_controller(env: &Env) -> (Address, Address) {
+    env.mock_all_auths();
+    let (_admin, gov_id, gov) = register_governance(env);
+    let controller_id = env.register(controller::Controller, (gov_id.clone(),));
+    gov.set_controller(&controller_id);
+    (gov_id, controller_id)
+}
+
+fn nft_args(env: &Env, hash: [u8; 32]) -> DeployPositionNftArgs {
+    DeployPositionNftArgs {
+        wasm_hash: BytesN::from_array(env, &hash),
+        uri: SorobanString::from_str(env, "https://xoxno.com/nft/"),
+        name: SorobanString::from_str(env, "XOXNO Position"),
+        symbol: SorobanString::from_str(env, "XPOS"),
+    }
+}
+
+#[test]
+fn deploy_position_nft_resolves_to_controller_with_standard_delay() {
+    let env = Env::default();
+    let (gov_id, controller_id) = gov_with_controller(&env);
+    let op = AdminOperation::DeployPositionNft(nft_args(&env, [0x11; 32]));
+
+    let resolved = env.as_contract(&gov_id, || resolve_op(&env, &op));
+
+    assert_eq!(resolved.target, controller_id);
+    assert_eq!(resolved.function, Symbol::new(&env, "deploy_position_nft"));
+    // wasm_hash, uri, name, symbol.
+    assert_eq!(resolved.args.len(), 4);
+    // Standard is safe: the controller reverts with `PositionNftAlreadyDeployed`
+    // once an NFT exists. `UpgradePositionNft` has no such guard and is Sensitive.
+    assert_eq!(resolved.delay_tier, DelayTier::Standard);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #10)")]
+fn deploy_position_nft_rejects_zero_wasm_hash() {
+    let env = Env::default();
+    let (gov_id, _controller_id) = gov_with_controller(&env);
+    let op = AdminOperation::DeployPositionNft(nft_args(&env, [0u8; 32]));
+
+    env.as_contract(&gov_id, || resolve_op(&env, &op));
+}
+
+#[test]
+fn upgrade_position_nft_resolves_to_controller_with_sensitive_delay() {
+    let env = Env::default();
+    let (gov_id, controller_id) = gov_with_controller(&env);
+    let op = AdminOperation::UpgradePositionNft(BytesN::from_array(&env, &[0x22; 32]));
+
+    let resolved = env.as_contract(&gov_id, || resolve_op(&env, &op));
+
+    assert_eq!(resolved.target, controller_id);
+    assert_eq!(resolved.function, Symbol::new(&env, "upgrade_position_nft"));
+    assert_eq!(resolved.args.len(), 1);
+    // Replacing the NFT code under live positions is a Sensitive operation.
+    assert_eq!(resolved.delay_tier, DelayTier::Sensitive);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #10)")]
+fn upgrade_position_nft_rejects_zero_wasm_hash() {
+    let env = Env::default();
+    let (gov_id, _controller_id) = gov_with_controller(&env);
+    let op = AdminOperation::UpgradePositionNft(BytesN::from_array(&env, &[0u8; 32]));
+
+    env.as_contract(&gov_id, || resolve_op(&env, &op));
+}
+
+/// `UpgradePriceAggregator` resolves to the aggregator's `upgrade` on the
+/// Sensitive tier. Oracle configuration (`ConfigureAssetOracle`) stays Standard.
+#[test]
+fn upgrade_price_aggregator_resolves_to_the_aggregator_with_sensitive_delay() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, gov_id, gov) = register_governance(&env);
+    let agg_id = env.register(price_aggregator::PriceAggregator, (gov_id.clone(),));
+    gov.set_price_aggregator(&agg_id);
+
+    let op = AdminOperation::UpgradePriceAggregator(BytesN::from_array(&env, &[0x33; 32]));
+    let resolved = env.as_contract(&gov_id, || resolve_op(&env, &op));
+
+    assert_eq!(resolved.target, agg_id, "must target the price aggregator");
+    assert_eq!(resolved.function, Symbol::new(&env, "upgrade"));
+    assert_eq!(resolved.args.len(), 1);
+    assert_eq!(resolved.delay_tier, DelayTier::Sensitive);
+}
+
+/// A zero wasm hash is rejected with `InvalidWasmHash`, as for every other
+/// upgrade variant.
+#[test]
+#[should_panic(expected = "Error(Contract, #10)")]
+fn upgrade_price_aggregator_rejects_zero_wasm_hash() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, gov_id, gov) = register_governance(&env);
+    let agg_id = env.register(price_aggregator::PriceAggregator, (gov_id.clone(),));
+    gov.set_price_aggregator(&agg_id);
+
+    let op = AdminOperation::UpgradePriceAggregator(BytesN::from_array(&env, &[0u8; 32]));
+    env.as_contract(&gov_id, || resolve_op(&env, &op));
+}
+
+#[test]
+fn force_socialize_bad_debt_resolves_to_controller_with_sensitive_delay() {
+    let env = Env::default();
+    let (gov_id, controller_id) = gov_with_controller(&env);
+    let op = AdminOperation::ForceSocializeBadDebt(42);
+
+    let resolved = env.as_contract(&gov_id, || resolve_op(&env, &op));
+
+    assert_eq!(resolved.target, controller_id);
+    assert_eq!(
+        resolved.function,
+        Symbol::new(&env, "force_socialize_bad_debt")
+    );
+    assert_eq!(resolved.args.len(), 1);
+    // Socializing an account's debt into the supply index is a Sensitive operation.
+    assert_eq!(resolved.delay_tier, DelayTier::Sensitive);
+}
+
+fn relax_args(env: &Env, expected_epoch: u64) -> RelaxSpokeAssetFlagsArgs {
+    RelaxSpokeAssetFlagsArgs {
+        spoke_id: 1,
+        hub_asset: HubAssetKey {
+            hub_id: 0,
+            asset: Address::generate(env),
+        },
+        expected_epoch,
+        paused: false,
+        frozen: true,
+        no_seize: false,
+    }
+}
+
+#[test]
+fn relax_spoke_asset_flags_resolves_to_controller_with_standard_delay() {
+    let env = Env::default();
+    let (gov_id, controller_id) = gov_with_controller(&env);
+    let args = relax_args(&env, 0);
+    let op = AdminOperation::RelaxSpokeAssetFlags(args.clone());
+
+    let resolved = env.as_contract(&gov_id, || resolve_op(&env, &op));
+
+    assert_eq!(resolved.target, controller_id);
+    assert_eq!(
+        resolved.function,
+        Symbol::new(&env, "relax_spoke_asset_flags")
+    );
+    assert_eq!(
+        resolved.args,
+        vec![
+            &env,
+            args.spoke_id.into_val(&env),
+            args.hub_asset.into_val(&env),
+            args.expected_epoch.into_val(&env),
+            args.paused.into_val(&env),
+            args.frozen.into_val(&env),
+            args.no_seize.into_val(&env),
+        ]
+    );
+    assert_eq!(resolved.delay_tier, DelayTier::Standard);
+}
+
+#[test]
+fn relax_spoke_asset_flags_keeps_each_flag_in_its_argument_position() {
+    let env = Env::default();
+    let (gov_id, _controller_id) = gov_with_controller(&env);
+
+    for (paused, frozen, no_seize) in [
+        (true, false, false),
+        (false, true, false),
+        (false, false, true),
+    ] {
+        let args = RelaxSpokeAssetFlagsArgs {
+            paused,
+            frozen,
+            no_seize,
+            ..relax_args(&env, 0)
+        };
+        let op = AdminOperation::RelaxSpokeAssetFlags(args.clone());
+
+        let resolved = env.as_contract(&gov_id, || resolve_op(&env, &op));
+
+        assert_eq!(
+            resolved.args,
+            vec![
+                &env,
+                args.spoke_id.into_val(&env),
+                args.hub_asset.into_val(&env),
+                args.expected_epoch.into_val(&env),
+                paused.into_val(&env),
+                frozen.into_val(&env),
+                no_seize.into_val(&env),
+            ]
+        );
+    }
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #319)")]
+fn relax_spoke_asset_flags_rejects_a_future_epoch_at_proposal() {
+    let env = Env::default();
+    let (gov_id, _controller_id) = gov_with_controller(&env);
+    let op = AdminOperation::RelaxSpokeAssetFlags(relax_args(&env, 1));
+
+    env.as_contract(&gov_id, || resolve_op(&env, &op));
+}
+
+#[test]
+fn resolve_oracle_zeroes_decimals_for_a_ref_key() {
+    let env = Env::default();
+    // A `Ref` key has no token contract to read decimals from, so the input
+    // value is discarded and a non-zero input still resolves to 0.
+    let oracle = AssetOracle {
+        asset_decimals: 7,
+        max_price_stale_seconds: 900,
+        sources: soroban_sdk::vec![&env],
+        tolerance: OracleTolerance {
+            upper_ratio_bps: 10_500,
+            lower_ratio_bps: 9_524,
+        },
+        independence: IndependencePolicy::RequireDisjoint,
+        min_sanity_price_wad: 1,
+        max_sanity_price_wad: i128::MAX,
+    };
+
+    let resolved = resolve_oracle(&env, &PriceKey::Ref(symbol_short!("XLMUSD")), &oracle);
+
+    assert_eq!(resolved.asset_decimals, 0);
+    // Everything other than the decimals is carried through untouched.
+    assert_eq!(resolved.max_price_stale_seconds, 900);
+    assert_eq!(resolved.min_sanity_price_wad, 1);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #34)")]
+fn apply_self_op_rejects_an_operation_that_does_not_target_governance() {
+    let env = Env::default();
+    let (gov_id, _controller_id) = gov_with_controller(&env);
+    // `Unpause` resolves to the controller, so `execute_self` never routes it
+    // here. Reaching this arm is an internal invariant failure (`InternalError`).
+    env.as_contract(&gov_id, || apply_self_op(&env, &AdminOperation::Unpause));
+}
+
+fn token_oracle(env: &Env, asset_decimals: u32) -> AssetOracle {
+    AssetOracle {
+        asset_decimals,
+        max_price_stale_seconds: 900,
+        sources: vec![env],
+        tolerance: OracleTolerance {
+            upper_ratio_bps: 10_500,
+            lower_ratio_bps: 9_524,
+        },
+        independence: IndependencePolicy::RequireDisjoint,
+        min_sanity_price_wad: 1,
+        max_sanity_price_wad: i128::MAX,
+    }
+}
+
+fn pool_args(asset: &Address, asset_decimals: u32) -> CreatePoolArgs {
+    CreatePoolArgs {
+        hub_id: 1,
+        asset: asset.clone(),
+        params: MarketParamsRaw {
+            max_borrow_rate: RAY,
+            base_borrow_rate: 0,
+            slope1: RAY / 100,
+            slope2: RAY / 10,
+            slope3: RAY / 2,
+            mid_utilization: RAY / 2,
+            optimal_utilization: 8 * RAY / 10,
+            max_utilization: 95 * RAY / 100,
+            reserve_factor: 1_000,
+            is_flashloanable: false,
+            flashloan_fee: 0,
+            asset_id: asset.clone(),
+            asset_decimals,
+        },
+    }
+}
+
+fn gov_with_relabelled_sac(env: &Env, listed: u32) -> (Address, Address, Address) {
+    env.mock_all_auths();
+    let (_admin, gov_id, gov) = register_governance(env);
+    let controller_id = env.register(controller::Controller, (gov_id.clone(),));
+    gov.set_controller(&controller_id);
+    let agg_id = env.register(price_aggregator::PriceAggregator, (gov_id.clone(),));
+    gov.set_price_aggregator(&agg_id);
+    let sac = env
+        .register_stellar_asset_contract_v2(Address::generate(env))
+        .address();
+    SeedClient::new(env, &agg_id)
+        .seed_oracle(&PriceKey::Token(sac.clone()), &token_oracle(env, listed));
+    (gov_id, controller_id, sac)
+}
+
+#[test]
+fn resolve_oracle_keeps_the_stored_unit_of_a_relabelled_token() {
+    let env = Env::default();
+    let (gov_id, _controller_id, sac) = gov_with_relabelled_sac(&env, 0);
+
+    let resolved = env.as_contract(&gov_id, || {
+        resolve_oracle(&env, &PriceKey::Token(sac.clone()), &token_oracle(&env, 7))
+    });
+
+    assert_eq!(resolved.asset_decimals, 0);
+}
+
+#[test]
+fn create_liquidity_pool_accepts_the_stored_unit_of_a_relabelled_token() {
+    let env = Env::default();
+    let (gov_id, controller_id, sac) = gov_with_relabelled_sac(&env, 0);
+    let op = AdminOperation::CreateLiquidityPool(pool_args(&sac, 0));
+
+    let resolved = env.as_contract(&gov_id, || resolve_op(&env, &op));
+
+    assert_eq!(resolved.target, controller_id);
+    assert_eq!(
+        resolved.function,
+        Symbol::new(&env, "create_liquidity_pool")
+    );
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #6)")]
+fn create_liquidity_pool_rejects_the_live_unit_of_a_relabelled_token() {
+    let env = Env::default();
+    let (gov_id, _controller_id, sac) = gov_with_relabelled_sac(&env, 0);
+    let op = AdminOperation::CreateLiquidityPool(pool_args(&sac, 7));
+
+    env.as_contract(&gov_id, || resolve_op(&env, &op));
+}

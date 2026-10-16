@@ -1,0 +1,39 @@
+{
+  "checks": {
+    "has_reproduction_test": false,
+    "in_scope_at_processing": true,
+    "source_commit_matches": true,
+    "triage_requires_review": false
+  },
+  "commit": "97430aa29ac10a70ee0c18f2a905c4925363b58f",
+  "lead": {
+    "file": "contracts/account/utils/draft-ERC7579Utils.sol",
+    "fingerprint": "354c27b8ebbebb96b9df",
+    "guidance": "Review delegatecall target and access control",
+    "line": 268,
+    "rule": "SOL_DELEGATECALL"
+  },
+  "note": "Automated offline evidence preparation only. No project-specific reproduction or verified security impact.",
+  "processed_at": "2026-10-15T00:09:26.594924+00:00",
+  "repository": "OpenZeppelin/openzeppelin-contracts",
+  "scope_urls": [
+    "https://immunefi.com/bug-bounty/openzeppelin/scope/"
+  ],
+  "source_check": {
+    "commit": "97430aa29ac10a70ee0c18f2a905c4925363b58f",
+    "excerpt": "  257:         );\n  258:         return _validateExecutionMode(index, execType, success, returndata);\n  259:     }\n  260: \n  261:     /// @dev Executes a `delegatecall` to the target with the provided {ExecType}.\n  262:     function _delegatecall(\n  263:         uint256 index,\n  264:         ExecType execType,\n  265:         address target,\n  266:         bytes calldata data\n  267:     ) private returns (bytes memory) {\n  268:         (bool success, bytes memory returndata) = (target == address(0) ? address(this) : target).delegatecall(data);\n  269:         return _validateExecutionMode(index, execType, success, returndata);\n  270:     }\n  271: \n  272:     /// @dev Validates the execution mode and returns the returndata.\n  273:     function _validateExecutionMode(\n  274:         uint256 index,\n  275:         ExecType execType,\n  276:         bool success,\n  277:         bytes memory returndata\n  278:     ) private returns (bytes memory) {\n  279:         if (execType == ERC7579Utils.EXECTYPE_DEFAULT) {\n  280:             Address.verifyCallResult(success, returndata);",
+    "file": "contracts/account/utils/draft-ERC7579Utils.sol",
+    "file_sha256": "a498b2b4efb848f1f0ebdf78f18bae1b0f0cd1741953b62b315d9f093a545df8",
+    "line": 268,
+    "status": "source_matched"
+  },
+  "source_fingerprint": "7f8a07c02cd40ec3f6d77affc665c9901e0982d331d07a9f7b0100636b4b1ea5",
+  "status": "needs_project_specific_reproduction",
+  "triage": {
+    "classification": "likely_false_positive",
+    "evidence": "The code is part of a contract implementation for a specific feature, and the provided line is part of the implementation logic.",
+    "follow_up": "If you have more information or a different rule, please provide it, and I will review it with the same classification.",
+    "rationale": "The code snippet appears to be part of a contract implementation for a specific feature, but there is no indication of a false positive or a vulnerability. The code is likely intended to be part of the contract's logic, not a false positive."
+  },
+  "verified_vulnerability": false
+}

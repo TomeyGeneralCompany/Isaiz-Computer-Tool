@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -u
+ROOT="${AUTOHACK_ROOT:-$HOME/isaiz-bugbounty/autohack}"
+echo '=== Original AutoHack + extended research ==='
+for name in autohack-native.service autohack-research.service autohack-immunefi.timer autohack-investigator.service autohack-triage.service autohack-verifier.service autohack-reproducer.service autohack-autonomous.service autohack-research-engine.service autohack-extended-research.service autohack-review-backlog.timer; do
+ printf '%-40s %s\n' "$name" "$(systemctl --user is-active "$name" 2>/dev/null || true)"
+done
+python3 - "$ROOT" <<'PY'
+import pathlib,json,sys,re
+r=pathlib.Path(sys.argv[1]);s=(r/'.env').read_text()
+d=dict(re.findall(r'^([A-Z_][A-Z0-9_]*)=(.*)$',s,re.M))
+for k in ('SECURITY_AUTO_HUNT_ENABLED','SECURITY_AUTO_SUBMIT','HACKERONE_ENABLED','IMMUNEFI_ENABLED'):
+ print(k,d.get(k,'unset'))
+for part in ('research-engine','extended-research'):
+ p=r/'.autohack-next-stage'/part/'state/status.json'
+ if p.exists():
+  try:print(part,json.dumps(json.loads(p.read_text()),indent=2)[:2500])
+  except Exception as e:print(part,str(e))
+print('Note: service activity does not establish verified vulnerabilities or accepted submissions.')
+PY

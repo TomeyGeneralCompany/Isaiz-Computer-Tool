@@ -1,0 +1,98 @@
+name: Security Scan
+
+on:
+  pull_request:
+    branches: [master, main, feat/*, rc/*]
+
+    paths:
+      - "contracts/**"
+      - "common/**"
+      - "interfaces/**"
+      - "tests/**"
+      - "certora/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "Makefile"
+      - "scripts/**"
+      - "docs/reference/invariants.md"
+      - ".github/workflows/**"
+      - ".github/scripts/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  access-control:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    name: Access Control Gate
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          clean: false
+
+      - name: Reset workspace, preserve target/ build cache
+        run: |
+          git reset --hard
+          git clean -ffdx -e target
+
+      # Source-only and deterministic: no toolchain, no build, no network. Runs
+      # in about a second, so it gates the PR long before the Rust jobs finish.
+      - name: Every state-changing entrypoint is gated or declared
+        run: make access-control-check
+
+  security-scan:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    name: Security Scan (OpenZeppelin)
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          clean: false
+
+      - name: Isolate rustup toolchain dir
+        run: |
+          rm -rf "$RUNNER_TEMP/rustup"
+          echo "RUSTUP_HOME=$RUNNER_TEMP/rustup" >> "$GITHUB_ENV"
+
+      - name: Reset workspace, preserve target/ build cache
+        run: |
+          git reset --hard
+          git clean -ffdx -e target
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+        with:
+          toolchain: nightly
+          targets: wasm32v1-none
+
+      - name: Install soroban-scanner
+
+        run: |
+          cargo +nightly install --git https://github.com/XOXNO/soroban-security-detectors-sdk \
+            --rev 43231611f039c444c4a1db0ef2ef25c3257afff1 \
+            soroban-security-detectors-runner
+
+      - name: Run security detectors
+
+        run: .github/scripts/run_scanner.sh
+
+      - name: Run security detectors (strict)
+        if: github.event_name == 'pull_request'
+        run: |
+          .github/scripts/run_scanner.sh | tee scan-results.txt
+          if grep -q "CRITICAL\|HIGH" scan-results.txt; then
+            echo "::error::Security scan found CRITICAL or HIGH severity issues"
+            exit 1
+          fi

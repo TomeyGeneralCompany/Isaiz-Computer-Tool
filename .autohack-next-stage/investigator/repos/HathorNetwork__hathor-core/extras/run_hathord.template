@@ -1,0 +1,11 @@
+#!/bin/bash
+
+# SPDX-FileCopyrightText: Hathor Labs
+# SPDX-License-Identifier: Apache-2.0
+
+cd ${INSTALL_DIR}/hathor-python/
+source ./venv/bin/activate
+
+WORDS=${WALLET_WORDS}
+
+exec ./hathor-cli run_node --hostname ${NODE_HOST} --listen tcp:40403 --status 8001 --testnet --peer peer_id.json --data ${INSTALL_DIR}/data --words "$${EMPTY}WORDS"

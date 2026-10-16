@@ -1,0 +1,31 @@
+{
+  "repository": "HathorNetwork/hathor-wallet-mobile",
+  "commit": "116a8658d60fb9be25d01847be2a9671ccbf81bf",
+  "scope_sources": [
+    {
+      "asset_type": "websites_and_applications",
+      "asset_url": "https://github.com/HathorNetwork/hathor-wallet-mobile",
+      "program": "hathornetwork",
+      "scope_url": "https://immunefi.com/bug-bounty/hathornetwork/scope/"
+    }
+  ],
+  "original_report": "HathorNetwork__hathor-wallet-mobile-116a8658d60f.json",
+  "lead": {
+    "rule": "JS_CHILD_EXEC",
+    "file": "scripts/update_translations.js",
+    "line": 201,
+    "guidance": "Review command construction and input provenance",
+    "fingerprint": "869e9a92a58da7317068"
+  },
+  "source_excerpt": "193:  * translation files have changed, and this may trigger a CI fail when running inside the CI.\n194:  * @returns {boolean} True if changes were found, or if an error happened\n195:  */\n196: function checkForChanges() {\n197:   console.log(`\u23f3 Checking for filesystem changes after i18n execution...`);\n198:   let statusResult = '';\n199:   let hasChanges = false;\n200:   try {\n201:     statusResult = execSync('git status --porcelain', { encoding: 'utf-8' });\n202:     hasChanges = statusResult.trim().length > 0;\n203:   } catch (error) {\n204:     console.error('\u274c Error checking for changes:', error);\n205:     return true;\n206:   }\n207: \n208:   if (hasChanges) {\n209:     // Print the full diff to the console",
+  "triage": {
+    "classification": "likely_false_positive",
+    "rationale": "The code checks for filesystem changes after i18n execution, but the logic is incomplete and not properly handling the case where no changes are found. The code is not properly validating the input or ensuring that the CI environment is properly configured.",
+    "evidence": "The code checks for filesystem changes but does not properly validate the input or ensure that the CI environment is properly configured.",
+    "follow_up": "If you have more information about the specific issue, please provide it, and I will help you refine the analysis further."
+  },
+  "status": "unverified_draft",
+  "verified_vulnerability": false,
+  "generated_at": "2026-10-15T01:11:18.065118+00:00",
+  "note": "Automated static triage only. No exploitability, eligibility, or bounty award established."
+}

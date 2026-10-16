@@ -1,0 +1,28 @@
+[package]
+name = "governance"
+version = "0.1.0"
+edition = "2021"
+
+autotests = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+soroban-sdk = { workspace = true }
+stellar-access = { workspace = true }
+stellar-governance = { workspace = true }
+stellar-macros = { workspace = true }
+common = { path = "../../common" }
+controller-interface = { path = "../../interfaces/controller" }
+governance-interface = { path = "../../interfaces/governance" }
+price-aggregator-interface = { path = "../../interfaces/price-aggregator" }
+
+[features]
+testing = []
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
+stellar-contract-utils = { workspace = true }
+controller = { path = "../controller", features = ["testing"] }
+price-aggregator = { path = "../price-aggregator", features = ["testing"] }

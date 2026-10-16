@@ -1,0 +1,576 @@
+use anyhow::{anyhow, Context, Result};
+
+use crate::stellar::client::{contract_id_from_strkey, sc_address_from_strkey};
+use serde::Deserialize;
+use std::fs;
+use std::net::SocketAddr;
+use std::path::Path;
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct KeeperConfig {
+    pub network: String,
+    pub rpc: RpcConfig,
+    pub contracts: ContractsConfig,
+    pub keyvault: KeyVaultConfig,
+    pub signer: SignerConfig,
+    pub fees: FeesConfig,
+    pub schedule: ScheduleConfig,
+    pub metrics: MetricsConfig,
+    pub log: LogConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RpcConfig {
+    /// RPC endpoints in preference order: primary first, last-resort last. The
+    /// key accepts either spelling (`url` or `urls`) and either shape (one
+    /// string or a list), so a single-endpoint config stays valid unchanged.
+    #[serde(alias = "url", deserialize_with = "one_or_many")]
+    pub urls: Vec<String>,
+    pub passphrase: String,
+    #[serde(default = "default_rpc_timeout")]
+    pub timeout_seconds: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ContractsConfig {
+    pub controller: String,
+    pub pool_wasm_hash: String,
+    #[serde(default, deserialize_with = "empty_string_as_none")]
+    pub flash_loan_receiver: Option<String>,
+
+    #[serde(default)]
+    pub markets: Vec<MarketConfig>,
+
+    #[serde(default)]
+    pub market_assets: Vec<String>,
+
+    #[serde(default, deserialize_with = "empty_string_as_none")]
+    pub governance: Option<String>,
+
+    #[serde(default, deserialize_with = "empty_string_as_none")]
+    pub xoxno_oracle_adapter: Option<String>,
+
+    #[serde(default, deserialize_with = "empty_string_as_none")]
+    pub price_aggregator: Option<String>,
+
+    #[serde(default, deserialize_with = "empty_string_as_none")]
+    pub redstone_adapter: Option<String>,
+
+    #[serde(default, deserialize_with = "empty_string_as_none")]
+    pub swap_router: Option<String>,
+
+    /// Instances the protocol only reads through (third-party oracle adapters,
+    /// the swap router). Nothing in the protocol writes them, so nothing renews
+    /// them; anyone may pay their rent, and an archived one fails every price
+    /// read or strategy that routes through it.
+    #[serde(default)]
+    pub extra_instances: Vec<String>,
+
+    /// Blend pools the controller approved for `migrate_from_blend`. The keeper
+    /// renews each one's controller `BlendPoolAllowed` row.
+    #[serde(default)]
+    pub blend_pools: Vec<String>,
+
+    /// `G...` or `C...` addresses registered with `set_position_manager`. The
+    /// keeper renews each one's controller `PositionManager` row.
+    #[serde(default)]
+    pub position_managers: Vec<String>,
+}
+
+impl ContractsConfig {
+    fn require_aggregator_for_markets(&self) -> Result<()> {
+        if self.price_aggregator.is_none()
+            && (!self.markets.is_empty() || !self.market_assets.is_empty())
+        {
+            return Err(anyhow!(
+                "config.contracts.price_aggregator is required when markets are configured \
+                 (the keeper must renew the price-aggregator's AssetOracle rows and instance)"
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct MarketConfig {
+    #[serde(default = "default_hub_id")]
+    pub hub_id: u32,
+    pub asset: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct KeyVaultConfig {
+    pub url: String,
+    pub secret_name: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SignerConfig {
+    #[serde(default = "default_derivation_path")]
+    pub derivation_path: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct FeesConfig {
+    #[serde(default = "default_base_fee")]
+    pub base_fee_stroops: u32,
+    #[serde(default = "default_fee_multiplier")]
+    pub resource_fee_multiplier: f64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ScheduleConfig {
+    pub ttl_tick_seconds: u64,
+    pub index_tick_seconds: u64,
+    pub ttl_safety_margin_days: u32,
+    pub asset_chunk: usize,
+    pub max_txs_per_tick: usize,
+
+    #[serde(default)]
+    pub enable_index_refresh: bool,
+
+    #[serde(default = "default_scan_users")]
+    pub scan_users: bool,
+
+    #[serde(default = "default_max_accounts_scan")]
+    pub max_accounts_scan: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct MetricsConfig {
+    pub bind: SocketAddr,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct LogConfig {
+    #[serde(default = "default_log_level")]
+    pub level: String,
+    #[serde(default = "default_log_format")]
+    pub format: String,
+}
+
+fn default_rpc_timeout() -> u64 {
+    30
+}
+fn default_derivation_path() -> String {
+    "m/44'/148'/0'".to_string()
+}
+fn default_base_fee() -> u32 {
+    100
+}
+fn default_fee_multiplier() -> f64 {
+    1.2
+}
+fn default_scan_users() -> bool {
+    true
+}
+fn default_max_accounts_scan() -> u64 {
+    50_000
+}
+fn default_log_level() -> String {
+    "info".to_string()
+}
+fn default_log_format() -> String {
+    "json".to_string()
+}
+fn default_hub_id() -> u32 {
+    1
+}
+
+/// Deserializes either one string or a list of strings into a list.
+fn one_or_many<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OneOrMany {
+        One(String),
+        Many(Vec<String>),
+    }
+
+    Ok(match OneOrMany::deserialize(deserializer)? {
+        OneOrMany::One(single) => vec![single],
+        OneOrMany::Many(list) => list,
+    })
+}
+
+fn empty_string_as_none<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let opt = Option::<String>::deserialize(deserializer)?;
+    Ok(opt.filter(|s| !s.trim().is_empty()))
+}
+
+impl KeeperConfig {
+    pub fn load(path: &Path) -> Result<Self> {
+        let raw =
+            fs::read_to_string(path).with_context(|| format!("read config {}", path.display()))?;
+        let cfg: KeeperConfig = serde_yaml::from_str(&raw)
+            .with_context(|| format!("parse YAML at {}", path.display()))?;
+        cfg.validate()?;
+        Ok(cfg)
+    }
+
+    fn validate(&self) -> Result<()> {
+        if self.network.trim().is_empty() {
+            return Err(anyhow!("config.network is empty"));
+        }
+        if self.rpc.urls.is_empty() {
+            return Err(anyhow!("config.rpc.url lists no endpoint"));
+        }
+        if let Some(idx) = self.rpc.urls.iter().position(|u| u.trim().is_empty()) {
+            return Err(anyhow!("config.rpc.url[{idx}] is empty"));
+        }
+        if self.rpc.passphrase.trim().is_empty() {
+            return Err(anyhow!("config.rpc.passphrase is empty"));
+        }
+        if !self.contracts.controller.starts_with('C') {
+            return Err(anyhow!(
+                "config.contracts.controller must be a C... address"
+            ));
+        }
+        if let Some(flash_loan_receiver) = &self.contracts.flash_loan_receiver {
+            if !flash_loan_receiver.starts_with('C') {
+                return Err(anyhow!(
+                    "config.contracts.flash_loan_receiver must be a C... address when set"
+                ));
+            }
+        }
+        if let Some(governance) = &self.contracts.governance {
+            if !governance.starts_with('C') {
+                return Err(anyhow!(
+                    "config.contracts.governance must be a C... address when set"
+                ));
+            }
+        }
+        if let Some(adapter) = &self.contracts.xoxno_oracle_adapter {
+            if !adapter.starts_with('C') {
+                return Err(anyhow!(
+                    "config.contracts.xoxno_oracle_adapter must be a C... address when set"
+                ));
+            }
+        }
+        if let Some(agg) = &self.contracts.price_aggregator {
+            if !agg.starts_with('C') {
+                return Err(anyhow!(
+                    "config.contracts.price_aggregator must be a C... address when set"
+                ));
+            }
+        }
+        // Parse at load so a malformed entry stops the boot instead of failing
+        // every snapshot. A repeated id would put the same key twice into one
+        // footprint.
+        let mut kept: std::collections::HashSet<&str> = [
+            Some(self.contracts.controller.as_str()),
+            self.contracts.flash_loan_receiver.as_deref(),
+            self.contracts.governance.as_deref(),
+            self.contracts.xoxno_oracle_adapter.as_deref(),
+            self.contracts.price_aggregator.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        for (name, address) in [
+            (
+                "redstone_adapter",
+                self.contracts.redstone_adapter.as_deref(),
+            ),
+            ("swap_router", self.contracts.swap_router.as_deref()),
+        ] {
+            if let Some(address) = address {
+                contract_id_from_strkey(address)
+                    .with_context(|| format!("config.contracts.{name}"))?;
+                if !kept.insert(address) {
+                    return Err(anyhow!(
+                        "config.contracts.{name} repeats a contract already kept alive: {address}"
+                    ));
+                }
+            }
+        }
+        for (i, extra) in self.contracts.extra_instances.iter().enumerate() {
+            contract_id_from_strkey(extra)
+                .with_context(|| format!("config.contracts.extra_instances[{i}]"))?;
+            if !kept.insert(extra.as_str()) {
+                return Err(anyhow!(
+                    "config.contracts.extra_instances[{i}] repeats a contract already kept alive: {extra}"
+                ));
+            }
+        }
+        for (i, pool) in self.contracts.blend_pools.iter().enumerate() {
+            contract_id_from_strkey(pool)
+                .with_context(|| format!("config.contracts.blend_pools[{i}]"))?;
+        }
+        for (i, manager) in self.contracts.position_managers.iter().enumerate() {
+            sc_address_from_strkey(manager)
+                .with_context(|| format!("config.contracts.position_managers[{i}]"))?;
+        }
+        self.contracts.require_aggregator_for_markets()?;
+        if self.contracts.pool_wasm_hash.len() != 64
+            || hex::decode(&self.contracts.pool_wasm_hash).is_err()
+        {
+            return Err(anyhow!(
+                "config.contracts.pool_wasm_hash must be a 32-byte hex string"
+            ));
+        }
+        for asset in &self.contracts.market_assets {
+            if !asset.starts_with('C') {
+                return Err(anyhow!(
+                    "config.contracts.market_assets entries must be contract IDs"
+                ));
+            }
+        }
+        for market in &self.contracts.markets {
+            if market.hub_id == 0 {
+                return Err(anyhow!(
+                    "config.contracts.markets entries must use hub_id >= 1"
+                ));
+            }
+            if !market.asset.starts_with('C') {
+                return Err(anyhow!(
+                    "config.contracts.markets entries must use C... asset contract IDs"
+                ));
+            }
+        }
+        if self.schedule.asset_chunk == 0 || self.schedule.max_txs_per_tick == 0 {
+            return Err(anyhow!(
+                "config.schedule.asset_chunk and max_txs_per_tick must be > 0"
+            ));
+        }
+        if self.fees.resource_fee_multiplier < 1.0 {
+            return Err(anyhow!(
+                "config.fees.resource_fee_multiplier must be >= 1.0"
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn safety_margin_ledgers(&self) -> u32 {
+        self.schedule
+            .ttl_safety_margin_days
+            .saturating_mul(LEDGERS_PER_DAY)
+    }
+}
+
+pub const LEDGERS_PER_DAY: u32 = 17_280;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn named_dependencies_reject_invalid_and_duplicate_addresses() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("config/mainnet.yaml");
+        let base = KeeperConfig::load(&path).unwrap();
+        let mut config = base.clone();
+        config.contracts.redstone_adapter = Some("CABC".into());
+        assert!(config.validate().is_err());
+        let mut config = base.clone();
+        config.contracts.swap_router = Some("CABC".into());
+        assert!(config.validate().is_err());
+        let mut config = base.clone();
+        config.contracts.swap_router = config.contracts.redstone_adapter.clone();
+        assert!(config.validate().is_err());
+        let mut config = base.clone();
+        config.contracts.redstone_adapter = Some(config.contracts.controller.clone());
+        assert!(config.validate().is_err());
+        let mut config = base;
+        config
+            .contracts
+            .extra_instances
+            .push(config.contracts.swap_router.clone().unwrap());
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn legacy_extra_instances_still_load_without_named_dependencies() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("config/mainnet.yaml");
+        let raw = fs::read_to_string(path).unwrap();
+        let mut value: serde_yaml::Value = serde_yaml::from_str(&raw).unwrap();
+        let contracts = value["contracts"].as_mapping_mut().unwrap();
+        let addresses: Vec<_> = ["redstone_adapter", "swap_router"]
+            .into_iter()
+            .map(|name| {
+                contracts
+                    .remove(serde_yaml::Value::String(name.into()))
+                    .unwrap()
+            })
+            .collect();
+        contracts.insert(
+            "extra_instances".into(),
+            serde_yaml::Value::Sequence(addresses),
+        );
+        let config: KeeperConfig = serde_yaml::from_value(value).unwrap();
+        config.validate().unwrap();
+        assert!(config.contracts.redstone_adapter.is_none());
+        assert!(config.contracts.swap_router.is_none());
+        assert_eq!(config.contracts.extra_instances.len(), 2);
+    }
+
+    /// The shipped mainnet config validates; a malformed or repeated
+    /// `extra_instances` entry fails validation.
+    #[test]
+    fn extra_instances_fail_at_boot_when_malformed_or_repeated() {
+        let raw =
+            fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("config/mainnet.yaml"))
+                .expect("read mainnet config");
+        let mut cfg: KeeperConfig = serde_yaml::from_str(&raw).expect("parse mainnet config");
+        cfg.validate().expect("shipped mainnet config validates");
+
+        cfg.contracts.extra_instances.push("CABC".into());
+        assert!(
+            cfg.validate().is_err(),
+            "a truncated strkey must fail at boot, not on every tick"
+        );
+        cfg.contracts.extra_instances.pop();
+
+        cfg.contracts
+            .extra_instances
+            .push(cfg.contracts.controller.clone());
+        assert!(
+            cfg.validate().is_err(),
+            "an id already kept alive must be rejected, or its key lands twice in a footprint"
+        );
+    }
+
+    /// A malformed Blend pool or position-manager address fails at boot, not on
+    /// every tick.
+    #[test]
+    fn malformed_shared_row_addresses_fail_validation() {
+        let raw =
+            fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("config/mainnet.yaml"))
+                .expect("read mainnet config");
+        let base: KeeperConfig = serde_yaml::from_str(&raw).expect("parse mainnet config");
+
+        let mut cfg = base.clone();
+        cfg.contracts.blend_pools.push("CABC".into());
+        assert!(cfg.validate().is_err());
+
+        let mut cfg = base.clone();
+        cfg.contracts
+            .blend_pools
+            .push("GAVWFZK5BGCGBWH4O2CXAHXVRIYVAMGCTZJ24IPLVNLT2WQ2LJBDEEBP".into());
+        assert!(cfg.validate().is_err(), "a Blend pool is a contract");
+
+        let mut cfg = base.clone();
+        cfg.contracts.position_managers.push("GABC".into());
+        assert!(cfg.validate().is_err());
+
+        let mut cfg = base;
+        cfg.contracts
+            .position_managers
+            .push("GAVWFZK5BGCGBWH4O2CXAHXVRIYVAMGCTZJ24IPLVNLT2WQ2LJBDEEBP".into());
+        cfg.contracts
+            .position_managers
+            .push("CAJJZSGMMM3PD7N33TAPHGBUGTB43OC73HVIK2L2G6BNGGGYOSSYBXBD".into());
+        cfg.validate()
+            .expect("an account or a contract can be a position manager");
+    }
+
+    /// Every shipped config file passes the same validation as a boot.
+    #[test]
+    fn shipped_configs_validate() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("config");
+        let mut parsed = 0;
+        for entry in fs::read_dir(&dir).expect("read config dir") {
+            let path = entry.expect("dir entry").path();
+            if path.extension().is_none_or(|ext| ext != "yaml") {
+                continue;
+            }
+            let raw = fs::read_to_string(&path).expect("read config");
+            let cfg: KeeperConfig = serde_yaml::from_str(&raw)
+                .unwrap_or_else(|e| panic!("parse {}: {e}", path.display()));
+            cfg.validate()
+                .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            assert!(
+                !cfg.rpc.urls.iter().any(|u| u.trim().is_empty()),
+                "{} has a blank RPC endpoint",
+                path.display()
+            );
+            assert!(
+                !cfg.rpc.urls.is_empty(),
+                "{} has no RPC endpoint",
+                path.display()
+            );
+            parsed += 1;
+        }
+        assert!(parsed >= 3, "expected the shipped configs, found {parsed}");
+    }
+
+    fn rpc(yaml: &str) -> Result<RpcConfig> {
+        Ok(serde_yaml::from_str(yaml)?)
+    }
+
+    /// A deployed config writes `url:` as one string. That must keep parsing
+    /// unchanged, and a list must parse under either spelling.
+    #[test]
+    fn rpc_url_accepts_one_or_many() {
+        let one = rpc("url: https://a.example\npassphrase: p\n").expect("scalar url");
+        assert_eq!(one.urls, vec!["https://a.example".to_string()]);
+        assert_eq!(one.timeout_seconds, 30);
+
+        let many = rpc("urls: [https://a.example, https://b.example]\npassphrase: p\n")
+            .expect("urls list");
+        assert_eq!(many.urls.len(), 2);
+
+        let aliased =
+            rpc("url: [https://a.example, https://b.example]\npassphrase: p\n").expect("url list");
+        assert_eq!(aliased.urls, many.urls);
+    }
+
+    #[test]
+    fn rpc_url_rejects_empty_endpoints() {
+        let cfg = rpc("urls: []\npassphrase: p\n").expect("empty list parses");
+        assert!(cfg.urls.is_empty());
+
+        let blank = rpc("urls: [https://a.example, \"  \"]\npassphrase: p\n").expect("parses");
+        assert!(blank.urls.iter().any(|u| u.trim().is_empty()));
+    }
+
+    fn contracts(gov_line: &str) -> ContractsConfig {
+        let yaml = format!(
+            "controller: CCONTROLLER\npool_wasm_hash: {}\n{}",
+            "0".repeat(64),
+            gov_line
+        );
+        serde_yaml::from_str(&yaml).expect("parse ContractsConfig")
+    }
+
+    /// The flash-loan receiver is optional (mainnet deploys none). Both absent
+    /// spellings parse as `None`: the key omitted, and the key present but empty.
+    #[test]
+    fn an_absent_flash_loan_receiver_parses() {
+        assert_eq!(contracts("").flash_loan_receiver, None);
+
+        let empty: ContractsConfig = serde_yaml::from_str(&format!(
+            "controller: CCONTROLLER\npool_wasm_hash: {}\nflash_loan_receiver: \"\"",
+            "0".repeat(64)
+        ))
+        .expect("an empty flash_loan_receiver must parse as absent");
+        assert_eq!(empty.flash_loan_receiver, None);
+    }
+
+    #[test]
+    fn markets_without_price_aggregator_fail_validation() {
+        let with_markets =
+            contracts("markets:\n  - { hub_id: 1, asset: CASSET }\nprice_aggregator: \"\"");
+        assert!(with_markets.require_aggregator_for_markets().is_err());
+
+        let wired = contracts("markets:\n  - { hub_id: 1, asset: CASSET }\nprice_aggregator: CAGG");
+        assert!(wired.require_aggregator_for_markets().is_ok());
+
+        assert!(contracts("").require_aggregator_for_markets().is_ok());
+    }
+
+    #[test]
+    fn governance_blank_yaml_deserializes_to_none() {
+        assert_eq!(contracts("").governance, None);
+        assert_eq!(contracts("governance: \"\"").governance, None);
+        assert_eq!(contracts("governance: \"   \"").governance, None);
+        assert_eq!(
+            contracts("governance: CGOV").governance,
+            Some("CGOV".to_string())
+        );
+    }
+}

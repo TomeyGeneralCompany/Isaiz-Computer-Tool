@@ -1,0 +1,424 @@
+/**
+ * Copyright (c) Hathor Labs and its affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */
+
+import { EventEmitter } from 'events';
+import _WebSocket from 'isomorphic-ws';
+import { ILogger, getDefaultLogger } from '../types';
+
+export const DEFAULT_WS_OPTIONS = {
+  wsURL: 'wss://node1.mainnet.hathor.network/v1a/',
+  heartbeatInterval: 3000,
+  connectionTimeout: 5000,
+  retryConnectionInterval: 1000,
+  maxRetryConnectionInterval: 30000,
+  openConnectionTimeout: 20000,
+  logger: getDefaultLogger(),
+};
+
+export type WsOptions = {
+  wsURL?: string;
+  heartbeatInterval?: number;
+  connectionTimeout?: number;
+  retryConnectionInterval?: number;
+  maxRetryConnectionInterval?: number;
+  openConnectionTimeout?: number;
+  logger: ILogger;
+};
+
+/**
+ * Handles websocket connections and message transmission
+ *
+ * @class
+ * @name WS
+ */
+abstract class BaseWebSocket extends EventEmitter {
+  // This is the class of the Websocket. It is used to open new WebSocket
+  // connections. We don't directly use it from import, so the unittests
+  // can replace it by a mock.
+  public WebSocket: _WebSocket;
+
+  // This is the websocket instance
+  private ws: _WebSocket;
+
+  // This is the URL of the websocket.
+  private wsURL: string | (() => string);
+
+  // Boolean that indicates that the websocket was instantiated. It's important to
+  // notice that it does not indicate that the connection has been established with
+  // the server, which is what the `connected` flag indicates
+  private started: boolean;
+
+  // Boolean to show when the websocket connection was established with the
+  // server. This gets set to true on the onOpen event listener.
+  private connected: boolean | null;
+
+  // Boolean to show when the websocket is online
+  private isOnline: boolean;
+
+  // Heartbeat interval in milliseconds
+  private heartbeatInterval: number;
+
+  // Retry connection interval in milliseconds
+  private retryConnectionInterval: number;
+
+  // Maximum retry connection interval in milliseconds. The reconnection delay
+  // grows exponentially from retryConnectionInterval and is capped at this value.
+  private maxRetryConnectionInterval: number;
+
+  // Number of consecutive reconnection attempts since the last successful open.
+  // Drives the exponential backoff; reset to 0 in onOpen().
+  private retryAttempt: number;
+
+  // Open connection timeout in milliseconds
+  private openConnectionTimeout: number;
+
+  // Date of connection.
+  private connectedDate: Date | null;
+
+  // Date of latest setup call. The setup is the way to open a new connection.
+  private latestSetupDate: Date | null;
+
+  // Latest round trip time measured by PING/PONG.
+  private latestRTT: number | null;
+
+  // Heartbeat interval to send pings
+  private heartbeat: ReturnType<typeof setTimeout> | null;
+
+  // Date of latest ping.
+  protected latestPingDate: Date | null;
+
+  // Timer used to detected when connection is down.
+  protected timeoutTimer: ReturnType<typeof setTimeout> | null;
+
+  // Timer used to retry connection
+  protected setupTimer: ReturnType<typeof setTimeout> | null;
+
+  // Connection timeout in milliseconds
+  protected connectionTimeout: number;
+
+  protected logger: ILogger;
+
+  constructor(options: WsOptions) {
+    super();
+
+    const {
+      wsURL,
+      heartbeatInterval,
+      connectionTimeout,
+      retryConnectionInterval,
+      maxRetryConnectionInterval,
+      openConnectionTimeout,
+      logger,
+    } = {
+      ...DEFAULT_WS_OPTIONS,
+      ...options,
+    };
+
+    this.WebSocket = _WebSocket;
+    this.wsURL = wsURL;
+    this.started = false;
+    this.connected = false;
+    this.isOnline = false;
+    this.heartbeatInterval = heartbeatInterval;
+    this.connectionTimeout = connectionTimeout;
+    this.retryConnectionInterval = retryConnectionInterval;
+    this.maxRetryConnectionInterval = maxRetryConnectionInterval;
+    this.retryAttempt = 0;
+    this.openConnectionTimeout = openConnectionTimeout;
+    this.connectedDate = null;
+    this.latestSetupDate = null;
+    this.latestPingDate = null;
+    this.latestRTT = null;
+    this.timeoutTimer = null;
+    this.setupTimer = null;
+    this.heartbeat = null;
+    this.logger = logger;
+  }
+
+  /**
+   * Return websocket url to connect to.
+   * */
+  getWSServerURL() {
+    if (typeof this.wsURL === 'function') {
+      return this.wsURL();
+    }
+    return this.wsURL;
+  }
+
+  /**
+   * Start websocket object and its methods
+   */
+  setup() {
+    if (this.started) {
+      return;
+    }
+
+    const wsURL = this.getWSServerURL();
+    if (wsURL === null) {
+      throw new Error('No server URL specified.');
+    }
+
+    if (this.ws) {
+      if (this.latestSetupDate) {
+        // This check is just to prevent trying to open
+        // a connection more than once within the open timeout
+        const dt = (new Date().getTime() - this.latestSetupDate.getTime()) / 1000;
+        if (dt < this.openConnectionTimeout) {
+          return;
+        }
+      }
+
+      this.closeWs();
+    }
+
+    this.ws = new this.WebSocket(wsURL);
+    this.latestSetupDate = new Date();
+
+    this.ws.onopen = () => this.onOpen();
+    this.ws.onmessage = evt => this.onMessage(evt);
+    this.ws.onerror = evt => this.onError(evt);
+    this.ws.onclose = () => this.onClose();
+
+    this.started = true;
+  }
+
+  /**
+   * Sets all event listeners to noops on the WebSocket instance
+   * and close it.
+   * */
+  closeWs() {
+    if (!this.ws) {
+      return;
+    }
+
+    this.ws.onopen = () => {};
+    this.ws.onclose = () => {};
+    this.ws.onerror = () => {};
+    this.ws.onmessage = () => {};
+
+    // Always tear down the underlying socket, regardless of readyState. A socket
+    // still CONNECTING (TCP established, HTTP 101 upgrade not yet completed) — or
+    // CLOSING — was previously only dereferenced (this.ws = null) without being
+    // closed when readyState !== OPEN. The OS keeps that socket ESTABLISHED until
+    // keepalive eventually reaps it (can be hours), so under reconnect churn
+    // against a connection-capped server (e.g. nginx limit_conn rejecting the
+    // upgrade after the TCP connect) each retry leaks one ESTABLISHED connection,
+    // which in turn consumes more of the cap — a self-reinforcing loop.
+    try {
+      const sock = this.ws as unknown as {
+        terminate?: () => void;
+        close: (code?: number, reason?: string) => void;
+      };
+      if (typeof sock.terminate === 'function') {
+        // node 'ws': forcibly destroys the socket, including CONNECTING/half-open.
+        sock.terminate();
+      } else {
+        // browser WebSocket: close() also aborts an in-progress CONNECTING handshake.
+        sock.close();
+      }
+    } catch (err) {
+      this.logger.warn('Error while closing websocket', { error: `${err}` });
+    }
+
+    this.ws = null;
+    this.started = false;
+    this.connected = false;
+  }
+
+  /**
+   * Return connection uptime in seconds (or null if not connected).
+   * */
+  uptime() {
+    if (!this.connectedDate) {
+      return null;
+    }
+    const now = new Date().getTime();
+    return (now - this.connectedDate.getTime()) / 1000;
+  }
+
+  onPong() {
+    if (this.latestPingDate) {
+      const dt = (new Date().getTime() - this.latestPingDate.getTime()) / 1000;
+      this.latestRTT = dt;
+      this.latestPingDate = null;
+    }
+    this.clearPongTimeoutTimer();
+  }
+
+  /**
+   * Handle message receiving from websocket
+   */
+  abstract onMessage(evt);
+
+  /**
+   * Method called when websocket connection is opened
+   */
+  onOpen() {
+    if (!this.started) {
+      return;
+    }
+
+    // Connection established: reset the reconnection backoff so the next
+    // unexpected drop retries quickly again.
+    this.retryAttempt = 0;
+    this.connected = true;
+    this.connectedDate = new Date();
+    this.heartbeat = setInterval(() => {
+      this.sendPing();
+    }, this.heartbeatInterval);
+  }
+
+  /**
+   * Removes all listeners, ends the connection and removes the setup reconnection timer
+   */
+  close() {
+    this.removeAllListeners();
+    this.endConnection();
+    this.clearSetupTimer();
+    this.clearPongTimeoutTimer();
+  }
+
+  /**
+   * Clears the reconnection timer if it exists
+   */
+  clearSetupTimer() {
+    if (this.setupTimer) {
+      clearTimeout(this.setupTimer);
+      this.setupTimer = null;
+    }
+  }
+
+  /**
+   * Clears the pong timeout timer if it exists
+   */
+  clearPongTimeoutTimer() {
+    if (this.timeoutTimer) {
+      clearTimeout(this.timeoutTimer);
+      this.timeoutTimer = null;
+    }
+  }
+
+  /**
+   * Compute the next reconnection delay using exponential backoff with jitter,
+   * capped at maxRetryConnectionInterval. A flat retry interval hammers a down
+   * or connection-capped server at a fixed rate with no relief; backoff lets the
+   * server recover and de-synchronizes many clients sharing one egress IP.
+   */
+  getReconnectDelay() {
+    const exp = Math.min(
+      this.maxRetryConnectionInterval,
+      this.retryConnectionInterval * 2 ** this.retryAttempt
+    );
+    // Full jitter on the top quarter of the interval keeps a healthy floor while
+    // spreading retries out across clients.
+    const jitter = Math.floor(Math.random() * (exp / 4));
+    this.retryAttempt += 1;
+    return exp + jitter;
+  }
+
+  /**
+   * Method called when websocket connection is closed
+   */
+  onClose() {
+    this.started = false;
+    this.connected = false;
+    this.connectedDate = null;
+    this.latestPingDate = null;
+    this.setIsOnline(false);
+    this.closeWs();
+
+    this.clearSetupTimer();
+    this.clearPongTimeoutTimer();
+    this.setupTimer = setTimeout(() => this.setup(), this.getReconnectDelay());
+    clearInterval(this.heartbeat || undefined); // XXX: We should probably handle a missing heartbeat
+  }
+
+  /**
+   * Method called when an error happend on websocket
+   */
+  onError(evt) {
+    this.emit('connection_error', evt);
+    this.onClose();
+  }
+
+  /**
+   * Method called to send a message to the server
+   */
+  sendMessage(msg: string) {
+    // The started flag means that the websocket instance has been
+    // instantiated, but it does not mean that the connection was
+    // successful yet, which is what the connected flags indicates.
+    if (!this.started || !this.connected) {
+      this.setIsOnline(false);
+      return;
+    }
+
+    if (this.ws.readyState === _WebSocket.OPEN) {
+      this.ws.send(msg);
+    } else {
+      // If it is still connecting, we wait a little and try again
+      setTimeout(() => {
+        this.sendMessage(msg);
+      }, 1000);
+    }
+  }
+
+  /**
+   * Should return a stringified ping message
+   */
+  abstract getPingMessage(): string;
+
+  /**
+   * Ping method to check if server is still alive
+   */
+  sendPing() {
+    if (this.latestPingDate) {
+      // Skipping sendPing. Still waiting for pong...
+      return;
+    }
+    const msg = this.getPingMessage();
+    this.latestPingDate = new Date();
+    this.timeoutTimer = setTimeout(() => this.onConnectionDown(), this.connectionTimeout);
+    this.sendMessage(msg);
+  }
+
+  /**
+   * Event received when the websocket connection is down.
+   */
+  onConnectionDown() {
+    this.logger.warn('Ping timeout. Connection is down...', {
+      uptime: this.uptime(),
+      connectionTimeout: this.connectionTimeout,
+    });
+
+    this.onClose();
+  }
+
+  /**
+   * Method called to end a websocket connection
+   */
+  endConnection() {
+    this.setIsOnline(false);
+    this.started = false;
+    this.connected = null;
+    this.closeWs();
+    clearInterval(this.heartbeat || undefined); // XXX: We should probably handle a missing heartbeat
+  }
+
+  /**
+   * Set if websocket is online
+   */
+  setIsOnline(value: boolean) {
+    if (this.isOnline !== value) {
+      this.isOnline = value;
+      // Emits event of online state change
+      this.emit('is_online', value);
+    }
+  }
+}
+
+export default BaseWebSocket;

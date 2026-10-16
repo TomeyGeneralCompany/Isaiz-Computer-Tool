@@ -1,0 +1,128 @@
+use common::types::HubAssetKey;
+use controller::types::PositionMode;
+use soroban_sdk::{vec, Vec};
+
+use crate::core::LendingTest;
+use crate::helpers::{f64_to_i128, hub_asset, HARNESS_SPOKE};
+use crate::ops::internal::burn_prefund;
+
+impl LendingTest {
+    pub fn supply(&mut self, user: &str, asset_name: &str, amount: f64) {
+        let decimals = self.resolve_market(asset_name).decimals;
+        let raw_amount = f64_to_i128(amount, decimals);
+        self.supply_raw(user, asset_name, raw_amount);
+    }
+
+    pub fn supply_raw(&mut self, user: &str, asset_name: &str, amount: i128) {
+        let addr = self.get_or_create_user(user);
+        let market = self.resolve_market(asset_name);
+        let asset_addr = market.asset.clone();
+
+        market.token_admin.mint(&addr, &amount);
+
+        let account_id = self.default_account_id_or_zero(user);
+        let spoke = self.account_spoke_or_default(account_id);
+
+        let ctrl = self.ctrl_client();
+        let assets: Vec<(HubAssetKey, i128)> = vec![&self.env, (hub_asset(asset_addr), amount)];
+        let returned_id = ctrl.supply(&addr, &account_id, &spoke, &assets);
+
+        if account_id == 0 {
+            self.register_account(user, returned_id, HARNESS_SPOKE, PositionMode::Normal);
+        }
+    }
+
+    /// Pre-funds `caller` and supplies into `account_id` on `spoke_id`. On
+    /// failure the pre-funded balance is burned again so the harness's token
+    /// books stay comparable across attempts.
+    fn supply_core(
+        &mut self,
+        caller: &str,
+        account_id: u64,
+        spoke_id: u32,
+        asset_name: &str,
+        amount: f64,
+    ) -> Result<u64, soroban_sdk::Error> {
+        let decimals = self.resolve_market(asset_name).decimals;
+        let raw_amount = f64_to_i128(amount, decimals);
+        let caller_addr = self.get_or_create_user(caller);
+        let market = self.resolve_market(asset_name);
+        let asset_addr = market.asset.clone();
+        market.token_admin.mint(&caller_addr, &raw_amount);
+
+        let ctrl = self.ctrl_client();
+        let assets: Vec<(HubAssetKey, i128)> =
+            vec![&self.env, (hub_asset(asset_addr.clone()), raw_amount)];
+        let res = match ctrl.try_supply(&caller_addr, &account_id, &spoke_id, &assets) {
+            Ok(Ok(id)) => Ok(id),
+            Ok(Err(err)) => Err(err),
+            Err(e) => Err(e.expect("expected contract error, got InvokeError")),
+        };
+        if res.is_err() {
+            burn_prefund(&self.env, &asset_addr, &caller_addr, raw_amount);
+        }
+        res
+    }
+
+    pub fn supply_to(&mut self, user: &str, account_id: u64, asset_name: &str, amount: f64) {
+        let spoke = self.account_spoke_or_default(account_id);
+        self.supply_core(user, account_id, spoke, asset_name, amount)
+            .expect("supply_to");
+    }
+
+    pub fn try_supply(
+        &mut self,
+        user: &str,
+        asset_name: &str,
+        amount: f64,
+    ) -> Result<u64, soroban_sdk::Error> {
+        let account_id = self.default_account_id_or_zero(user);
+        let spoke = self.account_spoke_or_default(account_id);
+        self.try_supply_with_spoke(user, asset_name, amount, spoke)
+    }
+
+    pub fn try_supply_to_account(
+        &mut self,
+        caller: &str,
+        target_user: &str,
+        asset_name: &str,
+        amount: f64,
+    ) -> Result<u64, soroban_sdk::Error> {
+        let account_id = self.resolve_account_id(target_user);
+        let spoke = self.account_spoke_or_default(account_id);
+        self.supply_core(caller, account_id, spoke, asset_name, amount)
+    }
+
+    pub fn try_supply_with_spoke(
+        &mut self,
+        user: &str,
+        asset_name: &str,
+        amount: f64,
+        spoke_id: u32,
+    ) -> Result<u64, soroban_sdk::Error> {
+        let account_id = self.default_account_id_or_zero(user);
+        self.supply_core(user, account_id, spoke_id, asset_name, amount)
+    }
+
+    pub fn supply_bulk(&mut self, user: &str, assets: &[(&str, f64)]) {
+        let addr = self.get_or_create_user(user);
+
+        let mut soroban_assets: Vec<(HubAssetKey, i128)> = Vec::new(&self.env);
+        for (asset_name, amount) in assets {
+            let market = self.resolve_market(asset_name);
+            let raw = f64_to_i128(*amount, market.decimals);
+            market.token_admin.mint(&addr, &raw);
+            soroban_assets.push_back((hub_asset(market.asset.clone()), raw));
+        }
+
+        let account_id = self.default_account_id_or_zero(user);
+        let spoke = self.account_spoke_or_default(account_id);
+
+        let ctrl = self.ctrl_client();
+        let returned_id = ctrl.supply(&addr, &account_id, &spoke, &soroban_assets);
+
+        if account_id == 0 {
+            self.register_account(user, returned_id, HARNESS_SPOKE, PositionMode::Normal);
+        }
+    }
+}

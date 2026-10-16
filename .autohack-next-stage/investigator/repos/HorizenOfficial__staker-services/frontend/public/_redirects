@@ -1,0 +1,4 @@
+# Cloudflare Pages redirects. /stake is always folded into the dashboard, so
+# redirect it at the edge (instant, no client round-trip). /deposits depends on
+# the SINGLE_POSITION flag and is handled client-side instead.
+/stake / 301

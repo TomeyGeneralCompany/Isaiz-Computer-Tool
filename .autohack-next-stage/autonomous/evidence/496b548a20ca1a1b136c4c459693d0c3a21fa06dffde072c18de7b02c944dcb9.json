@@ -1,0 +1,39 @@
+{
+  "checks": {
+    "has_reproduction_test": false,
+    "in_scope_at_processing": true,
+    "source_commit_matches": true,
+    "triage_requires_review": false
+  },
+  "commit": "8891f73d17887e272a5317065961269aee94f7cd",
+  "lead": {
+    "file": "scripts/verify/lib/actionExtractor.ts",
+    "fingerprint": "6a07f79f580d467603a3",
+    "guidance": "Review command construction and input provenance",
+    "line": 77,
+    "rule": "JS_CHILD_EXEC"
+  },
+  "note": "Automated offline evidence preparation only. No project-specific reproduction or verified security impact.",
+  "processed_at": "2026-10-15T00:09:26.004351+00:00",
+  "repository": "Instadapp/inst-governance",
+  "scope_urls": [
+    "https://immunefi.com/bug-bounty/instadapp/scope/"
+  ],
+  "source_check": {
+    "commit": "8891f73d17887e272a5317065961269aee94f7cd",
+    "excerpt": "   66:     if (openBrace === -1) continue;\n   67: \n   68:     const closeBrace = findMatchingBrace(src, openBrace);\n   69:     if (closeBrace === -1) continue;\n   70: \n   71:     const signature = src.slice(m.index, openBrace).trim();\n   72:     const rawBody = src.slice(openBrace + 1, closeBrace);\n   73:     const body = rawBody.trim();\n   74: \n   75:     const natspec = grabNatspecAbove(src, m.index);\n   76: \n   77:     const skippableMatch = /isActionSkippable\\(\\s*(\\d+)\\s*\\)/.exec(signature);\n   78:     const skippableIndex = skippableMatch ? Number(skippableMatch[1]) : null;\n   79: \n   80:     const normalisedBody = normaliseBody(body);\n   81:     const bodyHash = keccak256(toHex(normalisedBody));\n   82: \n   83:     const [startLine, endLine] = computeLineRange(\n   84:       src,\n   85:       m.index,\n   86:       closeBrace + 1\n   87:     );\n   88: \n   89:     result.push({",
+    "file": "scripts/verify/lib/actionExtractor.ts",
+    "file_sha256": "2e92d9d17a44d2b9a05dc6bb7cdf93a402287efa17be22423a4300ad7dbd0aab",
+    "line": 77,
+    "status": "source_matched"
+  },
+  "source_fingerprint": "9fecf5689cce962005b652004b3a2a0a1a159d397c09657708d43892ece5fedf",
+  "status": "needs_project_specific_reproduction",
+  "triage": {
+    "classification": "likely_false_positive",
+    "evidence": "The code is part of a bug-bounty system and may not be relevant to the current review.",
+    "follow_up": "If you have more context, please provide it to help with the review.",
+    "rationale": "The code is not checking for invalid command construction or input provenance, which is a general rule. The provided code is part of a bug-bounty system and may not be relevant to the current review."
+  },
+  "verified_vulnerability": false
+}

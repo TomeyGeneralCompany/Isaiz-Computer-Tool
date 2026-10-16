@@ -1,0 +1,232 @@
+# SPDX-FileCopyrightText: Hathor Labs
+# SPDX-License-Identifier: Apache-2.0
+
+# yamllint disable rule:line-length
+name: ci
+on: # yamllint disable-line rule:truthy
+  push:
+    branches:
+      - master
+      - dev
+    tags:
+      - v*
+  pull_request:
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - id: set-matrix
+        shell: python
+        run: |
+          import os
+          import json
+          full_matrix = {
+            'python': ['3.11', '3.12', '3.13'],
+            # available OS's: https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#jobsjob_idruns-on
+            'os': ['ubuntu-22.04', 'macos-15'],
+          }
+          # this is the fastest one:
+          reduced_matrix = {
+            'python': ['3.12'],
+            'os': ['ubuntu-22.04'],
+          }
+          github_repository = os.environ['GITHUB_REPOSITORY']
+          if github_repository.lower() == 'hathornetwork/hathor-core':
+              matrix = full_matrix
+          else:
+              matrix = reduced_matrix
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+            f.write('matrix={}\n'.format(json.dumps(matrix)))
+  check-matrix:
+    runs-on: ubuntu-latest
+    needs: matrix
+    steps:
+      - name: Install json2yaml
+        run: |
+          sudo npm install -g json2yaml
+      - name: Check matrix definition
+        run: |
+          matrix='${{ needs.matrix.outputs.matrix }}'
+          echo $matrix
+          echo $matrix | jq .
+          echo $matrix | json2yaml
+  uv-check:
+    name: uv-check py3.13 (ubuntu-22.04)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install Ubuntu dependencies
+        run: |
+          sudo apt-get -qy update
+          sudo apt-get -qy install graphviz librocksdb-dev libsnappy-dev liblz4-dev
+      - name: Install uv
+        run: pipx install uv
+      - name: Check uv.lock is up to date
+        run: uv lock --check
+      - name: Install uv dependencies
+        run: uv sync --frozen --dev --python 3.13
+      - name: Run checks
+        run: uv run --frozen make check
+      - name: Run htr-lib smoke test
+        run: uv run --frozen pytest -n0 -p no:warnings hathor_tests/others/test_htr_lib_integration.py
+  reuse:
+    name: reuse
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Install REUSE tool
+        run: python -m pip install --upgrade reuse
+      - name: Check REUSE compliance
+        run: reuse lint
+  lint:
+    name: lint py${{ matrix.python }} (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: matrix
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.matrix.outputs.matrix) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-hathor-env
+        name: Setup Hathor node environment
+        with:
+          python: ${{ matrix.python }}
+          os: ${{ matrix.os }}
+      - name: Cache mypy
+        uses: actions/cache@v4
+        with:
+          path: .mypy_cache
+          # this key is setup such that every branch has its cache and new branches can reuse dev's cache, but not the other way around
+          key: ${{ runner.os }}-py${{ matrix.python }}-mypy-${{ github.head_ref || github.ref }}
+          restore-keys: |
+            ${{ runner.os }}-py${{ matrix.python }}-mypy-refs/heads/dev-
+            ${{ runner.os }}-py${{ matrix.python }}-mypy-
+      - name: Run linters
+        run: poetry run make check
+  test-cli:
+    name: test-cli py${{ matrix.python }} (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: matrix
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.matrix.outputs.matrix) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-hathor-env
+        name: Setup Hathor node environment
+        with:
+          python: ${{ matrix.python }}
+          os: ${{ matrix.os }}
+      - name: Run CLI tests
+        run: poetry run make tests-cli
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        if: matrix.python == 3.12 && startsWith(matrix.os, 'ubuntu')
+        with:
+          flags: test-cli
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+  test-lib:
+    name: test-lib py${{ matrix.python }} (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: matrix
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.matrix.outputs.matrix) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-hathor-env
+        name: Setup Hathor node environment
+        with:
+          python: ${{ matrix.python }}
+          os: ${{ matrix.os }}
+      - name: Run lib tests
+        run: poetry run make tests-lib
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        if: matrix.python == 3.12 && startsWith(matrix.os, 'ubuntu')
+        with:
+          flags: test-lib
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+  test-other:
+    name: test-other py${{ matrix.python }} (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: matrix
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.matrix.outputs.matrix) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-hathor-env
+        name: Setup Hathor node environment
+        with:
+          python: ${{ matrix.python }}
+          os: ${{ matrix.os }}
+      - name: Run genesis tests
+        run: |
+          HATHOR_TEST_CONFIG_YAML='./hathorlib/hathorlib/conf/mainnet.yml' poetry run pytest -n0 --cov=hathor hathor_tests/tx/test_genesis.py
+          HATHOR_TEST_CONFIG_YAML='./hathorlib/hathorlib/conf/testnet.yml' poetry run pytest -n0 --cov=hathor --cov-append hathor_tests/tx/test_genesis.py
+          HATHOR_TEST_CONFIG_YAML='./hathorlib/hathorlib/conf/nano_testnet.yml' poetry run pytest -n0 --cov=hathor --cov-append hathor_tests/tx/test_genesis.py
+      - name: Run custom tests
+        run: poetry run bash ./extras/custom_tests.sh
+      - name: Run CI tests
+        run: poetry run pytest --cov=hathor --cov-append extras/github/
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        if: matrix.python == 3.12 && startsWith(matrix.os, 'ubuntu')
+        with:
+          flags: test-other
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+  all-checks:
+    name: all-checks
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [lint, reuse, test-cli, test-lib, test-other, uv-check]
+    steps:
+      - name: Check job results
+        run: |
+          if [[ "${{ needs.lint.result }}" != "success" ||
+                "${{ needs.reuse.result }}" != "success" ||
+                "${{ needs.test-cli.result }}" != "success" ||
+                "${{ needs.test-lib.result }}" != "success" ||
+                "${{ needs.test-other.result }}" != "success" ||
+                "${{ needs.uv-check.result }}" != "success" ]]; then
+            echo "One or more jobs failed or were cancelled:"
+            echo "  lint: ${{ needs.lint.result }}"
+            echo "  reuse: ${{ needs.reuse.result }}"
+            echo "  test-cli: ${{ needs.test-cli.result }}"
+            echo "  test-lib: ${{ needs.test-lib.result }}"
+            echo "  test-other: ${{ needs.test-other.result }}"
+            echo "  uv-check: ${{ needs.uv-check.result }}"
+            exit 1
+          fi
+          echo "All checks passed!"

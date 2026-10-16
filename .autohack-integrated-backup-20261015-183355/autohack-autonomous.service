@@ -1,0 +1,15 @@
+[Unit]
+Description=AutoHack autonomous offline evidence and investigation report pipeline
+After=autohack-triage.service autohack-verifier.service autohack-reproducer.service
+Wants=autohack-triage.service autohack-verifier.service autohack-reproducer.service
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -u /home/izy/isaiz-bugbounty/autohack/.autohack-next-stage/autonomous/worker.py
+Restart=always
+RestartSec=15
+NoNewPrivileges=true
+CPUQuota=20%
+MemoryMax=250M
+TasksMax=24
+[Install]
+WantedBy=default.target

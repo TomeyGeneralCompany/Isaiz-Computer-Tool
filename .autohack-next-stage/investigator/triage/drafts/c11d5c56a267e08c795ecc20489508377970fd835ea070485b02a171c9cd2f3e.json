@@ -1,0 +1,31 @@
+{
+  "repository": "Instadapp/fluid-contracts-public",
+  "commit": "9496626f71a761fc296dc3b2efbfd54c504e18f0",
+  "scope_sources": [
+    {
+      "asset_type": "smart_contract",
+      "asset_url": "https://github.com/Instadapp/fluid-contracts-public",
+      "program": "instadapp",
+      "scope_url": "https://immunefi.com/bug-bounty/instadapp/scope/"
+    }
+  ],
+  "original_report": "Instadapp__fluid-contracts-public-9496626f71a7.json",
+  "lead": {
+    "rule": "SOL_DELEGATECALL",
+    "file": "contracts/periphery/wallet/wallet/main.sol",
+    "line": 271,
+    "guidance": "Review delegatecall target and access control",
+    "fingerprint": "6efc50ac0bba68d02956"
+  },
+  "source_excerpt": "263: \n264:                 // handle action failure right after external call to better detect out of gas errors\n265:                 if (!success_) {\n266:                     _handleActionFailure(i, result_);\n267:                 }\n268:             } else if (action_.operation == 1) {\n269:                 // delegatecall (operation = 1)\n270: \n271:                 (success_, result_) = action_.target.delegatecall(action_.data);\n272: \n273:                 // reset _transientAllowHash to make sure it can not be set up in any way for reentrancy\n274:                 _resetTransientStorage();\n275: \n276:                 // handle action failure right after external call to better detect out of gas errors\n277:                 if (!success_) {\n278:                     _handleActionFailure(i, result_);\n279:                 }",
+  "triage": {
+    "classification": "likely_false_positive",
+    "rationale": "The code snippet appears to be part of a bug fix for handling delegatecall failures, but the details provided are unclear and lack context for a false positive classification. The code is likely a placeholder or part of a larger system, and there is insufficient information to determine its actual purpose or impact.",
+    "evidence": "The code snippet is part of a bug fix but lacks context for classification.",
+    "follow_up": "If you have more information about the code's purpose, I can provide further analysis."
+  },
+  "status": "unverified_draft",
+  "verified_vulnerability": false,
+  "generated_at": "2026-10-14T23:44:35.109576+00:00",
+  "note": "Automated static triage only. No exploitability, eligibility, or bounty award established."
+}

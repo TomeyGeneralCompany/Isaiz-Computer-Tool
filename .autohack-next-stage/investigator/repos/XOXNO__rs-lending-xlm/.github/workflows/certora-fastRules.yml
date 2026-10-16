@@ -1,0 +1,96 @@
+name: Certora Prover Fast Rules
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: "Certora profile to run (see certora/profiles.json)"
+        type: choice
+        default: fast
+        options:
+          - fast
+          - core
+          - heavy
+          - sanity
+          - all
+      job_timeout_minutes:
+        description: "Job wall-clock cap in minutes; the profile's confs prove one after another"
+        required: false
+        type: string
+        default: "720"
+
+permissions:
+  contents: read
+  pull-requests: write
+  statuses: write
+
+env:
+  CARGO_TERM_COLOR: always
+  STELLAR_VERSION: "28.0.0"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  certora-fast:
+    name: Fast Certora Rules
+    runs-on: self-hosted
+    timeout-minutes: ${{ fromJSON(inputs.job_timeout_minutes || '720') }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+        with:
+          toolchain: "1.95"
+          targets: wasm32v1-none
+          components: rustfmt
+
+      - name: Cache cargo registry and build
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-certora-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-certora-
+
+      - name: Install stellar-cli
+        run: bash .github/scripts/install-stellar-cli.sh
+
+      - name: Compile Certora feature paths
+        run: ./certora/compile_all.sh --wasm
+
+      - name: Verify CERTORAKEY is configured
+        env:
+          CERTORAKEY: ${{ secrets.CERTORAKEY }}
+        run: |
+          if [ -z "$CERTORAKEY" ]; then
+            echo "::error::CERTORAKEY secret is not configured; hosted prover cannot run."
+            echo "::error::A missing secret must fail this job, not silently skip it."
+            echo "::error::Either configure CERTORAKEY, or scope this workflow to internal PRs only."
+            exit 1
+          fi
+
+      - name: Install Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install Certora CLI
+        run: pip install --require-hashes -r certora/requirements-cli.txt
+
+      - name: Run Certora configs
+        env:
+          CERTORAKEY: ${{ secrets.CERTORAKEY }}
+          PROFILE: ${{ inputs.profile || 'fast' }}
+        # Without --wait_for_results the CLI exits 0 once the cloud accepts the
+        # job. Waiting makes a violated, vacuous or timed-out rule fail here.
+        run: ./certora/scripts/run_profile.py "$PROFILE" -- --wait_for_results ALL

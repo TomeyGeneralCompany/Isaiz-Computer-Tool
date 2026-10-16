@@ -1,0 +1,4388 @@
+/**
+ * Copyright (c) Hathor Labs and its affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */
+
+import { EventEmitter } from 'events';
+import bitcore, { util } from 'bitcore-lib';
+import assert from 'assert';
+import Header from '../headers/base';
+import FeeHeader from '../headers/fee';
+import {
+  DECIMAL_PLACES,
+  NATIVE_TOKEN_UID,
+  TOKEN_MINT_MASK,
+  AUTHORITY_TOKEN_DATA,
+  TOKEN_MELT_MASK,
+  WALLET_SERVICE_AUTH_DERIVATION_PATH,
+  P2SH_ACCT_PATH,
+  P2PKH_ACCT_PATH,
+  GAP_LIMIT,
+  SHIELDED_SPEND_ACCT_PATH,
+} from '../constants';
+import { decryptData, signMessage } from '../utils/crypto';
+import walletApi from './api/walletApi';
+import { retryOnTransientWalletError } from './walletServiceRetry';
+import {
+  deriveAddressFromXPubP2PKH,
+  fetchVerifiedExternalPrivateKey,
+  toOnChainAddress,
+} from '../utils/address';
+import { deriveShieldedAddress } from '../utils/shieldedAddress';
+import { checkScanXPrivKey, unlockScanXPrivKey } from '../shielded/scanKey';
+import { shieldedAddressError } from '../shielded/capability';
+import walletUtils from '../utils/wallet';
+import helpers from '../utils/helpers';
+import transaction from '../utils/transaction';
+import tokens from '../utils/tokens';
+import config from '../config';
+import P2PKH from '../models/p2pkh';
+import Transaction from '../models/transaction';
+import CreateTokenTransaction from '../models/create_token_transaction';
+import Output from '../models/output';
+import Input from '../models/input';
+import Address from '../models/address';
+import Network from '../models/network';
+import networkInstance from '../network';
+import { MemoryStore, Storage } from '../storage';
+import WalletServiceConnection from './connection';
+import SendTransactionWalletService, {
+  assertAllInputsSigned,
+  assertNanoCallerSigned,
+} from './sendTransactionWalletService';
+import { openShieldedOutput, sessionScanKey } from './walletServiceSendStorage';
+import { ensureHex } from '../utils/buffer';
+import {
+  AddressInfoObject,
+  GetBalanceObject,
+  GetAddressesObject,
+  GetHistoryObject,
+  Utxo,
+  OutputType,
+  OutputSendTransaction,
+  OutputRequestObj,
+  DataScriptOutputRequestObj,
+  InputRequestObj,
+  TransactionFullObject,
+  IHathorWallet,
+  WsTransaction,
+  CreateWalletAuthData,
+  ConnectionState,
+  TokenDetailsObject,
+  AuthorityTxOutput,
+  GetTxOutputsOptions,
+  WalletServiceServerUrls,
+  FullNodeVersionData,
+  WalletAddressMap,
+  TxByIdTokensResponseData,
+  WalletServiceDelegateAuthorityOptions,
+  WalletServiceDestroyAuthorityOptions,
+  FullNodeTxResponse,
+  FullNodeTxConfirmationDataResponse,
+  GetAddressDetailsObject,
+  CreateTokenOptionsInput,
+  ShieldedRegistrationFields,
+  ShieldedAddressInfoObject,
+  GetSplitBalanceObject,
+  WalletStatus,
+  ShieldedUtxo,
+} from './types';
+import type { ChangeOutputMode, IShieldedCryptoProvider } from '../shielded/types';
+import {
+  SendTxError,
+  UtxoError,
+  WalletRequestError,
+  WalletError,
+  UninitializedWalletError,
+  WalletFromXPubGuard,
+  PinRequiredError,
+  TokenNotFoundError,
+  HasTxOutsideFirstAddressError,
+  ShieldedKeyError,
+  TxNotFoundError,
+} from '../errors';
+import { assertChangeShieldedMode } from '../new/sendTransaction';
+import type { ShieldedOpeningEntry } from '../new/types';
+import NanoContractTransactionBuilder from '../nano_contracts/builder';
+import NanoContractHeader from '../nano_contracts/header';
+import {
+  NanoContractVertexType,
+  NanoContractBuilderCreateTokenOptions,
+  CreateNanoTxData,
+  CreateNanoTxOptions,
+} from '../nano_contracts/types';
+import { setNanoHeaderCallerFromWallet } from '../nano_contracts/utils';
+import { WalletServiceStorageProxy } from './walletServiceStorageProxy';
+import HathorWallet from '../new/wallet';
+import { ErrorMessages } from '../errorMessages';
+import {
+  ApiVersion,
+  EcdsaTxSign,
+  IStorage,
+  PrivateKeyProvider,
+  IWalletAccessData,
+  OutputValueType,
+  IHistoryTx,
+  IDataOutputWithToken,
+  WalletType,
+  ITokenData,
+  TokenVersion,
+  SCANNING_POLICY,
+  WalletAddressMode,
+  IAddressChainOptions,
+} from '../types';
+import { Fee } from '../utils/fee';
+
+// Time in milliseconds berween each polling to check wallet status
+// if it ended loading and became ready
+const WALLET_STATUS_POLLING_INTERVAL = 1000;
+
+// Maximum number of polling attempts before timing out
+const MAX_WALLET_STATUS_POLL_ATTEMPTS = 60;
+// How many `wallet/status` requests in a row may fail while startReadOnly
+// waits for the shielded side, before it runs legacy-only.
+const MAX_SHIELDED_STATUS_REQUEST_ERRORS = 3;
+
+// Wallet status values returned by the wallet-service API
+const WS_STATUS_READY = 'ready';
+const WS_STATUS_CREATING = 'creating';
+const WS_STATUS_ERROR = 'error';
+
+/**
+ * Whether the shielded side alone failed to load. The unified status is then
+ * 'error', but the legacy wallet is ready. Older services do not report the
+ * two sides, which reads as false.
+ */
+function isShieldedOnlyLoadFailure(status: WalletStatus): boolean {
+  return status.legacyStatus === WS_STATUS_READY && status.shieldedStatus === WS_STATUS_ERROR;
+}
+
+// Bounded retry budget for the wallet-service auth-token renewal.
+//
+// Context: right after `createWallet` returns, the `/auth/token` endpoint can
+// briefly respond with a transient error while the wallet-service's internal
+// state settles.
+// That renewal is awaited and errors propagate, we need an explicit bounded retry
+// to keep integration tests (and real clients) tolerant of the same settling race.
+const MAX_AUTH_TOKEN_RENEW_ATTEMPTS = 3;
+
+/**
+ * Whether the caller asked for the shielded address chain.
+ */
+function isShieldedChain(opts?: IAddressChainOptions): boolean {
+  return opts?.legacy === false;
+}
+
+enum walletState {
+  NOT_STARTED = 'Not started',
+  LOADING = 'Loading',
+  READY = 'Ready',
+}
+
+/**
+ * The on-chain fields of a shielded output, as the fullnode serializes it in
+ * `tx.shielded_outputs` or, without the ephemeral pubkey, in a shielded input:
+ * hex or base64, where the wallet-service's are hex.
+ */
+interface OnChainShieldedFields {
+  commitment: string;
+  // eslint-disable-next-line camelcase
+  range_proof: string;
+  // eslint-disable-next-line camelcase
+  ephemeral_pubkey?: string;
+  // eslint-disable-next-line camelcase
+  asset_commitment?: unknown;
+  mode?: unknown;
+}
+
+/**
+ * Whether a wallet-service shielded output carries the on-chain fields: the
+ * fields its opening is derived from and verified against.
+ */
+function matchesOnChain(entry: ShieldedUtxo, onChain: OnChainShieldedFields): boolean {
+  const same = (serviceHex: unknown, wire: unknown) =>
+    typeof serviceHex === 'string' &&
+    typeof wire === 'string' &&
+    serviceHex.toLowerCase() === ensureHex(wire).toLowerCase();
+  return (
+    same(entry.commitment, onChain.commitment) &&
+    same(entry.rangeProof, onChain.range_proof) &&
+    (onChain.ephemeral_pubkey === undefined ||
+      same(entry.ephemeralPubkey, onChain.ephemeral_pubkey)) &&
+    (onChain.mode === undefined || entry.mode === onChain.mode) &&
+    (entry.mode !== 2 ||
+      onChain.asset_commitment === undefined ||
+      same(entry.assetCommitment, onChain.asset_commitment))
+  );
+}
+
+/**
+ * The wallet-service's refusal of a tx_outputs lookup for an output of another
+ * wallet (403 `tx-output-not-in-wallet`); any other refusal is a failure.
+ */
+function isTxOutputNotInWallet(e: unknown): boolean {
+  if (!(e instanceof WalletRequestError) || !e.cause || !('status' in e.cause)) {
+    return false;
+  }
+  const { status, data } = e.cause;
+  return (
+    status === 403 && (data as { error?: unknown } | null)?.error === 'tx-output-not-in-wallet'
+  );
+}
+
+class HathorWalletServiceWallet extends EventEmitter implements IHathorWallet {
+  // String with wallet passphrase
+  passphrase: string;
+
+  // Wallet id from the wallet service
+  walletId: string | null;
+
+  // Network in which the wallet is connected ('mainnet' or 'testnet')
+  network: Network;
+
+  // Method to request the password from the client
+  private requestPassword: () => Promise<string>;
+
+  // String with 24 words separated by space
+  private seed: string | null;
+
+  // Xpub of the wallet
+  private xpub: string | null;
+
+  // Xpriv of the wallet on the account derivation path
+  private xpriv: string | null;
+
+  // Xpriv of the auth derivation path
+  private authPrivKey: bitcore.HDPrivateKey | null;
+
+  // State of the wallet. One of the walletState enum options
+  private state: string;
+
+  // Auth token to be used in the wallet API requests to wallet service
+  private authToken: string | null;
+
+  // Wallet status interval
+  // Variable to store the possible addresses to use that are after the last used address
+  private newAddresses: AddressInfoObject[];
+
+  // Index of the address to be used by the wallet
+  private indexToUse: number;
+
+  // WalletService-ready connection class
+  private conn: WalletServiceConnection;
+
+  // Flag to indicate if the wallet was already connected when the websocket conn is established
+  private firstConnection: boolean;
+
+  // Flag to indicate if the websocket connection is enabled
+  private readonly _isWsEnabled: boolean;
+
+  // Flag to indicate if the wallet is in single-address mode
+  private singleAddress: boolean;
+
+  // Address at index 0
+  private firstAddress: string | null;
+
+  // Whether the wallet's access data holds the shielded scan and spend keys,
+  // so they were registered with the wallet-service on start
+  private shieldedEnabled: boolean;
+
+  // Unused shielded addresses, refreshed together with `newAddresses`
+  private newShieldedAddresses: ShieldedAddressInfoObject[];
+
+  // Index of the shielded address to use in `newShieldedAddresses`
+  private shieldedIndexToUse: number;
+
+  public storage: IStorage;
+
+  /**
+   * Whether an external tx-signing method is registered (e.g. a passkey or hardware signer). Such a
+   * wallet can sign even when its storage holds only the xpub. Read from the storage, so it can't
+   * go stale if the storage's signing method is changed directly.
+   */
+  get isSignedExternally(): boolean {
+    return this.storage.hasTxSignatureMethod();
+  }
+
+  constructor({
+    requestPassword,
+    seed = null,
+    xpriv = null,
+    authxpriv = null,
+    xpub = null,
+    network,
+    passphrase = '',
+    enableWs = true,
+    storage = null,
+    singleAddressMode = false,
+  }: {
+    requestPassword: () => Promise<string>;
+    seed?: string | null;
+    xpriv?: string | null;
+    authxpriv?: string | null;
+    xpub?: string | null;
+    network: Network;
+    passphrase?: string;
+    enableWs?: boolean;
+    storage?: IStorage | null;
+    singleAddressMode?: boolean;
+  }) {
+    super();
+
+    if (!seed && !xpriv && !xpub) {
+      throw Error('You must explicitly provide the seed, xpriv or the xpub.');
+    }
+
+    if (seed && xpriv) {
+      throw Error('You cannot provide both a seed and an xpriv.');
+    }
+
+    if (xpriv && passphrase !== '') {
+      throw Error("You can't use xpriv with passphrase.");
+    }
+
+    if (xpriv && !authxpriv) {
+      throw new Error('You must provide both the account path xpriv and auth path xpriv.');
+    }
+
+    if (seed) {
+      // It will throw InvalidWords error in case is not valid
+      walletUtils.wordsValid(seed);
+    }
+
+    if (!storage) {
+      const store = new MemoryStore();
+      this.storage = new Storage(store);
+    } else {
+      this.storage = storage;
+    }
+
+    // Setup the connection so clients can listen to its events before it is started
+    this.conn = new WalletServiceConnection();
+    this._isWsEnabled = enableWs;
+    this.state = walletState.NOT_STARTED;
+
+    this.xpriv = xpriv;
+    this.seed = seed;
+    this.xpub = xpub;
+    if (authxpriv && !bitcore.HDPrivateKey.isValidSerialized(authxpriv)) {
+      throw new Error('authxpriv parameter is an invalid hd privatekey');
+    }
+    this.authPrivKey = authxpriv ? bitcore.HDPrivateKey(authxpriv) : null;
+
+    this.passphrase = passphrase;
+
+    this.requestPassword = requestPassword;
+
+    // ID of wallet after created on wallet service
+    this.walletId = null;
+
+    this.network = network;
+    networkInstance.setNetwork(this.network.name);
+
+    this.authToken = null;
+    this.firstConnection = true;
+
+    this.newAddresses = [];
+    this.indexToUse = -1;
+    this.singleAddress = singleAddressMode;
+    this.firstAddress = null;
+    this.shieldedEnabled = false;
+    this.newShieldedAddresses = [];
+    this.shieldedIndexToUse = -1;
+
+    // TODO should we have a debug mode?
+  }
+
+  /**
+   * Sets the server to connect on config singleton and storage
+   *
+   * @param {String} newServer - The new server to set the config and storage to
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  async changeServer(newServer: string) {
+    await this.storage.store.setItem('wallet:wallet_service:base_server', newServer);
+    config.setWalletServiceBaseUrl(newServer);
+  }
+
+  /**
+   * Sets the websocket server to connect on config singleton and storage
+   *
+   * @param {String} newServer - The new websocket server to set the config and storage to
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  async changeWsServer(newServer: string) {
+    await this.storage.store.setItem('wallet:wallet_service:ws_server', newServer);
+    config.setWalletServiceBaseWsUrl(newServer);
+  }
+
+  /**
+   * Gets the stored websocket and base server urls
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  async getServerUrlsFromStorage(): Promise<WalletServiceServerUrls> {
+    const walletServiceBaseUrl = (await this.storage.store.getItem(
+      'wallet:wallet_service:base_server'
+    )) as string;
+    const walletServiceWsUrl = (await this.storage.store.getItem(
+      'wallet:wallet_service:ws_server'
+    )) as string;
+
+    return {
+      walletServiceBaseUrl,
+      walletServiceWsUrl,
+    };
+  }
+
+  /**
+   * Get server URL from config object
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  // eslint-disable-next-line class-methods-use-this
+  getServerUrl(): string {
+    return config.getServerUrl();
+  }
+
+  /**
+   * Remove sensitive data from memory
+   *
+   * NOTICE: This won't remove data from memory immediately, we have to wait until javascript
+   * garbage collect it. JavaScript currently does not provide a standard way to trigger
+   * garbage collection
+   * */
+  clearSensitiveData() {
+    this.seed = null;
+    this.authPrivKey = null;
+  }
+
+  /**
+   * Get auth xpubkey from seed
+   *
+   * @param {String} seed 24 words
+   * @param {Object} options Options with passphrase and networkName
+   *
+   * @return {String} auth xpubkey
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  static getAuthXPubKeyFromSeed(
+    seed: string,
+    options: { passphrase?: string; networkName?: string } = {}
+  ): string {
+    const methodOptions = {
+      passphrase: '',
+      networkName: 'mainnet',
+      ...options,
+    };
+
+    const xpriv = walletUtils.getXPrivKeyFromSeed(seed, methodOptions);
+    const privkey = HathorWalletServiceWallet.deriveAuthPrivateKey(xpriv);
+
+    return privkey.xpubkey;
+  }
+
+  /**
+   * Derive private key from root to the auth specific purpose derivation path
+   *
+   * @param {HDPrivateKey} xpriv The wallet's root xpriv
+   *
+   * @return {HDPrivateKey} Derived private key at the auth derivation path
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  static deriveAuthPrivateKey(xpriv: bitcore.HDPrivateKey): bitcore.HDPrivateKey {
+    return xpriv.deriveNonCompliantChild(WALLET_SERVICE_AUTH_DERIVATION_PATH);
+  }
+
+  /**
+   * getWalletIdFromXPub: Get the wallet id given the xpubkey
+   *
+   * @param xpub - The xpubkey
+   * @returns The wallet id
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  static getWalletIdFromXPub(xpub: string) {
+    return walletUtils.getWalletIdFromXPub(xpub);
+  }
+
+  /**
+   * Start wallet: load the wallet data, update state and start polling wallet status until it's ready
+   *
+   * @param {Object} optionsParams Options parameters
+   *  {
+   *   'pinCode': PIN to encrypt the auth xpriv on storage
+   *   'password': Password to decrypt xpriv information
+   *   'waitReady': Whether to wait for the wallet to be ready (default: true)
+   *  }
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  async start({
+    pinCode,
+    password,
+    waitReady = true,
+  }: { pinCode?: string; password?: string; waitReady?: boolean } = {}) {
+    if (!pinCode) {
+      throw new Error('Pin code is required when starting the wallet.');
+    }
+
+    this.setState(walletState.LOADING);
+
+    let accessData: IWalletAccessData | null = null;
+    try {
+      accessData = await this.storage.getAccessData();
+    } catch (err) {
+      if (!(err instanceof UninitializedWalletError)) {
+        throw err;
+      }
+    }
+
+    if (!accessData) {
+      if (this.seed) {
+        if (!password) {
+          throw new Error('Password is required when starting the wallet from the seed.');
+        }
+        accessData = walletUtils.generateAccessDataFromSeed(this.seed, {
+          passphrase: this.passphrase,
+          pin: pinCode,
+          password,
+          networkName: this.network.name,
+          // multisig: not implemented on wallet service yet
+        });
+      } else if (this.xpriv) {
+        // generateAccessDataFromXpriv expects a xpriv on the change level path
+        const accountLevelPrivKey = new bitcore.HDPrivateKey(this.xpriv);
+        const changeLevelPrivKey = accountLevelPrivKey.deriveNonCompliantChild(0);
+
+        accessData = walletUtils.generateAccessDataFromXpriv(changeLevelPrivKey.xprivkey, {
+          pin: pinCode,
+          authXpriv: this.authPrivKey.xprivkey!,
+          // multisig: not implemented on wallet service yet
+        });
+      } else {
+        throw new Error('WalletService facade initialized without seed or xprivkey');
+      }
+
+      await this.storage.saveAccessData(accessData);
+    }
+
+    await this.addShieldedKeysToAccessData(accessData, pinCode, password);
+
+    // Read /version first: the shielded keys go only to a service that
+    // advertises shielded support
+    const versionData = await this.fetchVersionData();
+    const scanXpriv =
+      versionData?.shieldedOutputsEnabled === true
+        ? await this.unlockScanKeyForRegistration(accessData, pinCode)
+        : null;
+
+    const {
+      xpub,
+      authXpub,
+      xpubkeySignature,
+      authXpubkeySignature,
+      timestampNow,
+      firstAddress,
+      authDerivedPrivKey,
+      shielded,
+    } = await this.generateCreateWalletAuthData(accessData, pinCode, scanXpriv);
+    this.firstAddress = firstAddress;
+
+    this.xpub = xpub;
+    this.authPrivKey = authDerivedPrivKey;
+
+    const data = await walletApi.createWallet(
+      this,
+      xpub,
+      xpubkeySignature,
+      authXpub,
+      authXpubkeySignature,
+      timestampNow,
+      firstAddress,
+      shielded
+    );
+
+    this.walletId = data.status.walletId;
+
+    // A service that dropped the shielded fields did not register them
+    const ignoredFields = data.ignoredFields ?? [];
+    this.shieldedEnabled = shielded !== null && !ignoredFields.some(field => field in shielded);
+    this.storage.scanXPrivKey = this.shieldedEnabled ? scanXpriv : null;
+    if (isShieldedOnlyLoadFailure(data.status)) {
+      this.continueWithoutShielded(data.status);
+    }
+
+    // Populate `storage.version` with the fullnode network constants.
+    // Without this, `prepareToSend` would always fall back to the hardcoded
+    // mainnet TX_WEIGHT_CONSTANTS, ignoring the connected network's reported
+    // `min_tx_weight*` values — see HathorWallet.start in src/new/wallet.ts
+    // where the equivalent setApiVersion call lives.
+    //
+    // Run this BEFORE the `waitReady === false` early return so both
+    // public startup paths (waitReady=true and waitReady=false) populate
+    // the field. Otherwise non-blocking-startup callers would silently
+    // fall back to TX_WEIGHT_CONSTANTS forever, defeating the purpose of
+    // this feature.
+    this.populateStorageVersion(versionData);
+
+    // If waitReady is false, return immediately after wallet creation
+    if (!waitReady) {
+      this.clearSensitiveData();
+      return;
+    }
+
+    if (data.status.status === WS_STATUS_CREATING) {
+      // If the wallet status is creating, we should wait until it is ready
+      // before continuing
+      await this.pollForWalletStatus();
+    } else if (data.status.status !== WS_STATUS_READY && !isShieldedOnlyLoadFailure(data.status)) {
+      // At this stage, if the wallet is not 'ready' or 'creating' we should
+      // throw an error as there are only three states: 'ready', 'creating' or 'error'.
+      // A wallet whose shielded load alone failed still has a ready legacy side
+      throw new WalletRequestError(ErrorMessages.WALLET_STATUS_ERROR, {
+        cause: { state: data.status },
+      });
+    }
+
+    // Auth token renewal is NOT called explicitly here. The axios interceptor
+    // in walletServiceAxios.ts handles it on-demand: any authenticated API
+    // call (including getWalletStatus during polling) triggers
+    // validateAndRenewAuthToken() automatically when the token is missing or
+    // expired. By this point, authPrivKey and walletId are both set, so the
+    // interceptor can obtain a token without needing the PIN.
+    await this.onWalletReady();
+    this.clearSensitiveData();
+  }
+
+  /**
+   * Run this session legacy-only after the service failed to load the shielded
+   * side, so the legacy wallet stays usable.
+   */
+  private continueWithoutShielded(status: WalletStatus): void {
+    this.shieldedEnabled = false;
+    this.storage.scanXPrivKey = null;
+    this.storage.logger.warn(
+      `The wallet-service failed to load the shielded side of wallet ${status.walletId}; ` +
+        'the wallet runs without shielded support in this session.'
+    );
+  }
+
+  /**
+   * Whether the access data holds the shielded scan and spend keys.
+   */
+  private static hasShieldedKeys(accessData: IWalletAccessData): boolean {
+    return !!(
+      accessData.scanXpubkey &&
+      accessData.scanMainKey &&
+      accessData.spendXpubkey &&
+      accessData.spendMainKey
+    );
+  }
+
+  /**
+   * Whether this wallet registered shielded keys with the wallet-service, so
+   * shielded addresses and outputs can be used. Only wallets started from a
+   * seed have them; xpriv and xpub wallets are legacy-only.
+   */
+  isShieldedEnabled(): boolean {
+    return this.shieldedEnabled;
+  }
+
+  /**
+   * Derive the shielded keys for access data stored before shielded support,
+   * and save them. Needs the password, since the keys come from the encrypted
+   * seed: without it the wallet starts legacy-only, as before, and gets its
+   * shielded keys the next time it starts with the password. Access data
+   * without a seed (xpriv or xpub wallets) is left as is.
+   */
+  private async addShieldedKeysToAccessData(
+    accessData: IWalletAccessData,
+    pinCode: string,
+    password?: string
+  ): Promise<void> {
+    if (HathorWalletServiceWallet.hasShieldedKeys(accessData) || !accessData.words) {
+      return;
+    }
+    if (!password) {
+      return;
+    }
+    let migrated: boolean;
+    try {
+      migrated = walletUtils.migrateShieldedAccessData(accessData, {
+        pin: pinCode,
+        password,
+        passphrase: this.passphrase,
+        networkName: this.network.name,
+      });
+    } catch (e) {
+      const err = new WalletError(e instanceof Error ? e.message : String(e));
+      (err as WalletError & { cause?: unknown }).cause = e;
+      throw err;
+    }
+    if (migrated) {
+      await this.storage.saveAccessData(accessData);
+    }
+  }
+
+  /**
+   * Fetch the connected wallet-service's /version response and write it to
+   * `storage.version` so internal callers (notably `prepareToSend` via
+   * `transactionUtils.getWeightConstantsFromStorage`) consume the network's
+   * actual weight constants instead of the hardcoded mainnet defaults.
+   *
+   * `walletApi.getVersionData` returns `FullNodeVersionData` (camelCase, and
+   * without `decimal_places` / `native_token`). We map to the snake_case
+   * `ApiVersion` shape that storage expects, defaulting the missing fields:
+   * `decimal_places` to the constant default and `native_token` to null
+   * (storage.getDecimalPlaces / getNativeTokenData already fall back to
+   * constants when those fields are missing).
+   *
+   * Non-fatal: any failure is logged via the storage logger and swallowed.
+   * The wallet still works — `prepareToSend` simply falls back to
+   * `TX_WEIGHT_CONSTANTS` as it did before this method existed. We emit a
+   * warning rather than silently dropping the error so a regression here is
+   * visible in logs instead of producing surprisingly-mined transactions.
+   */
+  private populateStorageVersion(v: FullNodeVersionData | null): void {
+    if (!v) {
+      return;
+    }
+    const apiVersion: ApiVersion = {
+      version: v.version,
+      network: v.network,
+      min_weight: v.minWeight,
+      min_tx_weight: v.minTxWeight,
+      min_tx_weight_coefficient: v.minTxWeightCoefficient,
+      min_tx_weight_k: v.minTxWeightK,
+      token_deposit_percentage: v.tokenDepositPercentage,
+      token_deposit_percentage_numerator: v.tokenDepositPercentageNumerator,
+      token_deposit_percentage_denominator: v.tokenDepositPercentageDenominator,
+      reward_spend_min_blocks: v.rewardSpendMinBlocks,
+      max_number_inputs: v.maxNumberInputs,
+      max_number_outputs: v.maxNumberOutputs,
+      decimal_places: DECIMAL_PLACES,
+      native_token: null,
+    };
+    this.storage.setApiVersion(apiVersion);
+  }
+
+  /**
+   * The connected wallet-service's /version data, or null when it cannot be
+   * read. Non-fatal: the failure is logged, the wallet registers legacy-only
+   * and `prepareToSend` falls back to `TX_WEIGHT_CONSTANTS`.
+   */
+  private async fetchVersionData(): Promise<FullNodeVersionData | null> {
+    try {
+      return await this.getVersionData();
+    } catch (e) {
+      this.storage.logger.warn(
+        `wallet-service /version fetch failed during start(): ${e instanceof Error ? e.message : String(e)}`
+      );
+      return null;
+    }
+  }
+
+  /**
+   * The scan xpriv to register, checked against the record's scan xpub, or
+   * null when the record has no shielded keys or the key cannot be unlocked.
+   * As in the fullnode facade, a key problem never fails start(): the wallet
+   * registers legacy-only and logs why.
+   */
+  private async unlockScanKeyForRegistration(
+    accessData: IWalletAccessData,
+    pinCode: string
+  ): Promise<string | null> {
+    if (!HathorWalletServiceWallet.hasShieldedKeys(accessData)) {
+      return null;
+    }
+    try {
+      return await unlockScanXPrivKey(this.storage, pinCode);
+    } catch (error) {
+      if (!(error instanceof ShieldedKeyError)) {
+        throw error;
+      }
+      this.storage.logger.warn(
+        `The shielded view key was not unlocked at start (${error.errorCode}); ` +
+          'the wallet registers without shielded keys.'
+      );
+      return null;
+    }
+  }
+
+  /**
+   * Returns version data from the connected fullnode
+   * */
+  async getVersionData(): Promise<FullNodeVersionData> {
+    return walletApi.getVersionData(this);
+  }
+
+  /**
+   * Detects if we are loading from the seed or the account path and returns the
+   * required information for authentication
+   *
+   * @param pinCode The pincode to be used to encrypt the auth xprivkey
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  async generateCreateWalletAuthData(
+    accessData: IWalletAccessData,
+    pinCode: string,
+    scanXpriv: string | null = null
+  ): Promise<CreateWalletAuthData> {
+    let privKey: bitcore.HDPrivateKey;
+    let privKeyAccountPath: bitcore.HDPrivateKey;
+    let authDerivedPrivKey: bitcore.HDPrivateKey;
+
+    const now = Date.now();
+    const timestampNow = Math.floor(now / 1000); // in seconds
+
+    if (accessData.acctPathKey) {
+      const acctKey = decryptData(accessData.acctPathKey, pinCode);
+      privKeyAccountPath = bitcore.HDPrivateKey(acctKey);
+    } else if (this.seed) {
+      // Derive from seed present in memory
+      // getXPrivKeyFromSeed returns a HDPrivateKey on the root path
+      privKey = walletUtils.getXPrivKeyFromSeed(this.seed, {
+        passphrase: this.passphrase,
+        networkName: this.network.name,
+      });
+      privKeyAccountPath = privKey.deriveNonCompliantChild(P2PKH_ACCT_PATH);
+    } else if (this.xpriv) {
+      privKeyAccountPath = bitcore.HDPrivateKey(this.xpriv);
+    } else {
+      throw new Error('Cannot derive account path key');
+    }
+    const xpub = privKeyAccountPath.xpubkey;
+
+    if (accessData.authKey) {
+      const authKey = decryptData(accessData.authKey, pinCode);
+      authDerivedPrivKey = bitcore.HDPrivateKey(authKey);
+    } else if (this.seed) {
+      // Derive from seed present in memory
+      if (!privKey) {
+        privKey = walletUtils.getXPrivKeyFromSeed(this.seed, {
+          passphrase: this.passphrase,
+          networkName: this.network.name,
+        });
+      }
+      authDerivedPrivKey = HathorWalletServiceWallet.deriveAuthPrivateKey(privKey);
+    } else {
+      try {
+        authDerivedPrivKey = bitcore.HDPrivateKey.fromString(
+          await this.storage.getAuthPrivKey(pinCode)
+        );
+      } catch (err) {
+        throw new Error('Cannot fetch or derive auth path key');
+      }
+    }
+    const authXpub = authDerivedPrivKey.xpubkey;
+
+    const walletId: string = HathorWalletServiceWallet.getWalletIdFromXPub(xpub);
+
+    // prove we own the xpubkey
+    const xpubkeySignature = this.signMessage(privKeyAccountPath, timestampNow, walletId);
+
+    // prove we own the auth_xpubkey
+    const authXpubkeySignature = this.signMessage(authDerivedPrivKey, timestampNow, walletId);
+    const xpubChangeDerivation = walletUtils.xpubDeriveChild(xpub, 0);
+    const { base58: firstAddress } = deriveAddressFromXPubP2PKH(
+      xpubChangeDerivation,
+      0,
+      this.network.name
+    );
+
+    return {
+      xpub,
+      xpubkeySignature,
+      authXpub,
+      authXpubkeySignature,
+      timestampNow,
+      firstAddress,
+      authDerivedPrivKey,
+      shielded: scanXpriv
+        ? this.generateShieldedRegistration(
+            accessData,
+            pinCode,
+            scanXpriv,
+            timestampNow,
+            walletId,
+            authDerivedPrivKey
+          )
+        : null,
+    };
+  }
+
+  /**
+   * Build the fields that register the shielded keys with the wallet-service:
+   * the scan xpriv (so the service can find and decrypt the wallet's shielded
+   * outputs), the spend xpub (never the private key), the first shielded
+   * address, and two proofs. The spend key signs its own xpub, proving control
+   * of it; the auth key signs the first shielded address, consenting to these
+   * exact keys.
+   *
+   * @returns null when the access data has no shielded keys
+   */
+  private generateShieldedRegistration(
+    accessData: IWalletAccessData,
+    pinCode: string,
+    scanXpriv: string,
+    timestamp: number,
+    walletId: string,
+    authPrivKey: bitcore.HDPrivateKey
+  ): ShieldedRegistrationFields {
+    const spendPrivKey = new bitcore.HDPrivateKey(decryptData(accessData.spendMainKey!, pinCode));
+    const spendXpub = spendPrivKey.xpubkey;
+    if (spendXpub !== accessData.spendXpubkey) {
+      throw new WalletError('The stored spend key does not match the stored spend xpubkey.');
+    }
+    const { base58: firstCtAddress } = deriveShieldedAddress(
+      accessData.scanXpubkey!,
+      spendXpub,
+      0,
+      this.network.name
+    );
+
+    return {
+      scanXpriv,
+      spendXpub,
+      firstCtAddress,
+      spendXpubSignature: HathorWalletServiceWallet.signPayload(
+        spendPrivKey,
+        timestamp,
+        walletId,
+        spendXpub
+      ),
+      ctAddressSignature: HathorWalletServiceWallet.signPayload(
+        authPrivKey,
+        timestamp,
+        walletId,
+        firstCtAddress
+      ),
+    };
+  }
+
+  /**
+   * onUpdateTx: Event called when a transaction is updated
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  onUpdateTx(updatedTx) {
+    this.emit('update-tx', updatedTx);
+  }
+
+  /**
+   * onNewTx: Event called when a new transaction is received on the websocket feed
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  async onNewTx(newTx: WsTransaction) {
+    const { outputs } = newTx;
+    let shouldGetNewAddresses = false;
+
+    for (const output of outputs) {
+      // Check if the output's decoded address matches any of the wallet's new addresses
+      if (
+        output.decoded &&
+        output.decoded.address &&
+        this.newAddresses.find(newAddress => newAddress.address === output.decoded.address)
+      ) {
+        // break early
+        shouldGetNewAddresses = true;
+        break;
+      }
+    }
+
+    if (!shouldGetNewAddresses && this.newShieldedAddresses.length > 0) {
+      // Shielded outputs carry only their on-chain spend address; `addresses`
+      // lists every address the tx involves
+      const involved = new Set(newTx.addresses ?? []);
+      for (const output of newTx.shielded_outputs ?? []) {
+        if (output.decoded?.address) {
+          involved.add(output.decoded.address);
+        }
+      }
+      shouldGetNewAddresses = this.newShieldedAddresses.some(({ spendAddress }) =>
+        involved.has(spendAddress)
+      );
+    }
+
+    // We need to update the `newAddresses` array on every new transaction
+    // because the new tx might have used one of those addresses and we try to guarantee
+    // that every transaction uses a new address for increased privacy
+    if (shouldGetNewAddresses) {
+      await this.getNewAddresses();
+    }
+
+    this.emit('new-tx', newTx);
+  }
+
+  /**
+   * Return wallet auth token
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  getAuthToken(): string | null {
+    return this.authToken;
+  }
+
+  /**
+   * Returns the balance for each token in tx, if the input/output belongs to this wallet
+   *
+   * This method is meant to keep compatibility with the old facade
+   *
+   * @param {Object} tx Transaction data with array of inputs and outputs
+   *
+   * @return {Object} Object with each token and it's balance in this tx for this wallet
+   * */
+  async getTxBalance(
+    tx: IHistoryTx,
+    optionsParam = {}
+  ): Promise<{ [tokenId: string]: OutputValueType }> {
+    const options = { includeAuthorities: false, ...optionsParam };
+
+    const addresses: string[] = [];
+
+    const generator = this.getAllAddresses();
+
+    // We are not using for async (...) to maintain compatibility with older nodejs versions
+    // if we ever deprecate older node versions, we can refactor this to the new, cleaner syntax
+    let nextAddress = await generator.next();
+    while (!nextAddress.done) {
+      addresses.push(nextAddress.value.address);
+      nextAddress = await generator.next();
+    }
+
+    const balance: { [tokenId: string]: OutputValueType } = {};
+    for (const txout of tx.outputs) {
+      if (transaction.isAuthorityOutput(txout)) {
+        if (options.includeAuthorities) {
+          if (!balance[txout.token]) {
+            balance[txout.token] = 0n;
+          }
+        }
+        continue;
+      }
+      if (txout.decoded && txout.decoded.address && addresses.includes(txout.decoded.address)) {
+        if (!balance[txout.token]) {
+          balance[txout.token] = 0n;
+        }
+        balance[txout.token] += txout.value;
+      }
+    }
+
+    for (const txin of tx.inputs) {
+      // Shielded inputs don't have value/token/token_data fields
+      if (txin.token === undefined) continue;
+      if (transaction.isAuthorityOutput({ token_data: txin.token_data! })) {
+        if (options.includeAuthorities) {
+          if (!balance[txin.token]) {
+            balance[txin.token] = 0n;
+          }
+        }
+        continue;
+      }
+      if (txin.decoded && txin.decoded.address && addresses.includes(txin.decoded.address)) {
+        if (!balance[txin.token]) {
+          balance[txin.token] = 0n;
+        }
+        balance[txin.token] -= txin.value!;
+      }
+    }
+
+    return balance;
+  }
+
+  /**
+   * When the wallet starts, it might take some seconds for the wallet service to completely load all addresses
+   * This method is responsible for polling the wallet status until it's ready
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  async pollForWalletStatus(): Promise<void> {
+    let lastError: WalletRequestError | undefined;
+    let lastState: unknown;
+    for (let attempt = 0; attempt < MAX_WALLET_STATUS_POLL_ATTEMPTS; attempt++) {
+      let data;
+      try {
+        data = await walletApi.getWalletStatus(this);
+      } catch (err) {
+        if (!(err instanceof WalletRequestError)) {
+          throw err;
+        }
+        // WalletRequestError means the server (or the auth interceptor)
+        // responded but said no — could be a transient 502/503 or a
+        // momentary auth endpoint hiccup. Retry until we exhaust attempts.
+        lastError = err;
+        await helpers.sleep(WALLET_STATUS_POLLING_INTERVAL);
+        continue;
+      }
+
+      lastError = undefined;
+      lastState = data.status;
+      if (data.status.status === WS_STATUS_READY) {
+        return;
+      }
+      if (isShieldedOnlyLoadFailure(data.status)) {
+        this.continueWithoutShielded(data.status);
+        return;
+      }
+      // Only possible states are 'ready', 'creating' and 'error'. If status
+      // is not ready or creating, we should throw an error.
+      if (data.status.status !== WS_STATUS_CREATING) {
+        throw new WalletRequestError('Error getting wallet status.', {
+          cause: { state: data.status },
+        });
+      }
+
+      await helpers.sleep(WALLET_STATUS_POLLING_INTERVAL);
+    }
+    throw new WalletRequestError('Wallet status polling timed out.', {
+      cause: lastError ? { source: lastError } : { state: lastState },
+    });
+  }
+
+  /**
+   * Check if wallet is ready and throw error if not ready
+   *
+   * @memberof HathorWalletServiceWallet
+   * @public
+   */
+  public failIfWalletNotReady() {
+    if (!this.isReady()) {
+      throw new WalletError('Wallet not ready');
+    }
+  }
+
+  /**
+   * Method executed when wallet is ready
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  private async onWalletReady(skipAddressFetch: boolean = false) {
+    if (this.singleAddress) {
+      try {
+        await this.enableSingleAddressMode(true);
+      } catch (error) {
+        if (error instanceof HasTxOutsideFirstAddressError) {
+          await this.storage.setScanningPolicyData({
+            policy: SCANNING_POLICY.GAP_LIMIT,
+            gapLimit: GAP_LIMIT,
+          });
+          this.singleAddress = false;
+        } else {
+          throw error;
+        }
+      }
+    }
+    // We should wait for new addresses before setting wallet to ready
+    // Skip address fetching if requested (useful for read-only wallets that don't need gap addresses)
+    if (!skipAddressFetch) {
+      await this.getNewAddresses(true);
+    }
+
+    if (this.isWsEnabled()) {
+      this.setupConnection();
+    }
+    this.setState(walletState.READY);
+  }
+
+  setupConnection() {
+    if (!this.walletId) {
+      // This should never happen
+      throw new Error('Tried to setup connection but wallet_id is not set.');
+    }
+
+    this.conn.setWalletId(this.walletId);
+    this.conn.on('new-tx', (newTx: WsTransaction) => this.onNewTx(newTx));
+    this.conn.on('update-tx', updatedTx => this.onUpdateTx(updatedTx));
+    this.conn.on('state', (newState: ConnectionState) => this.onConnectionChangedState(newState));
+    this.conn.start();
+  }
+
+  /**
+   * Called when the connection to the websocket changes.
+   * It is also called if the network is down.
+   *
+   * Since the wallet service facade holds no data (as opposed to
+   * the old facade, where the wallet facade receives a storage object),
+   * the client needs to handle the data reload, so we just emit an event
+   * to indicate that a reload is necessary.
+   *
+   * @param {Number} newState Enum of new state after change
+   * */
+  onConnectionChangedState(newState: ConnectionState) {
+    if (newState === ConnectionState.CONNECTED) {
+      // We don't need to reload data if this is the first
+      // connection
+      if (!this.firstConnection) {
+        this.emit('reload-data');
+      }
+
+      this.firstConnection = false;
+    }
+  }
+
+  /**
+   * Get all addresses of the wallet
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  async *getAllAddresses(opts?: IAddressChainOptions): AsyncGenerator<GetAddressesObject> {
+    this.failIfWalletNotReady();
+    if (isShieldedChain(opts)) {
+      if (!this.shieldedEnabled) {
+        // As the fullnode facade: a wallet without shielded keys has none
+        return;
+      }
+      // Shielded rows also carry the on-chain `spendAddress`
+      const data = await walletApi.getAddresses(this, undefined, { legacy: false });
+      for (const address of data.addresses) {
+        yield address;
+      }
+      return;
+    }
+    const data = await walletApi.getAddresses(this);
+    for (const address of data.addresses) {
+      yield address;
+    }
+  }
+
+  /**
+   * Throw if the wallet did not register shielded keys, with the error the
+   * fullnode facade gives.
+   */
+  private failIfShieldedNotEnabled(): void {
+    if (!this.shieldedEnabled) {
+      throw shieldedAddressError('no-shielded-keys');
+    }
+  }
+
+  /**
+   * Throw if the shielded address chain cannot be used to pick addresses.
+   */
+  private failIfShieldedChainUnavailable(): void {
+    this.failIfShieldedNotEnabled();
+    if (this.singleAddress) {
+      throw new WalletError('Shielded addresses are not supported in single-address mode.');
+    }
+  }
+
+  /**
+   * Get the new addresses to be used by this wallet, i.e. the last GAP LIMIT unused addresses
+   * Then it updates this.newAddresses and this.indexToUse that handle the addresses to use
+   *
+   * @param ignoreWalletReady Will download new addresses even if the wallet is not set to ready
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  private async getNewAddresses(ignoreWalletReady: boolean = false) {
+    // If the user is sure the wallet service has already loaded his wallet, he can ignore the check
+    if (!ignoreWalletReady) {
+      // We should fail if the wallet is not ready because the wallet service address load mechanism is
+      // asynchronous, so we will get an empty or partial array of addresses if they are not all loaded.
+      this.failIfWalletNotReady();
+    }
+    if (this.singleAddress) {
+      await this.prepareSingleAddressMode();
+      return;
+    }
+    if (this.shieldedEnabled) {
+      // One request returns the unused addresses of both chains
+      const data = await walletApi.getNewAddresses(this, { legacy: false });
+      this.newAddresses = data.legacyAddresses;
+      this.indexToUse = 0;
+      const spendByIndex = new Map(data.spendAddresses.map(a => [a.index, a.address]));
+      this.newShieldedAddresses = data.addresses.map(addressInfo => {
+        const spendAddress = spendByIndex.get(addressInfo.index);
+        if (!spendAddress) {
+          throw new WalletRequestError(
+            `Missing the spend address of shielded address index ${addressInfo.index}.`
+          );
+        }
+        return { ...addressInfo, spendAddress };
+      });
+      this.shieldedIndexToUse = 0;
+      return;
+    }
+    const data = await walletApi.getNewAddresses(this);
+    this.newAddresses = data.addresses;
+    this.indexToUse = 0;
+  }
+
+  /**
+   * Get the balance of the wallet for a specific token
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  async getBalance(token?: string | null): Promise<GetBalanceObject[]>;
+
+  async getBalance(token: string | null, opts: { split: true }): Promise<GetSplitBalanceObject[]>;
+
+  async getBalance(
+    token: string | null = null,
+    opts: { split?: boolean } = {}
+  ): Promise<GetBalanceObject[] | GetSplitBalanceObject[]> {
+    this.failIfWalletNotReady();
+    if (opts.split) {
+      // Each amount split into its transparent and shielded parts
+      const data = await walletApi.getBalances(this, token, { split: true });
+      return data.balances;
+    }
+    const data = await walletApi.getBalances(this, token);
+    return data.balances;
+  }
+
+  async getTokens(): Promise<string[]> {
+    this.failIfWalletNotReady();
+    const data = await walletApi.getTokens(this);
+    return data.tokens;
+  }
+
+  /**
+   * Get the history of the wallet for a specific token
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  async getTxHistory(
+    options: { token_id?: string; count?: number; skip?: number } = {}
+  ): Promise<GetHistoryObject[]> {
+    this.failIfWalletNotReady();
+    const data = await walletApi.getHistory(this, options);
+    // eslint-disable-next-line camelcase
+    return data.history.map(({ tx_kind, ...entry }) =>
+      tx_kind === undefined ? entry : { ...entry, txKind: tx_kind }
+    );
+  }
+
+  /**
+   * Get utxo from tx id and index
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  async getUtxoFromId(txId: string, index: number): Promise<Utxo | null> {
+    const data = await walletApi.getTxOutputs(this, {
+      txId,
+      index,
+      skipSpent: true, // This is the API default, but we should be explicit about it
+    });
+    const utxos = data.txOutputs;
+    if (utxos.length === 0) {
+      // No utxo for this txId/index or is not from the requested wallet
+      return null;
+    }
+    if (utxos.length > 1) {
+      throw new UtxoError(
+        `Expected to receive only one utxo for txId ${txId} and index ${index} but received ${utxos.length}.`
+      );
+    }
+
+    return utxos[0];
+  }
+
+  /**
+   * Get utxos of the wallet addresses
+   *
+   * @param options Utxo filtering options
+   * @param {number} [options.max_utxos] - Maximum number of utxos to aggregate. Default to MAX_INPUTS (255).
+   * @param {string} [options.token] - Token to filter the utxos. If not sent, we select only HTR utxos.
+   * @param {number} [options.authorities] - Authorities to filter the utxos. If not sent, we select only non authority utxos.
+   * @param {string} [options.filter_address] - Address to filter the utxos.
+   * @param {number} [options.amount_smaller_than] - Maximum limit of utxo amount to filter the utxos list.
+   * @param {number} [options.amount_bigger_than] - Minimum limit of utxo amount to filter the utxos list.
+   * @param {number} [options.max_amount] - Limit the maximum total amount to consolidate summing all utxos.
+   * @param {boolean} [options.only_available_utxos] - Use only available utxos (not locked)
+   * @param {boolean} [options.shielded] - Select shielded utxos instead of transparent ones.
+   *
+   * @returns Promise that resolves with utxos and meta information about them
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  async getUtxos(
+    options: {
+      token?: string;
+      authorities?: number;
+      max_utxos?: number;
+      filter_address?: string;
+      amount_smaller_than?: number;
+      amount_bigger_than?: number;
+      max_amount?: number;
+      only_available_utxos?: boolean;
+      shielded?: boolean;
+    } = {}
+  ): Promise<{
+    total_amount_available: bigint;
+    total_utxos_available: bigint;
+    total_amount_locked: bigint;
+    total_utxos_locked: bigint;
+    utxos: {
+      address: string;
+      amount: bigint;
+      tx_id: string;
+      locked: boolean;
+      index: number;
+    }[];
+  }> {
+    this.failIfWalletNotReady();
+
+    const newOptions = {
+      token: options.token,
+      authorities: options.authorities,
+      max_utxos: options.max_utxos,
+      filter_address: options.filter_address,
+      amount_smaller_than: options.amount_smaller_than,
+      amount_bigger_than: options.amount_bigger_than,
+      max_amount: options.max_amount,
+      only_available_utxos: options.only_available_utxos,
+    };
+
+    const mappedOptions = {
+      tokenId: newOptions.token || NATIVE_TOKEN_UID,
+      authority: newOptions.authorities ? BigInt(newOptions.authorities) : undefined,
+      addresses: newOptions.filter_address ? [newOptions.filter_address] : undefined,
+      totalAmount: newOptions.max_amount ? BigInt(newOptions.max_amount) : undefined,
+      smallerThan: newOptions.amount_smaller_than,
+      biggerThan: newOptions.amount_bigger_than,
+      maxOutputs: newOptions.max_utxos || 255,
+      ignoreLocked: true,
+      skipSpent: newOptions.only_available_utxos !== false,
+      // Without a kind the wallet-service returns both kinds; ask explicitly
+      // so shielded utxos never pass for transparent ones
+      kind: options.shielded ? ('shielded' as const) : ('transparent' as const),
+    };
+
+    // Call the internal API to get UTXOs
+    const data = await walletApi.getTxOutputs(this, mappedOptions);
+    const filteredUtxos = data.txOutputs;
+
+    // Build the UtxoDetails response matching fullnode wallet interface
+    const utxoDetails = {
+      total_amount_available: 0n,
+      total_utxos_available: 0n,
+      total_amount_locked: 0n,
+      total_utxos_locked: 0n,
+      utxos: [] as {
+        address: string;
+        amount: bigint;
+        tx_id: string;
+        locked: boolean;
+        index: number;
+      }[],
+    };
+
+    // For wallet service, we'll assume all UTXOs are available (not locked)
+    // since the wallet service handles locking differently
+    for (const utxo of filteredUtxos) {
+      const utxoInfo = {
+        address: utxo.address,
+        amount: utxo.value,
+        tx_id: utxo.txId,
+        locked: false, // Wallet service UTXOs are typically available
+        index: utxo.index,
+      };
+
+      utxoDetails.utxos.push(utxoInfo);
+      utxoDetails.total_amount_available += utxo.value;
+      utxoDetails.total_utxos_available += 1n;
+    }
+
+    return utxoDetails;
+  }
+
+  /**
+   * Get utxos for filling a transaction
+   *
+   * @param amount The total amount needed
+   * @param options Options for filtering utxos
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  async getUtxosForAmount(
+    amount: OutputValueType,
+    options: {
+      token?: string;
+      filter_address?: string;
+    } = {}
+  ): Promise<{ utxos: Utxo[]; changeAmount: OutputValueType }> {
+    if (amount <= 0) {
+      throw new UtxoError('Total amount must be a positive integer.');
+    }
+
+    const newOptions = {
+      tokenId: options.token || NATIVE_TOKEN_UID,
+      addresses: options.filter_address ? [options.filter_address] : undefined,
+      totalAmount: amount,
+      ignoreLocked: true,
+      skipSpent: true,
+      kind: 'transparent' as const,
+    };
+
+    if (!newOptions.totalAmount) {
+      throw new UtxoError('We need the total amount of utxos.');
+    }
+
+    const data = await walletApi.getTxOutputs(this, newOptions);
+    // Spending a shielded utxo needs its blinding factors, which this path
+    // does not handle
+    const transparentUtxos = data.txOutputs.filter(utxo => utxo.kind !== 'shielded');
+
+    // Use selectUtxos to handle all error conditions and utxo selection
+    const ret = transaction.selectUtxos(transparentUtxos, newOptions.totalAmount!);
+    return { utxos: ret.utxos, changeAmount: ret.changeAmount };
+  }
+
+  /**
+   * Signs a message using xpriv derivation path m/44'/280'/0'
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  signMessage(hdPrivKey: bitcore.HDPrivateKey, timestamp: number, walletId: string): string {
+    const address = hdPrivKey.publicKey.toAddress(this.network.getNetwork()).toString();
+    return HathorWalletServiceWallet.signPayload(hdPrivKey, timestamp, walletId, address);
+  }
+
+  /**
+   * Sign `timestamp + walletId + payload` with a private key, the message
+   * format the wallet-service verifies for its authenticated requests.
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  static signPayload(
+    hdPrivKey: bitcore.HDPrivateKey,
+    timestamp: number,
+    walletId: string,
+    payload: string
+  ): string {
+    const message = String(timestamp).concat(walletId).concat(payload);
+    return signMessage(message, hdPrivKey.privateKey);
+  }
+
+  /**
+   * Validate that the wallet auth token is valid
+   * If it's not valid, requests a new one and update
+   *
+   * @param {string} usePassword Accepts the password as a parameter so we don't have to ask
+   * the client for it if we already have it in memory
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  async validateAndRenewAuthToken(usePassword?: string): Promise<void> {
+    if (!this.walletId) {
+      throw new Error('Wallet not ready yet.');
+    }
+
+    const now = new Date();
+    const timestampNow = Math.floor(now.getTime() / 1000);
+
+    const validateJWTExpireDate = (token: string): boolean => {
+      const base64Url = token.split('.')[1];
+      const base64 = base64Url.replace('-', '+').replace('_', '/');
+      const decodedData = JSON.parse(Buffer.from(base64, 'base64').toString('binary'));
+
+      // If the token will expire in the next 60 seconds (or has already expired)
+      const delta = 60;
+      if (timestampNow + delta > decodedData.exp) {
+        return false;
+      }
+
+      return true;
+    };
+
+    if (!this.authToken || !validateJWTExpireDate(this.authToken)) {
+      // Check if we're in read-only mode (no auth private key available)
+      // In read-only mode, we need to use the read-only auth token endpoint
+      if (!this.authPrivKey && !usePassword && this.xpub) {
+        // Read-only mode: renew using xpubkey without signature
+        await this.getReadOnlyAuthToken();
+        return;
+      }
+
+      let privKey = this.authPrivKey;
+
+      if (!privKey) {
+        // Request the client for the PIN
+        const password = usePassword || (await this.requestPassword());
+
+        // Use it to get the words from the storage
+        privKey = bitcore.HDPrivateKey.fromString(await this.storage.getAuthPrivKey(password));
+      }
+
+      await retryOnTransientWalletError(() => this.renewAuthToken(privKey, timestampNow), {
+        maxAttempts: MAX_AUTH_TOKEN_RENEW_ATTEMPTS,
+        intervalMs: WALLET_STATUS_POLLING_INTERVAL,
+      });
+    } else if (usePassword) {
+      // Token is valid but the user provided a PIN — renew proactively.
+      const privKey = bitcore.HDPrivateKey.fromString(
+        await this.storage.getAuthPrivKey(usePassword)
+      );
+
+      await retryOnTransientWalletError(() => this.renewAuthToken(privKey, timestampNow), {
+        maxAttempts: MAX_AUTH_TOKEN_RENEW_ATTEMPTS,
+        intervalMs: WALLET_STATUS_POLLING_INTERVAL,
+      });
+    }
+  }
+
+  /**
+   * Renew the auth token on the wallet service.
+   * Throws on failure so callers can handle the root cause.
+   *
+   * @param {HDPrivateKey} privKey - private key to sign the auth message
+   * @param {number} timestamp - Current timestamp to assemble the signature
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  async renewAuthToken(privKey: bitcore.HDPrivateKey, timestamp: number) {
+    if (!this.walletId) {
+      throw new Error('Wallet not ready yet.');
+    }
+
+    const sign = this.signMessage(privKey, timestamp, this.walletId);
+    const data = await walletApi.createAuthToken(this, timestamp, privKey.xpubkey, sign);
+    this.authToken = data.token;
+  }
+
+  /**
+   * Mint a full (read-write) auth token with an auth private key the caller holds only
+   * transiently, WITHOUT keeping the key on this instance.
+   *
+   * Meant for externally-signed, xpub-only wallets (e.g. a passkey signer): they browse with
+   * read-only tokens and, during the same ceremony that signs a transaction, derive the auth key
+   * (`HathorWalletServiceWallet.deriveAuthPrivateKey(rootXpriv)`) and call this before the
+   * transaction is sent, since sending needs a full token. Later renewals fall back to read-only
+   * tokens, exactly as for a wallet whose auth key isn't in memory.
+   *
+   * @param authPrivKey The wallet's auth private key (m/280'/280')
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  async refreshFullAuthToken(authPrivKey: bitcore.HDPrivateKey): Promise<void> {
+    if (!this.walletId) {
+      throw new Error('Wallet not ready yet.');
+    }
+    const timestampNow = Math.floor(Date.now() / 1000);
+    await retryOnTransientWalletError(() => this.renewAuthToken(authPrivKey, timestampNow), {
+      maxAttempts: MAX_AUTH_TOKEN_RENEW_ATTEMPTS,
+      intervalMs: WALLET_STATUS_POLLING_INTERVAL,
+    });
+  }
+
+  /**
+   * Set an external tx-signing method (e.g. a passkey or hardware signer), or null to clear it.
+   * With a signer set, transactions are signed through it — via the wallet-service storage proxy —
+   * and no pin is needed, even when the storage holds only the xpub. Mirrors HathorWallet.
+   *
+   * The signer gets the inputs that spend shielded outputs as the fullnode
+   * facade gives them, with the 'spend' request (see signTxInputs): the storage
+   * proxy marks an input on the shielded spend chain 'shielded-spend' from the
+   * stored shielded xpubs. `options.shieldedSpend` is accepted so callers can
+   * register a signer the same way on both facades; this facade has no
+   * shielded capability to gate on it, so it changes nothing here.
+   *
+   * @param method The external tx-signing method, or null to clear it
+   * @param [options.shieldedSpend] Whether the method signs the inputs that
+   *   spend shielded outputs. Accepted for symmetry with HathorWallet; unused.
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  setExternalTxSigningMethod(
+    method: EcdsaTxSign | null,
+    options: { shieldedSpend?: boolean } = {}
+  ): void {
+    this.storage.setTxSignatureMethod(method);
+  }
+
+  /**
+   * Set the shielded scan private key the wallet keeps in memory, or null to
+   * drop it. Sends need it to read the value of the shielded outputs they
+   * spend. A wallet started from its seed sets it at start(); a read-only
+   * wallet started with its shielded xpubs (startReadOnly) gets it here, from
+   * a key derived from its root while the root is at hand (see
+   * walletUtils.deriveShieldedScanXPrivKey). It is never persisted, and stop()
+   * drops it.
+   *
+   * @param xpriv The scan xpriv (m/44'/280'/1'/0), or null to drop it
+   * @throws {ShieldedKeyError}
+   *   - `shielded-not-started` when the wallet is not started, or stop() runs
+   *     during the call;
+   *   - `shielded-no-keys` when the record has no scan xpub to check it against;
+   *   - `shielded-corrupt-key` when it is not an extended private key;
+   *   - `shielded-key-mismatch` when it is not the key of the record's scan
+   *     xpub. The key in memory is then left as it was.
+   */
+  async setShieldedScanKey(xpriv: string | null): Promise<void> {
+    if (xpriv === null) {
+      this.storage.scanXPrivKey = null;
+      return;
+    }
+    this.failIfShieldedKeyNotStarted();
+    const accessData = await this.storage.getAccessData();
+    if (!accessData?.scanXpubkey) {
+      throw new ShieldedKeyError(
+        ErrorMessages.SHIELDED_NO_KEYS,
+        'The wallet record has no shielded scan xpub to check the view key against.'
+      );
+    }
+    const checked = checkScanXPrivKey(xpriv, accessData.scanXpubkey);
+    // stop() may have run during the read above, and it already dropped the
+    // key this would put back.
+    this.failIfShieldedKeyNotStarted();
+    this.storage.scanXPrivKey = checked;
+  }
+
+  /**
+   * Refuse to keep a scan key in memory for a wallet that is not started: stop()
+   * drops it, and nothing would drop one set after.
+   *
+   * @throws {ShieldedKeyError} `shielded-not-started`
+   */
+  private failIfShieldedKeyNotStarted(): void {
+    if (this.state === walletState.NOT_STARTED || this.walletId === null) {
+      throw new ShieldedKeyError(ErrorMessages.SHIELDED_NOT_STARTED, 'The wallet is not started.');
+    }
+  }
+
+  /**
+   * Set an external private-key provider, or null to clear it. getPrivateKeyFromAddress (and so
+   * oracle-data signing) and signMessageWithAddress then get address private keys from it instead
+   * of a stored, PIN-encrypted key, which lets an xpub-only wallet (e.g. a passkey signer) sign
+   * messages and oracle data. It does NOT enable sending transactions, which uses the tx-signing
+   * method. Mirrors HathorWallet.
+   *
+   * Oracle-data signing also checks the oracle address with isAddressMine, which needs a full auth
+   * token: a wallet browsing with a read-only token (startReadOnly) must mint one first, e.g. with
+   * refreshFullAuthToken in the same ceremony that provides the keys. Message signing works with
+   * a read-only token.
+   *
+   * @param getPrivKey The external provider, or null to clear it
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  setExternalPrivateKeyMethod(getPrivKey: PrivateKeyProvider | null): void {
+    this.storage.setPrivateKeyMethod(getPrivKey);
+  }
+
+  /**
+   * Whether an external private-key provider is registered (see setExternalPrivateKeyMethod),
+   * i.e. whether this wallet can sign messages and oracle data without a stored key. Mirrors
+   * HathorWallet.
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  hasExternalPrivateKeyMethod(): boolean {
+    return this.storage.hasPrivateKeyMethod();
+  }
+
+  /**
+   * Fetch an address private key from the external provider and check it belongs to the requested
+   * address, so a buggy or mismatched provider can never sign with the wrong key. Same checks as
+   * HathorWallet (see fetchVerifiedExternalPrivateKey in utils/address); index-based callers are
+   * checked against the wallet's own address at the index (getOwnAddressAtIndex).
+   *
+   * @param addressIndex Index whose private key to fetch
+   * @param [options.pinCode] Forwarded to the provider
+   * @param [options.expectedAddress] The address the key must own, when the caller knows it. Used
+   *   only for the check; it is not forwarded to the provider. Defaults to the address at the index.
+   * @returns {Promise<bitcore.PrivateKey>} The verified private key
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  async getVerifiedExternalPrivateKey(
+    addressIndex: number,
+    options: { pinCode?: string; expectedAddress?: string } = {}
+  ): Promise<bitcore.PrivateKey> {
+    return fetchVerifiedExternalPrivateKey(
+      this.storage,
+      this.getNetworkObject(),
+      addressIndex,
+      index => this.getOwnAddressAtIndex(index),
+      options
+    );
+  }
+
+  /**
+   * The wallet's own address at an index. Derived locally from the stored access data's xpub when
+   * the wallet has it, so checking a provider's key needs no wallet-service request and doesn't
+   * depend on its answer; otherwise asks the wallet-service. The stored xpub is always the
+   * change-level one (generateAccessDataFromXpub normalizes an account- or change-level xpub).
+   *
+   * @param index Address index
+   * @returns {Promise<string>} The address in base58
+   */
+  private async getOwnAddressAtIndex(index: number): Promise<string> {
+    const accessData = await this.storage.getAccessData();
+    if (!accessData?.xpubkey) {
+      return this.getAddressAtIndex(index);
+    }
+    return deriveAddressFromXPubP2PKH(accessData.xpubkey, index, this.getNetworkObject().name)
+      .base58;
+  }
+
+  /**
+   * Whether this wallet can't sign transactions: its storage holds only the xpub and no external
+   * tx-signing method is registered.
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  async isReadonly(): Promise<boolean> {
+    return (await this.storage.isReadonly()) && !this.storage.hasTxSignatureMethod();
+  }
+
+  /**
+   * Whether a pin still has to be supplied in order to sign. The pin only decrypts the local
+   * private key; with an external tx-signing method it is not needed.
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  pinIsRequired(pin: string | null | undefined): boolean {
+    return !pin && !this.storage.hasTxSignatureMethod();
+  }
+
+  /**
+   * Sign every input of `tx` through the registered external tx-signing method. The signer gets
+   * the wallet-service storage proxy, which resolves spent outputs and address indexes via the
+   * API. Callers are responsible for `prepareToSend`.
+   */
+  private async signInputsExternally(tx: Transaction, pinCode?: string | null): Promise<void> {
+    const storageProxy = new WalletServiceStorageProxy(this, this.storage).createProxy();
+    await transaction.signTransaction(tx, storageProxy, pinCode ?? '');
+    // Every input of these txs is the wallet's own.
+    assertAllInputsSigned(tx);
+  }
+
+  /**
+   * Get read-only auth token using only the xpubkey (no signature required)
+   * This allows read-only access to wallet data without needing private keys
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  async getReadOnlyAuthToken(): Promise<string> {
+    if (!this.xpub) {
+      throw new Error('xpub is required to get read-only auth token.');
+    }
+
+    if (!this.walletId) {
+      // Derive walletId from xpub if not set
+      this.walletId = HathorWalletServiceWallet.getWalletIdFromXPub(this.xpub);
+    }
+
+    const data = await walletApi.createReadOnlyAuthToken(this, this.xpub);
+    this.authToken = data.token;
+
+    return data.token;
+  }
+
+  /**
+   * Start wallet in read-only mode using only the xpubkey
+   * This allows querying wallet data without needing private keys or authentication
+   *
+   * With `shieldedXpubs`, the wallet's shielded scan and spend xpubs (see
+   * walletUtils.deriveShieldedXpubs), the wallet uses its shielded chain when
+   * the wallet-service registered it: the xpubs are kept on the access data,
+   * and the shielded side is enabled when `wallet/status` reports it ready
+   * and the shielded address the service has at index 0 is the one of these
+   * xpubs. While the service still loads it, the status is polled; when its
+   * load failed, the service has no shielded keys for the wallet or other
+   * ones, the wallet runs legacy-only in this session. Sends that spend shielded outputs also
+   * need the scan key in memory (setShieldedScanKey).
+   *
+   * @param options.skipAddressFetch - If true, skips fetching gap addresses (faster startup, ~300ms-1s saved)
+   * @param options.shieldedXpubs - The wallet's shielded scan and spend xpubs
+   * @throws {WalletRequestError} If wallet is not initialized or not ready
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  async startReadOnly(options?: {
+    skipAddressFetch?: boolean;
+    shieldedXpubs?: { scanXpubkey: string; spendXpubkey: string };
+  }): Promise<void> {
+    if (!this.xpub) {
+      throw new Error('xpub is required to start wallet in read-only mode.');
+    }
+
+    const skipAddressFetch = options?.skipAddressFetch || false;
+    const shieldedXpubs = options?.shieldedXpubs;
+    if (shieldedXpubs && (!shieldedXpubs.scanXpubkey || !shieldedXpubs.spendXpubkey)) {
+      throw new Error('The shielded scan and spend xpubs must be given together.');
+    }
+
+    this.setState(walletState.LOADING);
+
+    // Derive walletId from xpub
+    const walletId = HathorWalletServiceWallet.getWalletIdFromXPub(this.xpub);
+    this.walletId = walletId;
+    if (this.singleAddress) {
+      await this.storage.setScanningPolicyData({ policy: SCANNING_POLICY.SINGLE_ADDRESS });
+    }
+
+    // Save accessData for read-only wallet
+    // This is required for methods like getAddressPathForIndex() that need walletType
+    const accessData = walletUtils.generateAccessDataFromXpub(this.xpub, {
+      scanXpubkey: shieldedXpubs?.scanXpubkey,
+      spendXpubkey: shieldedXpubs?.spendXpubkey,
+    });
+    await this.storage.saveAccessData(accessData);
+    this.shieldedEnabled = false;
+
+    // Poll for read-only auth token. The RO token endpoint (no auth required)
+    // returns 400 while the wallet is still 'creating'. We retry WalletRequestError
+    // (server responded but said no) until it succeeds or we time out.
+    // Non-WalletRequestError (network failures, timeouts) propagate immediately.
+    let lastError: WalletRequestError | undefined;
+    for (let attempt = 0; attempt < MAX_WALLET_STATUS_POLL_ATTEMPTS; attempt++) {
+      try {
+        await this.getReadOnlyAuthToken();
+        lastError = undefined;
+        break;
+      } catch (err) {
+        if (!(err instanceof WalletRequestError)) {
+          throw err;
+        }
+        // Only retry on HTTP 400 (wallet may still be creating).
+        // Other status codes (401, 403, 404, etc.) are permanent failures.
+        const { cause } = err;
+        if (cause && 'status' in cause && cause.status !== 400) {
+          throw err;
+        }
+        lastError = err;
+        await helpers.sleep(WALLET_STATUS_POLLING_INTERVAL);
+      }
+    }
+    if (lastError) {
+      throw new WalletRequestError(
+        'Read-only wallet startup timed out. The wallet may not be initialized or is in an error state.',
+        { cause: { source: lastError } }
+      );
+    }
+    if (shieldedXpubs) {
+      this.shieldedEnabled =
+        (await this.isShieldedSideReady()) && (await this.serviceHasShieldedXpubs(shieldedXpubs));
+    }
+    await this.onWalletReady(skipAddressFetch);
+  }
+
+  /**
+   * Whether the shielded keys the wallet-service registered for this wallet
+   * are the given xpubs, by the shielded address at index 0 it reports. The
+   * local xpubs decide which inputs are signed on the spend chain and which
+   * scan key is accepted, while the service decides the addresses and utxos,
+   * so a wallet whose two sides differ (stale xpubs, a root of another
+   * network) runs legacy-only, which is logged.
+   *
+   * @param shieldedXpubs The wallet's shielded scan and spend xpubs
+   */
+  private async serviceHasShieldedXpubs(shieldedXpubs: {
+    scanXpubkey: string;
+    spendXpubkey: string;
+  }): Promise<boolean> {
+    const expected = deriveShieldedAddress(
+      shieldedXpubs.scanXpubkey,
+      shieldedXpubs.spendXpubkey,
+      0,
+      this.network.name
+    );
+    let registered: { address: string; spendAddress: string } | undefined;
+    try {
+      ({
+        addresses: [registered],
+      } = await walletApi.getAddresses(this, 0, { legacy: false }));
+    } catch (err) {
+      if (!(err instanceof WalletRequestError)) {
+        throw err;
+      }
+    }
+    if (
+      registered?.address === expected.base58 &&
+      registered?.spendAddress === expected.spendAddress
+    ) {
+      return true;
+    }
+    this.storage.logger.warn(
+      `The shielded keys the wallet-service has for wallet ${this.walletId} ` +
+        `${registered ? 'are not the given shielded xpubs' : 'could not be checked'}; ` +
+        'the wallet runs without shielded support in this session.'
+    );
+    return false;
+  }
+
+  /**
+   * Whether the wallet-service has the shielded side of this wallet ready, by
+   * `wallet/status`, polled while the service still loads it. A failed load,
+   * a wallet registered without shielded keys, a service that does not report
+   * the shielded side, a status that never settles and a status request that
+   * fails a few times in a row all leave the wallet legacy-only, which is
+   * logged. Any error other than a WalletRequestError is thrown.
+   */
+  private async isShieldedSideReady(): Promise<boolean> {
+    let status: WalletStatus | undefined;
+    let requestErrors = 0;
+    for (let attempt = 0; attempt < MAX_WALLET_STATUS_POLL_ATTEMPTS; attempt++) {
+      try {
+        ({ status } = await walletApi.getWalletStatus(this));
+        requestErrors = 0;
+      } catch (err) {
+        if (!(err instanceof WalletRequestError)) {
+          throw err;
+        }
+        status = undefined;
+        // A service that keeps refusing the request is not loading anything:
+        // only the shielded load is waited for, not a failing endpoint.
+        requestErrors += 1;
+        if (requestErrors >= MAX_SHIELDED_STATUS_REQUEST_ERRORS) {
+          break;
+        }
+      }
+      if (status?.shieldedStatus === WS_STATUS_READY) {
+        return true;
+      }
+      if (status && isShieldedOnlyLoadFailure(status)) {
+        this.continueWithoutShielded(status);
+        return false;
+      }
+      if (status && status.shieldedStatus !== WS_STATUS_CREATING) {
+        break;
+      }
+      await helpers.sleep(WALLET_STATUS_POLLING_INTERVAL);
+    }
+    this.storage.logger.warn(
+      `The wallet-service has no ready shielded side for wallet ${this.walletId} ` +
+        `(shielded status: ${status?.shieldedStatus ?? 'unknown'}); ` +
+        'the wallet runs without shielded support in this session.'
+    );
+    return false;
+  }
+
+  /**
+   * Create a SendTransaction instance to send a transaction with possibly multiple outputs.
+   *
+   * @param outputs Array of proposed outputs
+   * @param options Options parameters
+   *
+   * @return Promise<SendTransactionWalletService>
+   */
+  async sendManyOutputsSendTransaction(
+    outputs: Array<OutputRequestObj | DataScriptOutputRequestObj>,
+    options: {
+      inputs?: InputRequestObj[];
+      changeAddress?: string;
+      pinCode?: string;
+      changeShieldedMode?: ChangeOutputMode | null;
+    } = {}
+  ): Promise<SendTransactionWalletService> {
+    this.failIfWalletNotReady();
+    if (await this.isReadonly()) {
+      throw new WalletFromXPubGuard('sendManyOutputsSendTransaction');
+    }
+    const { changeShieldedMode } = options;
+    // Checked here too, for the sends the send engine does not build
+    assertChangeShieldedMode(changeShieldedMode);
+    const newOptions = {
+      inputs: [],
+      changeAddress: null,
+      pinCode: null,
+      ...options,
+    };
+
+    const { inputs, changeAddress, pinCode } = newOptions;
+
+    // PIN validation - request from client if not provided. With an external tx-signing method
+    // the pin is unused, so never prompt for it.
+    const pin =
+      pinCode || (this.storage.hasTxSignatureMethod() ? null : await this.requestPassword());
+    if (this.pinIsRequired(pin)) {
+      throw new Error('Pin is required.');
+    }
+
+    const sendTransactionOutputs = outputs.map(output => {
+      const typedOutput = { ...output } as OutputSendTransaction;
+      if (typedOutput.type === OutputType.DATA) {
+        typedOutput.value = 1n;
+        typedOutput.token = NATIVE_TOKEN_UID;
+      } else if (!this.shieldedEnabled && !typedOutput.shielded) {
+        // This path builds the scripts itself: a transparent output to a
+        // shielded address pays the spend address it embeds
+        typedOutput.address = toOnChainAddress(typedOutput.address!, this.network);
+        typedOutput.type = helpers.getOutputTypeFromAddress(typedOutput.address, this.network);
+      } else {
+        typedOutput.type = helpers.getOutputTypeFromAddress(typedOutput.address!, this.network);
+      }
+
+      return typedOutput;
+    });
+    const sendTransaction = new SendTransactionWalletService(this, {
+      outputs: sendTransactionOutputs,
+      inputs,
+      changeAddress,
+      pin,
+      changeShieldedMode,
+    });
+    return sendTransaction;
+  }
+
+  /**
+   * Creates and send a transaction from an array of inputs and outputs
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  async sendManyOutputsTransaction(
+    outputs: Array<OutputRequestObj | DataScriptOutputRequestObj>,
+    options: {
+      inputs?: InputRequestObj[];
+      changeAddress?: string;
+      pinCode?: string;
+      changeShieldedMode?: ChangeOutputMode | null;
+    } = {}
+  ): Promise<Transaction> {
+    const sendTransaction = await this.sendManyOutputsSendTransaction(outputs, options);
+    return sendTransaction.run();
+  }
+
+  /**
+   * Creates and send a simple transaction with one output
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  async sendTransaction(
+    address: string,
+    value: OutputValueType,
+    options: {
+      token?: string;
+      changeAddress?: string;
+      pinCode?: string;
+      changeShieldedMode?: ChangeOutputMode | null;
+    } = {}
+  ): Promise<Transaction> {
+    this.failIfWalletNotReady();
+    const newOptions = {
+      token: '00',
+      changeAddress: undefined,
+      ...options,
+    };
+    const { token, changeAddress, pinCode, changeShieldedMode } = newOptions;
+    const outputs = [{ address, value, token }];
+    return this.sendManyOutputsTransaction(outputs, {
+      inputs: [],
+      changeAddress,
+      pinCode,
+      changeShieldedMode,
+    });
+  }
+
+  /**
+   * Calculate input data from dataToSign and addressPath
+   * Get the private key corresponding to the addressPath,
+   * calculate the signature and add the public key
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  // eslint-disable-next-line class-methods-use-this -- XXX: This method should be made static
+  getInputData(xprivkey: string, dataToSignHash: Buffer, addressPath: number): Buffer {
+    const xpriv = bitcore.HDPrivateKey(xprivkey);
+    const derivedKey = xpriv.deriveNonCompliantChild(addressPath);
+    const { privateKey } = derivedKey;
+
+    const arr = [];
+    helpers.pushDataToStack(arr, transaction.getSignature(dataToSignHash, privateKey));
+    helpers.pushDataToStack(arr, derivedKey.publicKey.toBuffer());
+    return util.buffer.concat(arr);
+  }
+
+  /**
+   * Whether a derivation path is on the shielded spend chain (m/44'/280'/2').
+   */
+  static isShieldedSpendPath(path: string): boolean {
+    return path.startsWith(`${SHIELDED_SPEND_ACCT_PATH}/`);
+  }
+
+  /**
+   * Input data spending an output locked to the shielded spend chain: signed
+   * by the spend key at the address index. Shielded keys use compliant BIP32
+   * derivation, unlike the legacy chain.
+   */
+  static getSpendInputData(
+    spendXpriv: bitcore.HDPrivateKey,
+    dataToSignHash: Buffer,
+    addressIndex: number
+  ): Buffer {
+    const derivedKey = spendXpriv.deriveChild(addressIndex);
+    const arr = [];
+    helpers.pushDataToStack(arr, transaction.getSignature(dataToSignHash, derivedKey.privateKey));
+    helpers.pushDataToStack(arr, derivedKey.publicKey.toBuffer());
+    return util.buffer.concat(arr);
+  }
+
+  /**
+   * Sign each input with the key of its address path: the spend key for the
+   * shielded spend chain, the legacy key otherwise.
+   */
+  /**
+   * @internal Used by SendTransactionWalletService to sign the sends it builds.
+   */
+  async signInputsByPath(tx: Transaction, pinCode: string, addressPaths: string[]): Promise<void> {
+    const dataToSignHash = tx.getDataToSignHash();
+    const xprivkey = await this.storage.getMainXPrivKey(pinCode);
+    let spendXpriv: bitcore.HDPrivateKey | null = null;
+    for (const [idx, inputObj] of tx.inputs.entries()) {
+      const path = addressPaths[idx];
+      const addressIndex = HathorWalletServiceWallet.getAddressIndexFromFullPath(path);
+      if (HathorWalletServiceWallet.isShieldedSpendPath(path)) {
+        if (!spendXpriv) {
+          // eslint-disable-next-line no-await-in-loop -- decrypted once, on the first spend input
+          spendXpriv = new bitcore.HDPrivateKey(await this.storage.getSpendXPrivKey(pinCode));
+        }
+        inputObj.setData(
+          HathorWalletServiceWallet.getSpendInputData(spendXpriv, dataToSignHash, addressIndex)
+        );
+      } else {
+        inputObj.setData(this.getInputData(xprivkey, dataToSignHash, addressIndex));
+      }
+    }
+  }
+
+  /**
+   * The derivation path of an address holding an authority of the wallet.
+   */
+  private async getAuthorityAddressPath(address: string): Promise<string> {
+    const addressIndex = await this.getAddressIndex(address);
+    if (addressIndex === null) {
+      throw new Error(`Authority address ${address} not found in wallet`);
+    }
+    if (await this.isShieldedSpendAddress(address, addressIndex)) {
+      return `${SHIELDED_SPEND_ACCT_PATH}/0/${addressIndex}`;
+    }
+    return `${P2PKH_ACCT_PATH}/0/${addressIndex}`;
+  }
+
+  /**
+   * Whether an on-chain address is the wallet's shielded spend address at an
+   * index. The wallet-service reports an address index without its chain.
+   *
+   * @internal Used by WalletServiceStorageProxy to sign with the spend key.
+   */
+  async isShieldedSpendAddress(address: string, index: number): Promise<boolean> {
+    // Decided by the stored keys, not by whether this session registered
+    // them: the service keeps the spend chain from an earlier start, so a
+    // legacy-only session still holds outputs on spend addresses
+    const xpubs = await this.getStoredShieldedXpubs();
+    if (!xpubs) {
+      return false;
+    }
+    return (
+      deriveShieldedAddress(xpubs.scanXpub, xpubs.spendXpub, index, this.network.name)
+        .spendAddress === address
+    );
+  }
+
+  /**
+   * The record's shielded scan and spend xpubs, or null when it has none (or
+   * the wallet has no record yet).
+   */
+  private async getStoredShieldedXpubs(): Promise<{ scanXpub: string; spendXpub: string } | null> {
+    let scanXpub: string | undefined;
+    let spendXpub: string | undefined;
+    try {
+      [scanXpub, spendXpub] = await Promise.all([
+        this.storage.getScanXPubKey(),
+        this.storage.getSpendXPubKey(),
+      ]);
+    } catch (e) {
+      if (e instanceof UninitializedWalletError) {
+        return null;
+      }
+      throw e;
+    }
+    return scanXpub && spendXpub ? { scanXpub, spendXpub } : null;
+  }
+
+  /**
+   * Return if wallet is ready to be used
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  isReady(): boolean {
+    return this.state === walletState.READY;
+  }
+
+  /**
+   * Update wallet state and emit 'state' event
+   *
+   * @param {string} state New wallet state
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  setState(state: string) {
+    this.state = state;
+    this.emit('state', state);
+  }
+
+  /**
+   * Stop the wallet
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  async stop({ cleanStorage = true } = {}) {
+    this.walletId = null;
+    this.state = walletState.NOT_STARTED;
+    this.firstConnection = true;
+    this.removeAllListeners();
+
+    await this.storage.handleStop({ cleanStorage });
+    this.conn.stop();
+  }
+
+  /**
+   * Get address at specific index
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  async getAddressAtIndex(index: number, opts?: IAddressChainOptions): Promise<string> {
+    if (isShieldedChain(opts)) {
+      this.failIfShieldedNotEnabled();
+      const { addresses } = await walletApi.getAddresses(this, index, { legacy: false });
+      if (addresses.length <= 0) {
+        throw new Error('Error getting wallet shielded addresses.');
+      }
+      return addresses[0].address;
+    }
+    const { addresses } = await walletApi.getAddresses(this, index);
+
+    if (addresses.length <= 0) {
+      throw new Error('Error getting wallet addresses.');
+    }
+
+    return addresses[0].address;
+  }
+
+  /**
+   * Returns an address' privateKey given an index and the encryption password
+   *
+   * @param {string} pinCode - The PIN used to encrypt data in accessData
+   * @param {number} addressIndex - The address' index to fetch
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  async getAddressPrivKey(pinCode: string, addressIndex: number): Promise<bitcore.HDPrivateKey> {
+    const mainXPrivKey = await this.storage.getMainXPrivKey(pinCode);
+    const addressHDPrivKey = new bitcore.HDPrivateKey(mainXPrivKey).derive(addressIndex);
+
+    return addressHDPrivKey;
+  }
+
+  /**
+   * Gets the network name
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  getNetwork(): string {
+    return this.getNetworkObject().name;
+  }
+
+  /**
+   * Gets the network model object
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  getNetworkObject() {
+    return this.network;
+  }
+
+  /**
+   * Get the current address to be used
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  getCurrentAddress(
+    // eslint-disable-next-line default-param-last
+    { markAsUsed = false } = {},
+    opts?: IAddressChainOptions
+  ): AddressInfoObject {
+    if (isShieldedChain(opts)) {
+      return this.getCurrentShieldedAddress(markAsUsed);
+    }
+    if (this.singleAddress) {
+      return this.newAddresses[0];
+    }
+
+    const newAddressesLen = this.newAddresses.length;
+    if (this.indexToUse > newAddressesLen - 1) {
+      const addressInfo = this.newAddresses[newAddressesLen - 1];
+      return { ...addressInfo, info: 'GAP_LIMIT_REACHED' };
+    }
+
+    const addressInfo = this.newAddresses[this.indexToUse];
+    if (markAsUsed) {
+      this.indexToUse += 1;
+    }
+    return addressInfo;
+  }
+
+  /**
+   * How many unused shielded addresses the wallet-service handed this wallet,
+   * i.e. addresses it can still give out to receive shielded outputs.
+   */
+  getUnusedShieldedAddressCount(): number {
+    return this.newShieldedAddresses.length;
+  }
+
+  /**
+   * Get the current unused shielded address. The returned object also carries
+   * the on-chain `spendAddress` its outputs are locked to.
+   */
+  private getCurrentShieldedAddress(markAsUsed: boolean): ShieldedAddressInfoObject {
+    this.failIfShieldedChainUnavailable();
+    const count = this.newShieldedAddresses.length;
+    if (count === 0) {
+      // Deriving one locally would hand out an address the wallet-service does
+      // not watch, so funds sent to it would go unseen.
+      throw new WalletError('The wallet-service has no unused shielded address for this wallet.');
+    }
+    if (this.shieldedIndexToUse > count - 1) {
+      return { ...this.newShieldedAddresses[count - 1], info: 'GAP_LIMIT_REACHED' };
+    }
+    const addressInfo = this.newShieldedAddresses[this.shieldedIndexToUse];
+    if (markAsUsed) {
+      this.shieldedIndexToUse += 1;
+    }
+    return addressInfo;
+  }
+
+  /**
+   * Returns a base64 encoded signed message with an address' private key given an
+   * address index
+   *
+   * @param message The message to sign
+   * @param index The address index to sign with
+   * @param [pinCode] The PIN that decrypts the stored key; not needed with an external
+   *   private-key provider
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  async signMessageWithAddress(message: string, index: number, pinCode?: string): Promise<string> {
+    let privateKey: bitcore.PrivateKey;
+    if (this.storage.hasPrivateKeyMethod()) {
+      // External provider (e.g. a passkey signer): no stored key and no pin needed. The key is
+      // checked against the wallet's address at this index.
+      privateKey = await this.getVerifiedExternalPrivateKey(index, { pinCode });
+    } else {
+      // Ask for the pin when it wasn't given, like getPrivateKeyFromAddress and sendTransaction on
+      // this facade (HathorWallet falls back to its stored pin instead).
+      const pin = pinCode || (await this.requestPassword());
+      const addressHDPrivKey: bitcore.HDPrivateKey = await this.getAddressPrivKey(pin, index);
+      privateKey = addressHDPrivKey.privateKey;
+    }
+    const signedMessage: string = signMessage(message, privateKey);
+
+    return signedMessage;
+  }
+
+  /**
+   * Get the next address after the current available
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  getNextAddress(opts?: IAddressChainOptions): AddressInfoObject {
+    if (isShieldedChain(opts)) {
+      this.getCurrentShieldedAddress(true);
+      return this.getCurrentShieldedAddress(false);
+    }
+    if (this.singleAddress) {
+      return this.newAddresses[0];
+    }
+    // First we mark the current address as used, then return the next
+    this.getCurrentAddress({ markAsUsed: true });
+    return this.getCurrentAddress();
+  }
+
+  /**
+   * Get which address mode is currently enabled.
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  async getAddressMode(): Promise<WalletAddressMode> {
+    this.failIfWalletNotReady();
+
+    if (this.singleAddress) {
+      return WalletAddressMode.SINGLE;
+    }
+    return WalletAddressMode.MULTI;
+  }
+
+  /**
+   * Enable multi address mode for this wallet.
+   * Converts to a gap-limit wallet.
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  async enableMultiAddressMode(): Promise<void> {
+    this.failIfWalletNotReady();
+
+    // Switch policy in storage
+    await this.storage.setScanningPolicyData({
+      policy: SCANNING_POLICY.GAP_LIMIT,
+      gapLimit: GAP_LIMIT,
+    });
+
+    this.singleAddress = false;
+    await this.getNewAddresses();
+  }
+
+  /**
+   * Enable single-address scanning policy for this wallet.
+   * Converts a gap-limit wallet to use only the first address (index 0).
+   * Will throw if the wallet has transactions on any address other than the first.
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  async enableSingleAddressMode(ignoreWalletReady: boolean = false): Promise<void> {
+    if (await this.hasTxOutsideFirstAddress(ignoreWalletReady)) {
+      throw new HasTxOutsideFirstAddressError(
+        'Cannot enable single-address policy: wallet has transactions on addresses other than the first'
+      );
+    }
+
+    // Switch policy in storage
+    await this.storage.setScanningPolicyData({
+      policy: SCANNING_POLICY.SINGLE_ADDRESS,
+    });
+
+    this.singleAddress = true;
+    await this.prepareSingleAddressMode();
+  }
+
+  /**
+   * Prepare the wallet for single address mode.
+   * Loads first address if needed.
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  private async prepareSingleAddressMode(): Promise<void> {
+    if (!this.singleAddress) return;
+
+    if (!this.firstAddress) {
+      this.firstAddress = await this.getAddressAtIndex(0);
+    }
+
+    this.newAddresses = [
+      {
+        address: this.firstAddress,
+        index: 0,
+        addressPath: await this.getAddressPathForIndex(0),
+      },
+    ];
+    this.indexToUse = 0;
+  }
+
+  /**
+   * Get the address index of a base58 address
+   *
+   * @param {string} address Address to check
+   * @returns {number | null} The address index or undefined
+   */
+  async getAddressIndex(address: string): Promise<number | null> {
+    try {
+      const addressDetails = await this.getAddressDetails(address);
+      const addressIndex = addressDetails?.index;
+
+      return addressIndex;
+    } catch (_e) {
+      // Return null if the address is not found
+      return null;
+    }
+  }
+
+  /**
+   * Check if an address belongs to this wallet
+   *
+   * @param {string} address Address to check
+   * @returns {boolean} True if the address belongs to this wallet
+   */
+  async isAddressMine(address: string): Promise<boolean> {
+    // Use the checkAddressesMine API to verify if the address belongs to the wallet
+    const response = await this.checkAddressesMine([address]);
+    return response[address] === true;
+  }
+
+  /**
+   * Get private key from address
+   *
+   * @param {string} address The address to get the private key for
+   * @param {Object} options Options
+   * @param {string} [options.pinCode] PIN code to decrypt the private key
+   *
+   * @returns {Promise<bitcore.PrivateKey>} Private key for this address
+   */
+  async getPrivateKeyFromAddress(
+    address: string,
+    options: { pinCode?: string } = {}
+  ): Promise<bitcore.PrivateKey> {
+    // Deliberately the raw storage check, not this.isReadonly(): this needs a private key, which
+    // an external tx-signing method doesn't provide; only a stored key or an external private-key
+    // provider can. Kept first so an xpub-only wallet without a provider gets WalletFromXPubGuard
+    // even for an address that isn't its own.
+    if ((await this.storage.isReadonly()) && !this.storage.hasPrivateKeyMethod()) {
+      throw new WalletFromXPubGuard('getPrivateKeyFromAddress');
+    }
+
+    // First get the address index
+    const addressIndex = await this.getAddressIndex(address);
+    if (addressIndex === null) {
+      throw new WalletError(`Address ${address} does not belong to this wallet`);
+    }
+
+    // External provider (e.g. a passkey signer): no stored key and no pin needed. The key is
+    // checked against the requested address.
+    if (this.storage.hasPrivateKeyMethod()) {
+      return this.getVerifiedExternalPrivateKey(addressIndex, {
+        ...options,
+        expectedAddress: address,
+      });
+    }
+
+    // Request PIN if not provided
+    const pin = options.pinCode || (await this.requestPassword());
+
+    if (await this.isShieldedSpendAddress(toOnChainAddress(address, this.network), addressIndex)) {
+      // An address of the shielded spend chain signs with the spend key
+      const spendXpriv = new bitcore.HDPrivateKey(await this.storage.getSpendXPrivKey(pin));
+      return spendXpriv.deriveChild(addressIndex).privateKey;
+    }
+
+    // Get the HD private key for this address
+    const addressHDPrivKey = await this.getAddressPrivKey(pin, addressIndex);
+
+    // Return just the private key (not the HD key)
+    return addressHDPrivKey.privateKey;
+  }
+
+  /**
+   * Verify address belongs to wallet and return its index
+   * @private
+   */
+  private async getAddressIndexIfOwned(address: string): Promise<number> {
+    const addressDetails = await this.getAddressDetails(address);
+    if (addressDetails?.index === undefined) {
+      throw new Error(
+        `Address used to sign the transaction (${address}) does not belong to the wallet.`
+      );
+    }
+    return addressDetails.index;
+  }
+
+  /**
+   * Get caller address from address index for nano contract operations
+   * @private
+   */
+  private async getCallerAddressFromIndex(pin: string, addressIndex: number): Promise<Address> {
+    const addressPrivKey = await this.getAddressPrivKey(pin, addressIndex);
+    const callerAddress = new Address(
+      addressPrivKey.publicKey.toAddress(this.network.getNetwork()).toString(),
+      { network: this.network }
+    );
+    return callerAddress;
+  }
+
+  /**
+   * Get the seqnum to be used in a nano header for the address
+   */
+  async getNanoHeaderSeqnum(address: string): Promise<number> {
+    const addressInfo = await walletApi.getAddressDetails(this, address);
+
+    return addressInfo.data.seqnum + 1;
+  }
+
+  /**
+   * Set the caller address and seqnum on a nano contract header
+   *
+   * @param nanoHeader The nano contract header to modify
+   * @param address The new caller address
+   */
+  async setNanoHeaderCaller(nanoHeader: NanoContractHeader, address: string): Promise<void> {
+    await setNanoHeaderCallerFromWallet(nanoHeader, address, this);
+  }
+
+  /**
+   * Get detailed information about a specific address from the wallet service
+   *
+   * @param address The address to get details for
+   * @returns Promise that resolves with address details including index, transactions count, and seqnum
+   */
+  async getAddressDetails(address: string): Promise<GetAddressDetailsObject> {
+    const onChain = toOnChainAddress(address, this.network);
+    const addressDetails = await walletApi.getAddressDetails(this, onChain);
+    if (
+      onChain !== address &&
+      !(await this.isOwnShieldedAddress(address, addressDetails.data.index))
+    ) {
+      throw new WalletError(`${address} is not an address of this wallet.`);
+    }
+    return addressDetails.data;
+  }
+
+  /**
+   * Whether a shielded address is this wallet's at an index of its spend
+   * chain. The wallet-service matches a shielded address by its spend half
+   * only, so the whole address, scan key included, is compared with the one
+   * the wallet derives there.
+   */
+  private async isOwnShieldedAddress(address: string, index: number): Promise<boolean> {
+    const xpubs = await this.getStoredShieldedXpubs();
+    if (!xpubs) {
+      return false;
+    }
+    return (
+      deriveShieldedAddress(xpubs.scanXpub, xpubs.spendXpub, index, this.network.name).base58 ===
+      address
+    );
+  }
+
+  // eslint-disable-next-line class-methods-use-this
+  async markUtxoSelected(): Promise<void> {
+    // XXX: Currently a no-op... We currently have a very specific mechanism for
+    // locking utxos, which is the createTxProposal/sendTxProposal, that is very
+    // tightly coupled to the regular send transaction method.
+  }
+
+  /* eslint-disable-next-line class-methods-use-this */
+  getTx(id: string) {
+    throw new WalletError('Not implemented.');
+  }
+
+  /* eslint-disable class-methods-use-this */
+  getAddressInfo(address: string, options = {}) {
+    throw new WalletError('Not implemented.');
+  }
+
+  /* eslint-disable class-methods-use-this */
+  consolidateUtxos(destinationAddress: string, options = {}) {
+    throw new WalletError('Not implemented.');
+  }
+
+  /* eslint-disable class-methods-use-this */
+  getFullHistory(): TransactionFullObject[] {
+    throw new WalletError('Not implemented.');
+  }
+
+  /**
+   * Set the crypto provider used to recover shielded outputs and build
+   * shielded transactions. Pass `undefined` to clear it.
+   */
+  setShieldedCryptoProvider(provider?: IShieldedCryptoProvider): void {
+    this.storage.setShieldedCryptoProvider(provider);
+  }
+
+  /**
+   * Checks if the given array of addresses belongs to the caller wallet
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  async checkAddressesMine(addresses: string[]): Promise<WalletAddressMap> {
+    if (addresses.length === 0) {
+      return {};
+    }
+
+    // The wallet-service knows shielded addresses by their on-chain spend
+    // address; the result is keyed by the addresses the caller passed.
+    const onChain = addresses.map(address => toOnChainAddress(address, this.network));
+    const response = await walletApi.checkAddressesMine(this, onChain);
+
+    const result: WalletAddressMap = {};
+    for (const [i, address] of addresses.entries()) {
+      if (!(onChain[i] in response.addresses)) {
+        continue;
+      }
+      let mine = response.addresses[onChain[i]];
+      if (mine && onChain[i] !== address) {
+        // A shielded address: its spend half is the wallet's, check the rest
+        // eslint-disable-next-line no-await-in-loop -- shielded addresses are few
+        const { data } = await walletApi.getAddressDetails(this, onChain[i]);
+        // eslint-disable-next-line no-await-in-loop
+        mine = await this.isOwnShieldedAddress(address, data.index);
+      }
+      result[address] = mine;
+    }
+    return result;
+  }
+
+  /**
+   * Create SendTransaction object and run from mining
+   * Returns a promise that resolves when the send succeeds
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  async handleSendPreparedTransaction(transactionObj: Transaction): Promise<Transaction> {
+    const sendTransaction = new SendTransactionWalletService(this, { transaction: transactionObj });
+    return sendTransaction.runFromMining();
+  }
+
+  /**
+   * Prepare create new token data, sign the inputs and returns an object ready to be mined
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  async prepareCreateNewToken(
+    name: string,
+    symbol: string,
+    amount: OutputValueType,
+    options = {}
+  ): Promise<CreateTokenTransaction> {
+    this.failIfWalletNotReady();
+    type optionsType = {
+      address: string | null;
+      changeAddress: string | null;
+      createMint: boolean;
+      mintAuthorityAddress: string | null;
+      allowExternalMintAuthorityAddress: boolean | null;
+      createMelt: boolean;
+      meltAuthorityAddress: string | null;
+      allowExternalMeltAuthorityAddress: boolean | null;
+      data: string[] | null;
+      isCreateNFT: boolean;
+      pinCode: string | null;
+      signTx: boolean;
+      tokenVersion: TokenVersion | null;
+    };
+    const newOptions: optionsType = {
+      address: null,
+      changeAddress: null,
+      createMint: true,
+      mintAuthorityAddress: null,
+      allowExternalMintAuthorityAddress: false,
+      createMelt: true,
+      meltAuthorityAddress: null,
+      allowExternalMeltAuthorityAddress: false,
+      data: null,
+      isCreateNFT: false,
+      pinCode: null,
+      signTx: true,
+      tokenVersion: TokenVersion.DEPOSIT,
+      ...options,
+    };
+
+    if (newOptions.mintAuthorityAddress && !newOptions.allowExternalMintAuthorityAddress) {
+      // Validate that the mint authority address belongs to the wallet
+      const checkAddressMineMap = await this.checkAddressesMine([newOptions.mintAuthorityAddress]);
+      if (!checkAddressMineMap[newOptions.mintAuthorityAddress]) {
+        throw new SendTxError('The mint authority address must belong to your wallet.');
+      }
+    }
+
+    if (newOptions.meltAuthorityAddress && !newOptions.allowExternalMeltAuthorityAddress) {
+      // Validate that the melt authority address belongs to the wallet
+      const checkAddressMineMap = await this.checkAddressesMine([newOptions.meltAuthorityAddress]);
+      if (!checkAddressMineMap[newOptions.meltAuthorityAddress]) {
+        throw new SendTxError('The melt authority address must belong to your wallet.');
+      }
+    }
+    const tokenVersion = newOptions.tokenVersion || TokenVersion.DEPOSIT;
+
+    // 1. Calculate HTR deposit needed
+    let deposit = 0n;
+    if (tokenVersion === TokenVersion.DEPOSIT) {
+      deposit += this.getDepositAmount(amount);
+    }
+
+    if (newOptions.data && newOptions.data.length > 0) {
+      // We require a 0.01 HTR fee for each data output created
+      deposit += tokens.getDataFee(newOptions.data.length);
+    }
+
+    // Create outputs
+    const outputsObj: Output[] = [];
+    const dataOutputs: Output[] = [];
+    if (newOptions.data && newOptions.data.length > 0) {
+      for (const dataString of newOptions.data) {
+        dataOutputs.push(helpers.createNFTOutput(dataString));
+      }
+    }
+
+    // insert the data outputs in the beggining of the array, in case it isn't a NFT it will be added at the end of the array
+    if (newOptions.isCreateNFT && dataOutputs.length > 0) {
+      outputsObj.push(...dataOutputs);
+    }
+
+    // a. Token amount
+    const address = this.validateAddress(newOptions.address);
+
+    const p2pkhScript = address.getScript();
+    outputsObj.push(new Output(amount, p2pkhScript, { tokenData: 1 }));
+
+    if (newOptions.createMint) {
+      // b. Mint authority
+      const mintAuthorityAddressObj = this.validateAddress(newOptions.mintAuthorityAddress);
+      const p2pkhMintAuthorityScript = mintAuthorityAddressObj.getScript();
+      outputsObj.push(
+        new Output(TOKEN_MINT_MASK, p2pkhMintAuthorityScript, { tokenData: AUTHORITY_TOKEN_DATA })
+      );
+    }
+
+    // 2. Calculate the fee, we are using a simplified fee calculation since in this method we only have outputs related to the token creation
+    // Data outputs are not included in this fee calculation because they have their own fee (0.01 HTR per data output)
+    let fee = 0n;
+    if (tokenVersion === TokenVersion.FEE) {
+      fee = Fee.calculateTokenCreationTxFee([...outputsObj]);
+    }
+
+    const headers: Header[] = [];
+    if (fee > 0) {
+      headers.push(new FeeHeader([{ tokenIndex: 0, amount: fee }]));
+    }
+
+    // 3. Get utxos for HTR
+    const totalAmount = deposit + fee;
+    const { utxos, changeAmount } = await this.getUtxosForAmount(totalAmount, {
+      token: NATIVE_TOKEN_UID,
+    });
+    if (utxos.length === 0) {
+      throw new UtxoError(
+        `No utxos available to fill the request. Token: HTR - Amount: ${totalAmount}.`
+      );
+    }
+
+    if (changeAmount) {
+      // c. HTR change output
+      outputsObj.push(this.createOutput(changeAmount, newOptions.changeAddress));
+    }
+
+    if (newOptions.createMelt) {
+      // d. Melt authority
+      const meltAuthorityAddressObj = this.validateAddress(newOptions.meltAuthorityAddress);
+
+      const p2pkhMeltAuthorityScript = meltAuthorityAddressObj.getScript();
+      outputsObj.push(
+        new Output(TOKEN_MELT_MASK, p2pkhMeltAuthorityScript, { tokenData: AUTHORITY_TOKEN_DATA })
+      );
+    }
+
+    const utxosAddressPath: string[] = [];
+    // 3. Create the transaction object with the inputs and outputs (new token amount, change address with HTR, mint/melt authorities - depending on parameters)
+    const inputsObj: Input[] = [];
+    for (const utxo of utxos) {
+      inputsObj.push(new Input(utxo.txId, utxo.index));
+      utxosAddressPath.push(utxo.addressPath);
+    }
+
+    // if it isn't a NFT, add the data outputs at the end of the array
+    if (!newOptions.isCreateNFT && dataOutputs.length > 0) {
+      outputsObj.push(...dataOutputs);
+    }
+
+    const tx = new CreateTokenTransaction(name, symbol, inputsObj, outputsObj, {
+      tokenVersion,
+      headers,
+    });
+
+    // Sign transaction
+    if (newOptions.signTx) {
+      if (this.storage.hasTxSignatureMethod()) {
+        await this.signInputsExternally(tx, newOptions.pinCode);
+      } else {
+        if (!newOptions.pinCode) {
+          throw new Error('PIN not specified in prepareCreateNewToken options');
+        }
+
+        await this.signInputsByPath(tx, newOptions.pinCode, utxosAddressPath);
+      }
+    }
+
+    tx.prepareToSend(transaction.getWeightConstantsFromStorage(this.storage));
+    return tx;
+  }
+
+  /**
+   * Expects a BIP44 path at the address level and returns the address index
+   *
+   * @param {string} fullPath - The full BIP44 path for the address index
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  static getAddressIndexFromFullPath(fullPath: string): number {
+    const parts = fullPath.split('/');
+
+    assert.equal(6, parts.length);
+
+    return parseInt(parts[5], 10);
+  }
+
+  /**
+   * Helper method to get authority tx_outputs
+   * Uses the getTxOutputs API method to return one or many authorities
+   */
+  async _getAuthorityTxOutput(options: {
+    tokenId: string;
+    authority: OutputValueType;
+    skipSpent: boolean;
+    maxOutputs?: number;
+    filterAddress?: string | null;
+  }): Promise<AuthorityTxOutput[]> {
+    const apiOptions: GetTxOutputsOptions = {
+      tokenId: options.tokenId,
+      authority: options.authority,
+      skipSpent: options.skipSpent,
+      maxOutputs: options.maxOutputs,
+    };
+
+    if (options.filterAddress) {
+      apiOptions.addresses = [options.filterAddress];
+    }
+
+    const { txOutputs } = await walletApi.getTxOutputs(this, apiOptions);
+
+    return txOutputs.map(txOutput => ({
+      txId: txOutput.txId,
+      index: txOutput.index,
+      address: txOutput.address,
+      authorities: txOutput.authorities,
+    }));
+  }
+
+  /**
+   * Get mint authorities
+   * Uses the getTxOutputs API method to return one or many mint authorities
+   *
+   * @param tokenId of the token to select the authority utxo
+   * @param options Object with custom options.
+   *  {
+   *    'many': if should return many utxos or just one (default false),
+   *    'skipSpent': if should not include spent utxos (default true)
+   *  }
+   *
+   * @return Promise that resolves with an Array of objects with {txId, index, address, authorities} of the authority output.
+   * Returns an empty array in case there are no tx outputs for this type
+   * */
+  async getMintAuthority(
+    tokenId: string,
+    options: { many?: boolean; skipSpent?: boolean } = {}
+  ): Promise<AuthorityTxOutput[]> {
+    const newOptions = { many: false, skipSpent: true, ...options };
+
+    return this._getAuthorityTxOutput({
+      tokenId,
+      authority: TOKEN_MINT_MASK,
+      skipSpent: newOptions.skipSpent,
+      maxOutputs: newOptions.many ? undefined : 1,
+    });
+  }
+
+  /**
+   * Get melt authorities
+   * Uses the getTxOutputs API method to return one or many melt authorities
+   *
+   * @param tokenId of the token to select the authority utxo
+   * @param options Object with custom options.
+   *  {
+   *    'many': if should return many utxos or just one (default false),
+   *    'skipSpent': if should not include spent utxos (default true)
+   *  }
+   *
+   * @return Promise that resolves with an Array of objects with {txId, index, address, authorities} of the authority output.
+   * Returns an empty array in case there are no tx outputs for this type
+   * */
+  async getMeltAuthority(
+    tokenId: string,
+    options: { many?: boolean; skipSpent?: boolean } = {}
+  ): Promise<AuthorityTxOutput[]> {
+    const newOptions = { many: false, skipSpent: true, ...options };
+
+    return this._getAuthorityTxOutput({
+      tokenId,
+      authority: TOKEN_MELT_MASK,
+      skipSpent: newOptions.skipSpent,
+      maxOutputs: newOptions.many ? undefined : 1,
+    });
+  }
+
+  /**
+   * Get authority utxo
+   *
+   * @param tokenUid UID of the token to select the authority utxo
+   * @param authority The authority to filter ('mint' or 'melt')
+   * @param options Object with custom options.
+   *  {
+   *    'many': if should return many utxos or just one (default false),
+   *    'only_available_utxos': If we should filter for available utxos (default false),
+   *    'filter_address': Address to filter the utxo to get (default null)
+   *  }
+   *
+   * @return Promise that resolves with an Array of objects with {txId, index, address, authorities} of the authority output.
+   * Returns an empty array in case there are no tx outputs for this type
+   * */
+  async getAuthorityUtxo(
+    tokenUid: string,
+    authority: string,
+    options: {
+      many?: boolean;
+      only_available_utxos?: boolean;
+      filter_address?: string | null;
+    } = {}
+  ): Promise<AuthorityTxOutput[]> {
+    let authorityValue: OutputValueType;
+    if (authority === 'mint') {
+      authorityValue = TOKEN_MINT_MASK;
+    } else if (authority === 'melt') {
+      authorityValue = TOKEN_MELT_MASK;
+    } else {
+      throw new Error('Invalid authority value.');
+    }
+
+    const newOptions = {
+      many: false,
+      only_available_utxos: false,
+      filter_address: null,
+      ...options,
+    };
+
+    return this._getAuthorityTxOutput({
+      tokenId: tokenUid,
+      authority: authorityValue,
+      skipSpent: newOptions.only_available_utxos,
+      maxOutputs: newOptions.many ? undefined : 1,
+      filterAddress: newOptions.filter_address,
+    });
+  }
+
+  /**
+   * Create a new custom token in the network
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  async createNewToken(
+    name: string,
+    symbol: string,
+    amount: OutputValueType,
+    options = {}
+  ): Promise<Transaction> {
+    this.failIfWalletNotReady();
+    const tx = await this.prepareCreateNewToken(name, symbol, amount, options);
+    return this.handleSendPreparedTransaction(tx);
+  }
+
+  /**
+   * Prepare mint token data, sign the inputs and returns an object ready to be mined
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  async prepareMintTokensData(
+    token: string,
+    amount: OutputValueType,
+    options = {}
+  ): Promise<Transaction> {
+    this.failIfWalletNotReady();
+    type optionsType = {
+      address: string | null;
+      changeAddress: string | null;
+      createAnotherMint: boolean;
+      mintAuthorityAddress: string | null;
+      allowExternalMintAuthorityAddress: boolean;
+      pinCode: string | null;
+      signTx: boolean;
+    };
+    const newOptions: optionsType = {
+      address: null,
+      changeAddress: null,
+      createAnotherMint: true,
+      mintAuthorityAddress: null,
+      allowExternalMintAuthorityAddress: false,
+      pinCode: null,
+      signTx: true,
+      ...options,
+    };
+
+    if (newOptions.mintAuthorityAddress && !newOptions.allowExternalMintAuthorityAddress) {
+      // Validate that the mint authority address belongs to the wallet
+      const checkAddressMineMap = await this.checkAddressesMine([newOptions.mintAuthorityAddress]);
+      if (!checkAddressMineMap[newOptions.mintAuthorityAddress]) {
+        throw new SendTxError('The mint authority address must belong to your wallet.');
+      }
+    }
+
+    // Get token info
+    const { tokenInfo } = await this.getTokenDetails(token);
+
+    if (!tokenInfo) {
+      throw new TokenNotFoundError(token);
+    }
+
+    // 1. Calculate HTR deposit needed
+    let deposit = 0n;
+    if (tokenInfo?.version === TokenVersion.DEPOSIT) {
+      deposit = this.getDepositAmount(amount);
+    }
+
+    // 2. Get mint authority
+    const mintAuthorities = await this.getMintAuthority(token, { many: false, skipSpent: true });
+    if (mintAuthorities.length === 0) {
+      throw new UtxoError(`No authority utxo available for minting tokens. Token: ${token}.`);
+    }
+    // it's safe to assume that we have an utxo in the array
+    const mintUtxo = mintAuthorities[0];
+
+    // Create outputs
+    const outputsObj: Output[] = [];
+    // a. Token amount
+    outputsObj.push(this.createOutput(amount, newOptions.address, 1));
+
+    if (newOptions.createAnotherMint) {
+      // b. Mint authority
+      const authorityAddressObj = this.validateAddress(newOptions.mintAuthorityAddress);
+      const p2pkhAuthorityScript = authorityAddressObj.getScript();
+      outputsObj.push(
+        new Output(TOKEN_MINT_MASK, p2pkhAuthorityScript, { tokenData: AUTHORITY_TOKEN_DATA })
+      );
+    }
+
+    const mappedOutputs = outputsObj.map(output => this.mapToDataOutput(output, token));
+
+    // We pass an empty array in the Inputs, because we are minting and won't hit the edge case of melting without outputs
+    const _tokens = new Map<string, ITokenData>();
+    _tokens.set(tokenInfo.id, { ...tokenInfo, uid: tokenInfo.id });
+
+    const fee = await Fee.calculate([], mappedOutputs, _tokens);
+    const headers: Header[] = [];
+    if (fee > 0) {
+      headers.push(new FeeHeader([{ tokenIndex: 0, amount: fee }]));
+    }
+
+    // 4. Get utxos for HTR
+    const totalAmount = deposit + fee;
+    const { utxos, changeAmount } = await this.getUtxosForAmount(totalAmount, {
+      token: NATIVE_TOKEN_UID,
+    });
+    if (utxos.length === 0) {
+      throw new UtxoError(
+        `No utxos available to fill the request. Token: HTR - Amount: ${totalAmount}.`
+      );
+    }
+
+    // 3. Create inputs from utxos and track address paths for signing
+    const inputsObj: Input[] = [];
+    const addressPaths: string[] = [];
+
+    // Add HTR inputs
+    for (const utxo of utxos) {
+      inputsObj.push(helpers.parseToInput(utxo));
+      addressPaths.push(utxo.addressPath);
+    }
+
+    // Add mint authority input and resolve its address path
+    inputsObj.push(helpers.parseToInput(mintUtxo));
+    addressPaths.push(await this.getAuthorityAddressPath(mintUtxo.address));
+
+    if (changeAmount) {
+      // c. HTR change output
+      outputsObj.push(this.createOutput(changeAmount, newOptions.changeAddress));
+    }
+
+    const tx = new Transaction(inputsObj, outputsObj, { headers });
+    tx.tokens = [token];
+
+    // Sign transaction
+    if (newOptions.signTx) {
+      if (this.storage.hasTxSignatureMethod()) {
+        await this.signInputsExternally(tx, newOptions.pinCode);
+      } else {
+        if (!newOptions.pinCode) {
+          throw new Error('PIN not specified in prepareMintTokensData options');
+        }
+
+        await this.signInputsByPath(tx, newOptions.pinCode, addressPaths);
+      }
+    }
+
+    tx.prepareToSend(transaction.getWeightConstantsFromStorage(this.storage));
+    return tx;
+  }
+
+  /**
+   * Mint new token units
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  async mintTokens(token: string, amount: OutputValueType, options = {}): Promise<Transaction> {
+    this.failIfWalletNotReady();
+    const tx = await this.prepareMintTokensData(token, amount, options);
+    return this.handleSendPreparedTransaction(tx);
+  }
+
+  /**
+   * Call get token details API
+   *
+   * @param tokenId Token uid to get the token details
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  async getTokenDetails(tokenId: string): Promise<TokenDetailsObject> {
+    const response = await walletApi.getTokenDetails(this, tokenId);
+    const { details } = response;
+
+    return details;
+  }
+
+  /**
+   * Prepare melt token data, sign the inputs and returns an object ready to be mined
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  async prepareMeltTokensData(
+    token: string,
+    amount: OutputValueType,
+    options = {}
+  ): Promise<Transaction> {
+    this.failIfWalletNotReady();
+    type optionsType = {
+      address: string | null;
+      changeAddress: string | null;
+      createAnotherMelt: boolean;
+      meltAuthorityAddress: string | null;
+      allowExternalMeltAuthorityAddress: boolean;
+      pinCode: string | null;
+      signTx: boolean;
+    };
+    const newOptions: optionsType = {
+      address: null,
+      changeAddress: null,
+      createAnotherMelt: true,
+      meltAuthorityAddress: null,
+      allowExternalMeltAuthorityAddress: false,
+      pinCode: null,
+      signTx: true,
+      ...options,
+    };
+
+    if (newOptions.meltAuthorityAddress && !newOptions.allowExternalMeltAuthorityAddress) {
+      // Validate that the melt authority address belongs to the wallet
+      const checkAddressMineMap = await this.checkAddressesMine([newOptions.meltAuthorityAddress]);
+      if (!checkAddressMineMap[newOptions.meltAuthorityAddress]) {
+        throw new SendTxError('The melt authority address must belong to your wallet.');
+      }
+    }
+
+    // Get token info
+    const { tokenInfo } = await this.getTokenDetails(token);
+    if (!tokenInfo) {
+      throw new TokenNotFoundError(token);
+    }
+
+    // 1. Calculate HTR withdraw
+    let withdraw = 0n;
+    if (tokenInfo?.version === TokenVersion.DEPOSIT) {
+      withdraw = this.getWithdrawAmount(amount);
+    }
+
+    // 2. Get utxos for custom token to melt
+    const { utxos: tokenUtxos, changeAmount } = await this.getUtxosForAmount(amount, { token });
+    if (tokenUtxos.length === 0) {
+      throw new UtxoError(`Not enough tokens to be melted. Token: ${token} - Amount: ${amount}.`);
+    }
+
+    // 3. Get melt authority
+    const meltAuthorities = await this.getMeltAuthority(token, { many: false, skipSpent: true });
+    if (meltAuthorities.length === 0) {
+      throw new UtxoError(`No authority utxo available for melting tokens. Token: ${token}.`);
+    }
+    // it's safe to assume that we have an utxo in the array
+    const meltUtxo = meltAuthorities[0];
+
+    // 4. Create inputs from utxos and track address paths for signing
+    const inputsObj: Input[] = [];
+    const addressPaths: string[] = [];
+
+    // Add token inputs
+    for (const utxo of tokenUtxos) {
+      inputsObj.push(helpers.parseToInput(utxo));
+      addressPaths.push(utxo.addressPath);
+    }
+
+    // Add melt authority input and resolve its address path
+    inputsObj.push(helpers.parseToInput(meltUtxo));
+    addressPaths.push(await this.getAuthorityAddressPath(meltUtxo.address));
+
+    // Create outputs
+    const outputsObj: Output[] = [];
+
+    // a. withdrawal
+    // We may have nothing to withdraw
+    if (withdraw) {
+      outputsObj.push(this.createOutput(withdraw, newOptions.address, 0)); // token data is 0 because we are withdrawing HTR
+    }
+
+    if (newOptions.createAnotherMelt) {
+      // b. Melt authority
+      const authorityAddressObj = this.validateAddress(newOptions.meltAuthorityAddress);
+      const p2pkhAuthorityScript = authorityAddressObj.getScript();
+      outputsObj.push(
+        new Output(TOKEN_MELT_MASK, p2pkhAuthorityScript, {
+          tokenData: AUTHORITY_TOKEN_DATA,
+        })
+      );
+    }
+
+    if (changeAmount) {
+      // c. Token change output
+      outputsObj.push(this.createOutput(changeAmount, newOptions.changeAddress, 1));
+    }
+
+    const headers: Header[] = [];
+
+    if (tokenInfo?.version === TokenVersion.FEE) {
+      const mappedOutputs = outputsObj.map(output => this.mapToDataOutput(output, token));
+      const tokenData = {
+        uid: tokenInfo.id,
+        name: tokenInfo.name,
+        symbol: tokenInfo.symbol,
+        version: tokenInfo.version,
+      } satisfies ITokenData;
+      const fee = await Fee.calculate(
+        tokenUtxos, // we are using the token utxos instead of the inputs we need to check if this utxo is an authority utxo
+        mappedOutputs,
+        new Map([[tokenData.uid, tokenData]])
+      );
+
+      if (fee > 0) {
+        headers.push(new FeeHeader([{ tokenIndex: 0, amount: fee }]));
+      }
+
+      // Get utxos for HTR
+      const { utxos: htrUtxos, changeAmount: htrChangeAmount } = await this.getUtxosForAmount(fee, {
+        token: NATIVE_TOKEN_UID,
+      });
+
+      if (htrUtxos.length === 0) {
+        throw new UtxoError(`No utxos available to fill the request. Token: HTR - Amount: ${fee}.`);
+      }
+
+      // Add HTR inputs
+      for (const utxo of htrUtxos) {
+        inputsObj.push(helpers.parseToInput(utxo));
+        addressPaths.push(utxo.addressPath);
+      }
+
+      // Htr isn't billable, so we can append it here after calculating the fee
+      if (htrChangeAmount) {
+        // HTR change output
+        outputsObj.push(this.createOutput(htrChangeAmount, newOptions.changeAddress));
+      }
+    }
+
+    const tx = new Transaction(inputsObj, outputsObj, { headers });
+    tx.tokens = [token];
+
+    // Sign transaction
+    if (newOptions.signTx) {
+      if (this.storage.hasTxSignatureMethod()) {
+        await this.signInputsExternally(tx, newOptions.pinCode);
+      } else {
+        if (!newOptions.pinCode) {
+          throw new Error('PIN not specified in prepareMeltTokensData options');
+        }
+
+        await this.signInputsByPath(tx, newOptions.pinCode, addressPaths);
+      }
+    }
+
+    tx.prepareToSend(transaction.getWeightConstantsFromStorage(this.storage));
+    return tx;
+  }
+
+  private mapToDataOutput(output: Output, token: string) {
+    let authorities = 0n;
+    if (output.isAuthority()) {
+      if (output.isMint()) {
+        authorities = 1n;
+      }
+      if (output.isMelt()) {
+        authorities = 2n;
+      }
+    }
+    return {
+      token,
+      value: output.value,
+      authorities,
+      data: '',
+      type: output.getType(this.network) as never,
+    } satisfies IDataOutputWithToken;
+  }
+
+  /**
+   * Generate a change output with the given amount. If the address is not provided, it will
+   * use the current address.
+   * @param amount Token amount
+   * @param address address string
+   * @param tokenData token data to be used in the output
+   * @returns an Output object
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   * @throws SendTxError if the address is not valid
+   */
+  private createOutput(amount: bigint, address: string | null, tokenData?: number): Output {
+    const addressObj = this.validateAddress(address);
+    return new Output(amount, new P2PKH(addressObj).createScript(), { tokenData });
+  }
+
+  /**
+   * Validate and throw if the provided address is not valid, it will use the current address if
+   * the address is not provided.
+   * @param address address string
+   * @returns the valid the address instance
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   * @throws SendTxError if the address is not valid
+   */
+  private validateAddress(
+    address: string | null,
+    { markAsUsed }: { markAsUsed: boolean } = { markAsUsed: true }
+  ): Address {
+    const _address = address || this.getCurrentAddress({ markAsUsed }).address;
+    const addressInstance = new Address(_address, { network: this.network });
+    if (!addressInstance.isValid()) {
+      throw new SendTxError(`Address ${address} is not valid.`);
+    }
+    return addressInstance;
+  }
+
+  /**
+   * Melt custom token units
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  async meltTokens(token: string, amount: OutputValueType, options = {}): Promise<Transaction> {
+    this.failIfWalletNotReady();
+    const tx = await this.prepareMeltTokensData(token, amount, options);
+    return this.handleSendPreparedTransaction(tx);
+  }
+
+  /**
+   * HTR deposit required to mint the given amount of a deposit-based token.
+   *
+   * The deposit percentage is read from the connected fullnode's `/version` data,
+   * so callers pass only the amount. Requires the wallet to be READY.
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  getDepositAmount(mintAmount: OutputValueType): OutputValueType {
+    this.failIfWalletNotReady();
+    const { numerator, denominator } = this.storage.getTokenDepositPercentageFraction();
+    return tokens.getDepositAmount(mintAmount, numerator, denominator);
+  }
+
+  /**
+   * HTR withdrawal returned when melting the given amount of a deposit-based token.
+   *
+   * The deposit percentage is read from the connected fullnode's `/version` data,
+   * so callers pass only the amount. Requires the wallet to be READY.
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  getWithdrawAmount(meltAmount: OutputValueType): OutputValueType {
+    this.failIfWalletNotReady();
+    const { numerator, denominator } = this.storage.getTokenDepositPercentageFraction();
+    return tokens.getWithdrawAmount(meltAmount, numerator, denominator);
+  }
+
+  /**
+   * Prepare delegate authority data, sign the inputs and returns an object ready to be mined
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  async prepareDelegateAuthorityData(
+    token: string,
+    type: string,
+    address: string,
+    {
+      anotherAuthorityAddress = null,
+      createAnother = true,
+      pinCode = null,
+    }: WalletServiceDelegateAuthorityOptions
+  ): Promise<Transaction> {
+    this.failIfWalletNotReady();
+
+    let mask: OutputValueType;
+    if (type === 'mint') {
+      mask = TOKEN_MINT_MASK;
+    } else if (type === 'melt') {
+      mask = TOKEN_MELT_MASK;
+    } else {
+      throw new WalletError('Type options are mint and melt for delegate authority method.');
+    }
+
+    // 1. Get authority utxo to spend
+    const authorityUtxos =
+      type === 'mint'
+        ? await this.getMintAuthority(token, { many: false, skipSpent: true })
+        : await this.getMeltAuthority(token, { many: false, skipSpent: true });
+    if (authorityUtxos.length === 0) {
+      throw new UtxoError(
+        `No authority utxo available for delegating authority. Token: ${token} - Type ${type}.`
+      );
+    }
+    // it's safe to assume that we have an utxo in the array
+    const utxo = authorityUtxos[0];
+
+    // 2. Create input from utxo
+    const inputsObj: Input[] = [];
+    inputsObj.push(new Input(utxo.txId, utxo.index));
+
+    // Create outputs
+    const outputsObj: Output[] = [];
+    const addressObj = new Address(address, { network: this.network });
+    if (!addressObj.isValid()) {
+      throw new SendTxError(`Address ${address} is not valid.`);
+    }
+
+    const p2pkh = new P2PKH(addressObj);
+    const p2pkhScript = p2pkh.createScript();
+    outputsObj.push(new Output(mask, p2pkhScript, { tokenData: AUTHORITY_TOKEN_DATA }));
+
+    if (createAnother) {
+      const anotherAddressStr =
+        anotherAuthorityAddress || this.getCurrentAddress({ markAsUsed: true }).address;
+      const anotherAddress = new Address(anotherAddressStr, { network: this.network });
+      if (!anotherAddress.isValid()) {
+        throw new SendTxError(`Address ${anotherAuthorityAddress} is not valid.`);
+      }
+      const p2pkhAnotherAddress = new P2PKH(anotherAddress);
+      const p2pkhAnotherAddressScript = p2pkhAnotherAddress.createScript();
+      outputsObj.push(
+        new Output(mask, p2pkhAnotherAddressScript, {
+          tokenData: AUTHORITY_TOKEN_DATA,
+        })
+      );
+    }
+
+    const tx = new Transaction(inputsObj, outputsObj);
+    tx.tokens = [token];
+
+    if (this.storage.hasTxSignatureMethod()) {
+      await this.signInputsExternally(tx, pinCode);
+    } else {
+      if (!pinCode) {
+        throw new Error('PIN not specified in prepareDelegateAuthorityData options');
+      }
+
+      await this.signInputsByPath(tx, pinCode, [await this.getAuthorityAddressPath(utxo.address)]);
+    }
+
+    tx.prepareToSend(transaction.getWeightConstantsFromStorage(this.storage));
+
+    return tx;
+  }
+
+  /**
+   * Transfer (delegate) authority outputs to another address
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  async delegateAuthority(
+    token: string,
+    type: string,
+    address: string,
+    options: WalletServiceDelegateAuthorityOptions
+  ): Promise<Transaction> {
+    this.failIfWalletNotReady();
+    const tx = await this.prepareDelegateAuthorityData(token, type, address, options);
+    return this.handleSendPreparedTransaction(tx);
+  }
+
+  /**
+   * Destroy authority outputs
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  async prepareDestroyAuthorityData(
+    token: string,
+    type: string,
+    count: number,
+    { pinCode = null }: WalletServiceDestroyAuthorityOptions
+  ): Promise<Transaction> {
+    this.failIfWalletNotReady();
+
+    if (type !== 'mint' && type !== 'melt') {
+      throw new WalletError('Type options are mint and melt for destroy authority method.');
+    }
+
+    // 1. Get authority utxo to spend
+    const authorityUtxos =
+      type === 'mint'
+        ? await this.getMintAuthority(token, { many: true, skipSpent: true })
+        : await this.getMeltAuthority(token, { many: true, skipSpent: true });
+    if (authorityUtxos.length < count) {
+      throw new UtxoError(
+        `Not enough authority utxos available for destroying. Token: ${token} - Type ${type}. Requested quantity ${count} - Available quantity ${authorityUtxos.length}`
+      );
+    }
+    const ret = { utxos: authorityUtxos.slice(0, count) };
+
+    // 1. Create input from utxo
+    const inputsObj: Input[] = [];
+    for (const utxo of ret.utxos) {
+      inputsObj.push(new Input(utxo.txId, utxo.index));
+    }
+
+    // No outputs because we are just destroying the authority utxos
+
+    const tx = new Transaction(inputsObj, []);
+    tx.tokens = [token];
+
+    if (this.storage.hasTxSignatureMethod()) {
+      await this.signInputsExternally(tx, pinCode);
+    } else {
+      if (!pinCode) {
+        throw new Error('PIN not specified in prepareDestroyAuthorityData options');
+      }
+
+      const addressPaths: string[] = [];
+      for (const utxo of ret.utxos) {
+        // eslint-disable-next-line no-await-in-loop -- one lookup per authority input
+        addressPaths.push(await this.getAuthorityAddressPath(utxo.address));
+      }
+      await this.signInputsByPath(tx, pinCode, addressPaths);
+    }
+
+    tx.prepareToSend(transaction.getWeightConstantsFromStorage(this.storage));
+    return tx;
+  }
+
+  /**
+   * Destroy authority outputs
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  async destroyAuthority(
+    token: string,
+    type: string,
+    count: number,
+    options: WalletServiceDestroyAuthorityOptions
+  ): Promise<Transaction> {
+    this.failIfWalletNotReady();
+    const tx = await this.prepareDestroyAuthorityData(token, type, count, options);
+    return this.handleSendPreparedTransaction(tx);
+  }
+
+  /**
+   * Create an NFT in the network
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  async createNFT(
+    name: string,
+    symbol: string,
+    amount: OutputValueType,
+    data: string,
+    options = {}
+  ): Promise<Transaction> {
+    this.failIfWalletNotReady();
+    type optionsType = {
+      address: string | null;
+      changeAddress: string | null;
+      createMintAuthority: boolean;
+      mintAuthorityAddress: string | null;
+      allowExternalMintAuthorityAddress: boolean | null;
+      createMeltAuthority: boolean;
+      meltAuthorityAddress: string | null;
+      allowExternalMeltAuthorityAddress: boolean | null;
+      data?: string[];
+      isCreateNFT?: boolean;
+    };
+    const newOptions: optionsType = {
+      address: null,
+      changeAddress: null,
+      createMintAuthority: false,
+      mintAuthorityAddress: null,
+      allowExternalMintAuthorityAddress: false,
+      createMeltAuthority: false,
+      meltAuthorityAddress: null,
+      allowExternalMeltAuthorityAddress: false,
+      ...options,
+    };
+    newOptions.data = [data];
+    newOptions.isCreateNFT = true;
+    const tx = await this.prepareCreateNewToken(name, symbol, amount, newOptions);
+    return this.handleSendPreparedTransaction(tx);
+  }
+
+  async getTxById(txId: string): Promise<TxByIdTokensResponseData> {
+    this.failIfWalletNotReady();
+    const data = await walletApi.getTxById(this, txId);
+    return data;
+  }
+
+  async getFullTxById(txId: string): Promise<FullNodeTxResponse> {
+    this.failIfWalletNotReady();
+
+    return walletApi.getFullTxById(this, txId);
+  }
+
+  /**
+   * Get the unblinding factors for shielded outputs in a transaction, in the
+   * shape the fullnode facade's `getShieldedUnblindingForTx` returns.
+   *
+   * Returns one entry per shielded output of the tx **the wallet owns**, and
+   * one per shielded input spending an output the wallet owned. Outputs paid
+   * to others are left out: disclosing their blinding factors would leak the
+   * recipient's amount and token. Ownership is the wallet-service's: it lists
+   * an output of this wallet, spent or not, only once it has recovered it with
+   * the wallet's scan key. The wallet then opens it with the scan key in
+   * memory, so the openings are the ones the fullnode facade derives.
+   *
+   * Indexes follow the fullnode facade: an output's on-chain absolute index
+   * (`len(transparent_outputs) + shielded_index`), an input's position.
+   *
+   * @throws {ShieldedKeyError} `no-shielded-keys` when the wallet did not
+   *   register shielded keys in this session
+   */
+  async getShieldedUnblindingForTx(
+    txId: string
+  ): Promise<{ outputs: ShieldedOpeningEntry[]; inputs: ShieldedOpeningEntry[] }> {
+    this.failIfWalletNotReady();
+    this.failIfShieldedNotEnabled();
+
+    let response: FullNodeTxResponse;
+    try {
+      response = await this.getFullTxById(txId);
+    } catch (e) {
+      if (e instanceof TxNotFoundError) {
+        return { outputs: [], inputs: [] };
+      }
+      throw e;
+    }
+    const { tx } = response;
+
+    const scanKey = sessionScanKey(this.storage);
+    const openingOf = async (
+      outputTxId: string,
+      outputIndex: number,
+      onChain: OnChainShieldedFields
+    ): Promise<Omit<ShieldedOpeningEntry, 'index'> | null> => {
+      const entry = await this.getOwnShieldedOutput(outputTxId, outputIndex);
+      if (!entry) return null;
+      // The opening is published under this tx's index, so it must be of the
+      // output this tx carries, never of another output the service maps here
+      if (!matchesOnChain(entry, onChain)) {
+        throw new WalletError(
+          `The wallet-service's shielded output ${outputTxId}:${outputIndex} is not the one ` +
+            `transaction ${txId} carries at that position.`
+        );
+      }
+      const opened = await openShieldedOutput(this.storage, scanKey, entry);
+      return {
+        value: opened.value,
+        token: opened.token,
+        vbf: opened.blindingFactor,
+        ...(opened.assetBlindingFactor ? { abf: opened.assetBlindingFactor } : {}),
+      };
+    };
+
+    const outputs: ShieldedOpeningEntry[] = [];
+    const transparentCount = tx.outputs.length;
+    for (const [s, shieldedOutput] of (tx.shielded_outputs ?? []).entries()) {
+      const index = transparentCount + s;
+      // eslint-disable-next-line no-await-in-loop -- few shielded outputs per tx
+      const opening = await openingOf(txId, index, shieldedOutput);
+      if (opening) outputs.push({ index, ...opening });
+    }
+
+    const inputs: ShieldedOpeningEntry[] = [];
+    for (const [index, input] of tx.inputs.entries()) {
+      // The fullnode marks every input that spends a shielded output
+      if (!('type' in input) || input.type !== 'shielded') continue;
+      // eslint-disable-next-line no-await-in-loop -- few shielded inputs per tx
+      const opening = await openingOf(input.tx_id, input.index, input);
+      if (opening) inputs.push({ index, ...opening });
+    }
+
+    return { outputs, inputs };
+  }
+
+  /**
+   * A shielded output of this wallet, spent or not, as `GET wallet/tx_outputs`
+   * returns it; `null` when the wallet-service has none at that position for
+   * this wallet (another wallet's output, a transparent one, or one it has not
+   * recovered).
+   */
+  private async getOwnShieldedOutput(txId: string, index: number): Promise<ShieldedUtxo | null> {
+    let txOutputs: Utxo[];
+    try {
+      ({ txOutputs } = await walletApi.getTxOutputs(this, {
+        txId,
+        index,
+        skipSpent: false,
+        kind: 'shielded',
+      }));
+    } catch (e) {
+      if (isTxOutputNotInWallet(e)) {
+        return null;
+      }
+      throw e;
+    }
+    const entry = txOutputs.find(o => o.txId === txId && o.index === index);
+    // Only recovered outputs have a value the wallet-service vouches for
+    return entry?.kind === 'shielded' && entry.recoveryState === 'recovered' ? entry : null;
+  }
+
+  async getTxConfirmationData(txId: string): Promise<FullNodeTxConfirmationDataResponse> {
+    this.failIfWalletNotReady();
+
+    const data = await walletApi.getTxConfirmationData(this, txId);
+    return data;
+  }
+
+  async graphvizNeighborsQuery(txId: string, graphType: string, maxLevel: number): Promise<string> {
+    this.failIfWalletNotReady();
+
+    const data = await walletApi.graphvizNeighborsQuery(this, txId, graphType, maxLevel);
+    return data;
+  }
+
+  /**
+   * Check if websocket connection is enabled
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   *
+   * @returns {boolean} If wallet has websocket connection enabled
+   */
+  isWsEnabled(): boolean {
+    return this._isWsEnabled;
+  }
+
+  /**
+   * Check if the pin used to encrypt the main key is valid.
+   * @param {string} pin
+   * @returns {Promise<boolean>}
+   */
+  async checkPin(pin: string): Promise<boolean> {
+    return this.storage.checkPin(pin);
+  }
+
+  /**
+   * Check if the password used to encrypt the seed is valid.
+   * @param {string} password
+   * @returns {Promise<boolean>}
+   */
+  async checkPassword(password: string): Promise<boolean> {
+    return this.storage.checkPassword(password);
+  }
+
+  /**
+   * @param {string} pin
+   * @param {string} password
+   * @returns {Promise<boolean>}
+   */
+  async checkPinAndPassword(pin: string, password: string): Promise<boolean> {
+    return (await this.checkPin(pin)) && this.checkPassword(password); // The promise from checkPassword will be returned
+  }
+
+  /**
+   * Check if the wallet is a hardware wallet.
+   * @returns {Promise<boolean>}
+   */
+  // eslint-disable-next-line class-methods-use-this -- The method returns a hardcoded value
+  async isHardwareWallet(): Promise<boolean> {
+    // We currently do not have support for hardware wallets
+    // in the wallet-service facade.
+    return false;
+  }
+
+  /**
+   * Get address path from specific derivation index
+   *
+   * @param {number} index Address path index
+   *
+   * @return {Promise<string>} Address path for the given index
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  async getAddressPathForIndex(index: number, opts?: IAddressChainOptions): Promise<string> {
+    if (isShieldedChain(opts)) {
+      return `${SHIELDED_SPEND_ACCT_PATH}/0/${index}`;
+    }
+    const walletType = await this.storage.getWalletType();
+
+    if (walletType === WalletType.MULTISIG) {
+      // P2SH
+      return `${P2SH_ACCT_PATH}/0/${index}`;
+    }
+
+    // P2PKH
+    return `${P2PKH_ACCT_PATH}/0/${index}`;
+  }
+
+  /**
+   * Create a nano contract transaction and return the SendTransaction object
+   *
+   * @param {string} method Method of nano contract to have the transaction created
+   * @param {string} address Address that will be used to sign the nano contract transaction
+   * @param {CreateNanoTxData} [data]
+   * @param {CreateNanoTxOptions} [options]
+   *
+   * @returns {Promise<any>} SendTransaction-compatible object
+   */
+  async createNanoContractTransaction(
+    method: string,
+    address: string,
+    data: CreateNanoTxData,
+    options: CreateNanoTxOptions = {}
+  ): Promise<SendTransactionWalletService> {
+    this.failIfWalletNotReady();
+
+    if (await this.isReadonly()) {
+      throw new WalletFromXPubGuard('createNanoContractTransaction');
+    }
+
+    const newOptions = { pinCode: null, signTx: true, ...options };
+    const pin = newOptions.pinCode;
+
+    // Only require PIN if we're actually signing (an external signer doesn't need one)
+    if (newOptions.signTx !== false && this.pinIsRequired(pin)) {
+      throw new PinRequiredError('Pin is required.');
+    }
+
+    // Verify address belongs to wallet
+    await this.getAddressIndexIfOwned(address);
+
+    // Get the caller address
+    const callerAddress = new Address(address, { network: this.getNetworkObject() });
+
+    // Build and send transaction
+    const actions = data.actions || [];
+    const args = data.args || [];
+
+    const builder = new NanoContractTransactionBuilder()
+      .setMethod(method)
+      .setWallet(this as unknown as HathorWallet) // FIXME: Should accept IHathorWallet instead
+      .setBlueprintId(data.blueprintId as string)
+      .setNcId(data.ncId as string)
+      .setCaller(callerAddress)
+      .setActions(actions)
+      .setArgs(args)
+      .setVertexType(NanoContractVertexType.TRANSACTION);
+
+    // Set max fee if declared
+    if (newOptions.maxFee !== undefined) {
+      builder.setMaxFee(newOptions.maxFee);
+    }
+
+    // Set contract pays fees if declared
+    if (newOptions.contractPaysFees !== undefined) {
+      builder.setContractPaysFees(newOptions.contractPaysFees);
+    }
+
+    // Set the transaction change address if declared
+    if (newOptions.changeAddress) {
+      builder.setChangeAddress(newOptions.changeAddress);
+    }
+
+    const tx = await builder.build();
+    // Use the standard utility to sign and prepare the transaction
+    return this.prepareNanoSendTransactionWalletService(tx, address, pin!, {
+      signTx: newOptions.signTx,
+    });
+  }
+
+  /**
+   * Create and send a nano contract transaction
+   *
+   * @param {string} method Method of nano contract to have the transaction created
+   * @param {string} address Address that will be used to sign the nano contract transaction
+   * @param {CreateNanoTxData} [data]
+   * @param {Omit<CreateNanoTxOptions, 'signTx'>} [options]
+   *
+   * @returns {Promise<Transaction>} Transaction object returned from execution
+   */
+  async createAndSendNanoContractTransaction(
+    method: string,
+    address: string,
+    data: CreateNanoTxData,
+    options: Omit<CreateNanoTxOptions, 'signTx'> = {}
+  ): Promise<Transaction> {
+    const sendTransaction = await this.createNanoContractTransaction(method, address, data, {
+      ...options,
+      signTx: true,
+    });
+
+    const result = await sendTransaction.runFromMining();
+    if (!result) {
+      throw new Error('Failed to send nano contract transaction');
+    }
+    return result;
+  }
+
+  /**
+   * Create and send a Create Token Transaction with nano header
+   *
+   * @param {string} method Method of nano contract to have the transaction created
+   * @param {string} address Address that will be used to sign the nano contract transaction
+   * @param {object} data Nano contract data (blueprintId, ncId, actions, args)
+   * @param {object} createTokenOptions Options for token creation (mint/melt authorities, NFT, etc)
+   * @param {object} options Options (pinCode)
+   *
+   * @returns {Promise<Transaction>}
+   */
+  async createAndSendNanoContractCreateTokenTransaction(
+    method: string,
+    address: string,
+    data: CreateNanoTxData,
+    createTokenOptions: CreateTokenOptionsInput,
+    options: Omit<CreateNanoTxOptions, 'changeAddress'> = {}
+  ): Promise<Transaction> {
+    const sendTransaction = await this.createNanoContractCreateTokenTransaction(
+      method,
+      address,
+      data,
+      createTokenOptions,
+      options
+    );
+    const result = await sendTransaction.runFromMining();
+    if (!result) {
+      throw new Error('Failed to send nano contract create token transaction');
+    }
+    return result;
+  }
+
+  /**
+   * Custom nano contract transaction preparation for wallet-service facade
+   * Signs the nano contract transaction using the wallet's own key derivation logic
+   *
+   * @param tx Nano contract transaction to sign
+   * @param address Address to use for signing (must belong to this wallet)
+   * @param pinCode PIN code to decrypt the private key
+   * @returns SendTransactionWalletService instance with the signed and prepared transaction
+   */
+  async prepareNanoSendTransactionWalletService(
+    tx: Transaction,
+    address: string,
+    pinCode: string | null,
+    options: { signTx?: boolean } = { signTx: true }
+  ): Promise<SendTransactionWalletService> {
+    // Get the index for the address
+    const addressDetails = await this.getAddressDetails(address);
+    const addressIndex = addressDetails?.index;
+
+    if (addressIndex === undefined) {
+      throw new Error(
+        `Address used to sign the transaction (${address}) does not belong to the wallet.`
+      );
+    }
+
+    if (options.signTx !== false && (pinCode || this.storage.hasTxSignatureMethod())) {
+      await this.signTx(tx, { pinCode });
+      if (this.storage.hasTxSignatureMethod()) {
+        // Every input of a nano tx built here is the wallet's own, and so is its caller.
+        assertAllInputsSigned(tx);
+        assertNanoCallerSigned(tx);
+      }
+    }
+
+    const sendTransaction = new SendTransactionWalletService(this, {
+      transaction: tx,
+      pin: pinCode,
+    });
+    return sendTransaction;
+  }
+
+  /**
+   * Create a Create Token Transaction with nano header and return the SendTransaction object
+   *
+   * @param {string} method Method of nano contract to have the transaction created
+   * @param {string} address Address that will be used to sign the nano contract transaction
+   * @param {object} data Nano contract data (blueprintId, ncId, actions, args)
+   * @param {object} createTokenOptions Options for token creation (mint/melt authorities, NFT, etc)
+   * @param {object} options Options (pinCode)
+   *
+   * @returns {Promise<SendTransactionWalletService>}
+   */
+  async createNanoContractCreateTokenTransaction(
+    method: string,
+    address: string,
+    data: CreateNanoTxData,
+    createTokenOptions: CreateTokenOptionsInput,
+    options: Omit<CreateNanoTxOptions, 'changeAddress'> = {}
+  ): Promise<SendTransactionWalletService> {
+    this.failIfWalletNotReady();
+    if (await this.isReadonly()) {
+      throw new WalletFromXPubGuard('createNanoContractCreateTokenTransaction');
+    }
+    const newOptions = { pinCode: null, signTx: true, ...options };
+    const pin = newOptions.pinCode;
+
+    // Only require PIN if we're actually signing (an external signer doesn't need one)
+    if (newOptions.signTx !== false && this.pinIsRequired(pin)) {
+      throw new PinRequiredError('Pin is required.');
+    }
+
+    // // Verify address belongs to wallet
+    await this.getAddressIndexIfOwned(address);
+
+    // Get the caller address
+    const callerAddress = new Address(address, { network: this.getNetworkObject() });
+
+    // Build and send transaction
+    const actions = data.actions || [];
+    const args = data.args || [];
+
+    const mergedCreateTokenOptions: NanoContractBuilderCreateTokenOptions = {
+      changeAddress: null,
+      createMint: true,
+      mintAuthorityAddress: null,
+      allowExternalMintAuthorityAddress: false,
+      createMelt: true,
+      meltAuthorityAddress: null,
+      allowExternalMeltAuthorityAddress: false,
+      data: null,
+      isCreateNFT: false,
+      tokenVersion: TokenVersion.DEPOSIT,
+      ...createTokenOptions,
+    } as NanoContractBuilderCreateTokenOptions;
+
+    const builder = new NanoContractTransactionBuilder()
+      .setMethod(method)
+      .setWallet(this as unknown as HathorWallet) // FIXME: Should accept IHathorWallet instead
+      .setBlueprintId(data.blueprintId as string)
+      .setNcId(data.ncId as string)
+      .setCaller(callerAddress)
+      .setActions(actions)
+      .setArgs(args)
+      .setVertexType(NanoContractVertexType.CREATE_TOKEN_TRANSACTION, mergedCreateTokenOptions);
+
+    // Set max fee if declared
+    if (newOptions.maxFee !== undefined) {
+      builder.setMaxFee(newOptions.maxFee);
+    }
+
+    // Set contract pays fees if declared
+    if (newOptions.contractPaysFees !== undefined) {
+      builder.setContractPaysFees(newOptions.contractPaysFees);
+    }
+
+    const tx = await builder.build();
+
+    return this.prepareNanoSendTransactionWalletService(tx, address, pin, {
+      signTx: newOptions.signTx,
+    });
+  }
+
+  /**
+   * Check if the wallet has transactions outside the first address
+   *
+   * This is useful to determine if single-address mode can be enabled for the wallet.
+   * Returns true if there are transactions on addresses with index > 0.
+   *
+   * @returns {Promise<boolean>} True if wallet has transactions on non-first addresses
+   *
+   * @memberof HathorWalletServiceWallet
+   * @inner
+   */
+  async hasTxOutsideFirstAddress(ignoreWalletReady: boolean = false): Promise<boolean> {
+    // If the user is sure the wallet service has already loaded his wallet, he can ignore the check
+    if (!ignoreWalletReady) {
+      // We should fail if the wallet is not ready because the wallet service address load mechanism is
+      // asynchronous, so we will get an empty or partial array of addresses if they are not all loaded.
+      this.failIfWalletNotReady();
+    }
+    const data = await walletApi.getHasTxOutsideFirstAddress(this);
+    return data.hasTransactions;
+  }
+
+  /**
+   * Sign all inputs of the given transaction.
+   *
+   * @param tx - The transaction to be signed
+   * @param options - Options for signing
+   * @param options.pinCode - PIN to decrypt the private key. Optional but required if not set in this
+   *
+   * @returns The signed transaction
+   */
+  async signTx(tx: Transaction, options: { pinCode?: string | null } = {}): Promise<Transaction> {
+    if (await this.isReadonly()) {
+      throw new WalletFromXPubGuard('signTx');
+    }
+    if (this.pinIsRequired(options.pinCode)) {
+      throw new Error('Pin code is required to sign a transaction');
+    }
+
+    // The proxy signs with the registered external tx-signing method when there is one (passing
+    // itself as the signer's storage), otherwise with the stored key decrypted by the pin.
+    const storageProxy = new WalletServiceStorageProxy(this, this.storage);
+    const signedTx = await transaction.signTransaction(
+      tx,
+      storageProxy.createProxy(),
+      options.pinCode ?? ''
+    );
+    signedTx.prepareToSend(transaction.getWeightConstantsFromStorage(this.storage));
+    return signedTx;
+  }
+}
+
+export default HathorWalletServiceWallet;

@@ -1,0 +1,31 @@
+{
+  "repository": "HathorNetwork/hathor-core",
+  "commit": "0738c7c981e506c582d83fa5456fe1b84eeccedc",
+  "scope_sources": [
+    {
+      "asset_type": "blockchain_dlt",
+      "asset_url": "https://github.com/HathorNetwork/hathor-core",
+      "program": "hathornetwork",
+      "scope_url": "https://immunefi.com/bug-bounty/hathornetwork/scope/"
+    }
+  ],
+  "original_report": "HathorNetwork__hathor-core-0738c7c981e5.json",
+  "lead": {
+    "rule": "PY_EVAL",
+    "file": "hathor_tests/nanocontracts/on_chain_blueprints/test_script_restrictions.py",
+    "line": 124,
+    "guidance": "Review dynamic execution and input provenance",
+    "fingerprint": "7a72b0e55e9e1ab002df"
+  },
+  "source_excerpt": "116:             ],\n117:             'dir': [\n118:                 '''x = dir()''',\n119:             ],\n120:             'eval': [\n121:                 '''x = eval('1+1')''',\n122:             ],\n123:             'exec': [\n124:                 '''exec('x=1+1')''',\n125:             ],\n126:             'getattr': [\n127:                 '''x = dict()\\nx.foo = 1\\ny = getattr(x, 'foo')''',\n128:             ],\n129:             'globals': [\n130:                 '''x = 1\\ny = globals()['x']''',\n131:             ],\n132:             'hasattr': [",
+  "triage": {
+    "classification": "likely_false_positive",
+    "rationale": "The code snippet is part of a test script that checks for dynamic execution and input provenance, but the content is not related to actual vulnerabilities or exploitable code. The test is designed to validate the system's behavior under certain conditions, not to identify a false positive.",
+    "evidence": "The test script is part of a bug-bounty lead and is designed to validate the system's behavior under specific conditions.",
+    "follow_up": "If you have more details about the test, I can help analyze it further."
+  },
+  "status": "unverified_draft",
+  "verified_vulnerability": false,
+  "generated_at": "2026-10-14T23:30:13.445223+00:00",
+  "note": "Automated static triage only. No exploitability, eligibility, or bounty award established."
+}

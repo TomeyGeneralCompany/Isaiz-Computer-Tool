@@ -1,0 +1,39 @@
+{
+  "checks": {
+    "has_reproduction_test": false,
+    "in_scope_at_processing": true,
+    "source_commit_matches": true,
+    "triage_requires_review": false
+  },
+  "commit": "8891f73d17887e272a5317065961269aee94f7cd",
+  "lead": {
+    "file": "scripts/verify/lib/tokenUsage.ts",
+    "fingerprint": "ba60876f54c73f04ba1a",
+    "guidance": "Review command construction and input provenance",
+    "line": 124,
+    "rule": "JS_CHILD_EXEC"
+  },
+  "note": "Automated offline evidence preparation only. No project-specific reproduction or verified security impact.",
+  "processed_at": "2026-10-15T00:09:27.094646+00:00",
+  "repository": "Instadapp/inst-governance",
+  "scope_urls": [
+    "https://immunefi.com/bug-bounty/instadapp/scope/"
+  ],
+  "source_check": {
+    "commit": "8891f73d17887e272a5317065961269aee94f7cd",
+    "excerpt": "  113: \n  114: /**\n  115:  * Return `*_ADDRESS` constants that appear in limit-config struct fields\n  116:  * (`VaultConfig`, `DexConfig`, `SupplyProtocolConfig`, `BorrowProtocolConfig`)\n  117:  * which helpers convert through `getRawAmount`.\n  118:  */\n  119: export function detectPricedAddressConstants(stripped: string): Set<string> {\n  120:   const priced = new Set<string>();\n  121:   for (const re of [PRICED_CONFIG_FIELD, PRICED_USD_HELPER_ARG]) {\n  122:     let match: RegExpExecArray | null;\n  123:     re.lastIndex = 0;\n  124:     while ((match = re.exec(stripped)) !== null) {\n  125:       const ident = match[1]!;\n  126:       if (ident !== \"address\") priced.add(ident);\n  127:     }\n  128:   }\n  129:   return priced;\n  130: }\n  131: \n  132: export function detectTokensUsedFromSource(src: string): TokenUsageResult {\n  133:   const stripped = stripCommentsStringsAndMarkerBlock(src);\n  134: \n  135:   const ADDRESS_IDENT = /\\b([A-Za-z_][A-Za-z0-9_]*_ADDRESS)\\b/g;\n  136:   const allRefs = new Set<string>();",
+    "file": "scripts/verify/lib/tokenUsage.ts",
+    "file_sha256": "0dee25a8a15bccc173bd4e33a3bca6739536c1d40b2b03c4a70d2b6c9a67f3bd",
+    "line": 124,
+    "status": "source_matched"
+  },
+  "source_fingerprint": "b0a6665816d094ced51ff874ca9934e1c7dc793a887edef7e07753dbc90cdd06",
+  "status": "needs_project_specific_reproduction",
+  "triage": {
+    "classification": "likely_false_positive",
+    "evidence": "The code is not checking for the presence of specific fields or arguments in the input string, which is a common practice in command construction.",
+    "follow_up": "If you have more information, please provide it to help with further analysis.",
+    "rationale": "The code is not checking for the presence of specific fields or arguments in the input string, which is a common practice in command construction. This could lead to potential issues with the implementation, but it's not a false positive."
+  },
+  "verified_vulnerability": false
+}

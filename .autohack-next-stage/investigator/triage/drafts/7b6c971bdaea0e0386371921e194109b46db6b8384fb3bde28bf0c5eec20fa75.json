@@ -1,0 +1,31 @@
+{
+  "repository": "OpenZeppelin/openzeppelin-contracts",
+  "commit": "97430aa29ac10a70ee0c18f2a905c4925363b58f",
+  "scope_sources": [
+    {
+      "asset_type": "smart_contract",
+      "asset_url": "https://github.com/OpenZeppelin/openzeppelin-contracts",
+      "program": "openzeppelin",
+      "scope_url": "https://immunefi.com/bug-bounty/openzeppelin/scope/"
+    }
+  ],
+  "original_report": "OpenZeppelin__openzeppelin-contracts-97430aa29ac1.json",
+  "lead": {
+    "rule": "JS_CHILD_EXEC",
+    "file": "hardhat/hardhat-exposed/internal/expose.ts",
+    "line": 168,
+    "guidance": "Review command construction and input provenance",
+    "fingerprint": "7e0b648066c596458c96"
+  },
+  "source_excerpt": "160: // than the raw input source names (`npm/<name>@<version>/<path>`, `project/lib/<path>`, ...). Hardhat records those\n161: // aliases as `[<context>:]<prefix>=<target>` remappings we invert here.\n162: //\n163: // Skip remappings whose target overlaps a project source: those alias the contracts being exposed rather than their\n164: // dependencies, so inverting them would move the whole exposed tree under the alias.\n165: function parseApplicableRemappings(remappings: string[], projectSourcePrefixes: string[]): ParsedRemapping[] {\n166:   return remappings\n167:     .flatMap(remapping => {\n168:       const groups = remappingRegex.exec(remapping)?.groups as\n169:         | { context: string | undefined; prefix: string; target: string }\n170:         | undefined;\n171:       return groups ? [groups] : [];\n172:     })\n173:     .filter(\n174:       ({ context, target }) =>\n175:         [undefined, '', 'project/'].includes(context) &&\n176:         !projectSourcePrefixes.some(source => source.startsWith(target) || target.startsWith(source)),",
+  "triage": {
+    "classification": "needs_review",
+    "rationale": "The code snippet appears to be part of a logic to handle remappings in a hardhat configuration, but the implementation is incomplete and lacks proper validation of the input. The code is incomplete and lacks proper handling of edge cases, which could lead to incorrect behavior or errors in the system.",
+    "evidence": "The code snippet is incomplete and lacks proper handling of edge cases, which could lead to incorrect behavior or errors in the system.",
+    "follow_up": "If you have more information or a specific issue, please provide it, and I will help you further."
+  },
+  "status": "unverified_draft",
+  "verified_vulnerability": false,
+  "generated_at": "2026-10-14T23:53:49.201924+00:00",
+  "note": "Automated static triage only. No exploitability, eligibility, or bounty award established."
+}

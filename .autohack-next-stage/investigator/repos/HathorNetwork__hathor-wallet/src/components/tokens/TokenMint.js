@@ -1,0 +1,217 @@
+/**
+ * Copyright (c) Hathor Labs and its affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */
+
+import React from 'react';
+import { t } from 'ttag';
+import $ from 'jquery';
+import hathorLib from '@hathor/wallet-lib';
+import TokenAction from './TokenAction';
+import tokens from '../../utils/tokens';
+import walletUtils from '../../utils/wallet';
+import helpers from '../../utils/helpers';
+import InputNumber from '../InputNumber';
+import { connect } from 'react-redux';
+import { get } from 'lodash';
+import { getGlobalWallet } from "../../modules/wallet";
+
+const mapStateToProps = (state) => {
+  return {
+    wallet: getGlobalWallet(),
+    tokenMetadata: state.tokenMetadata,
+    useWalletService: state.useWalletService,
+    decimalPlaces: state.serverInfo.decimalPlaces,
+  };
+};
+
+/**
+ * Component that renders the mint form in the token detail screen
+ *
+ * @memberof Components
+ */
+class TokenMint extends React.Component {
+  constructor(props) {
+    super(props);
+
+    // Reference to create another mint checkbox
+    this.createAnother = React.createRef();
+    // Reference to choose address automatically checkbox
+    this.chooseAddress = React.createRef();
+    // Reference to address input
+    this.address = React.createRef();
+    // Reference to address input wrapper (to show/hide it)
+    this.addressWrapper = React.createRef();
+
+    /**
+     * amount {number} Amount of tokens to create
+     */
+    this.state = { amount: null };
+  }
+
+  /**
+   * Prepare transaction to execute mint method after form validation
+   *
+   * @param {String} pin PIN written by the user
+   *
+   * @return {Object} In case of success, an object with {success: true, sendTransaction, promise}, where sendTransaction is a
+   * SendTransaction object that emit events while the tx is being sent and promise resolves when the sending is done
+   * In case of error, an object with {success: false, message}
+   */
+  prepareSendTransaction = async (pin) => {
+    const address = this.chooseAddress.current.checked ? null : this.address.current.value;
+    const wallet = getGlobalWallet();
+    const transaction = await wallet.prepareMintTokensData(
+      this.props.token.uid,
+      this.state.amount,
+      {
+        address,
+        createAnotherMint: this.createAnother.current.checked,
+        pinCode: pin
+      }
+    );
+
+    if (this.props.useWalletService) {
+      return new hathorLib.SendTransactionWalletService(wallet, {
+        transaction,
+        pin,
+      });
+    }
+
+    return new hathorLib.SendTransaction({ transaction, pin, storage: wallet.storage });
+  }
+
+  /**
+   * Return if token is an NFT
+   */
+  isNFT = () => {
+    return helpers.isTokenNFT(get(this.props, 'token.uid'), this.props.tokenMetadata);
+  }
+
+  /**
+   * Return a message to be shown in case of success
+   */
+  getSuccessMessage = () => {
+    const prettyAmountValue = hathorLib.numberUtils.prettyValue(this.state.amount, this.isNFT() ? 0 : this.props.decimalPlaces);
+    return t`${prettyAmountValue} ${this.props.token.symbol} minted!`;
+  }
+
+  /**
+   * Method executed after user clicks on mint button. Validates the form.
+   *
+   * @return {string} Error message, in case of form invalid. Nothing, otherwise.
+   */
+  mint = () => {
+    if (this.chooseAddress.current.checked === false && this.address.current.value === '') {
+      return t`Address is required when not selected automatically`;
+    }
+  }
+
+  /**
+   * Shows/hides address field depending on the checkbox click
+   *
+   * @param {Object} e Event for the address checkbox input change
+   */
+  handleCheckboxAddress = (e) => {
+    const value = e.target.checked;
+    if (value) {
+      $(this.addressWrapper.current).hide(400);
+    } else {
+      $(this.addressWrapper.current).show(400);
+    }
+  }
+
+  /**
+   * Handles amount input change
+   */
+  onAmountChange = (amount) => {
+    this.setState({amount});
+  }
+
+  render() {
+    const renderMintAddress = () => {
+      return (
+        <div className="d-flex flex-row align-items-center justify-content-start col-12 mb-3">
+          <div className="d-flex flex-row align-items-center address-checkbox">
+            <div className="form-check">
+              <input className="form-check-input" type="checkbox" ref={this.chooseAddress} id="autoselectAddress" defaultChecked={true} onChange={this.handleCheckboxAddress} />
+              <label className="form-check-label" htmlFor="autoselectAddress">
+                {t`Automatically select address to receive new tokens`}
+              </label>
+            </div>
+          </div>
+          <div className="form-group col-6" ref={this.addressWrapper} style={{display: 'none'}}>
+            <label>Destination address</label>
+            <input ref={this.address} type="text" placeholder={t`Address`} className="form-control" />
+          </div>
+        </div>
+      );
+    }
+
+    const renderInputNumber = () => (
+      <InputNumber
+       required
+       className="form-control"
+       onValueChange={this.onAmountChange}
+       isNFT={this.isNFT()}
+      />
+    );
+
+    const renderForm = () => {
+      return (
+        <div>
+          <div className="row">
+            <div className="form-group col-3">
+              <label>Amount</label>
+              {renderInputNumber()}
+              {this.isNFT() && <small className="text-muted">{t`This is an NFT token. The amount will be an integer number, without decimal places.`}</small>}
+            </div>
+            {renderMintAddress()}
+          </div>
+          <div className="form-group d-flex flex-row align-items-center">
+            <div className="form-check">
+              <input className="form-check-input" type="checkbox" ref={this.createAnother} id="keepMint" defaultChecked={true} />
+              <label className="form-check-label" htmlFor="keepMint">
+                {t`Create another mint output for you?`}
+              </label>
+              <p className="subtitle">{t`Leave it checked unless you know what you are doing`}</p>
+            </div>
+          </div>
+        </div>
+      )
+    }
+
+    const getAmountToCalculateDeposit = () => {
+      if (this.isNFT()) {
+        // The NFT amount will be an integer but to get the token deposit
+        // we must use the decimal
+        return this.state.amount / 100;
+      } else {
+        return this.state.amount;
+      }
+    }
+
+    const wallet = getGlobalWallet();
+    const depositPercent = wallet.storage.getTokenDepositPercentage();
+    const nativeTokenConfig = wallet.storage.getNativeTokenData();
+
+    return (
+      <TokenAction
+       renderForm={renderForm}
+       title={t`Mint tokens`}
+       subtitle={`A deposit of ${depositPercent * 100}% in ${nativeTokenConfig.symbol} of the mint amount is required`}
+       deposit={`Deposit: ${tokens.getDepositAmount(getAmountToCalculateDeposit(), depositPercent, this.props.decimalPlaces)} ${nativeTokenConfig.symbol} (${hathorLib.numberUtils.prettyValue(this.props.htrBalance, this.props.decimalPlaces)} ${nativeTokenConfig.symbol} available)`}
+       buttonName={t`Go`}
+       validateForm={this.mint}
+       getSuccessMessage={this.getSuccessMessage}
+       prepareSendTransaction={this.prepareSendTransaction}
+       modalTitle={t`Minting tokens`}
+       {...this.props}
+      />
+    )
+  }
+}
+
+export default connect(mapStateToProps)(TokenMint);

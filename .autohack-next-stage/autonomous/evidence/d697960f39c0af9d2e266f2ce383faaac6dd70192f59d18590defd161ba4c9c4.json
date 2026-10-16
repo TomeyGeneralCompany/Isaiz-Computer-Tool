@@ -1,0 +1,39 @@
+{
+  "checks": {
+    "has_reproduction_test": false,
+    "in_scope_at_processing": true,
+    "source_commit_matches": true,
+    "triage_requires_review": false
+  },
+  "commit": "116a8658d60fb9be25d01847be2a9671ccbf81bf",
+  "lead": {
+    "file": "scripts/update_translations.js",
+    "fingerprint": "24be76a10f540722d788",
+    "guidance": "Review command construction and input provenance",
+    "line": 68,
+    "rule": "JS_CHILD_EXEC"
+  },
+  "note": "Automated offline evidence preparation only. No project-specific reproduction or verified security impact.",
+  "processed_at": "2026-10-15T00:57:35.402589+00:00",
+  "repository": "HathorNetwork/hathor-wallet-mobile",
+  "scope_urls": [
+    "https://immunefi.com/bug-bounty/hathornetwork/scope/"
+  ],
+  "source_check": {
+    "commit": "116a8658d60fb9be25d01847be2a9671ccbf81bf",
+    "excerpt": "   57:  */\n   58: function runLocaleUpdatePot() {\n   59:   console.log('⏳ Updating pot file...');\n   60:   try {\n   61:     // Check if the pot file exists. If not, create it.\n   62:     if (!fs.existsSync('./locale/texts.pot')) {\n   63:       fs.mkdirSync('./locale', { recursive: true });\n   64:       fs.writeFileSync('./locale/texts.pot', '');\n   65:     }\n   66: \n   67:     // Extract the strings from the source code\n   68:     execSync('npx ttag extract -o ./locale/texts.pot ./src/', { stdio: 'inherit' });\n   69:   } catch (error) {\n   70:     console.error('❌ Error updating pot file:', error);\n   71:     process.exit(1);\n   72:   }\n   73: }\n   74: \n   75: /**\n   76:  * Checks whether the root `.pot` file is outdated.\n   77:  * @returns {boolean} True if the `.pot` file is outdated\n   78:  */\n   79: function checkPotOutdated() {\n   80:   console.log(`⏳ Checking if pot file is outdated...`);",
+    "file": "scripts/update_translations.js",
+    "file_sha256": "5b7a433427ae4630a64aeeb32af18a70e63b9d04894feaddb579d8d164e7b22a",
+    "line": 68,
+    "status": "source_matched"
+  },
+  "source_fingerprint": "946ed1731d35e1bcaee71059f13e00a2b29180c694fce13149dc7ca7986772a0",
+  "status": "needs_project_specific_reproduction",
+  "triage": {
+    "classification": "likely_false_positive",
+    "evidence": "The code checks for the existence of a file and creates it, but the logic is incomplete and does not address the potential for outdated `.pot` files.",
+    "follow_up": "If you have more specific questions about the code's behavior, please provide additional context.",
+    "rationale": "The code checks for the existence of a file and creates it, but the logic is incomplete and does not address the potential for outdated `.pot` files. The code is not designed to validate or update the `.pot` file, which is a common issue in translation systems. This is a general guideline for command construction, not a specific vulnerability."
+  },
+  "verified_vulnerability": false
+}

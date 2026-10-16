@@ -1,0 +1,62 @@
+name: tests
+on:
+  push:
+    branches:
+    - master
+    - release
+    - release-candidate
+    tags:
+    - v*
+  pull_request:
+    branches:
+    - master
+    - release
+    - release-candidate
+jobs:
+  test:
+    runs-on: 'ubuntu-latest'
+    timeout-minutes: 40  # default is 360
+    strategy:
+      matrix:
+        node-version: [22.x]
+    steps:
+    # https://github.com/actions/checkout/releases/tag/v4.1.7
+    - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
+    - name: Use Node.js ${{ matrix.node-version }}
+      # https://github.com/actions/setup-node/releases/tag/v4.0.3
+      uses: actions/setup-node@1e60f620b9541d16bece96c5465dc8ee9832be0b
+      with:
+        node-version: ${{ matrix.node-version }}
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libusb-1.0-0-dev libudev-dev
+    - name: Install dependencies
+      run: npm install
+    - name: Install ttag-cli globally
+      run: npm install -g ttag-cli
+    - name: Install gettext
+      run: sudo apt-get install gettext
+    - name: Check version
+      run: make check_version
+    - name: Pot file
+      run: make check_pot
+    - name: Po file
+      run: make check_po
+    - name: i18n
+      run: make i18n
+      # Tests are currently disabled because of an incompatibility between React 18 and
+      # React-Scripts v4.
+      # See related PRs about this:
+      # https://github.com/HathorNetwork/hathor-wallet/pull/416
+      # https://github.com/HathorNetwork/hathor-wallet/pull/449
+      # https://github.com/HathorNetwork/hathor-wallet/pull/567
+#    - name: Unit tests
+#      run: npm run test -- --coverage
+#    - name: Upload coverage
+#      # https://github.com/codecov/codecov-action/releases/tag/v3.1.4
+#      uses: codecov/codecov-action@eaaf4bedf32dbdc6b720b63067d99c4d77d6047d
+    - name: Start
+      run: npm start & npx wait-on http://localhost:3000
+      env:
+        CI: true

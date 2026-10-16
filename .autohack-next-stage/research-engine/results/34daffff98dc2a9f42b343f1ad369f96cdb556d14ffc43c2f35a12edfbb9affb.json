@@ -1,0 +1,11 @@
+{
+  "commit": "0bc1dd9c49203dd45f48f0046abc4e95a50d06da",
+  "detail": {},
+  "input_hash": "b12d9c1793e739eede1ff7b29cd4902e6316afc82ad248eb965d453b44499d2c",
+  "processed_at": "2026-10-15T20:04:51.312684+00:00",
+  "repository": "Instadapp/avocado-contracts-public",
+  "source_draft": "/home/izy/isaiz-bugbounty/autohack/.autohack-next-stage/investigator/triage/drafts/34daffff98dc2a9f42b343f1ad369f96cdb556d14ffc43c2f35a12edfbb9affb.json",
+  "status": "out_of_scope",
+  "submitted": false,
+  "verified_vulnerability": false
+}

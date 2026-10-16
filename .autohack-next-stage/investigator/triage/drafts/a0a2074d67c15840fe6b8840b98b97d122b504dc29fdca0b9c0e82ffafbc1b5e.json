@@ -1,0 +1,31 @@
+{
+  "repository": "HathorNetwork/hathor-wallet",
+  "commit": "ba75f1ad2a182d3f8e6e49a8dce224e421361419",
+  "scope_sources": [
+    {
+      "asset_type": "websites_and_applications",
+      "asset_url": "https://github.com/HathorNetwork/hathor-wallet",
+      "program": "hathornetwork",
+      "scope_url": "https://immunefi.com/bug-bounty/hathornetwork/scope/"
+    }
+  ],
+  "original_report": "HathorNetwork__hathor-wallet-ba75f1ad2a18.json",
+  "lead": {
+    "rule": "JS_CHILD_EXEC",
+    "file": "scripts/win-ev-sign.js",
+    "line": 34,
+    "guidance": "Review command construction and input provenance",
+    "fingerprint": "a3bbd1b1cc218fcefee7"
+  },
+  "source_excerpt": "26:     \"-jar jsign-4.2.jar\",\n27:     \"--storetype YUBIKEY\",\n28:     `--certfile \"${CERTIFICATE_FILE}\"`,\n29:     `--storepass \"${TOKEN_PASSWORD}\"`,\n30:     `--alias \"${CERTIFICATE_NAME}\"`,\n31:     `\"${configuration.path}\"`\n32:   ];\n33: \n34:   require(\"child_process\").execSync(\n35:     cmdline.join(\" \"),\n36:     {\n37:       stdio: \"inherit\"\n38:     }\n39:   );\n40: };",
+  "triage": {
+    "classification": "likely_false_positive",
+    "rationale": "The code snippet appears to be part of a command-line interface (CLI) setup for a wallet signing process, but the command construction and input provenance are not verified. The presence of placeholders like ${CERTIFICATE_FILE} and ${TOKEN_PASSWORD} indicates potential for misuse or injection, which could lead to vulnerabilities. However, the specific implementation details are not provided, making it unclear if this is a false positive or a legitimate feature.",
+    "evidence": "The code snippet is part of a wallet signing process, but the command construction and input provenance are not verified.",
+    "follow_up": "If you have more context or a verified feature, please provide it, and I can help refine the classification."
+  },
+  "status": "unverified_draft",
+  "verified_vulnerability": false,
+  "generated_at": "2026-10-14T23:33:36.886474+00:00",
+  "note": "Automated static triage only. No exploitability, eligibility, or bounty award established."
+}

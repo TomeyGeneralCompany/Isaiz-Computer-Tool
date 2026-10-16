@@ -1,0 +1,150 @@
+use controller::types::PositionMode;
+use soroban_sdk::Bytes;
+use test_harness::{
+    assert_contract_error, build_aggregator_swap, errors, LendingTest, ALICE, BOB, LIQUIDATOR,
+};
+
+fn setup() -> LendingTest {
+    let mut t = LendingTest::new().standard_two_asset().build();
+
+    t.supply(ALICE, "USDC", 10_000.0);
+    t.borrow(ALICE, "ETH", 1.0);
+    t.supply(BOB, "USDC", 5_000.0);
+    t.supply(LIQUIDATOR, "USDC", 5_000.0);
+    t
+}
+
+#[test]
+fn test_all_state_changing_entries_reject_under_flash_loan_ongoing() {
+    let mut t = setup();
+    let alice_id = t.resolve_account_id(ALICE);
+    t.ensure_approved_blend();
+    t.set_flash_loan_ongoing(true);
+
+    assert_contract_error(t.try_supply(BOB, "USDC", 1.0), errors::FLASH_LOAN_ONGOING);
+    assert_contract_error(t.try_borrow(ALICE, "ETH", 0.01), errors::FLASH_LOAN_ONGOING);
+    assert_contract_error(t.try_repay(ALICE, "ETH", 0.01), errors::FLASH_LOAN_ONGOING);
+    assert_contract_error(
+        t.try_withdraw(ALICE, "USDC", 1.0),
+        errors::FLASH_LOAN_ONGOING,
+    );
+    assert_contract_error(
+        t.try_liquidate(LIQUIDATOR, ALICE, "ETH", 0.01),
+        errors::FLASH_LOAN_ONGOING,
+    );
+
+    assert_contract_error(
+        t.try_update_indexes_for(&["USDC", "ETH"]),
+        errors::FLASH_LOAN_ONGOING,
+    );
+    assert_contract_error(t.try_claim_revenue("USDC"), errors::FLASH_LOAN_ONGOING);
+    assert_contract_error(
+        t.try_update_account_threshold(false, &[alice_id]),
+        errors::FLASH_LOAN_ONGOING,
+    );
+    assert_contract_error(
+        t.try_clean_bad_debt_by_id(alice_id),
+        errors::FLASH_LOAN_ONGOING,
+    );
+    assert_contract_error(
+        t.try_force_socialize_bad_debt_by_id(alice_id),
+        errors::FLASH_LOAN_ONGOING,
+    );
+    let payer = t.get_or_create_user(BOB);
+    let usdc = test_harness::hub_asset(t.resolve_asset("USDC"));
+    assert_contract_error(
+        t.ctrl_client()
+            .try_recapitalize(&payer, &usdc, &1i128)
+            .map(|decoded| decoded.expect("recapitalize returns i128"))
+            .map_err(|err| err.expect("expected a contract error")),
+        errors::FLASH_LOAN_ONGOING,
+    );
+    assert_contract_error(
+        t.try_migrate_from_blend(BOB, 0, &["USDC"], &[], &[]),
+        errors::FLASH_LOAN_ONGOING,
+    );
+
+    let empty_swap = Bytes::new(&t.env);
+    assert_contract_error(
+        t.try_multiply(
+            ALICE,
+            "USDC",
+            1.0,
+            "ETH",
+            PositionMode::Multiply,
+            &empty_swap,
+        ),
+        errors::FLASH_LOAN_ONGOING,
+    );
+    assert_contract_error(
+        t.try_swap_debt(ALICE, "ETH", 0.01, "USDC", &empty_swap),
+        errors::FLASH_LOAN_ONGOING,
+    );
+    assert_contract_error(
+        t.try_swap_collateral(ALICE, "USDC", 1.0, "ETH", &empty_swap),
+        errors::FLASH_LOAN_ONGOING,
+    );
+    assert_contract_error(
+        t.try_repay_debt_with_collateral(ALICE, "USDC", 1.0, "ETH", &empty_swap, false),
+        errors::FLASH_LOAN_ONGOING,
+    );
+
+    let receiver = t.deploy_flash_loan_receiver();
+    assert_contract_error(
+        t.try_flash_loan(BOB, "USDC", 1.0, &receiver),
+        errors::FLASH_LOAN_ONGOING,
+    );
+
+    let flash_pos_receiver = t.deploy_flash_position_receiver();
+    let mut mins = soroban_sdk::Vec::new(&t.env);
+    mins.push_back((test_harness::hub_asset(t.resolve_asset("USDC")), 1i128));
+    assert_contract_error(
+        t.try_flash_position(
+            BOB,
+            0,
+            PositionMode::Multiply,
+            "ETH",
+            1.0,
+            &flash_pos_receiver,
+            &Bytes::new(&t.env),
+            &mins,
+            &soroban_sdk::Vec::new(&t.env),
+        ),
+        errors::FLASH_LOAN_ONGOING,
+    );
+
+    t.set_flash_loan_ongoing(false);
+
+    t.fund_router("USDC", 3_000.0);
+    let steps = build_aggregator_swap(
+        &t,
+        "ETH",
+        "USDC",
+        test_harness::apply_flash_fee(10_000_000),
+        3000_0000000,
+    );
+    let account_id = t
+        .try_multiply(ALICE, "USDC", 1.0, "ETH", PositionMode::Multiply, &steps)
+        .expect("multiply should succeed after guard cleared");
+    assert!(account_id > 0);
+}
+
+/// GH-28. `add_delegate`, `remove_delegate` and `renew_account` move no value and
+/// carry no flash guard, so they remain callable with the flash flag synthetically
+/// set. This tests guard policy, not reachability from a flash-loan callback.
+#[test]
+fn delegate_and_renew_verbs_stay_reachable_under_flash_loan_ongoing() {
+    let mut t = setup();
+    let alice_id = t.resolve_account_id(ALICE);
+    let alice = t.get_or_create_user(ALICE);
+    let delegate = t.get_or_create_user(BOB);
+    t.ctrl_client().set_position_manager(&delegate, &true);
+    t.set_flash_loan_ongoing(true);
+    let ctrl = t.ctrl_client();
+    assert!(ctrl.try_add_delegate(&alice, &alice_id, &delegate).is_ok());
+    assert!(ctrl
+        .try_remove_delegate(&alice, &alice_id, &delegate)
+        .is_ok());
+    assert!(ctrl.try_renew_account(&alice, &alice_id).is_ok());
+    t.set_flash_loan_ongoing(false);
+}

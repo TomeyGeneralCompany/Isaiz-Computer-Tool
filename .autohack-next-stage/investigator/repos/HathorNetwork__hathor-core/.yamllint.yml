@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: Hathor Labs
+# SPDX-License-Identifier: Apache-2.0
+
+extends: default
+
+ignore:
+  - .venv/
+
+rules:
+  document-start: disable
+  line-length:
+    max: 100
+  new-lines:
+    type: platform
+  comments:
+    min-spaces-from-content: 1

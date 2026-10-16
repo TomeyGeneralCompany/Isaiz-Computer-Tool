@@ -1,0 +1,39 @@
+{
+  "checks": {
+    "has_reproduction_test": false,
+    "in_scope_at_processing": true,
+    "source_commit_matches": true,
+    "triage_requires_review": true
+  },
+  "commit": "97430aa29ac10a70ee0c18f2a905c4925363b58f",
+  "lead": {
+    "file": "hardhat/hardhat-exposed/internal/expose.ts",
+    "fingerprint": "7e0b648066c596458c96",
+    "guidance": "Review command construction and input provenance",
+    "line": 168,
+    "rule": "JS_CHILD_EXEC"
+  },
+  "note": "Automated offline evidence preparation only. No project-specific reproduction or verified security impact.",
+  "processed_at": "2026-10-15T00:09:26.796656+00:00",
+  "repository": "OpenZeppelin/openzeppelin-contracts",
+  "scope_urls": [
+    "https://immunefi.com/bug-bounty/openzeppelin/scope/"
+  ],
+  "source_check": {
+    "commit": "97430aa29ac10a70ee0c18f2a905c4925363b58f",
+    "excerpt": "  157: }\n  158: \n  159: // Exposed contracts live in the project, so they import dependency files through the project's own aliases rather\n  160: // than the raw input source names (`npm/<name>@<version>/<path>`, `project/lib/<path>`, ...). Hardhat records those\n  161: // aliases as `[<context>:]<prefix>=<target>` remappings we invert here.\n  162: //\n  163: // Skip remappings whose target overlaps a project source: those alias the contracts being exposed rather than their\n  164: // dependencies, so inverting them would move the whole exposed tree under the alias.\n  165: function parseApplicableRemappings(remappings: string[], projectSourcePrefixes: string[]): ParsedRemapping[] {\n  166:   return remappings\n  167:     .flatMap(remapping => {\n  168:       const groups = remappingRegex.exec(remapping)?.groups as\n  169:         | { context: string | undefined; prefix: string; target: string }\n  170:         | undefined;\n  171:       return groups ? [groups] : [];\n  172:     })\n  173:     .filter(\n  174:       ({ context, target }) =>\n  175:         [undefined, '', 'project/'].includes(context) &&\n  176:         !projectSourcePrefixes.some(source => source.startsWith(target) || target.startsWith(source)),\n  177:     )\n  178:     .sort((a, b) => b.target.length - a.target.length) // Longest target first: most specific remapping wins.\n  179:     .map(({ prefix, target }) => ({ prefix, target }));\n  180: }",
+    "file": "hardhat/hardhat-exposed/internal/expose.ts",
+    "file_sha256": "8e9f897cd34b4f06d8cf0c7377bfbd786a01758b943a31f4d9d96a726cf20ea8",
+    "line": 168,
+    "status": "source_matched"
+  },
+  "source_fingerprint": "2674d190ebd26a605be2a744e89970ba50adfa883c6e22cc3a14e318ea8beb35",
+  "status": "needs_project_specific_reproduction",
+  "triage": {
+    "classification": "needs_review",
+    "evidence": "The code snippet is incomplete and lacks proper handling of edge cases, which could lead to incorrect behavior or errors in the system.",
+    "follow_up": "If you have more information or a specific issue, please provide it, and I will help you further.",
+    "rationale": "The code snippet appears to be part of a logic to handle remappings in a hardhat configuration, but the implementation is incomplete and lacks proper validation of the input. The code is incomplete and lacks proper handling of edge cases, which could lead to incorrect behavior or errors in the system."
+  },
+  "verified_vulnerability": false
+}

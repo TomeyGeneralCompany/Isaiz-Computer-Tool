@@ -1,0 +1,60 @@
+[workspace]
+members = ["."]
+resolver = "2"
+
+[package]
+name = "keeper-bot"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Off-chain TTL keepalive + index-refresh service for the XOXNO Lending Soroban protocol."
+
+[[bin]]
+name = "keeper-bot"
+path = "src/main.rs"
+
+[[bin]]
+name = "prove_permissionless"
+path = "src/bin/prove_permissionless.rs"
+
+[lib]
+name = "keeper_bot"
+path = "src/lib.rs"
+
+[dependencies]
+
+tokio = { version = "1.50", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+clap = { version = "4", features = ["derive", "env"] }
+
+stellar-rpc-client = { git = "https://github.com/stellar/rs-stellar-rpc-client", rev = "a44c2b6a71d42868d7048b2a504bc4ee6c0d3fb8" }
+stellar-xdr = { version = "=28.0.0", features = ["std", "base64", "serde"] }
+stellar-strkey = "0.0.16"
+
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+bip39 = { version = "2.2", features = ["std"] }
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+
+mx-keyvault = { version = "0.1.0", default-features = false, features = ["keyvault"] }
+
+axum = { version = "0.7", default-features = false, features = ["http1", "tokio"] }
+prometheus = { version = "0.13", default-features = false }
+
+[dev-dependencies]
+tokio = { version = "1.50", features = ["macros", "rt-multi-thread", "test-util"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+debug = 0
+panic = "abort"

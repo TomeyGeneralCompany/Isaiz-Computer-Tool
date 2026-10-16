@@ -1,0 +1,31 @@
+{
+  "repository": "HathorNetwork/hathor-core",
+  "commit": "0738c7c981e506c582d83fa5456fe1b84eeccedc",
+  "scope_sources": [
+    {
+      "asset_type": "blockchain_dlt",
+      "asset_url": "https://github.com/HathorNetwork/hathor-core",
+      "program": "hathornetwork",
+      "scope_url": "https://immunefi.com/bug-bounty/hathornetwork/scope/"
+    }
+  ],
+  "original_report": "HathorNetwork__hathor-core-0738c7c981e5.json",
+  "lead": {
+    "rule": "PY_EVAL",
+    "file": "hathorlib/hathorlib/nanocontracts/metered_exec.py",
+    "line": 65,
+    "guidance": "Review dynamic execution and input provenance",
+    "fingerprint": "817cbe3bdb9cbf94842d"
+  },
+  "source_excerpt": "57:             filename='<blueprint>',\n58:             mode='exec',\n59:             flags=0,\n60:             dont_inherit=True,\n61:             optimize=0,\n62:             _feature_version=PYTHON_CODE_COMPAT_VERSION[1],\n63:         )\n64:         # XXX: SECURITY: `code` and `env` need the proper restrictions by this point\n65:         exec(code, env)\n66:         del env['__builtins__']\n67:         return env\n68: \n69:     def call(self, func: Callable[[Unpack[_Ts]], _T], /, *, args: tuple[Unpack[_Ts]]) -> _T:\n70:         \"\"\" This is equivalent to `func(*args, **kwargs)` but with execution metering and memory limiting.\n71:         \"\"\"\n72:         from hathorlib.nanocontracts.custom_builtins import get_exec_builtins\n73:         from hathorlib.nanocontracts.exception import NCFail",
+  "triage": {
+    "classification": "likely_false_positive",
+    "rationale": "The code snippet is part of a nanocontract implementation and does not indicate any explicit security restrictions or provenance checks. The use of `exec` with dynamic execution and memory limits is not a security concern in this context.",
+    "evidence": "No explicit security restrictions or provenance checks are indicated in the code.",
+    "follow_up": "If you have further questions, please provide more context about the specific use case or security concerns you're encountering with this code."
+  },
+  "status": "unverified_draft",
+  "verified_vulnerability": false,
+  "generated_at": "2026-10-14T23:31:05.616034+00:00",
+  "note": "Automated static triage only. No exploitability, eligibility, or bounty award established."
+}

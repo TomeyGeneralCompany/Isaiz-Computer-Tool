@@ -1,0 +1,14 @@
+{
+  "1": {
+    "name": "Core"
+  },
+  "2": {
+    "name": "Secondary USDC"
+  },
+  "3": {
+    "name": "Liquidity Pools"
+  },
+  "4": {
+    "name": "Liqvid Private Credit"
+  }
+}

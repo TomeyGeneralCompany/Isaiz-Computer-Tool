@@ -1,0 +1,105 @@
+use common::types::HubAssetKey;
+use soroban_sdk::{vec, Address, Vec};
+
+use crate::core::LendingTest;
+use crate::helpers::{f64_to_i128, hub_asset};
+
+impl LendingTest {
+    pub fn withdraw(&mut self, user: &str, asset_name: &str, amount: f64) {
+        let decimals = self.resolve_market(asset_name).decimals;
+        let raw_amount = f64_to_i128(amount, decimals);
+        self.withdraw_raw(user, asset_name, raw_amount);
+    }
+
+    /// One withdrawal of `amount` raw units, optionally paid to `recipient`
+    /// instead of `user`. `amount == 0` means "the whole position".
+    fn withdraw_inner(
+        &mut self,
+        user: &str,
+        asset_name: &str,
+        amount: i128,
+        recipient: Option<Address>,
+    ) -> Vec<(HubAssetKey, i128)> {
+        let account_id = self.resolve_account_id(user);
+        let addr = self.users.get(user).unwrap().address.clone();
+        let asset_addr = self.resolve_asset(asset_name);
+
+        let ctrl = self.ctrl_client();
+        let withdrawals: Vec<(HubAssetKey, i128)> =
+            vec![&self.env, (hub_asset(asset_addr), amount)];
+        ctrl.withdraw(&addr, &account_id, &withdrawals, &recipient)
+    }
+
+    pub fn withdraw_raw(&mut self, user: &str, asset_name: &str, amount: i128) {
+        self.withdraw_inner(user, asset_name, amount, None);
+    }
+
+    pub fn withdraw_raw_returning(
+        &mut self,
+        user: &str,
+        asset_name: &str,
+        amount: i128,
+    ) -> Vec<(HubAssetKey, i128)> {
+        self.withdraw_inner(user, asset_name, amount, None)
+    }
+
+    pub fn withdraw_to_raw(
+        &mut self,
+        user: &str,
+        asset_name: &str,
+        amount: i128,
+        recipient: &Address,
+    ) -> Vec<(HubAssetKey, i128)> {
+        self.withdraw_inner(user, asset_name, amount, Some(recipient.clone()))
+    }
+
+    pub fn withdraw_all(&mut self, user: &str, asset_name: &str) {
+        self.withdraw_raw(user, asset_name, 0);
+    }
+
+    pub fn try_withdraw_raw(
+        &mut self,
+        user: &str,
+        asset_name: &str,
+        amount: i128,
+    ) -> Result<(), soroban_sdk::Error> {
+        let account_id = self.try_resolve_account_id(user)?;
+        let addr = self.users.get(user).unwrap().address.clone();
+        let asset_addr = self.resolve_asset(asset_name);
+
+        let ctrl = self.ctrl_client();
+        let withdrawals: Vec<(HubAssetKey, i128)> =
+            vec![&self.env, (hub_asset(asset_addr), amount)];
+        match ctrl.try_withdraw(&addr, &account_id, &withdrawals, &None) {
+            Ok(Ok(_)) => Ok(()),
+            Ok(Err(err)) => Err(err.into()),
+            Err(e) => Err(e.expect("expected contract error, got InvokeError")),
+        }
+    }
+
+    pub fn try_withdraw(
+        &mut self,
+        user: &str,
+        asset_name: &str,
+        amount: f64,
+    ) -> Result<(), soroban_sdk::Error> {
+        let decimals = self.resolve_market(asset_name).decimals;
+        let raw_amount = f64_to_i128(amount, decimals);
+        self.try_withdraw_raw(user, asset_name, raw_amount)
+    }
+
+    pub fn withdraw_bulk(&mut self, user: &str, assets: &[(&str, f64)]) {
+        let account_id = self.resolve_account_id(user);
+        let addr = self.users.get(user).unwrap().address.clone();
+
+        let mut soroban_withdrawals: Vec<(HubAssetKey, i128)> = Vec::new(&self.env);
+        for (asset_name, amount) in assets {
+            let market = self.resolve_market(asset_name);
+            let raw = f64_to_i128(*amount, market.decimals);
+            soroban_withdrawals.push_back((hub_asset(market.asset.clone()), raw));
+        }
+
+        let ctrl = self.ctrl_client();
+        ctrl.withdraw(&addr, &account_id, &soroban_withdrawals, &None);
+    }
+}

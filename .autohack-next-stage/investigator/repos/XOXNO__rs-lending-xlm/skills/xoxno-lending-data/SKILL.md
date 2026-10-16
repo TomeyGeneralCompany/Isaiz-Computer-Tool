@@ -1,0 +1,197 @@
+---
+name: xoxno-lending-data
+description: "Use when consuming XOXNO Lending data off-chain — indexing controller, pool, position-NFT, token, or oracle events; tracking account lifecycle; deriving liquidation accounting; building analytics; or calling the public Stellar lending REST API."
+user-invocable: true
+argument-hint: "[indexing or analytics task]"
+---
+
+# XOXNO Lending data operations
+
+The canonical wire catalog is
+[docs/reference/events.md](../../docs/reference/events.md). It defines event
+topics, payload layouts, enum discriminants, units, ordering, and inherited
+events. Do not copy that catalog into an indexer guide. This skill covers the
+operational rules needed to consume it.
+
+Use [api.md](api.md) for the public REST surface and
+[addresses.md](../xoxno-lending/addresses.md) for deployment coordinates.
+
+## Wallet and application reads
+
+Use the [v1 arrays](api.md#integrator-v1-arrays) for portfolio and asset screens.
+The responses already include balances, prices, token labels/logos, APYs,
+capacity estimates, and one position per indexed owned NFT. Ordinary rendering
+needs no event indexing or manual joins. The optional SDK read entry handles
+pagination and exports the public types; plain HTTP works from any language.
+
+Keep raw strings and nullable fields intact. Follow pagination through an empty
+page with a next link. Indexed data and cached prices can lag the ledger;
+recheck NFT ownership and prepare transactions through the selected network's
+RPC before signing. See the
+[wallet guide](https://xoxno.com/docs/stellar-lending/dev/wallet-integration).
+
+## Subscribe by contract address
+
+Resolve addresses for the selected network (`testnet` or `mainnet`) from
+`configs/networks.json`, then subscribe to at least:
+
+- controller: account deltas, liquidation, bad debt, and configuration;
+- pool: market indexes, cash, shares, and parameters;
+- position NFT: mint, transfer, and burn lifecycle;
+- relevant token contracts: transfers and approvals when cash-flow evidence is
+  required;
+- price aggregator (`price_aggregator` key, not the swap router's
+  `aggregator` key): oracle configuration changes.
+
+Match both emitting contract address and ordered topic vector. Topic text alone
+is not an identity.
+
+## Asset and market identity
+
+Discover assets contract-address-first:
+
+1. Start with the token contract address from configuration, an event, or an
+   explicit user selection.
+2. Resolve every v1 asset row for that address.
+3. Select an explicit `(spoke_id, hub_id, asset)` tuple.
+4. Use symbol/name only as display metadata after identity is fixed.
+
+Never select the first display-symbol match or the first API/search result.
+Symbols are non-unique and one asset contract can exist in several hubs and
+spokes. Key account legs by `(account_id, hub_id, asset)` and reserve state by
+`(spoke_id, hub_id, asset)`; key pool state by `(hub_id, asset)`.
+
+## Ingestion loop
+
+For every `getEvents` page:
+
+1. Request by contract ids and, where useful, exact topics.
+2. Drop events where `inSuccessfulContractCall === false`. Reverted diagnostic
+   events are not state transitions, activities, or liquidation candidates.
+3. Decode known events; preserve unknown events for later decoder upgrades
+   instead of crashing the page.
+4. Apply the page transactionally with idempotency key
+   `(txHash, eventId, childIndex)`.
+5. Persist derived rows and the response cursor in the same durable commit.
+6. Resume with `{ cursor }`; do not combine cursor and ledger-range modes.
+
+Sort by ledger, transaction index, operation index, and event order parsed from
+the RPC event id. A batched event contains ordered child records; assign a
+stable child index. Never order by pool timestamp because several updates can
+share it.
+
+If a requested start ledger is older than RPC retention, REST history can seed
+derived balances, charts, or candidate sets. It cannot reconstruct canonical
+raw events, transaction ordering, or missing event payloads unless an
+independent archival source proves and supplies those records. Label
+REST-seeded state with provenance and reconcile it when raw history becomes
+available.
+
+## Decoding pitfalls
+
+- Soroban map fields are keyed by symbols; never decode map values by Rust
+  declaration order.
+- Vec and tuple payloads are positional. Single-value event data is the value
+  itself, not a map containing the Rust field name.
+- Preserve unknown action discriminants as data.
+- Amounts/cash use token base units unless the canonical event reference marks
+  RAY, WAD, or BPS.
+- Pool timestamps are milliseconds; ledger close times are seconds.
+- Position `scaled_amount` is the resulting RAY share balance, not the delta.
+- Position `amount` is the account's token-unit movement. Some other events
+  report a requested amount, not a measured receipt, for example
+  `FlashPositionEvent.amount` and `InitialMultiplyPaymentEvent.amount`.
+- `decodeStellarLendingEvent` (`@xoxno/sdk-js/stellar-lending`) returns `null`
+  for a topic it does not decode. `null` does not mean an invalid chain event.
+
+## State is broader than events
+
+Events are not complete state truth:
+
+- a position batch with no legs is not emitted;
+- bad-debt cleanup does not emit a cleanup position batch;
+- constructors and inherited helpers can mutate state without a protocol
+  custom event;
+- token behavior and downstream contract state require their own event
+  standards or direct reads;
+- prices are resolved at call time and can change without controller events.
+
+Use events as ordered change evidence, then reconcile account, market, NFT,
+and token state with views. Do not claim canonical state reconstruction from
+controller events alone.
+
+## Account lifecycle
+
+The position NFT token id equals the lending account id. Track:
+
+- mint: account creation, including `Credit(0)` liquidation receivers;
+- transfer: owner change;
+- burn: account deletion;
+- controller position batches: current owner, spoke, mode, and position legs.
+
+There is no controller `AccountCreated` event. A repayment that empties debt
+does not necessarily burn the account, and an absent batch does not prove no
+state changed elsewhere.
+
+## Liquidation accounting
+
+Group the successful transaction's controller events using the ordering in the
+canonical event reference. Pool, NFT, and token events can interleave.
+
+- `LiquidationEvent` reports measured repayment value, capped at each planned
+  debt leg (`repaid_usd_wad`, USD WAD) and the bonus (`bonus_bps`, BPS), not collateral proceeds.
+- Target `LiqSeize` legs report gross collateral movement.
+- Credit receiver `LiqCredit` legs report net credited movement and omit
+  zero-net legs.
+- Transfer mode emits no fee leg: `LiqSeize.amount` is gross and the pool
+  transfers the net amount to the liquidator. The fee is `LiqSeize.amount`
+  minus that seizure transfer. Before execution, `get_liquidation_estimate`
+  reports it in `protocol_fees`.
+
+For Credit mode, approximate per-asset fee from gross and net token movement.
+For exact share fees, process batches in event order. Apply earlier account
+changes first. For each identified Credit liquidation, use balances immediately
+before its target and receiver batches. An omitted receiver leg credits zero
+shares. Do not reuse transaction-start balances after earlier operations
+changed either account. Key prior balances by `(hub_id, asset)`.
+Every emitted `scaled_amount` is a resulting balance, not a delta:
+
+```text
+target_seized_share_delta =
+    target_prior_scaled[(hub_id, asset)] - target_resulting_scaled[(hub_id, asset)]
+
+receiver_credited_share_delta =
+    receiver_resulting_scaled[(hub_id, asset)] - receiver_prior_scaled[(hub_id, asset)]
+
+exact_fee_shares[(hub_id, asset)] =
+    target_seized_share_delta - receiver_credited_share_delta
+```
+
+Then value the share delta using the matching `(hub_id, asset)` supply index
+and the protocol's directed rounding. A newly created `Credit(0)` receiver has
+a prior balance of zero. Without both keyed prior balances, exact fee
+derivation is impossible from the resulting `scaled_amount` values alone.
+
+Do not reconstruct gross seizure from repayment times bonus. For profitability, use a conservative estimate of net proceeds. Transfer
+estimates can round a full claim above the pool payout. Clamp gross tokens
+to the floor of the held claim before subtracting the fee. Credit estimates
+use RAY supply shares; subtract the fee shares before conversion. Simulate
+the complete write and reconcile confirmed effects. Follow the
+[liquidation runbook](../xoxno-lending-liquidations/SKILL.md).
+
+## Candidate discovery
+
+Collect account ids only from successful `position:batch_update` events, seed
+from REST if needed, and re-evaluate on a timer and pool index changes. Drop
+missing/debt-free accounts after on-chain checks. Persist the event cursor
+before advancing the external checkpoint.
+
+## Completion checks
+
+- [ ] Contract addresses came from the selected network configuration.
+- [ ] Every asset selection includes explicit spoke, hub, and contract address.
+- [ ] Reverted events were skipped.
+- [ ] Rows and cursor were committed durably and idempotently.
+- [ ] REST-seeded records are labeled derived, not canonical raw events.
+- [ ] Liquidation fees use prior scaled balance when exact share deltas matter.
+- [ ] Event-derived results were reconciled with current state views.

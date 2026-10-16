@@ -1,0 +1,124 @@
+
+
+
+groups:
+  - name: keeper.liveness
+    rules:
+
+
+
+      - alert: KeeperDown
+        expr: up{job="keeper"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "rs-lending keeper is DOWN ({{ $labels.instance }})"
+          description: >
+            No metrics scrape for 5m. While the keeper is down, footprint TTLs
+            are not extended; sustained downtime archives protocol storage and
+            freezes the contract. Restart the keeper and verify it boots
+            (GET :9090/health == ok).
+
+
+
+
+      - alert: KeeperEntriesArchived
+        expr: keeper_entries_archived > 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "rs-lending storage entries archived ({{ $value }})"
+          description: >
+            keeper_entries_archived={{ $value }} for 10m: TTL lapsed on protocol
+            storage. Run the keeper restore path (it auto-restores archived keys)
+            and investigate why extension did not happen in time.
+
+
+
+
+      - alert: KeeperNotProgressing
+
+
+
+
+
+        expr: |
+          sum(increase(keeper_jobs_planned_total[15m])) > 0
+          and (sum(increase(keeper_txs_total{status="success"}[15m])) or vector(0)) == 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "rs-lending keeper planning jobs but completing none"
+          description: >
+            Jobs were planned in the last 15m but no transaction succeeded. Check
+            RPC connectivity, signer XLM balance, and recent
+            keeper_txs_total{status=~"failed|error"} / keeper_sim_failures_total.
+
+
+      - alert: KeeperTickFailing
+        expr: increase(keeper_tick_failed_total[15m]) > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "rs-lending keeper tick failures ({{ $labels.loop }} loop)"
+          description: >
+            keeper_tick_failed_total for the {{ $labels.loop }} loop has been
+            increasing for 15m. Recurring tick failures stop TTL extension;
+            escalate toward critical if it persists past ~1h.
+
+
+      - alert: KeeperTxFailures
+        expr: increase(keeper_txs_total{status=~"failed|error"}[15m]) > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "rs-lending keeper transactions failing ({{ $labels.kind }})"
+          description: >
+            keeper_txs_total{status=~"failed|error"} increasing for 15m for kind
+            {{ $labels.kind }}. Check fees, sequence, and RPC health; persistent
+            failures lead to missed TTL extension.
+
+      # Catches a live process whose TTL loop is wedged (a hung RPC call or a
+      # stuck await). `KeeperNotProgressing` and `KeeperTickFailing` need a tick
+      # to run, so they stay silent in this case.
+      - alert: KeeperTickStalled
+        expr: time() - keeper_last_tick_timestamp_seconds > 43200
+        for: 30m
+        labels:
+          severity: critical
+        annotations:
+          summary: "rs-lending keeper has not completed a tick in {{ $value | humanizeDuration }}"
+          description: >
+            The process is up but the TTL loop has not finished a discovery tick
+            for over 12h, twice the 6h interval. Storage TTLs are not being
+            checked and every keeper_entry_* gauge is stale. Check RPC
+            reachability from the keeper and the keeper.discovery logs.
+
+      # A key encoding that matches nothing looks like "nothing to do": no jobs
+      # planned, no failures, no archived entries. Its only signature is a group
+      # where every key reads never_created. The baseline is 1 (controller/roles:
+      # the controller has no access-control roles), so this alerts above 1.
+      - alert: KeeperKeyGroupUnreachable
+        expr: |
+          count(
+            (sum by (contract, group) (keeper_entries{state="never_created"}) > 0)
+            unless
+            (sum by (contract, group) (keeper_entries{state="live"}) > 0)
+          ) > 1
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "rs-lending keeper: {{ $value }} key groups have nothing live"
+          description: >
+            Every probed key in a group came back never_created. Usually benign
+            (nothing has written that key yet), but it is also how a wrong
+            storage-key encoding presents — the keeper renews nothing and no
+            other metric shows it. Compare the keeper key builder against the
+            contract's storage key enum for the affected group.
+

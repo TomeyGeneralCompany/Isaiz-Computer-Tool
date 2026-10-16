@@ -1,0 +1,258 @@
+//! Submission validation and price aggregation for the oracle: freshness and
+//! monotonicity checks on incoming submissions, and the median-based
+//! aggregate computation that clusters signer submissions by timestamp skew
+//! and writes the resulting price and history.
+
+use common::constants::{BPS, MS_PER_SECOND};
+use common::oracle::observation::{MAX_FUTURE_SKEW_SECONDS, MAX_TWAP_RECORDS};
+use common::oracle::providers::redstone::RedStonePriceData;
+
+use soroban_sdk::{Address, Env, String, Vec, U256};
+
+use crate::storage::{
+    load_history, load_max_cluster_spread_bps, load_max_relative_skew, load_max_submission_age,
+    load_resolution, load_signers, load_submission, load_threshold, record_signer_feed,
+    remove_aggregate, renew_known_feed, store_aggregate, store_history, store_submission_record,
+    SignerSubmission,
+};
+use crate::Error;
+
+/// Maximum number of aggregate entries retained in a feed's price history.
+pub(crate) const MAX_HISTORY_LEN: u32 = MAX_TWAP_RECORDS;
+
+/// Upper bound on a submitted price value.
+pub(crate) const MAX_SUBMITTED_PRICE: i128 = 1_000_000_000_000_000_000_000_000;
+
+/// Rejects `package_timestamp` (milliseconds) with `FutureTimestamp` if it is
+/// more than `MAX_FUTURE_SKEW_SECONDS` ahead of the ledger time (seconds).
+pub(crate) fn require_not_future(env: &Env, package_timestamp: u64) -> Result<(), Error> {
+    let ts_secs = package_timestamp / MS_PER_SECOND;
+    let max_future = env
+        .ledger()
+        .timestamp()
+        .saturating_add(MAX_FUTURE_SKEW_SECONDS);
+    if ts_secs > max_future {
+        return Err(Error::FutureTimestamp);
+    }
+    Ok(())
+}
+
+/// Rejects `package_timestamp` (milliseconds) with `StaleSubmission` if its age
+/// against the ledger time exceeds the maximum submission age (seconds).
+pub(crate) fn require_fresh_submission(env: &Env, package_timestamp: u64) -> Result<(), Error> {
+    let ts_secs = package_timestamp / MS_PER_SECOND;
+    let now = env.ledger().timestamp();
+    if now.saturating_sub(ts_secs) > load_max_submission_age(env) {
+        return Err(Error::StaleSubmission);
+    }
+    Ok(())
+}
+
+/// Rejects `package_timestamp` (milliseconds) with `StaleSubmission` if
+/// `signer` has a stored submission for `feed_id` with a later package
+/// timestamp. Passes if no prior submission exists.
+pub(crate) fn require_monotonic_package(
+    env: &Env,
+    feed_id: &String,
+    signer: &Address,
+    package_timestamp: u64,
+) -> Result<(), Error> {
+    if let Some(prev) = load_submission(env, feed_id, signer) {
+        if package_timestamp < prev.package_timestamp {
+            return Err(Error::StaleSubmission);
+        }
+    }
+    Ok(())
+}
+
+/// Adds `feed_id` to `signer`'s feed list, renews the feed's index TTL, and
+/// overwrites the signer's latest submission for `feed_id` with `price` and
+/// `package_timestamp` (milliseconds).
+pub(crate) fn store_submission(
+    env: &Env,
+    feed_id: &String,
+    signer: &Address,
+    price: i128,
+    package_timestamp: u64,
+) {
+    record_signer_feed(env, signer, feed_id);
+
+    renew_known_feed(env, feed_id);
+    store_submission_record(env, feed_id, signer, price, package_timestamp);
+}
+
+/// What a recompute does to the stored aggregate when it cannot form a new one.
+///
+/// Owner paths use `Clear`. The submit path uses `Retain`: clearing there would
+/// let one signer take a feed offline by submitting alone after its peers'
+/// entries age out.
+pub(crate) enum QuorumMiss {
+    /// Delete the aggregate: the signer set and threshold no longer justify it.
+    Clear,
+    /// Keep the aggregate and let staleness age it out.
+    Retain,
+}
+
+/// Recomputes the current aggregate for `feed_id` from the registered signers'
+/// latest submissions: discards submissions older than the maximum submission
+/// age, then keeps only those within `max_relative_skew` of the newest
+/// surviving timestamp, clamped to ledger time so a future-dated submission
+/// cannot drag the cluster window forward. If fewer than `threshold`
+/// submissions survive either filter, or the cluster has fewer than
+/// `2 * (signers - threshold) + 1` entries and its highest price exceeds its
+/// lowest by more than the configured spread, applies `on_miss` and stores no
+/// new aggregate. Otherwise stores the lower median of the clustered prices,
+/// with the oldest clustered package timestamp and the ledger time as write
+/// timestamp, and records it in the feed's history (see `push_history`).
+pub(crate) fn recompute_aggregate(env: &Env, feed_id: &String, on_miss: QuorumMiss) {
+    let signers = load_signers(env);
+    let max_submission_age = load_max_submission_age(env);
+    let max_relative_skew = load_max_relative_skew(env);
+    let now = env.ledger().timestamp();
+
+    let mut kept_submissions: Vec<SignerSubmission> = Vec::new(env);
+    let mut newest_ts: u64 = 0;
+
+    for signer in signers.iter() {
+        let Some(submission) = load_submission(env, feed_id, &signer) else {
+            continue;
+        };
+
+        let age_seconds = now.saturating_sub(submission.package_timestamp / MS_PER_SECOND);
+        if age_seconds > max_submission_age {
+            continue;
+        }
+
+        newest_ts = newest_ts.max(submission.package_timestamp);
+        kept_submissions.push_back(submission);
+    }
+
+    let threshold = load_threshold(env);
+    if kept_submissions.len() < threshold {
+        apply_quorum_miss(env, feed_id, on_miss);
+        return;
+    }
+
+    let newest_ts = newest_ts.min(now.saturating_mul(MS_PER_SECOND));
+    let skew_ms = max_relative_skew.saturating_mul(MS_PER_SECOND);
+
+    let mut clustered_prices: Vec<i128> = Vec::new(env);
+    let mut oldest_package_timestamp: u64 = u64::MAX;
+    let mut lowest = i128::MAX;
+    let mut highest = i128::MIN;
+    for submission in kept_submissions.iter() {
+        let ts = submission.package_timestamp;
+        if newest_ts.saturating_sub(ts) > skew_ms {
+            continue;
+        }
+        clustered_prices.push_back(submission.price);
+        lowest = lowest.min(submission.price);
+        highest = highest.max(submission.price);
+        oldest_package_timestamp = oldest_package_timestamp.min(ts);
+    }
+
+    if clustered_prices.len() < threshold {
+        apply_quorum_miss(env, feed_id, on_miss);
+        return;
+    }
+
+    let spread_free_cluster = signers
+        .len()
+        .saturating_sub(threshold)
+        .saturating_mul(2)
+        .saturating_add(1);
+    if clustered_prices.len() < spread_free_cluster
+        && !within_spread(lowest, highest, load_max_cluster_spread_bps(env))
+    {
+        apply_quorum_miss(env, feed_id, on_miss);
+        return;
+    }
+
+    let median = median_of(&clustered_prices);
+    let write_timestamp = now * MS_PER_SECOND;
+    let aggregate = RedStonePriceData {
+        price: U256::from_u128(env, median as u128),
+        package_timestamp: oldest_package_timestamp,
+        write_timestamp,
+    };
+
+    store_aggregate(env, feed_id, &aggregate);
+    push_history(env, feed_id, aggregate);
+}
+
+/// Applies `on_miss` to `feed_id`'s stored aggregate. History is untouched --
+/// it is appended only on a successful write.
+fn apply_quorum_miss(env: &Env, feed_id: &String, on_miss: QuorumMiss) {
+    match on_miss {
+        QuorumMiss::Clear => remove_aggregate(env, feed_id),
+        QuorumMiss::Retain => {}
+    }
+}
+
+/// Returns whether `highest * BPS <= lowest * (BPS + spread_bps)`. A product
+/// that overflows `i128` counts as outside the spread.
+fn within_spread(lowest: i128, highest: i128, spread_bps: u32) -> bool {
+    let bound = BPS + i128::from(spread_bps);
+    match (highest.checked_mul(BPS), lowest.checked_mul(bound)) {
+        (Some(scaled_highest), Some(scaled_lowest)) => scaled_highest <= scaled_lowest,
+        _ => false,
+    }
+}
+
+/// Returns an ascending-sorted copy of `prices`, computed with an in-place
+/// insertion sort.
+fn sorted_copy(prices: &Vec<i128>) -> Vec<i128> {
+    let mut sorted = prices.clone();
+    let len = sorted.len();
+    for i in 1..len {
+        let key = sorted.get_unchecked(i);
+        let mut j = i;
+        while let Some(previous_index) = j.checked_sub(1) {
+            let prev = sorted.get_unchecked(previous_index);
+            if prev <= key {
+                break;
+            }
+            sorted.set(j, prev);
+            j = previous_index;
+        }
+        sorted.set(j, key);
+    }
+    sorted
+}
+
+/// Returns the lower median of `prices`. Panics if `prices` is empty.
+fn median_of(prices: &Vec<i128>) -> i128 {
+    let sorted = sorted_copy(prices);
+    let len = sorted.len();
+
+    sorted.get_unchecked((len - 1) / 2)
+}
+
+/// Appends `aggregate` to `feed_id`'s history, or overwrites the last entry
+/// if its write timestamp falls within one resolution period of the previous
+/// entry. Evicts the oldest entry when the history reaches `MAX_HISTORY_LEN`.
+fn push_history(env: &Env, feed_id: &String, aggregate: RedStonePriceData) {
+    let mut history: Vec<RedStonePriceData> =
+        load_history(env, feed_id).unwrap_or_else(|| Vec::new(env));
+
+    let resolution_ms = u64::from(load_resolution(env)) * MS_PER_SECOND;
+    let len = history.len();
+    let replace_last = len > 0 && {
+        let last = history.get_unchecked(len - 1);
+        aggregate.write_timestamp < last.write_timestamp.saturating_add(resolution_ms)
+    };
+
+    if replace_last {
+        history.set(len - 1, aggregate);
+    } else {
+        if len >= MAX_HISTORY_LEN {
+            history.pop_front();
+        }
+        history.push_back(aggregate);
+    }
+    store_history(env, feed_id, &history);
+}
+
+#[cfg(test)]
+#[path = "../tests/unit/aggregation.rs"]
+mod tests;

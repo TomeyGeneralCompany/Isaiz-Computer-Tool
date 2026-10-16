@@ -1,0 +1,39 @@
+{
+  "checks": {
+    "has_reproduction_test": false,
+    "in_scope_at_processing": true,
+    "source_commit_matches": true,
+    "triage_requires_review": false
+  },
+  "commit": "cde2abf753cdfbb67e8129b8c0672d5c15444aa1",
+  "lead": {
+    "file": "ts-tests/contracts/TestCalls.sol",
+    "fingerprint": "d80d7f1436c1c2b13221",
+    "guidance": "Review delegatecall target and access control",
+    "line": 27,
+    "rule": "SOL_DELEGATECALL"
+  },
+  "note": "Automated offline evidence preparation only. No project-specific reproduction or verified security impact.",
+  "processed_at": "2026-10-15T00:09:26.304727+00:00",
+  "repository": "AcalaNetwork/Acala",
+  "scope_urls": [
+    "https://immunefi.com/bug-bounty/acala/scope/"
+  ],
+  "source_check": {
+    "commit": "cde2abf753cdfbb67e8129b8c0672d5c15444aa1",
+    "excerpt": "   16:     function test_static_call(address target, bytes memory input) public view returns(bytes memory) {\n   17:         (bool success, bytes memory returnData) = target.staticcall(input);\n   18:        assembly {\n   19:             if eq(success, 0) {\n   20:                 revert(add(returnData, 0x20), returndatasize())\n   21:             }\n   22:         }\n   23:         return returnData;\n   24:     }\n   25: \n   26:     function test_delegate_call(address target, bytes memory input, bytes memory output) public {\n   27:         (bool success, bytes memory returnData) = target.delegatecall(input);\n   28:        assembly {\n   29:             if eq(success, 0) {\n   30:                 revert(add(returnData, 0x20), returndatasize())\n   31:             }\n   32:         }\n   33:         require(keccak256(abi.encodePacked(returnData)) == keccak256(abi.encodePacked(output)), \"call reverted\");\n   34:     }\n   35: }",
+    "file": "ts-tests/contracts/TestCalls.sol",
+    "file_sha256": "cb730e21b2f46882c62df62f3f876d73dd6aa1dd24f0d385c8e32a608dc04594",
+    "line": 27,
+    "status": "source_matched"
+  },
+  "source_fingerprint": "9097b9a858ed4b7988ab2df6f84a87188de9b7c3175f48275f954306b8359ac4",
+  "status": "needs_project_specific_reproduction",
+  "triage": {
+    "classification": "likely_false_positive",
+    "evidence": "The code is part of a public repository and is used for testing. The test cases are designed to validate delegatecall behavior, and the logic is correctly implemented.",
+    "follow_up": "If you have more context or specific requirements, please provide it, and I will review it further.",
+    "rationale": "The code appears to be part of a test suite and does not indicate any known vulnerabilities. The delegatecall logic is correctly implemented, and the test cases are designed to validate the behavior of the function. There is insufficient context to determine if this is a false positive or a valid test case."
+  },
+  "verified_vulnerability": false
+}

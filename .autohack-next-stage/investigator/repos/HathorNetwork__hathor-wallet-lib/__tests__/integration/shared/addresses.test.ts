@@ -1,0 +1,221 @@
+/**
+ * Copyright (c) Hathor Labs and its affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */
+
+/**
+ * Shared address-method tests.
+ *
+ * Validates address derivation, pointer behavior and address-ownership checks
+ * (`checkAddressesMine`) common to both the fullnode ({@link HathorWallet})
+ * and wallet-service ({@link HathorWalletServiceWallet}) facades.
+ *
+ * Facade-specific tests live in:
+ * - `fullnode-specific/addresses.test.ts`
+ * - `fullnode-specific/address-info.test.ts` (holds the malformed-address case
+ *   of `checkAddressesMine`, which only the fullnode facade accepts)
+ * - `service-specific/addresses.test.ts`
+ */
+
+import type { IWalletTestAdapter } from '../adapters/types';
+import { FullnodeWalletTestAdapter } from '../adapters/fullnode.adapter';
+import { ServiceWalletTestAdapter } from '../adapters/service.adapter';
+import { WALLET_CONSTANTS } from '../configuration/test-constants';
+
+const adapters: IWalletTestAdapter[] = [
+  new FullnodeWalletTestAdapter(),
+  new ServiceWalletTestAdapter(),
+];
+
+const ADDRESS_PATH_REGEX = /^m\/44'\/280'\/0'\/0\/\d+$/;
+
+/**
+ * How many addresses the shared, index-by-index comparisons verify.
+ *
+ * The shared suite only needs to prove that address derivation works and is
+ * consistent across BOTH facades — it deliberately does NOT exercise gap-limit
+ * boundaries, which are facade-specific (the wallet-service backend loads a
+ * smaller window than the fullnode facade derives on demand; see
+ * service-specific/addresses.test.ts and fullnode-specific/addresses.test.ts).
+ *
+ * A small sample comfortably below every facade's gap limit (fullnode 20,
+ * wallet service 10) keeps these assertions cheap and free of any coupling to a
+ * particular facade's address window. Five addresses is plenty to prove the
+ * derivation is correct and deterministic.
+ */
+const SHARED_ADDRESS_SAMPLE = 5;
+
+describe.each(adapters)('[Shared] addresses — $name', adapter => {
+  beforeAll(async () => {
+    await adapter.suiteSetup();
+  });
+
+  afterAll(async () => {
+    await adapter.suiteTeardown();
+  });
+
+  it('getAllAddresses returns addresses in derivation-index order', async () => {
+    const { wallet } = await adapter.createWallet();
+
+    try {
+      const addresses = await adapter.getAllAddresses(wallet);
+
+      expect(addresses.length).toBeGreaterThan(0);
+
+      // Each entry should have a valid path and a non-empty address
+      addresses.forEach(entry => {
+        expect(typeof entry.address).toBe('string');
+        expect(entry.address.length).toBeGreaterThan(0);
+        expect(entry.addressPath).toMatch(ADDRESS_PATH_REGEX);
+      });
+
+      // Indices should be a strict ascending sequence starting at 0
+      addresses.forEach((entry, position) => {
+        expect(entry.index).toBe(position);
+      });
+
+      // The address at each index should match getAddressAtIndex. Only the
+      // first SHARED_ADDRESS_SAMPLE are checked — enough to prove consistency
+      // without depending on any facade's gap-limit window.
+      for (let i = 0; i < SHARED_ADDRESS_SAMPLE; i++) {
+        const direct = await adapter.getAddressAtIndex(wallet, i);
+        expect(direct).toBe(addresses[i].address);
+      }
+    } finally {
+      await adapter.stopWallet(wallet);
+    }
+  });
+
+  it('getCurrentAddress returns the same address on repeated calls', async () => {
+    const { wallet } = await adapter.createWallet();
+
+    try {
+      const first = await adapter.getCurrentAddress(wallet);
+      const second = await adapter.getCurrentAddress(wallet);
+
+      expect(first.address).toBe(second.address);
+      expect(first.index).toBe(second.index);
+      expect(first.addressPath).toBe(second.addressPath);
+      expect(first.addressPath).toMatch(ADDRESS_PATH_REGEX);
+
+      // Should match the address at the same index
+      const directAddress = await adapter.getAddressAtIndex(wallet, first.index);
+      expect(directAddress).toBe(first.address);
+    } finally {
+      await adapter.stopWallet(wallet);
+    }
+  });
+
+  it('markAsUsed advances the current address', async () => {
+    const { wallet } = await adapter.createWallet();
+
+    try {
+      const before = await adapter.getCurrentAddress(wallet);
+      const marked = await adapter.getCurrentAddress(wallet, { markAsUsed: true });
+      const after = await adapter.getCurrentAddress(wallet);
+
+      // The marked call returns the address it just consumed
+      expect(marked.address).toBe(before.address);
+      expect(marked.index).toBe(before.index);
+
+      // The next call returns the following address
+      expect(after.index).toBe(before.index + 1);
+      expect(after.address).not.toBe(before.address);
+    } finally {
+      await adapter.stopWallet(wallet);
+    }
+  });
+
+  it('getNextAddress advances the current address', async () => {
+    const { wallet } = await adapter.createWallet();
+
+    try {
+      const currentBefore = await adapter.getCurrentAddress(wallet);
+      const next = await adapter.getNextAddress(wallet);
+      const currentAfter = await adapter.getCurrentAddress(wallet);
+
+      expect(next.index).toBe(currentBefore.index + 1);
+      expect(next.address).not.toBe(currentBefore.address);
+      expect(currentAfter.address).toBe(next.address);
+      expect(currentAfter.index).toBe(next.index);
+    } finally {
+      await adapter.stopWallet(wallet);
+    }
+  });
+
+  it('getAddressIndex returns the correct index and undefined for unknown addresses', async () => {
+    const { wallet } = await adapter.createWallet();
+
+    try {
+      const target = await adapter.getAddressAtIndex(wallet, 2);
+      const index = await adapter.getAddressIndex(wallet, target);
+      expect(index).toBe(2);
+
+      const unknown = await adapter.getAddressIndex(wallet, 'WUnknownAddressNotInThisWallet');
+      expect(unknown).toBeUndefined();
+    } finally {
+      await adapter.stopWallet(wallet);
+    }
+  });
+
+  it('getAddressAtIndex returns the expected address', async () => {
+    const { wallet, addresses } = await adapter.createWallet();
+
+    try {
+      // The adapter exposes precalculated addresses for the wallet it just built;
+      // each must match what the wallet returns for the same index.
+      expect(addresses).toBeDefined();
+      const expected = addresses!;
+
+      // Only compare the first SHARED_ADDRESS_SAMPLE addresses. That is enough
+      // to prove getAddressAtIndex returns the correctly-derived address, and it
+      // keeps the shared assertions independent of any facade's gap-limit window
+      // (the wallet-service facade only knows a bounded set; see
+      // SHARED_ADDRESS_SAMPLE). Facade-specific limits are tested in
+      // service-specific/ and fullnode-specific/ addresses.test.ts.
+      for (let i = 0; i < SHARED_ADDRESS_SAMPLE; i++) {
+        const address = await adapter.getAddressAtIndex(wallet, i);
+        expect(address).toBe(expected[i]);
+      }
+    } finally {
+      await adapter.stopWallet(wallet);
+    }
+  });
+
+  it('checkAddressesMine maps wallet addresses to true, a foreign address to false, and an empty query to an empty map', async () => {
+    const { wallet } = await adapter.createWallet();
+
+    try {
+      // Indices 1..3 are comfortably inside every facade's address window
+      // (see SHARED_ADDRESS_SAMPLE).
+      const address1 = await adapter.getAddressAtIndex(wallet, 1);
+      const address2 = await adapter.getAddressAtIndex(wallet, 2);
+      const address3 = await adapter.getAddressAtIndex(wallet, 3);
+
+      // A well-formed base58 address that belongs to another wallet. Malformed
+      // address strings are deliberately NOT exercised here: the wallet-service
+      // response schema only admits base58 keys, so that case is fullnode-only
+      // (see fullnode-specific/address-info.test.ts).
+      const foreignAddress = WALLET_CONSTANTS.genesis.addresses[0];
+
+      await expect(
+        adapter.checkAddressesMine(wallet, [address1, address2, address3, foreignAddress])
+      ).resolves.toStrictEqual({
+        [address1]: true,
+        [address2]: true,
+        [address3]: true,
+        [foreignAddress]: false,
+      });
+
+      // Empty in, empty out. Both facades agree on the result but reach it
+      // differently — the wallet-service short-circuits before its HTTP call,
+      // the fullnode falls out of its per-address loop — so the contract is
+      // worth pinning here rather than in either facade-specific suite.
+      await expect(adapter.checkAddressesMine(wallet, [])).resolves.toStrictEqual({});
+    } finally {
+      await adapter.stopWallet(wallet);
+    }
+  });
+});

@@ -1,0 +1,31 @@
+{
+  "repository": "HathorNetwork/hathor-wallet-mobile",
+  "commit": "116a8658d60fb9be25d01847be2a9671ccbf81bf",
+  "scope_sources": [
+    {
+      "asset_type": "websites_and_applications",
+      "asset_url": "https://github.com/HathorNetwork/hathor-wallet-mobile",
+      "program": "hathornetwork",
+      "scope_url": "https://immunefi.com/bug-bounty/hathornetwork/scope/"
+    }
+  ],
+  "original_report": "HathorNetwork__hathor-wallet-mobile-116a8658d60f.json",
+  "lead": {
+    "rule": "JS_CHILD_EXEC",
+    "file": "src/screens/SendConfirmScreen.js",
+    "line": 112,
+    "guidance": "Review command construction and input provenance",
+    "fingerprint": "95dcaed1579a5133bd18"
+  },
+  "source_excerpt": "104:   const msg = err?.message || '';\n105:   const htrUid = hathorLib.constants.NATIVE_TOKEN_UID;\n106:   if (msg.includes(`No UTXOs available for the token ${htrUid}`)) {\n107:     return t`Insufficient HTR to cover the network fee.`;\n108:   }\n109:   if (msg.includes('No UTXOs available for the token')) {\n110:     return t`Insufficient balance to send this transaction.`;\n111:   }\n112:   const insufficientTokens = INSUFFICIENT_TOKENS_ERROR.exec(msg);\n113:   if (insufficientTokens) {\n114:     // HTR pays the fees: for HTR, they count with the amount.\n115:     return insufficientTokens[1] === htrUid\n116:       ? t`Insufficient HTR to cover this transaction and its fees.`\n117:       : t`Insufficient balance to send this transaction.`;\n118:   }\n119:   if (INPUT_LIMIT_ERROR.test(msg)) {\n120:     return t`This amount needs more inputs than a transaction can hold. Try sending a smaller amount.`;",
+  "triage": {
+    "classification": "likely_false_positive",
+    "rationale": "The code checks for specific error messages but does not validate the input or ensure proper handling of the HTR token. The logic is incomplete and may not cover all edge cases.",
+    "evidence": "The code checks for specific error messages but does not validate the input or ensure proper handling of the HTR token. The logic is incomplete and may not cover all edge cases.",
+    "follow_up": "If you have more details, I can help analyze further."
+  },
+  "status": "unverified_draft",
+  "verified_vulnerability": false,
+  "generated_at": "2026-10-15T01:23:11.013627+00:00",
+  "note": "Automated static triage only. No exploitability, eligibility, or bounty award established."
+}

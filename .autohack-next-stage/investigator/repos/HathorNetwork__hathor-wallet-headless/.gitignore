@@ -1,0 +1,17 @@
+*.swp
+
+config.js
+
+node_modules/
+__pycache__/
+
+coverage
+coverage-integration
+
+.vscode
+.DS_Store
+.idea
+
+tmp/
+
+dist/

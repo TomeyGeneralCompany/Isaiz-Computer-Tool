@@ -1,0 +1,11 @@
+{
+  "commit": "cde2abf753cdfbb67e8129b8c0672d5c15444aa1",
+  "detail": {},
+  "input_hash": "5f550c83fae2e6bb34520b8e63c9b5268cf12c3a55d98f1293af111f4530d190",
+  "processed_at": "2026-10-15T20:04:51.317362+00:00",
+  "repository": "AcalaNetwork/Acala",
+  "source_draft": "/home/izy/isaiz-bugbounty/autohack/.autohack-next-stage/investigator/triage/drafts/648bb099af3b0c4795e42cf3f3eeed914931557927a67ab781e8d97bcb5a92d8.json",
+  "status": "out_of_scope",
+  "submitted": false,
+  "verified_vulnerability": false
+}

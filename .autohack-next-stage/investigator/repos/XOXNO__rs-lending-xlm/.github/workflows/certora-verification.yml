@@ -1,0 +1,223 @@
+name: Certora Verification
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: >-
+          Profile from certora/profiles.json to prove, one job per rule.
+          Leave empty to run the sanity profile one job per conf.
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  STELLAR_VERSION: "28.0.0"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  compile-check:
+    name: Certora compile, coverage, and artifacts
+    runs-on: ubuntu-latest
+    outputs:
+      sanity-matrix: ${{ steps.sanity-matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+        with:
+          toolchain: "1.95"
+          targets: wasm32v1-none
+
+      - name: Install stellar-cli
+        run: bash .github/scripts/install-stellar-cli.sh
+
+      - name: Compile and run static proof-integrity gates
+        run: ./certora/compile_all.sh
+
+      - name: Build fresh Certora WASM artifacts
+        run: make certora-wasm
+
+      - name: Verify WASM hashes and source provenance
+        run: python3 certora/scripts/check_wasm_artifacts.py
+
+      - id: sanity-matrix
+        name: Derive the proof matrix from profiles.json
+        env:
+          PROFILE: ${{ inputs.profile }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          profiles = json.loads(Path("certora/profiles.json").read_text())["profiles"]
+
+          def expand(name, seen=()):
+              if name not in profiles:
+                  sys.exit(f"unknown profile {name!r}; known: {', '.join(sorted(profiles))}")
+              if name in seen:
+                  sys.exit(f"recursive profile include: {' -> '.join((*seen, name))}")
+              items = []
+              for item in profiles[name]:
+                  if "profile" in item:
+                      items.extend(expand(item["profile"], (*seen, name)))
+                  else:
+                      items.append(item)
+              return items
+
+          profile = os.environ.get("PROFILE", "").strip()
+          matrix = []
+          for item in expand(profile or "sanity"):
+              conf = Path(item["conf"])
+              entry = {"conf_dir": str(conf.parent), "conf": conf.name}
+              if not profile:
+                  # Default run: one job per conf of the sanity profile.
+                  matrix.append({**entry, "label": conf.stem, "rule": ""})
+                  continue
+              # A chosen profile gets one job per rule, so every rule receives
+              # the whole global_timeout and its own report.
+              for rule in json.loads(conf.read_text())["rule"]:
+                  matrix.append({**entry, "label": f"{conf.stem}/{rule}", "rule": rule})
+
+          if len(matrix) > 256:
+              sys.exit(
+                  f"profile {profile!r} expands to {len(matrix)} jobs; GitHub caps a "
+                  "matrix at 256. Dispatch a narrower profile."
+              )
+          print("matrix=" + json.dumps({"include": matrix}, separators=(",", ":")))
+          PY
+
+      - name: Upload fresh Certora WASM artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: certora-wasm-${{ github.sha }}
+          path: artifacts/wasm
+          if-no-files-found: error
+          retention-days: 3
+
+  sanity:
+    name: ${{ inputs.profile || 'sanity' }} — ${{ matrix.label }}
+    needs: compile-check
+    runs-on: ubuntu-latest
+    # --wait_for_results ALL blocks until the cloud returns. The largest conf
+    # global_timeout is 7200 s; the rest is queue time. Without this cap a
+    # stalled queue holds the job for GitHub's 360-minute default.
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      # Each running job holds one unfinished cloud job, and the cloud bills an
+      # unfinished job at 120 minutes against the monthly submission allowance.
+      # Four in flight is 480 projected minutes; the allowance is 2120.
+      max-parallel: 4
+      matrix: ${{ fromJSON(needs.compile-check.outputs.sanity-matrix) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install Java
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install Certora CLI
+        run: pip install --require-hashes -r certora/requirements-cli.txt
+
+      - name: Download pinned Certora WASM artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: certora-wasm-${{ github.sha }}
+          path: artifacts/wasm
+
+      - name: Recheck artifact hashes after transfer
+        run: python3 certora/scripts/check_wasm_artifacts.py
+
+      - id: prove
+        name: Verify focused job
+        env:
+          CERTORAKEY: ${{ secrets.CERTORAKEY }}
+          RULE: ${{ matrix.rule }}
+          CONF: ${{ matrix.conf }}
+        working-directory: ${{ matrix.conf_dir }}
+        run: |
+          set -o pipefail
+          # `--wait_for_results ALL` is required. Without it the CLI returns as
+          # soon as the cloud accepts the job, so the step passes on submission,
+          # `prover.log` holds no verdict, and the summary row below records
+          # "none". Waiting also bounds how many jobs are unfinished at once,
+          # which is what the cloud counts against the monthly allowance.
+          if [ -n "$RULE" ]; then
+            certoraSorobanProver "$CONF" --rule "$RULE" \
+              --wait_for_results ALL 2>&1 | tee prover.log
+          else
+            certoraSorobanProver "$CONF" \
+              --wait_for_results ALL 2>&1 | tee prover.log
+          fi
+
+      - name: Record the verdict in the job summary
+        if: always()
+        working-directory: ${{ matrix.conf_dir }}
+        env:
+          RULE: ${{ matrix.rule }}
+          CONF: ${{ matrix.conf }}
+          PROVE_OUTCOME: ${{ steps.prove.outcome }}
+        run: |
+          # One row per job. With --wait_for_results ALL the log carries a real
+          # verdict. A row that still says "none" means the CLI did not wait:
+          # the step records the row and then fails, so an unproved job can
+          # never stay green.
+          # SANITY_FAILED wins over the assertion verdict: a vacuous rule still
+          # prints "Verified: <rule>-Assertions". Then anchor on the rule's own
+          # "-Assertions" sub-rule, because the "-rule_not_vacuous_tac" sub-rule
+          # prints "Violated:" on a healthy rule; the fallback for timeouts and
+          # errors drops that line for the same reason.
+          if grep -q 'SANITY_FAILED' prover.log 2>/dev/null; then
+            verdict="SANITY_FAILED"
+          else
+            verdict="$(grep -Eo '(Verified|Violated): [^ ]*-Assertions$' prover.log 2>/dev/null | cut -d: -f1 | sort -u | tr '\n' '+' | sed 's/+$//')"
+          fi
+          if [ -z "$verdict" ]; then
+            verdict="$(grep -v 'rule_not_vacuous_tac' prover.log 2>/dev/null | grep -Eo '(Verified|Violated|Timeout|Error)[^ ]*' | tail -1)"
+          fi
+          url="$(grep -Eo 'https://[^ ]*prover.certora.com[^ ]*' prover.log 2>/dev/null | tail -1)"
+          if [ -z "$verdict" ] && [[ "$url" =~ ^https://prover\.certora\.com/output/[0-9]+/[0-9a-f]+\?anonymousKey=[0-9a-f]+$ ]]; then
+            verdict="$(curl -fsS --retry 3 -m 30 "$(printf '%s' "$url" | sed 's#?anonymousKey=#/output.json?anonymousKey=#')" | jq -r --arg r "$RULE" '
+              def v: if type == "string" then . else tojson end;
+              if $r != "" then (.rules[$r] | v)
+              elif (.rules | type) == "object" and (.rules | length) > 0 then
+                ([.rules[] | v] | if all(. == "SUCCESS") then "SUCCESS" else (map(select(. != "SUCCESS")) | unique | join("+")) end)
+              else empty end' 2>/dev/null)" || verdict=""
+            [ "$verdict" != null ] || verdict=""
+            if [ -n "$verdict" ] && [ "$verdict" != SUCCESS ]; then
+              echo "::error::prover output.json reports $verdict for $CONF (${RULE:-all rules})"
+              failed=1
+            fi
+          fi
+          {
+            echo "| conf | rule | outcome | verdict | report |"
+            echo "|---|---|---|---|---|"
+            echo "| $CONF | ${RULE:-all} | $PROVE_OUTCOME | ${verdict:-none} | ${url:-none} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ -z "$verdict" ]; then
+            echo "::error::no prover verdict found in prover.log or output.json for $CONF (${RULE:-all}); the job is unproved, not passing"
+            exit 1
+          fi
+          [ -z "${failed:-}" ] || exit 1

@@ -1,0 +1,16 @@
+{
+  "skills": [
+    "xoxno-lending-troubleshooting"
+  ],
+  "query": "A repay-with-collateral swap on XOXNO reverted with Error(Contract, #114). Your docs say 114 is CannotCleanBadDebt but I am not liquidating anyone, I'm just repaying my own debt. Bug in the protocol?",
+  "expected_behavior": [
+    "Do not infer namespace from the operation name. Pair code and emitter in the same diagnostic and trace handled errors. Map #114 against the verified emitter, or report unknown.",
+    "Inspect complete simulation or transaction diagnostic events. Do not treat resultXdr alone as proof of the emitting contract.",
+    "Warns that @xoxno/sdk-js mapSorobanError(raw) resolves the code against the lending catalog only and cannot disambiguate the contract, so its result must be qualified by the contract id",
+    "If diagnostics identify a router or DEX failure, use that contract's error catalog. Re-quote and simulate the complete transaction for a stale route. Leave ambiguous errors unmapped."
+  ],
+  "machine_checkable": [
+    "Answer mentions the panicking contract id / diagnostic events as the disambiguator",
+    "Do not attribute #114 to any contract without matching diagnostic evidence."
+  ]
+}

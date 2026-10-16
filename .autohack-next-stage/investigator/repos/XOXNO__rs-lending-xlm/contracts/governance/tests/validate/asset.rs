@@ -1,0 +1,167 @@
+use super::*;
+use crate::test_support::register_governance;
+use common::constants::{MAX_ASSET_DECIMALS, RAY};
+use common::types::{AssetOracle, IndependencePolicy, OracleTolerance};
+use price_aggregator::{PriceAggregator, PriceAggregatorClient as SeedClient};
+use soroban_sdk::testutils::Address as _;
+use soroban_sdk::{vec, Env};
+
+fn sample_market_params(asset: &Address, decimals: u32) -> MarketParamsRaw {
+    MarketParamsRaw {
+        max_borrow_rate: RAY,
+        base_borrow_rate: 0,
+        slope1: RAY / 100,
+        slope2: RAY / 10,
+        slope3: RAY / 2,
+        mid_utilization: RAY / 2,
+        optimal_utilization: 8 * RAY / 10,
+        max_utilization: 95 * RAY / 100,
+        reserve_factor: 1_000,
+        is_flashloanable: false,
+        flashloan_fee: 0,
+        asset_id: asset.clone(),
+        asset_decimals: decimals,
+    }
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #116)")]
+fn validate_spoke_cap_args_rejects_negative_supply_cap() {
+    let env = Env::default();
+    validate_spoke_cap_args(&env, -1, 0);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #36)")]
+fn validate_position_limits_rejects_zero() {
+    let env = Env::default();
+    validate_position_limits(
+        &env,
+        &PositionLimits {
+            max_supply_positions: 0,
+            max_borrow_positions: 1,
+        },
+    );
+}
+
+// The cap is inclusive. Use `POSITION_LIMIT_MAX`, not a literal, so the test
+// tracks the constant.
+#[test]
+fn validate_position_limits_accepts_exactly_the_cap() {
+    let env = Env::default();
+    validate_position_limits(
+        &env,
+        &PositionLimits {
+            max_supply_positions: POSITION_LIMIT_MAX,
+            max_borrow_positions: POSITION_LIMIT_MAX,
+        },
+    );
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #36)")]
+fn validate_position_limits_rejects_above_cap() {
+    let env = Env::default();
+    validate_position_limits(
+        &env,
+        &PositionLimits {
+            max_supply_positions: 1,
+            max_borrow_positions: POSITION_LIMIT_MAX + 1,
+        },
+    );
+}
+
+#[test]
+fn validate_and_fetch_token_decimals_returns_token_value() {
+    let env = Env::default();
+    let admin = Address::generate(&env);
+    let sac = env.register_stellar_asset_contract_v2(admin).address();
+    assert_eq!(validate_and_fetch_token_decimals(&env, &sac), 7);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #6)")]
+fn validate_and_fetch_token_decimals_rejects_non_token() {
+    let env = Env::default();
+    validate_and_fetch_token_decimals(&env, &Address::generate(&env));
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #8)")]
+fn validate_market_creation_rejects_wrong_asset_id() {
+    let env = Env::default();
+    let asset = Address::generate(&env);
+    let other = Address::generate(&env);
+    let params = sample_market_params(&other, 7);
+    validate_market_creation(&env, &asset, &params, 7);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #6)")]
+fn validate_market_creation_rejects_decimals_out_of_range() {
+    let env = Env::default();
+    let asset = Address::generate(&env);
+    let params = sample_market_params(&asset, MAX_ASSET_DECIMALS + 1);
+    validate_market_creation(&env, &asset, &params, MAX_ASSET_DECIMALS + 1);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #6)")]
+fn validate_market_creation_rejects_decimals_mismatch() {
+    let env = Env::default();
+    let asset = Address::generate(&env);
+    let params = sample_market_params(&asset, 7);
+    validate_market_creation(&env, &asset, &params, 6);
+}
+
+fn oracle_in(env: &Env, asset_decimals: u32) -> AssetOracle {
+    AssetOracle {
+        asset_decimals,
+        max_price_stale_seconds: 900,
+        sources: vec![env],
+        tolerance: OracleTolerance {
+            upper_ratio_bps: 10_500,
+            lower_ratio_bps: 9_524,
+        },
+        independence: IndependencePolicy::RequireDisjoint,
+        min_sanity_price_wad: 1,
+        max_sanity_price_wad: i128::MAX,
+    }
+}
+
+#[test]
+fn listed_token_decimals_uses_live_decimals_without_an_aggregator() {
+    let env = Env::default();
+    let (_admin, gov_id, _gov) = register_governance(&env);
+    let token = Address::generate(&env);
+    for live in [0u32, 7, 18] {
+        assert_eq!(
+            env.as_contract(&gov_id, || listed_token_decimals(&env, &token, live)),
+            live
+        );
+    }
+}
+
+#[test]
+fn listed_token_decimals_keeps_the_stored_oracle_unit_over_a_relabel() {
+    let env = Env::default();
+    let (_admin, gov_id, gov) = register_governance(&env);
+    let agg_id = env.register(PriceAggregator, (gov_id.clone(),));
+    gov.set_price_aggregator(&agg_id);
+    let agg = SeedClient::new(&env, &agg_id);
+    let rwa = Address::generate(&env);
+    let seven = Address::generate(&env);
+    let unlisted = Address::generate(&env);
+    agg.seed_oracle(&PriceKey::Token(rwa.clone()), &oracle_in(&env, 0));
+    agg.seed_oracle(&PriceKey::Token(seven.clone()), &oracle_in(&env, 7));
+
+    let listed = |token: &Address, live: u32| {
+        env.as_contract(&gov_id, || listed_token_decimals(&env, token, live))
+    };
+    assert_eq!(listed(&rwa, 2), 0);
+    assert_eq!(listed(&rwa, 0), 0);
+    assert_eq!(listed(&seven, 6), 7);
+    assert_eq!(listed(&seven, 7), 7);
+    assert_eq!(listed(&unlisted, 7), 7);
+    assert_eq!(listed(&unlisted, 0), 0);
+}

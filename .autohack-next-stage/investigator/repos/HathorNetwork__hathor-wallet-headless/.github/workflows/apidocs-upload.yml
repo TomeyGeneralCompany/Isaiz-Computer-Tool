@@ -1,0 +1,107 @@
+name: apidocs-upload
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+
+  # First check if this version is a valid public release
+  # This follows semver recommendations, with release candidates having a dash and a dot
+  # @see https://semver.org/spec/v2.0.0-rc.2.html
+  check-version:
+    runs-on: ubuntu-latest
+    outputs:
+      release_status_output: ${{ steps.release_version.outputs.version_status_output }}
+
+    steps:
+      - name: Check release version
+        id: release_version
+        shell: bash
+        run: |
+  
+          if [[ "${{ github.ref }}" = refs/tags/* ]]; then
+            version="${GITHUB_REF#refs/tags/}"
+            echo "version=$version"
+
+            # Pattern that accepts releases: "v1.0.0" , "v2.4.6". 
+            if [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              result=isRelease
+            # Pattern that accepts release candidates: "v1.0.0-rc.1".
+            elif [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$ ]]; then
+              result=isReleaseCandidate
+            # Pattern that accepts "v1.0.0-rc1", an invalid rc notation.
+            elif [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-rc[0-9]+$ ]]; then
+              echo "release candidate version is invalid"
+              exit 1
+            else
+              result=isNotRelease
+            fi
+          else
+            result=isNotTag
+          fi
+  
+          echo $result
+          echo "version_status_output=$result" >> $GITHUB_OUTPUT
+
+  # Initiate upload only if the version is valid
+  upload-apidocs:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # This is required for requesting the JWT
+    needs: check-version
+    env:
+      release_status: ${{ needs.check-version.outputs.release_status_output }}
+    if: >-
+      ${{ 
+          needs.check-version.outputs.release_status_output == 'isRelease' || 
+          needs.check-version.outputs.release_status_output == 'isReleaseCandidate'
+      }}
+    timeout-minutes: 10
+
+    strategy:
+      matrix:
+        node-version: [22.x]
+
+    steps:
+      # https://github.com/actions/checkout/releases/tag/v4.0.0
+      - uses: actions/checkout@3df4ab11eba7bda6032a0b82a6bb43b11571feac
+      - name: Use Node.js ${{ matrix.node-version }}
+        # https://github.com/actions/setup-node/releases/tag/v4.0.0
+        uses: actions/setup-node@8f152de45cc393bb48ce5d89d36b731f54556e65
+        with:
+          node-version: ${{ matrix.node-version }}
+      - name: Install dependencies
+        run: npm ci
+
+      # We use the config module to configure the apidocs generation
+      - name: Create config module
+        run: cp ./config.js.template ./src/config.js
+
+      - name: Create the tmp folder
+        run: mkdir tmp
+
+      # Generating the apidocs json and linting to ensure it's a valid document
+      - name: Create the apidocs json
+        run: npm run docs_convert
+      - name: Lint the apidocs json
+        run: npm run docs_lint
+      - name: Build the apidocs HTML
+        run: npm run docs_build
+
+      # Configure AWS credentials
+      - name: Set up AWS CLI
+        # https://github.com/aws-actions/configure-aws-credentials/releases/tag/v4.0.1
+        uses: aws-actions/configure-aws-credentials@010d0da01d0b5a38af31e9c3470dbfdabdecca3a
+        with:
+          role-to-assume: ${{ secrets.AWS_HEADLESS_UPLOAD_ROLE }}
+          aws-region: us-east-1
+
+      # Copy the document to S3
+      - name: Upload HTML to S3
+        run: |
+          if [[ "${{ env.release_status }}" == "isRelease" ]]; then
+            aws s3 cp index.html s3://${{ secrets.AWS_APIDOCS_BUCKET_NAME_PROD }}
+          fi
+      

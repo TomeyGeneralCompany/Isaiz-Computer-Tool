@@ -1,0 +1,39 @@
+{
+  "checks": {
+    "has_reproduction_test": false,
+    "in_scope_at_processing": true,
+    "source_commit_matches": true,
+    "triage_requires_review": false
+  },
+  "commit": "1717bdd8e6b75a1fa82abb99dbdc29e08b013c59",
+  "lead": {
+    "file": "hardhat/hardhat-solidity-docgen/internal/utils/execall.ts",
+    "fingerprint": "310840617c6a7d46b78e",
+    "guidance": "Review command construction and input provenance",
+    "line": 10,
+    "rule": "JS_CHILD_EXEC"
+  },
+  "note": "Automated offline evidence preparation only. No project-specific reproduction or verified security impact.",
+  "processed_at": "2026-10-15T09:39:30.996452+00:00",
+  "repository": "OpenZeppelin/openzeppelin-contracts-upgradeable",
+  "scope_urls": [
+    "https://immunefi.com/bug-bounty/openzeppelin/scope/"
+  ],
+  "source_check": {
+    "commit": "1717bdd8e6b75a1fa82abb99dbdc29e08b013c59",
+    "excerpt": "    1: /**\n    2:  * Iterates over all contiguous matches of the regular expression over the\n    3:  * text. Stops as soon as the regular expression no longer matches at the\n    4:  * current position.\n    5:  */\n    6: export function* execAll(re: RegExp, text: string) {\n    7:   re = new RegExp(re, re.flags + (re.sticky ? '' : 'y'));\n    8: \n    9:   while (true) {\n   10:     const match = re.exec(text);\n   11: \n   12:     // We break out of the loop if there is no match or if the empty string is\n   13:     // matched because no progress will be made and it will loop indefinitely.\n   14:     if (!match?.[0]) break;\n   15: \n   16:     yield match;\n   17:   }\n   18: }",
+    "file": "hardhat/hardhat-solidity-docgen/internal/utils/execall.ts",
+    "file_sha256": "b27a5fe6eb5ae22bb891395a26f8a5c1981afaeb61ef1e6fb6def6489d33c691",
+    "line": 10,
+    "status": "source_matched"
+  },
+  "source_fingerprint": "936567a0aa6d7b2f6ad513a1d57e4b4e4a299ac70b456c642ee3a51b68060ab5",
+  "status": "needs_project_specific_reproduction",
+  "triage": {
+    "classification": "likely_false_positive",
+    "evidence": "The code is incomplete and lacks proper validation of the input, which could lead to incorrect results.",
+    "follow_up": "If the code is incomplete, it may be necessary to add validation checks to ensure the input is correctly formatted and processed.",
+    "rationale": "The code is using a regular expression to find matches in a text string, but the implementation is incomplete and lacks proper validation of the input. The logic is incomplete and may not handle edge cases, which could lead to incorrect results. There is insufficient context to determine the actual purpose of the code."
+  },
+  "verified_vulnerability": false
+}

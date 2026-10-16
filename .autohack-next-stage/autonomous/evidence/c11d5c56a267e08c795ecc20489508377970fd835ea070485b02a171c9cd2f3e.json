@@ -1,0 +1,39 @@
+{
+  "checks": {
+    "has_reproduction_test": false,
+    "in_scope_at_processing": true,
+    "source_commit_matches": true,
+    "triage_requires_review": false
+  },
+  "commit": "9496626f71a761fc296dc3b2efbfd54c504e18f0",
+  "lead": {
+    "file": "contracts/periphery/wallet/wallet/main.sol",
+    "fingerprint": "6efc50ac0bba68d02956",
+    "guidance": "Review delegatecall target and access control",
+    "line": 271,
+    "rule": "SOL_DELEGATECALL"
+  },
+  "note": "Automated offline evidence preparation only. No project-specific reproduction or verified security impact.",
+  "processed_at": "2026-10-15T00:09:27.498384+00:00",
+  "repository": "Instadapp/fluid-contracts-public",
+  "scope_urls": [
+    "https://immunefi.com/bug-bounty/instadapp/scope/"
+  ],
+  "source_check": {
+    "commit": "9496626f71a761fc296dc3b2efbfd54c504e18f0",
+    "excerpt": "  260:                 // we do not explicitly check for this, default interaction is via UI which can check and handle this.\n  261:                 // Also applies to delegatecall etc.\n  262:                 (success_, result_) = action_.target.call{ value: action_.value }(action_.data);\n  263: \n  264:                 // handle action failure right after external call to better detect out of gas errors\n  265:                 if (!success_) {\n  266:                     _handleActionFailure(i, result_);\n  267:                 }\n  268:             } else if (action_.operation == 1) {\n  269:                 // delegatecall (operation = 1)\n  270: \n  271:                 (success_, result_) = action_.target.delegatecall(action_.data);\n  272: \n  273:                 // reset _transientAllowHash to make sure it can not be set up in any way for reentrancy\n  274:                 _resetTransientStorage();\n  275: \n  276:                 // handle action failure right after external call to better detect out of gas errors\n  277:                 if (!success_) {\n  278:                     _handleActionFailure(i, result_);\n  279:                 }\n  280:             } else if (action_.operation == 2) {\n  281:                 // flashloan (operation = 2)\n  282:                 // flashloan is always executed via .call, flashloan aggregator uses `msg.sender`, so .delegatecall\n  283:                 // wouldn't send funds to this contract but rather to the original sender.",
+    "file": "contracts/periphery/wallet/wallet/main.sol",
+    "file_sha256": "be7a68c39c732cc7690d02d14b843d4972453ba598c9c55afa1c281064159632",
+    "line": 271,
+    "status": "source_matched"
+  },
+  "source_fingerprint": "b87f081e09dee805c4d161e8ab4854e241e83ba901063ef71fd12122913662f9",
+  "status": "needs_project_specific_reproduction",
+  "triage": {
+    "classification": "likely_false_positive",
+    "evidence": "The code snippet is part of a bug fix but lacks context for classification.",
+    "follow_up": "If you have more information about the code's purpose, I can provide further analysis.",
+    "rationale": "The code snippet appears to be part of a bug fix for handling delegatecall failures, but the details provided are unclear and lack context for a false positive classification. The code is likely a placeholder or part of a larger system, and there is insufficient information to determine its actual purpose or impact."
+  },
+  "verified_vulnerability": false
+}

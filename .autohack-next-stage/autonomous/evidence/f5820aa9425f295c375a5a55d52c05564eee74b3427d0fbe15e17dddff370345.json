@@ -1,0 +1,39 @@
+{
+  "checks": {
+    "has_reproduction_test": false,
+    "in_scope_at_processing": true,
+    "source_commit_matches": true,
+    "triage_requires_review": true
+  },
+  "commit": "0bc1dd9c49203dd45f48f0046abc4e95a50d06da",
+  "lead": {
+    "file": "contracts/AvocadoMultisig/AvocadoMultisigSecondary.sol",
+    "fingerprint": "1d8a740dbc9094a6db7c",
+    "guidance": "Review delegatecall target and access control",
+    "line": 799,
+    "rule": "SOL_DELEGATECALL"
+  },
+  "note": "Automated offline evidence preparation only. No project-specific reproduction or verified security impact.",
+  "processed_at": "2026-10-15T00:09:28.109307+00:00",
+  "repository": "Instadapp/avocado-contracts-public",
+  "scope_urls": [
+    "https://immunefi.com/bug-bounty/instadapp/scope/"
+  ],
+  "source_check": {
+    "commit": "0bc1dd9c49203dd45f48f0046abc4e95a50d06da",
+    "excerpt": "  788:                 // low-level call will return success true also if action target is not even a contract.\n  789:                 // we do not explicitly check for this, default interaction is via UI which can check and handle this.\n  790:                 // Also applies to delegatecall etc.\n  791:                 (success_, result_) = action_.target.call{ value: action_.value }(action_.data);\n  792: \n  793:                 // handle action failure right after external call to better detect out of gas errors\n  794:                 if (!success_) {\n  795:                     _simulateHandleActionFailure(actionMinGasLeft_, i, result_);\n  796:                 }\n  797:             } else if (action_.operation == 1 && isDelegateCallId_) {\n  798:                 // delegatecall (operation = 1 & id = mixed(1 / 21))\n  799:                 (success_, result_) = action_.target.delegatecall(action_.data);\n  800: \n  801:                 // handle action failure right after external call to better detect out of gas errors\n  802:                 if (!success_) {\n  803:                     _simulateHandleActionFailure(actionMinGasLeft_, i, result_);\n  804:                 }\n  805: \n  806:                 // reset _transientAllowHash to make sure it can not be set up in any way for reentrancy\n  807:                 _resetTransientStorage();\n  808: \n  809:                 // for delegatecall, make sure storage was not modified. After every action, to also defend reentrancy\n  810:                 uint256 storageSlot0_;\n  811:                 uint256 storageSlot1_;",
+    "file": "contracts/AvocadoMultisig/AvocadoMultisigSecondary.sol",
+    "file_sha256": "6b09cbb01d6ab420f6a7043a6e326428ac4dee44badc5ac4c55051af0961930c",
+    "line": 799,
+    "status": "source_matched"
+  },
+  "source_fingerprint": "4050fde4f0673476fc759d8752ad5519b6d622447ca0b2bc0ed698a3146a2c33",
+  "status": "needs_project_specific_reproduction",
+  "triage": {
+    "classification": "needs_review",
+    "evidence": "Incomplete file details and lack of implementation context.",
+    "follow_up": "If the file is properly reviewed, it could be a potential bug. However, without more information, it's best to proceed with a review of the rule and file.",
+    "rationale": "The code appears to be part of a bug bounty lead, but the details provided are incomplete. The rule is about delegatecall handling, but the file and line number are not clear on the actual implementation. There is insufficient context to determine if this is a false positive or a valid review."
+  },
+  "verified_vulnerability": false
+}

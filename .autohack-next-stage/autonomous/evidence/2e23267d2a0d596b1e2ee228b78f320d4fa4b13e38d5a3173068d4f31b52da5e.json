@@ -1,0 +1,39 @@
+{
+  "checks": {
+    "has_reproduction_test": false,
+    "in_scope_at_processing": true,
+    "source_commit_matches": true,
+    "triage_requires_review": true
+  },
+  "commit": "8891f73d17887e272a5317065961269aee94f7cd",
+  "lead": {
+    "file": "contracts/GovernorBravoDelegator.sol",
+    "fingerprint": "7d09172a4b5d6d1ea410",
+    "guidance": "Review delegatecall target and access control",
+    "line": 57,
+    "rule": "SOL_DELEGATECALL"
+  },
+  "note": "Automated offline evidence preparation only. No project-specific reproduction or verified security impact.",
+  "processed_at": "2026-10-15T00:09:25.786664+00:00",
+  "repository": "Instadapp/inst-governance",
+  "scope_urls": [
+    "https://immunefi.com/bug-bounty/instadapp/scope/"
+  ],
+  "source_check": {
+    "commit": "8891f73d17887e272a5317065961269aee94f7cd",
+    "excerpt": "   46: \n   47:         emit NewImplementation(oldImplementation, implementation);\n   48:     }\n   49: \n   50:     /**\n   51:      * @notice Internal method to delegate execution to another contract\n   52:      * @dev It returns to the external caller whatever the implementation returns or forwards reverts\n   53:      * @param callee The contract to delegatecall\n   54:      * @param data The raw data to delegatecall\n   55:      */\n   56:     function delegateTo(address callee, bytes memory data) internal {\n   57:         (bool success, bytes memory returnData) = callee.delegatecall(data);\n   58:         assembly {\n   59:             if eq(success, 0) {\n   60:                 revert(add(returnData, 0x20), returndatasize())\n   61:             }\n   62:         }\n   63:     }\n   64: \n   65:     /**\n   66:      * @dev Delegates execution to an implementation contract.\n   67:      * It returns to the external caller whatever the implementation returns\n   68:      * or forwards reverts.\n   69:      */",
+    "file": "contracts/GovernorBravoDelegator.sol",
+    "file_sha256": "407308bd40f9b1fe7fcde681dcb168e9a2943d868e1a69bf244c2294ea5a26c9",
+    "line": 57,
+    "status": "source_matched"
+  },
+  "source_fingerprint": "d2ae0dd77b2d57cd838f8cc7cee32e3e507ebee6a3f48f9f6b6354fc6cc8830a",
+  "status": "needs_project_specific_reproduction",
+  "triage": {
+    "classification": "needs_review",
+    "evidence": "The source code is a governance contract, but no further context is provided about its implementation or potential risks.",
+    "follow_up": "If the rule is applied to a real-world implementation, it would require additional context to determine if it's a false positive or a potential vulnerability. However, without further information, it's best to proceed with the current information.",
+    "rationale": "The code snippet appears to be part of a governance contract, but there is insufficient context to determine if it's a false positive or a potential vulnerability. The rule is about delegatecall, but the evidence provided is limited to the source code and line number, which is insufficient to evaluate its correctness or potential impact."
+  },
+  "verified_vulnerability": false
+}

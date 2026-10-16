@@ -1,0 +1,31 @@
+{
+  "repository": "AcalaNetwork/Acala",
+  "commit": "cde2abf753cdfbb67e8129b8c0672d5c15444aa1",
+  "scope_sources": [
+    {
+      "asset_type": "blockchain_dlt",
+      "asset_url": "https://github.com/AcalaNetwork/Acala",
+      "program": "acala",
+      "scope_url": "https://immunefi.com/bug-bounty/acala/scope/"
+    }
+  ],
+  "original_report": "AcalaNetwork__Acala-cde2abf753cd.json",
+  "lead": {
+    "rule": "SOL_DELEGATECALL",
+    "file": "ts-tests/contracts/TestCalls.sol",
+    "line": 27,
+    "guidance": "Review delegatecall target and access control",
+    "fingerprint": "d80d7f1436c1c2b13221"
+  },
+  "source_excerpt": "19:             if eq(success, 0) {\n20:                 revert(add(returnData, 0x20), returndatasize())\n21:             }\n22:         }\n23:         return returnData;\n24:     }\n25: \n26:     function test_delegate_call(address target, bytes memory input, bytes memory output) public {\n27:         (bool success, bytes memory returnData) = target.delegatecall(input);\n28:        assembly {\n29:             if eq(success, 0) {\n30:                 revert(add(returnData, 0x20), returndatasize())\n31:             }\n32:         }\n33:         require(keccak256(abi.encodePacked(returnData)) == keccak256(abi.encodePacked(output)), \"call reverted\");\n34:     }\n35: }",
+  "triage": {
+    "classification": "likely_false_positive",
+    "rationale": "The code appears to be part of a test suite and does not indicate any known vulnerabilities. The delegatecall logic is correctly implemented, and the test cases are designed to validate the behavior of the function. There is insufficient context to determine if this is a false positive or a valid test case.",
+    "evidence": "The code is part of a public repository and is used for testing. The test cases are designed to validate delegatecall behavior, and the logic is correctly implemented.",
+    "follow_up": "If you have more context or specific requirements, please provide it, and I will review it further."
+  },
+  "status": "unverified_draft",
+  "verified_vulnerability": false,
+  "generated_at": "2026-10-14T23:29:41.511890+00:00",
+  "note": "Automated static triage only. No exploitability, eligibility, or bounty award established."
+}

@@ -1,0 +1,223 @@
+use controller::types::ControllerKey;
+use test_harness::{
+    assert_contract_error, errors, hub_asset, map_try_ok_unit, usdc_preset, LendingTest, ALICE, BOB,
+};
+
+#[test]
+fn test_create_normal_account() {
+    let mut t = LendingTest::new().with_market(usdc_preset()).build();
+
+    let account_id = t.create_account(ALICE);
+    assert!(account_id > 0, "account_id should be non-zero");
+
+    let attrs = t.get_account_attributes(ALICE);
+    assert_eq!(attrs.spoke_id, 1);
+    assert_eq!(attrs.mode, controller::types::PositionMode::Normal);
+}
+
+#[test]
+fn test_create_spoke_account() {
+    let mut t = LendingTest::new().stablecoin_spoke_two_asset().build();
+
+    let account_id = t.create_spoke_account(ALICE, 2);
+    assert!(account_id > 0);
+
+    let attrs = t.get_account_attributes(ALICE);
+    assert_eq!(attrs.spoke_id, 2);
+}
+
+#[test]
+fn test_create_account_full_custom() {
+    let mut t = LendingTest::new().with_market(usdc_preset()).build();
+
+    let account_id = t.create_account_full(ALICE, 1, controller::types::PositionMode::Multiply);
+    assert!(account_id > 0);
+
+    let attrs = t.get_account_attributes(ALICE);
+    assert_eq!(attrs.mode, controller::types::PositionMode::Multiply);
+    assert_eq!(attrs.spoke_id, 1);
+}
+
+#[test]
+fn test_remove_empty_account() {
+    let mut t = LendingTest::new().with_market(usdc_preset()).build();
+
+    t.create_account(ALICE);
+    t.remove_account(ALICE);
+
+    let accounts = t.get_active_accounts(ALICE);
+    assert_eq!(
+        accounts.len(),
+        0,
+        "account list should be empty after removal"
+    );
+}
+
+#[test]
+fn test_remove_rejects_with_positions() {
+    let mut t = LendingTest::new().with_market(usdc_preset()).build();
+
+    t.supply(ALICE, "USDC", 1_000.0);
+
+    let result = t.try_remove_account(ALICE);
+    assert_contract_error(result, errors::POSITION_NOT_FOUND);
+}
+
+#[test]
+fn test_multiple_accounts_per_user() {
+    let mut t = LendingTest::new().standard_two_asset().build();
+
+    let id1 = t.create_account(ALICE);
+    let id2 = t.create_account_full(ALICE, 1, controller::types::PositionMode::Normal);
+    assert_ne!(id1, id2, "accounts should have different IDs");
+
+    t.supply_to(ALICE, id1, "USDC", 1_000.0);
+    t.supply_to(ALICE, id2, "ETH", 0.5);
+
+    let bal1 = t.supply_balance_for(ALICE, id1, "USDC");
+    let bal2 = t.supply_balance_for(ALICE, id2, "ETH");
+    assert!(bal1 > 999.0, "account 1 should have ~1000 USDC supply");
+    assert!(bal2 > 0.49, "account 2 should have ~0.5 ETH supply");
+
+    let accounts = t.get_active_accounts(ALICE);
+    assert!(accounts.len() >= 2, "should have at least 2 accounts");
+}
+
+#[test]
+fn test_account_auto_removed_after_full_repay_withdraw() {
+    let mut t = LendingTest::new().standard_two_asset().build();
+
+    t.supply(ALICE, "USDC", 10_000.0);
+    t.borrow(ALICE, "ETH", 1.0);
+
+    t.repay(ALICE, "ETH", 1.01);
+
+    t.withdraw_all(ALICE, "USDC");
+
+    let accounts = t.get_active_accounts(ALICE);
+    assert_eq!(
+        accounts.len(),
+        0,
+        "account should be auto-removed when all positions empty"
+    );
+}
+
+#[test]
+fn test_get_active_accounts() {
+    let mut t = LendingTest::new().with_market(usdc_preset()).build();
+
+    t.get_or_create_user(ALICE);
+    let accounts_before = t.get_active_accounts(ALICE);
+    assert_eq!(accounts_before.len(), 0);
+
+    t.create_account(ALICE);
+    let accounts_after = t.get_active_accounts(ALICE);
+    assert_eq!(accounts_after.len(), 1);
+}
+
+#[test]
+fn test_account_owner_verified() {
+    let mut t = LendingTest::new().with_market(usdc_preset()).build();
+
+    t.supply(ALICE, "USDC", 10_000.0);
+
+    let alice_account_id = t.resolve_account_id(ALICE);
+    let bob_addr = t.get_or_create_user(BOB);
+    let usdc_addr = t.resolve_asset("USDC");
+
+    let ctrl = t.ctrl_client();
+    let withdrawals = soroban_sdk::vec![&t.env, (hub_asset(usdc_addr), 10_000_000_000i128)];
+    let result = match ctrl.try_withdraw(&bob_addr, &alice_account_id, &withdrawals, &None) {
+        Ok(res) => res.map(|_| ()).map_err(|e| e.into()),
+        Err(e) => Err(e.expect("expected contract error, got InvokeError")),
+    };
+    assert_contract_error(result, errors::NOT_AUTHORIZED);
+}
+
+#[test]
+fn test_renew_account_requires_owner() {
+    let mut t = LendingTest::new().with_market(usdc_preset()).build();
+    t.supply(ALICE, "USDC", 1_000.0);
+    let account_id = t.find_account_id(ALICE).unwrap();
+
+    let bob = t.get_or_create_user(BOB);
+    let result = t.ctrl_client().try_renew_account(&bob, &account_id);
+    let mapped: Result<(), soroban_sdk::Error> = map_try_ok_unit(result);
+
+    assert_contract_error(mapped, errors::ACCOUNT_NOT_IN_MARKET);
+}
+
+#[test]
+fn test_adopt_account_prunes_old_owner_bookkeeping() {
+    let mut t = LendingTest::new().with_market(usdc_preset()).build();
+
+    let account_id = t.create_account(ALICE);
+    assert_eq!(t.resolve_account_id(ALICE), account_id);
+
+    let attrs = t.get_account_attributes(ALICE);
+
+    t.nft_transfer(ALICE, BOB, account_id);
+    t.adopt_account(BOB, account_id, attrs.spoke_id, attrs.mode);
+
+    // The new owner's bookkeeping resolves the transferred account.
+    assert_eq!(t.resolve_account_id(BOB), account_id);
+
+    // The old owner's bookkeeping does not reference it.
+    assert_eq!(
+        t.find_account_id(ALICE),
+        None,
+        "old owner must have no account left after the transferred id is pruned"
+    );
+
+    // A harness verb invoked as the old owner must not resolve the transferred
+    // account: `create_account` for ALICE mints a new id.
+    let alice_new_account_id = t.create_account(ALICE);
+    assert_ne!(
+        alice_new_account_id, account_id,
+        "old owner's next create_account must mint a fresh id, not resolve the transferred one"
+    );
+    assert_eq!(t.resolve_account_id(ALICE), alice_new_account_id);
+
+    // `supply` resolves the caller's default account through the same bookkeeping.
+    t.supply(ALICE, "USDC", 100.0);
+    assert_eq!(
+        t.resolve_account_id(ALICE),
+        alice_new_account_id,
+        "supply as the old owner must land on their fresh account, not the transferred one"
+    );
+    assert!(
+        t.supply_balance_for(ALICE, alice_new_account_id, "USDC") > 99.0,
+        "supply must have landed on ALICE's fresh account"
+    );
+
+    // BOB's adopted account is unaffected by ALICE's new account.
+    assert_eq!(t.resolve_account_id(BOB), account_id);
+}
+
+#[test]
+fn test_renew_account_owner_succeeds() {
+    let mut t = LendingTest::new().with_market(usdc_preset()).build();
+    t.supply(ALICE, "USDC", 1_000.0);
+    let account_id = t.find_account_id(ALICE).unwrap();
+
+    let alice = t.get_or_create_user(ALICE);
+    t.ctrl_client().renew_account(&alice, &account_id);
+
+    assert_eq!(t.find_account_id(ALICE), Some(account_id));
+    t.assert_supply_near(ALICE, "USDC", 1_000.0, 0.01);
+}
+
+#[test]
+#[should_panic(expected = "should have no positions")]
+fn assert_no_positions_checks_a_removed_account_for_leftover_positions() {
+    let mut t = LendingTest::new().with_market(usdc_preset()).build();
+    t.supply(ALICE, "USDC", 100.0);
+    let account_id = t.account_id(ALICE);
+    t.env.as_contract(&t.controller, || {
+        t.env
+            .storage()
+            .persistent()
+            .remove(&ControllerKey::AccountMeta(account_id));
+    });
+    t.assert_no_positions(ALICE);
+}

@@ -1,0 +1,39 @@
+{
+  "checks": {
+    "has_reproduction_test": false,
+    "in_scope_at_processing": true,
+    "source_commit_matches": true,
+    "triage_requires_review": false
+  },
+  "commit": "8891f73d17887e272a5317065961269aee94f7cd",
+  "lead": {
+    "file": "scripts/verify/lib/actionExtractor.ts",
+    "fingerprint": "1dcd06f85287dbcb3b98",
+    "guidance": "Review command construction and input provenance",
+    "line": 58,
+    "rule": "JS_CHILD_EXEC"
+  },
+  "note": "Automated offline evidence preparation only. No project-specific reproduction or verified security impact.",
+  "processed_at": "2026-10-15T00:09:25.401001+00:00",
+  "repository": "Instadapp/inst-governance",
+  "scope_urls": [
+    "https://immunefi.com/bug-bounty/instadapp/scope/"
+  ],
+  "source_check": {
+    "commit": "8891f73d17887e272a5317065961269aee94f7cd",
+    "excerpt": "   47: \n   48: export function extractActionsFromSource(\n   49:   src: string\n   50: ): ExtractedAction[] {\n   51:   const result: ExtractedAction[] = [];\n   52: \n   53:   // Find every function-declaration keyword. The preamble (visibility,\n   54:   // modifier, return clause) is captured up to the first `{` past it.\n   55:   const FN_START = /\\bfunction\\s+(action(\\d+))\\s*\\(/g;\n   56: \n   57:   let m: RegExpExecArray | null;\n   58:   while ((m = FN_START.exec(src)) !== null) {\n   59:     const fullName = m[1]!;\n   60:     const index = Number(m[2]!);\n   61: \n   62:     // Find the body open-brace at or after the signature, skipping over\n   63:     // comments / strings which cannot legitimately contain a `{` in this\n   64:     // context but which we still respect for correctness.\n   65:     const openBrace = findNextUnquoted(src, FN_START.lastIndex, \"{\");\n   66:     if (openBrace === -1) continue;\n   67: \n   68:     const closeBrace = findMatchingBrace(src, openBrace);\n   69:     if (closeBrace === -1) continue;\n   70: ",
+    "file": "scripts/verify/lib/actionExtractor.ts",
+    "file_sha256": "2e92d9d17a44d2b9a05dc6bb7cdf93a402287efa17be22423a4300ad7dbd0aab",
+    "line": 58,
+    "status": "source_matched"
+  },
+  "source_fingerprint": "225056d27cdc8494cc008cf224114e18d0bb7528f03d9107829ff3fbc6da8774",
+  "status": "needs_project_specific_reproduction",
+  "triage": {
+    "classification": "likely_false_positive",
+    "evidence": "Incomplete logic for handling command construction and input provenance, lack of context for determining validity.",
+    "follow_up": "If you have more context or a verified vulnerability, please provide it here for further analysis.",
+    "rationale": "The code snippet appears to be part of a static analysis tool for a bug bounty, but the logic for extracting function declarations and handling command construction is not clearly validated. The code is incomplete and lacks proper context for determining whether the extracted actions are valid or incorrect. There is insufficient evidence to classify this as an actual vulnerability or false positive."
+  },
+  "verified_vulnerability": false
+}

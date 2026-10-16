@@ -1,0 +1,101 @@
+# SPDX-FileCopyrightText: Hathor Labs
+# SPDX-License-Identifier: Apache-2.0
+
+from typing import NamedTuple
+
+from hathor.conf.settings import HathorSettings
+from hathor.daa import DAAFactory
+from hathor.feature_activation.feature_service import FeatureService
+from hathor.nanocontracts.blueprint_service import BlueprintService
+from hathor.reactor import ReactorProtocol as Reactor
+from hathor.transaction.storage import TransactionStorage
+from hathor.verification.block_verifier import BlockVerifier
+from hathor.verification.merge_mined_block_verifier import MergeMinedBlockVerifier
+from hathor.verification.nano_header_verifier import NanoHeaderVerifier
+from hathor.verification.on_chain_blueprint_verifier import OnChainBlueprintVerifier
+from hathor.verification.poa_block_verifier import PoaBlockVerifier
+from hathor.verification.token_creation_transaction_verifier import TokenCreationTransactionVerifier
+from hathor.verification.transaction_verifier import TransactionVerifier
+from hathor.verification.vertex_verifier import VertexVerifier
+
+
+class VertexVerifiers(NamedTuple):
+    """A group of verifier instances, one for each vertex type."""
+    vertex: VertexVerifier
+    block: BlockVerifier
+    merge_mined_block: MergeMinedBlockVerifier
+    poa_block: PoaBlockVerifier
+    tx: TransactionVerifier
+    token_creation_tx: TokenCreationTransactionVerifier
+    nano_header: NanoHeaderVerifier
+    on_chain_blueprint: OnChainBlueprintVerifier
+
+    @classmethod
+    def create_defaults(
+        cls,
+        *,
+        reactor: Reactor,
+        settings: HathorSettings,
+        daa_factory: DAAFactory,
+        feature_service: FeatureService,
+        tx_storage: TransactionStorage,
+        blueprint_service: BlueprintService,
+    ) -> 'VertexVerifiers':
+        """
+        Create a VertexVerifiers instance using the default verifier for each vertex type,
+        from all required dependencies.
+        """
+        vertex_verifier = VertexVerifier(reactor=reactor, settings=settings, feature_service=feature_service)
+
+        return cls.create(
+            reactor=reactor,
+            settings=settings,
+            vertex_verifier=vertex_verifier,
+            daa_factory=daa_factory,
+            feature_service=feature_service,
+            tx_storage=tx_storage,
+            blueprint_service=blueprint_service,
+        )
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        reactor: Reactor,
+        settings: HathorSettings,
+        vertex_verifier: VertexVerifier,
+        daa_factory: DAAFactory,
+        feature_service: FeatureService,
+        tx_storage: TransactionStorage,
+        blueprint_service: BlueprintService,
+    ) -> 'VertexVerifiers':
+        """
+        Create a VertexVerifiers instance using a custom vertex_verifier.
+        """
+        block_verifier = BlockVerifier(
+            settings=settings,
+            daa_factory=daa_factory,
+            feature_service=feature_service,
+            tx_storage=tx_storage,
+        )
+        merge_mined_block_verifier = MergeMinedBlockVerifier(settings=settings, feature_service=feature_service)
+        poa_block_verifier = PoaBlockVerifier(settings=settings)
+        tx_verifier = TransactionVerifier(settings=settings, daa_factory=daa_factory, feature_service=feature_service)
+        token_creation_tx_verifier = TokenCreationTransactionVerifier(settings=settings)
+        nano_header_verifier = NanoHeaderVerifier(
+            settings=settings,
+            tx_storage=tx_storage,
+            blueprint_service=blueprint_service,
+        )
+        on_chain_blueprint_verifier = OnChainBlueprintVerifier(settings=settings)
+
+        return VertexVerifiers(
+            vertex=vertex_verifier,
+            block=block_verifier,
+            merge_mined_block=merge_mined_block_verifier,
+            poa_block=poa_block_verifier,
+            tx=tx_verifier,
+            token_creation_tx=token_creation_tx_verifier,
+            nano_header=nano_header_verifier,
+            on_chain_blueprint=on_chain_blueprint_verifier,
+        )

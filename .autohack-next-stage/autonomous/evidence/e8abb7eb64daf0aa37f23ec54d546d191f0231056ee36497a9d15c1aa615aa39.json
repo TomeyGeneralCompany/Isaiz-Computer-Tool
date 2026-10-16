@@ -1,0 +1,39 @@
+{
+  "checks": {
+    "has_reproduction_test": false,
+    "in_scope_at_processing": true,
+    "source_commit_matches": true,
+    "triage_requires_review": false
+  },
+  "commit": "598d3905a6f4ebe68a52c79d461bedb7246fa187",
+  "lead": {
+    "file": "scripts/update-docs-branch.js",
+    "fingerprint": "c214e1416d893ca593ea",
+    "guidance": "Review command construction and input provenance",
+    "line": 7,
+    "rule": "JS_CHILD_EXEC"
+  },
+  "note": "Automated offline evidence preparation only. No project-specific reproduction or verified security impact.",
+  "processed_at": "2026-10-15T09:36:30.595031+00:00",
+  "repository": "OpenZeppelin/openzeppelin-contracts",
+  "scope_urls": [
+    "https://immunefi.com/bug-bounty/openzeppelin/scope/"
+  ],
+  "source_check": {
+    "commit": "598d3905a6f4ebe68a52c79d461bedb7246fa187",
+    "excerpt": "    1: import proc from 'child_process';\n    2: import fs from 'fs';\n    3: import path from 'path';\n    4: \n    5: const read = cmd => proc.execSync(cmd, { encoding: 'utf8' }).trim();\n    6: const run = cmd => {\n    7:   proc.execSync(cmd, { stdio: 'inherit' });\n    8: };\n    9: const tryRead = cmd => {\n   10:   try {\n   11:     return read(cmd);\n   12:   } catch {\n   13:     return undefined;\n   14:   }\n   15: };\n   16: \n   17: const releaseBranchRegex = /^release-v(?<version>(?<major>\\d+)\\.(?<minor>\\d+)(?:\\.(?<patch>\\d+))?)$/;\n   18: \n   19: const currentBranch = read('git rev-parse --abbrev-ref HEAD');",
+    "file": "scripts/update-docs-branch.js",
+    "file_sha256": "b8eaa19b98d576625e1c7e5014b40e2dae8e682b6a18ed0a68a74b16270429ad",
+    "line": 7,
+    "status": "source_matched"
+  },
+  "source_fingerprint": "15859adba8050d3344b99a73f1d46a31590ead43618da10aa24c2b8be3d93fc6",
+  "status": "needs_project_specific_reproduction",
+  "triage": {
+    "classification": "likely_false_positive",
+    "evidence": "The code is part of a bug-bounty project and is used to update documentation. There's no indication of exploitable code or potential security issues.",
+    "follow_up": "If you're looking for a vulnerability, please provide more details about the code and the context in which it's used.",
+    "rationale": "The code is using 'proc' and 'fs' to execute child processes, which is not a known vulnerability. The 'read' function is designed to handle command execution, but there's no indication of potential security issues in the code. The 'tryRead' function is a safeguard against undefined values, but it's not a direct vulnerability."
+  },
+  "verified_vulnerability": false
+}

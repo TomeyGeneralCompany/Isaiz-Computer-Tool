@@ -1,0 +1,275 @@
+use anyhow::{anyhow, Result};
+use stellar_xdr::ScVal;
+
+use crate::scval::{field_bool, field_i128, field_u32, field_u64, vec_items};
+
+#[derive(Debug, Clone)]
+pub struct MarketIndexView {
+    pub supply_index_ray: i128,
+    pub borrow_index_ray: i128,
+    pub final_price_wad: i128,
+    pub primary_price_wad: i128,
+    pub anchor_price_wad: i128,
+
+    pub price_timestamp: u64,
+    pub stale: bool,
+    pub deviation: bool,
+
+    pub valid: bool,
+
+    /// `OracleError` discriminant behind an invalid price. `None` when the price is
+    /// valid or the row has no `error_code` field, so the field never fails a decode.
+    pub error_code: Option<u32>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SpokeConfig {
+    pub is_deprecated: bool,
+    pub liquidation_target_hf_wad: i128,
+    pub hf_for_max_bonus_wad: i128,
+    pub liquidation_bonus_factor_bps: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct SpokeAssetConfig {
+    pub is_collateralizable: bool,
+    pub is_borrowable: bool,
+    pub paused: bool,
+    pub frozen: bool,
+    pub loan_to_value_bps: u32,
+    pub liquidation_threshold_bps: u32,
+    pub liquidation_bonus_bps: u32,
+    pub liquidation_fees_bps: u32,
+    pub supply_cap: i128,
+    pub borrow_cap: i128,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SpokeUsage {
+    pub supplied_scaled_ray: i128,
+    pub borrowed_scaled_ray: i128,
+}
+
+pub fn decode_market_indexes(value: &ScVal) -> Result<Vec<MarketIndexView>> {
+    let items = vec_items(value).ok_or_else(|| anyhow!("expected Vec<MarketIndexView>"))?;
+    items.iter().map(decode_market_index_row).collect()
+}
+
+fn decode_market_index_row(value: &ScVal) -> Result<MarketIndexView> {
+    Ok(MarketIndexView {
+        supply_index_ray: field_i128(value, "supply_index")
+            .ok_or_else(|| anyhow!("supply_index missing"))?,
+        borrow_index_ray: field_i128(value, "borrow_index")
+            .ok_or_else(|| anyhow!("borrow_index missing"))?,
+        final_price_wad: field_i128(value, "price_wad")
+            .ok_or_else(|| anyhow!("price_wad missing"))?,
+        primary_price_wad: field_i128(value, "primary_price_wad")
+            .ok_or_else(|| anyhow!("primary_price_wad missing"))?,
+        anchor_price_wad: field_i128(value, "anchor_price_wad")
+            .ok_or_else(|| anyhow!("anchor_price_wad missing"))?,
+        price_timestamp: field_u64(value, "price_timestamp").unwrap_or(0),
+        stale: field_bool(value, "stale").unwrap_or(false),
+        deviation: field_bool(value, "deviation").unwrap_or(false),
+        valid: field_bool(value, "valid").unwrap_or(false),
+        error_code: field_u32(value, "error_code"),
+    })
+}
+
+pub fn decode_spoke(value: &ScVal) -> Result<SpokeConfig> {
+    Ok(SpokeConfig {
+        is_deprecated: field_bool(value, "is_deprecated").unwrap_or(false),
+        liquidation_target_hf_wad: field_i128(value, "liquidation_target_hf_wad").unwrap_or(0),
+        hf_for_max_bonus_wad: field_i128(value, "hf_for_max_bonus_wad").unwrap_or(0),
+        liquidation_bonus_factor_bps: field_u32(value, "liquidation_bonus_factor_bps").unwrap_or(0),
+    })
+}
+
+pub fn decode_spoke_asset(value: &ScVal) -> Result<SpokeAssetConfig> {
+    Ok(SpokeAssetConfig {
+        is_collateralizable: field_bool(value, "is_collateralizable").unwrap_or(false),
+        is_borrowable: field_bool(value, "is_borrowable").unwrap_or(false),
+        paused: field_bool(value, "paused").unwrap_or(false),
+        frozen: field_bool(value, "frozen").unwrap_or(false),
+        loan_to_value_bps: field_u32(value, "loan_to_value").unwrap_or(0),
+        liquidation_threshold_bps: field_u32(value, "liquidation_threshold").unwrap_or(0),
+        liquidation_bonus_bps: field_u32(value, "liquidation_bonus").unwrap_or(0),
+        liquidation_fees_bps: field_u32(value, "liquidation_fees").unwrap_or(0),
+
+        supply_cap: field_i128(value, "supply_cap").ok_or_else(|| anyhow!("supply_cap missing"))?,
+        borrow_cap: field_i128(value, "borrow_cap").ok_or_else(|| anyhow!("borrow_cap missing"))?,
+    })
+}
+
+pub fn decode_spoke_usage(value: &ScVal) -> Result<SpokeUsage> {
+    if !matches!(value, ScVal::Map(_)) {
+        return Err(anyhow!("expected SpokeUsageRaw map"));
+    }
+    Ok(SpokeUsage {
+        supplied_scaled_ray: field_i128(value, "supplied_scaled_ray").unwrap_or(0),
+        borrowed_scaled_ray: field_i128(value, "borrowed_scaled_ray").unwrap_or(0),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use stellar_xdr::{Int128Parts, ScMap, ScMapEntry, ScVec};
+
+    fn sym(t: &str) -> ScVal {
+        ScVal::Symbol(crate::keys::symbol(t).unwrap())
+    }
+    fn i128v(v: i128) -> ScVal {
+        ScVal::I128(Int128Parts {
+            hi: (v >> 64) as i64,
+            lo: v as u64,
+        })
+    }
+    fn map(entries: Vec<(&str, ScVal)>) -> ScVal {
+        ScVal::Map(Some(ScMap(
+            entries
+                .into_iter()
+                .map(|(k, v)| ScMapEntry {
+                    key: sym(k),
+                    val: v,
+                })
+                .collect::<Vec<_>>()
+                .try_into()
+                .unwrap(),
+        )))
+    }
+
+    #[test]
+    fn decodes_market_index_vec_in_order() {
+        let row = map(vec![
+            ("asset", i128v(0)),
+            ("supply_index", i128v(1_000_000)),
+            ("borrow_index", i128v(2_000_000)),
+            ("price_wad", i128v(100)),
+            ("primary_price_wad", i128v(101)),
+            ("anchor_price_wad", i128v(99)),
+            ("price_timestamp", ScVal::U64(1_700_000_000)),
+            ("stale", ScVal::Bool(false)),
+            ("deviation", ScVal::Bool(true)),
+            ("valid", ScVal::Bool(false)),
+        ]);
+        let vec = ScVal::Vec(Some(ScVec(vec![row].try_into().unwrap())));
+        let decoded = decode_market_indexes(&vec).unwrap();
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(decoded[0].final_price_wad, 100);
+        assert_eq!(decoded[0].primary_price_wad, 101);
+        assert_eq!(decoded[0].anchor_price_wad, 99);
+        assert_eq!(decoded[0].price_timestamp, 1_700_000_000);
+        assert!(!decoded[0].stale);
+        assert!(decoded[0].deviation);
+        assert!(!decoded[0].valid);
+        // A row without an `error_code` key must decode.
+        assert_eq!(decoded[0].error_code, None);
+    }
+
+    /// Decodes `error_code` from `U32` and `Void`, the encodings of `Option<u32>`.
+    /// A resolution error zeroes `stale` and `deviation`, so only the code names
+    /// the cause.
+    #[test]
+    fn decodes_market_index_error_code() {
+        let with_code = |code: ScVal| {
+            let row = map(vec![
+                ("asset", i128v(0)),
+                ("supply_index", i128v(1_000_000)),
+                ("borrow_index", i128v(2_000_000)),
+                ("price_wad", i128v(0)),
+                ("primary_price_wad", i128v(0)),
+                ("anchor_price_wad", i128v(0)),
+                ("price_timestamp", ScVal::U64(0)),
+                ("stale", ScVal::Bool(false)),
+                ("deviation", ScVal::Bool(false)),
+                ("valid", ScVal::Bool(false)),
+                ("error_code", code),
+            ]);
+            let vec = ScVal::Vec(Some(ScVec(vec![row].try_into().unwrap())));
+            decode_market_indexes(&vec).unwrap()
+        };
+
+        // 206 is `PriceFeedStale`.
+        let some = with_code(ScVal::U32(206));
+        assert_eq!(some[0].error_code, Some(206));
+        assert!(
+            !some[0].stale,
+            "the flags stay zeroed; only the code reports"
+        );
+        assert!(!some[0].deviation);
+
+        let none = with_code(ScVal::Void);
+        assert_eq!(none[0].error_code, None);
+    }
+
+    #[test]
+    fn decodes_spoke_liquidation_curve() {
+        let m = map(vec![
+            ("is_deprecated", ScVal::Bool(false)),
+            (
+                "liquidation_target_hf_wad",
+                i128v(1_050_000_000_000_000_000),
+            ),
+            ("hf_for_max_bonus_wad", i128v(950_000_000_000_000_000)),
+            ("liquidation_bonus_factor_bps", ScVal::U32(5000)),
+        ]);
+        let cfg = decode_spoke(&m).unwrap();
+        assert!(!cfg.is_deprecated);
+        assert_eq!(cfg.liquidation_target_hf_wad, 1_050_000_000_000_000_000);
+        assert_eq!(cfg.hf_for_max_bonus_wad, 950_000_000_000_000_000);
+        assert_eq!(cfg.liquidation_bonus_factor_bps, 5000);
+    }
+
+    #[test]
+    fn decodes_spoke_asset_flags_and_caps() {
+        let m = map(vec![
+            ("is_collateralizable", ScVal::Bool(true)),
+            ("is_borrowable", ScVal::Bool(false)),
+            ("paused", ScVal::Bool(true)),
+            ("frozen", ScVal::Bool(false)),
+            ("loan_to_value", ScVal::U32(7500)),
+            ("liquidation_threshold", ScVal::U32(8000)),
+            ("liquidation_bonus", ScVal::U32(500)),
+            ("liquidation_fees", ScVal::U32(100)),
+            ("supply_cap", i128v(1_000_000)),
+            ("borrow_cap", i128v(0)),
+        ]);
+        let cfg = decode_spoke_asset(&m).unwrap();
+        assert!(cfg.is_collateralizable);
+        assert!(cfg.paused);
+        assert_eq!(cfg.loan_to_value_bps, 7500);
+
+        assert_eq!(cfg.borrow_cap, 0);
+    }
+
+    #[test]
+    fn spoke_asset_missing_cap_fails_rather_than_defaulting_to_closed() {
+        let base = vec![
+            ("is_collateralizable", ScVal::Bool(true)),
+            ("is_borrowable", ScVal::Bool(true)),
+            ("paused", ScVal::Bool(false)),
+            ("frozen", ScVal::Bool(false)),
+            ("loan_to_value", ScVal::U32(7500)),
+            ("liquidation_threshold", ScVal::U32(8000)),
+            ("liquidation_bonus", ScVal::U32(500)),
+            ("liquidation_fees", ScVal::U32(100)),
+        ];
+
+        let mut no_supply = base.clone();
+        no_supply.push(("borrow_cap", i128v(1_000_000)));
+        assert!(decode_spoke_asset(&map(no_supply)).is_err());
+
+        let mut no_borrow = base.clone();
+        no_borrow.push(("supply_cap", i128v(1_000_000)));
+        assert!(decode_spoke_asset(&map(no_borrow)).is_err());
+
+        assert!(decode_spoke_asset(&map(base)).is_err());
+    }
+
+    #[test]
+    fn spoke_usage_missing_fields_default_zero() {
+        let usage = decode_spoke_usage(&map(vec![])).unwrap();
+        assert_eq!(usage.supplied_scaled_ray, 0);
+        assert_eq!(usage.borrowed_scaled_ray, 0);
+    }
+}

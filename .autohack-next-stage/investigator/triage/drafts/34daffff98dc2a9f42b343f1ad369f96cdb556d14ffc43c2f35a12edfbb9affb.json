@@ -1,0 +1,31 @@
+{
+  "repository": "Instadapp/avocado-contracts-public",
+  "commit": "0bc1dd9c49203dd45f48f0046abc4e95a50d06da",
+  "scope_sources": [
+    {
+      "asset_type": "smart_contract",
+      "asset_url": "https://github.com/Instadapp/avocado-contracts-public",
+      "program": "instadapp",
+      "scope_url": "https://immunefi.com/bug-bounty/instadapp/scope/"
+    }
+  ],
+  "original_report": "Instadapp__avocado-contracts-public-0bc1dd9c4920.json",
+  "lead": {
+    "rule": "SOL_TX_ORIGIN",
+    "file": "contracts/AvocadoMultisig/AvocadoMultisigCore.sol",
+    "line": 529,
+    "guidance": "Review authorization based on tx.origin",
+    "fingerprint": "2a59db9f62fd08e9d044"
+  },
+  "source_excerpt": "521:         CastParams calldata params_,\n522:         CastForwardParams calldata forwardParams_,\n523:         SignatureParams[] memory signaturesParams_,\n524:         ChainAgnosticHash[] memory chainAgnosticHashes_,\n525:         bool estimate_\n526:     ) internal returns (bool success_, string memory revertReason_) {\n527:         if (\n528:             !(msg.sender == 0x000000000000000000000000000000000000dEaD ||\n529:                 (msg.sender == avoForwarder && tx.origin == 0x000000000000000000000000000000000000dEaD))\n530:         ) {\n531:             // sender must be the allowed AvoForwarder and tx origin must be dead address,\n532:             // or msg.sender must be 0x000000000000000000000000000000000000dEaD directly.\n533:             revert AvocadoMultisig__Unauthorized();\n534:         }\n535: \n536:         (success_, revertReason_) = abi.decode(\n537:             _spell(",
+  "triage": {
+    "classification": "likely_false_positive",
+    "rationale": "The code checks if the sender is the allowed AvoForwarder and the tx origin is a dead address, but the logic is incomplete and may not cover all cases. The code is incomplete and lacks proper validation for all possible scenarios.",
+    "evidence": "The code checks for sender == 0x000000000000000000000000000000000000dEaD or sender == avoForwarder and tx.origin == 0x000000000000000000000000000000000000dEaD, but does not cover all possible cases. The code is incomplete and lacks proper validation for all possible scenarios.",
+    "follow_up": "Review the code for completeness and ensure all possible cases are covered. If the code is incomplete, it may require additional validation steps to ensure correctness."
+  },
+  "status": "unverified_draft",
+  "verified_vulnerability": false,
+  "generated_at": "2026-10-14T23:40:58.631220+00:00",
+  "note": "Automated static triage only. No exploitability, eligibility, or bounty award established."
+}

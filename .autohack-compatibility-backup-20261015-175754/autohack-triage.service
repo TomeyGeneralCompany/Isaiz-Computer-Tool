@@ -1,0 +1,18 @@
+[Unit]
+Description=AutoHack bounded local Qwen static lead triage
+After=network-online.target ollama.service autohack-investigator.service
+Wants=network-online.target
+[Service]
+Type=simple
+WorkingDirectory=/home/izy/isaiz-bugbounty/autohack
+ExecStart=/usr/bin/python3 -u /home/izy/isaiz-bugbounty/autohack/.autohack-next-stage/investigator/triage/worker.py
+Environment=AUTOHACK_TRIAGE_MODEL=qwen3:0.6b
+Environment=AUTOHACK_TRIAGE_PER_CYCLE=6
+Restart=on-failure
+RestartSec=30
+CPUQuota=45%
+MemoryMax=300M
+TasksMax=40
+NoNewPrivileges=true
+[Install]
+WantedBy=default.target

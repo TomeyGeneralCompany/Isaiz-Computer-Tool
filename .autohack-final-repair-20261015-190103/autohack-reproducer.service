@@ -1,0 +1,18 @@
+[Unit]
+Description=AutoHack offline reproduction evidence queue
+After=default.target
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /home/izy/isaiz-bugbounty/autohack/.autohack-next-stage/investigator/reproduction/worker.py
+Restart=on-failure
+RestartSec=15
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/izy/isaiz-bugbounty/autohack/.autohack-next-stage/investigator/reproduction
+CPUQuota=35%
+MemoryMax=450M
+TasksMax=32
+[Install]
+WantedBy=default.target

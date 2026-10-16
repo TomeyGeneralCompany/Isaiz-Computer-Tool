@@ -1,0 +1,14 @@
+{
+  "commit": "b5f10574f943911635754dd76ed6ce95858b7d93",
+  "detail": {
+    "language": ".js",
+    "note": "Solidity Foundry adapter only in this release"
+  },
+  "input_hash": "1bf21c7b26cecaec4392c0009e330f6d5da294983c350df8ab6067bd15bafa69",
+  "processed_at": "2026-10-15T00:50:50.205912+00:00",
+  "repository": "OpenZeppelin/uniswap-hooks",
+  "source_draft": "/home/izy/isaiz-bugbounty/autohack/.autohack-next-stage/investigator/triage/drafts/83ae2a7c123c679f6279c27e05592aa92e4ea3ee01ff07f9fa689df0232c4eca.json",
+  "status": "adapter_not_available",
+  "submitted": false,
+  "verified_vulnerability": false
+}

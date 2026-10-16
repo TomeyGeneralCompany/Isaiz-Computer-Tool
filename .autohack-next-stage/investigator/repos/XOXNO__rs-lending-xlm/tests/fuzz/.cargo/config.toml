@@ -1,0 +1,5 @@
+[target.aarch64-apple-darwin]
+rustflags = ["-Cunsafe-allow-abi-mismatch=sanitizer"]
+
+[target.x86_64-apple-darwin]
+rustflags = ["-Cunsafe-allow-abi-mismatch=sanitizer"]

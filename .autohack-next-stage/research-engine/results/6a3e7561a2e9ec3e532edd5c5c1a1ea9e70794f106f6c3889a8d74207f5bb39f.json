@@ -1,0 +1,11 @@
+{
+  "commit": "8891f73d17887e272a5317065961269aee94f7cd",
+  "detail": {},
+  "input_hash": "41b47e3b2a48de21ca783d6f9a3f9cb1551324c4422ad67d3e02ec6492e7dae9",
+  "processed_at": "2026-10-15T20:04:51.318715+00:00",
+  "repository": "Instadapp/inst-governance",
+  "source_draft": "/home/izy/isaiz-bugbounty/autohack/.autohack-next-stage/investigator/triage/drafts/6a3e7561a2e9ec3e532edd5c5c1a1ea9e70794f106f6c3889a8d74207f5bb39f.json",
+  "status": "out_of_scope",
+  "submitted": false,
+  "verified_vulnerability": false
+}

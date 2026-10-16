@@ -1,0 +1,10 @@
+[Unit]
+Description=Refresh Immunefi public bounty scope for passive AutoHack research
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+WorkingDirectory=/home/izy/isaiz-bugbounty/autohack
+ExecStart=/usr/bin/python3 /home/izy/isaiz-bugbounty/autohack/.autohack-next-stage/immunefi/sync.py
+NoNewPrivileges=true
+MemoryMax=200M
