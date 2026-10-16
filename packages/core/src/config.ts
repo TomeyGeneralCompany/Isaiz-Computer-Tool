@@ -124,17 +124,22 @@ export function setRuntimeOverride<K extends keyof Config>(
   key: K,
   value: Config[K],
 ): void {
-  _runtimeOverrides[key] = value;
+  // Validate before changing the live process state.
+  const validated = configSchema.partial().strict().parse({
+    ...readFileOverrides(),
+    [key]: value,
+  });
   // Persist to shared file for cross-process visibility
-  const merged = { ...readFileOverrides(), [key]: value };
   try {
-    const validated = configSchema.partial().strict().parse(merged);
     mkdirSync(join(process.env.PROJECT_ROOT || process.cwd(), "data"), { recursive: true });
     const tempFile = OVERRIDES_FILE + "." + process.pid + ".tmp";
     writeFileSync(tempFile, JSON.stringify(validated, null, 2), { mode: 0o600 });
     renameSync(tempFile, OVERRIDES_FILE);
-    _fileOverridesCache = { data: merged, readAt: Date.now() };
-  } catch {}
+    _fileOverridesCache = { data: validated, readAt: Date.now() };
+    _runtimeOverrides[key] = validated[key] as Config[K];
+  } catch (err) {
+    throw new Error("Failed to persist runtime override", { cause: err });
+  }
 }
 
 /** Get current runtime overrides (for dashboard display). */
