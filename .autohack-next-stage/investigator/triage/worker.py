@@ -24,7 +24,7 @@ DB = HERE/'triage.sqlite3'
 STOP = False
 signal.signal(signal.SIGTERM, lambda *_: globals().__setitem__('STOP', True))
 signal.signal(signal.SIGINT, lambda *_: globals().__setitem__('STOP', True))
-MODEL = os.getenv('AUTOHACK_TRIAGE_MODEL','qwen3:0.6b')
+MODEL = os.getenv('AUTOHACK_TRIAGE_MODEL','qwen3:4b')
 OLLAMA = 'http://127.0.0.1:11434/api/chat'
 INTERVAL = max(60,int(os.getenv('AUTOHACK_TRIAGE_INTERVAL','120')))
 MAX_PER_CYCLE = max(1,min(20,int(os.getenv('AUTOHACK_TRIAGE_PER_CYCLE','6'))))
