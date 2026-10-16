@@ -13,7 +13,7 @@ import subprocess
 import time
 from datetime import datetime, timezone
 
-ROOT = Path(os.environ.get('AUTOHACK_ROOT', str(Path.home() / 'isaiz-bugbounty/autohack')))
+ROOT = Path(os.environ.get('AUTOHACK_ROOT', str(Path(__file__).resolve().parents[3])))
 BASE = ROOT / '.autohack-next-stage/investigator'
 DRAFTS = BASE / 'triage/drafts'
 OUT = BASE / 'verification/results'
