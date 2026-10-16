@@ -4,7 +4,7 @@ Never executes repository code, generated commands, exploits, or remote tests.
 Never claims a security defect is verified without an independent reproduction.
 """
 import ast, datetime as dt, hashlib, json, os, pathlib, re, signal, subprocess, time, traceback
-ROOT=pathlib.Path.home()/'isaiz-bugbounty/autohack/.autohack-next-stage'
+ROOT=pathlib.Path(__file__).resolve().parents[1]
 INV=ROOT/'investigator'
 BASE=ROOT/'autonomous'
 SCOPE=ROOT/'immunefi/scope.json'
