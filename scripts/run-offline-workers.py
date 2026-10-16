@@ -65,7 +65,7 @@ def main() -> int:
                     print(f"{name} exited with code {child.returncode}", flush=True)
                     children.pop(name, None)
                     streams.pop(name).close()
-                    retry_at[name] = time.monotonic() + delay
+                    retry_at[name] = time.monotonic() + (21600 if name == "scope" and child.returncode == 0 else 1800 if name == "scope" else delay)
                 if time.monotonic() < retry_at[name]:
                     continue
                 stream = open(logs / f"{name}.log", "ab", buffering=0)
@@ -78,7 +78,7 @@ def main() -> int:
                 except OSError as exc:
                     print(f"Cannot start {name}: {exc}", file=sys.stderr, flush=True)
                     stream.close()
-                    retry_at[name] = time.monotonic() + delay
+                    retry_at[name] = time.monotonic() + (1800 if name == "scope" else delay)
                     continue
                 children[name] = child
                 streams[name] = stream
