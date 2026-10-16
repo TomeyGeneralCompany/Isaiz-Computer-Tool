@@ -5,7 +5,7 @@ container with a preinstalled image, no network, no host secrets, and bounded re
 A generated test passing is NOT by itself proof of a vulnerability.
 """
 import datetime, hashlib, json, os, pathlib, re, shutil, signal, subprocess, tempfile, time, urllib.request
-ROOT=pathlib.Path(os.environ.get('AUTOHACK_ROOT',str(pathlib.Path.home()/'isaiz-bugbounty/autohack')))
+ROOT=pathlib.Path(os.environ.get('AUTOHACK_ROOT',str(pathlib.Path(__file__).resolve().parents[2])))
 STAGE=ROOT/'.autohack-next-stage'; INV=STAGE/'investigator'; BASE=STAGE/'research-engine'
 DRAFTS=INV/'triage/drafts'; REPOS=INV/'repos'; SCOPE=STAGE/'immunefi/scope.json'
 OUT=BASE/'results'; REPORTS=BASE/'reports'; CASES=BASE/'cases'; STATE=BASE/'state'
