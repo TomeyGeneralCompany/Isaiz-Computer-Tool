@@ -25,6 +25,20 @@ import {
 
 const log = createLogger("orchestrator");
 
+// Node-cron minute fields range from 0 to 59. An interval of 60 minutes
+// must be represented as an hourly schedule, not "*/60 * * * *".
+function pollSchedule(minutes: number): string {
+  if (!Number.isSafeInteger(minutes) || minutes < 1) {
+    throw new Error(`Invalid polling interval: ${minutes}`);
+  }
+  if (minutes < 60) return `*/${minutes} * * * *`;
+  if (minutes % 60 === 0 && minutes / 60 < 24) {
+    return `0 */${minutes / 60} * * *`;
+  }
+  if (minutes === 1440) return "0 0 * * *";
+  throw new Error(`Polling interval ${minutes} minutes cannot be expressed reliably as a cron schedule`);
+}
+
 function startDashboard(port: number) {
   const child = execFile("npx", ["next", "dev", "--port", String(port)], {
     cwd: new URL("./packages/dashboard", import.meta.url).pathname,
@@ -80,7 +94,7 @@ function main() {
 
   // HackerOne discovery polling
   if (config.HACKERONE_ENABLED) {
-    cron.schedule(`*/${config.HACKERONE_POLL_MINUTES} * * * *`, async () => {
+    cron.schedule(pollSchedule(config.HACKERONE_POLL_MINUTES), async () => {
       try {
         await pollHackerOne();
         await backfillSignalRequirements();
@@ -96,7 +110,7 @@ function main() {
 
   // Immunefi discovery polling (crypto/web3 bounties with source code)
   if (config.IMMUNEFI_ENABLED) {
-    cron.schedule(`*/${config.HACKERONE_POLL_MINUTES} * * * *`, async () => {
+    cron.schedule(pollSchedule(config.HACKERONE_POLL_MINUTES), async () => {
       try {
         await pollImmunefi();
         runSecurityAnalysisQueue();
@@ -109,7 +123,7 @@ function main() {
 
   // Huntr discovery polling (AI/ML open source bounties)
   if (config.HUNTR_ENABLED) {
-    cron.schedule(`*/${config.HACKERONE_POLL_MINUTES} * * * *`, async () => {
+    cron.schedule(pollSchedule(config.HACKERONE_POLL_MINUTES), async () => {
       try {
         await pollHuntr();
         runSecurityAnalysisQueue();
@@ -122,7 +136,7 @@ function main() {
 
   // Aggregator discovery polling (Bugcrowd, Intigriti, YesWeHack, Federacy — source code only)
   if (config.AGGREGATOR_ENABLED) {
-    cron.schedule(`*/${config.HACKERONE_POLL_MINUTES} * * * *`, async () => {
+    cron.schedule(pollSchedule(config.HACKERONE_POLL_MINUTES), async () => {
       try {
         await pollAggregator();
         runSecurityAnalysisQueue();
@@ -190,7 +204,7 @@ function main() {
   });
 
   // Security submission status poller: check HackerOne for triager decisions
-  cron.schedule(`*/${config.SECURITY_SUBMISSION_POLL_MINUTES} * * * *`, async () => {
+  cron.schedule(pollSchedule(config.SECURITY_SUBMISSION_POLL_MINUTES), async () => {
     if (!config.HACKERONE_ENABLED) return;
     try {
       const updated = await pollSubmissionStatuses();
