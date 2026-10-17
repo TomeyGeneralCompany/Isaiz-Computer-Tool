@@ -20,6 +20,8 @@ jobs:
               ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
           print(f"Validated {len(paths)} Python files")
           PY
+      - name: Validate launch scripts
+        run: bash -n run-local-autohack.sh run-complete-autohack.sh setup-and-run.sh
       - name: Test offline ingestion
         run: python3 -m unittest discover -s tests -p "test_*.py" -v
   typescript:
