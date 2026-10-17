@@ -13,6 +13,7 @@ import sqlite3
 import subprocess
 import sys
 import urllib.request
+import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 RESULTS: dict[str, dict] = {}
@@ -41,6 +42,21 @@ def main() -> int:
         record("local_model", "qwen3:4b" in names, "Available models: " + ", ".join(str(n) for n in names))
     except Exception as exc:
         record("local_model", False, type(exc).__name__ + ": " + str(exc))
+    if RESULTS.get("local_model", {}).get("passed"):
+        try:
+            payload = json.dumps({"model": "qwen3:4b", "stream": False, "think": False,
+                                  "messages": [{"role": "user", "content": "Reply with the single word READY."}],
+                                  "options": {"num_predict": 24, "temperature": 0}}).encode()
+            request = urllib.request.Request("http://127.0.0.1:11434/api/chat", data=payload,
+                                             headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(request, timeout=120) as response:
+                answer = json.load(response).get("message", {}).get("content", "")
+            record("local_inference", isinstance(answer, str) and "READY" in answer.upper(),
+                   "Ollama produced a response" if answer else "Ollama returned no response")
+        except Exception as exc:
+            record("local_inference", False, str(exc))
+    else:
+        record("local_inference", False, "Local model unavailable")
     path = Path(os.getenv("DB_PATH", "data/bounty.db")).expanduser()
     if not path.is_absolute():
         path = ROOT / path
