@@ -17,6 +17,18 @@ if [[ ! -d node_modules ]]; then
   echo "Installing locked Node dependencies..."
   npm ci
 fi
+if [[ ! -f .env ]]; then
+  echo "No .env in this checkout. Checking for the existing local installation..." >&2
+  ORIGINAL="$HOME/isaiz-bugbounty/autohack/.env"
+  if [[ -f "$ORIGINAL" ]]; then
+    install -m 600 "$ORIGINAL" "$ROOT/.env"
+    echo "Imported existing local configuration (permissions 0600)."
+  else
+    echo "No local runtime configuration found; cannot start configured services." >&2
+    exit 2
+  fi
+fi
+export PROJECT_ROOT="$ROOT"
 echo "Initializing application database..."
 npm run db:push
 echo "Checking local prerequisites..."
