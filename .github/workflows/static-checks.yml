@@ -33,4 +33,4 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci --ignore-scripts
-      - run: npx tsc --noEmit --project tsconfig.json
+      - run: npx tsc --noEmit --project tsconfig.json\n      - name: Exercise direct Ollama agent with mock server\n        run: npx tsx scripts/test-mock-agent.ts
