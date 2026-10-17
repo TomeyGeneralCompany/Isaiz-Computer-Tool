@@ -961,7 +961,7 @@ export async function processAdversarialQueue(programId?: string): Promise<void>
 
         // Auto-submit if enabled and recommendation is "submit" (not "submit_cautiously")
         // Only HackerOne supports programmatic submission — other providers require manual submission
-        if (config.SECURITY_AUTO_SUBMIT && finalRecommendation === "submit" && program.provider === "hackerone" && program.providerProgramId) {
+        if (config.SECURITY_AUTO_SUBMIT && finalRecommendation === "submit" && program.provider === "hackerone" && program.providerProgramId && !finding.id.startsWith("offline-")) {
           try {
             const handle = program.providerProgramId;
             const scopes = await fetchProgramScopes(handle);
