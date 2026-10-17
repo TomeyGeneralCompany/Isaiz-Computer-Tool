@@ -255,6 +255,11 @@ export async function spawnClaude(
   onMetrics?: (metrics: SpawnMetrics) => void,
   opts?: SpawnClaudeOpts,
 ): Promise<string> {
+  if (process.env.LOCAL_OLLAMA_MODEL) {
+    const { runLocalAudit } = await import("./local-ollama-runner");
+    return runLocalAudit(prompt, logFile, timeoutMs, opts?.cwd ?? "/tmp/security-audit",
+      process.env.LOCAL_OLLAMA_MODEL, opts?.systemPrompt);
+  }
   // Use PTY runner for rich terminal output (opt-in via SECURITY_LIVE_OUTPUT=1)
   const usePty = process.env.SECURITY_LIVE_OUTPUT === "1";
   log.info({ isTTY: process.stdout.isTTY, usePty }, "spawnClaude: selecting output mode");
