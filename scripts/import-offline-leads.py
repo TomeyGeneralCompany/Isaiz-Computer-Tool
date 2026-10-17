@@ -40,7 +40,13 @@ def scope_repositories() -> set[str]:
 
 
 def database_path() -> Path:
-    configured = os.environ.get("DB_PATH", "data/bounty.db")
+    configured = os.environ.get("DB_PATH")
+    if not configured and (ROOT / ".env").is_file():
+        for line in (ROOT / ".env").read_text().splitlines():
+            if line.strip().startswith("DB_PATH="):
+                configured = line.strip().partition("=")[2].strip().strip(chr(34)).strip(chr(39))
+                break
+    configured = configured or "data/bounty.db"
     path = Path(configured).expanduser()
     return path if path.is_absolute() else ROOT / path
 
