@@ -68,7 +68,7 @@ def main() -> int:
             proc = subprocess.run([claude, "--print", "--model", "qwen3:4b",
                                    "--max-turns", "1", "--tools", ""],
                                   input="Reply with the single word READY.",
-                                  capture_output=True, text=True, timeout=120,
+                                  capture_output=True, text=True, timeout=35,
                                   cwd=ROOT, env=env)
             record("agent_backend", proc.returncode == 0 and "READY" in proc.stdout.upper(),
                    ("Agent backend responded" if proc.returncode == 0 else proc.stderr[-500:]))
