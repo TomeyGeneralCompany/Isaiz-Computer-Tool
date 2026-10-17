@@ -44,8 +44,7 @@ export async function runLocalAudit(
         return message.content;
       }
       for (const call of message.tool_calls.slice(0, 8)) {
-        await appendFile(logFile, "[TOOL] " + call.function.name + "\
-");
+        await appendFile(logFile, "[TOOL] " + call.function.name + "\\n");
         let output: string;
         try {
           const name = call.function.name;
