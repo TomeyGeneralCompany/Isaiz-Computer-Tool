@@ -72,6 +72,11 @@ class ImporterTests(unittest.TestCase):
         self.db.execute("DELETE FROM security_programs")
         self.assertEqual(module.import_leads(self.db)["imported"], 0)
 
+    def test_false_positive_is_not_imported(self):
+        self.draft["triage"]["classification"] = "likely_false_positive"
+        (module.DRAFTS / "lead.json").write_text(json.dumps(self.draft))
+        self.assertEqual(module.import_leads(self.db)["imported"], 0)
+
     def test_unverified_only(self):
         self.draft["verified_vulnerability"] = True
         (module.DRAFTS / "lead.json").write_text(json.dumps(self.draft))
