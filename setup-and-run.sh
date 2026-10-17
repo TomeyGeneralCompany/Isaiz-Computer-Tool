@@ -33,5 +33,7 @@ echo "Initializing application database..."
 npm run db:push
 echo "Checking local prerequisites..."
 python3 scripts/doctor.py
+echo "Running local acceptance checks..."
+python3 scripts/acceptance.py
 echo "Starting AutoHack..."
 exec bash "$ROOT/run-complete-autohack.sh"
