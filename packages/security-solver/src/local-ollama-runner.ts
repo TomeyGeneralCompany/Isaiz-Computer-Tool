@@ -27,7 +27,7 @@ export async function runLocalAudit(
   }
   try {
     for (let turn = 0; turn < 20; turn++) {
-      const response = await fetch("http://127.0.0.1:11434/api/chat", {
+      const response = await fetch(process.env.AUTOHACK_OLLAMA_URL || "http://127.0.0.1:11434/api/chat", {
         method: "POST", signal: controller.signal,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ model, stream: false, think: false, messages, tools,
