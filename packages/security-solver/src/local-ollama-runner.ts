@@ -4,6 +4,7 @@ import { resolve, relative, sep } from "node:path";
 type Message = { role: string; content: string; tool_name?: string; tool_calls?: Array<{ function: { name: string; arguments: Record<string, unknown> } }> };
 const tools = [
   { type: "function", function: { name: "list_files", description: "List files in the authorized local audit workspace", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } } },
+  { type: "function", function: { name: "search_files", description: "Search tracked source files for a literal string inside the authorized workspace", parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } } },
   { type: "function", function: { name: "read_file", description: "Read a source file in the authorized local audit workspace", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } } },
 ];
 export async function runLocalAudit(
@@ -54,6 +55,30 @@ export async function runLocalAudit(
             const entries = await readdir(full, { withFileTypes: true });
             output = entries.filter(e => !e.name.startsWith(".") && e.name !== "node_modules")
               .slice(0, 100).map(e => (e.isDirectory() ? "dir " : "file ") + e.name).join("\n");
+          } else if (name === "search_files") {
+            const query = String(call.function.arguments?.query ?? "").slice(0, 120);
+            if (query.length < 3) throw new Error("Search query must be at least three characters");
+            const results: string[] = [];
+            let visited = 0;
+            async function walk(dir: string, depth: number): Promise<void> {
+              if (depth > 5 || visited > 300 || results.length >= 40) return;
+              for (const entry of await readdir(dir, { withFileTypes: true })) {
+                if (entry.name.startsWith(".") || ["node_modules", "dist", "build", "vendor"].includes(entry.name)) continue;
+                const target = resolve(dir, entry.name);
+                if (entry.isSymbolicLink()) continue;
+                if (entry.isDirectory()) { await walk(target, depth + 1); continue; }
+                if (!entry.isFile() || !/\\.(ts|tsx|js|jsx|py|go|rs|java|php|rb|sol|json|yaml|yml)$/.test(entry.name)) continue;
+                visited++;
+                const info = await stat(target);
+                if (info.size > 128000) continue;
+                const lines = (await readFile(target, "utf8")).split("\\n");
+                for (let i = 0; i < lines.length && results.length < 40; i++) {
+                  if (lines[i].includes(query)) results.push(relative(root, target) + ":" + (i + 1) + ": " + lines[i].slice(0, 240));
+                }
+              }
+            }
+            await walk(root, 0);
+            output = results.join("\\n") || "No matches";
           } else if (name === "read_file") {
             const info = await stat(full);
             if (!info.isFile() || info.size > 256_000) throw new Error("Not a readable source file under 256KB");
