@@ -41,7 +41,7 @@ class ImporterTests(unittest.TestCase):
         """)
         self.db.execute(
             "INSERT INTO security_programs VALUES (?,?,?,?,?)",
-            ("p1", "immunefi", "Example", json.dumps(["https://github.com/example/repo"]), "active"),
+            ("p1", "immunefi", "Example", json.dumps({"scopes": [{"assetIdentifier": "https://github.com/example/repo", "eligibleForBounty": True}]}), "active"),
         )
         self.draft = {
             "repository": "example/repo", "commit": "a" * 40,
