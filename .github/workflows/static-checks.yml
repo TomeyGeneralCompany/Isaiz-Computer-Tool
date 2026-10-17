@@ -20,6 +20,8 @@ jobs:
               ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
           print(f"Validated {len(paths)} Python files")
           PY
+      - name: Test offline ingestion
+        run: python3 -m unittest discover -s tests -p "test_*.py" -v
   typescript:
     runs-on: ubuntu-latest
     steps:
