@@ -40,7 +40,7 @@ def scope_repositories() -> set[str]:
 
 
 def database_path() -> Path:
-    configured = os.environ.get("DB_PATH", "data/autohack.db")
+    configured = os.environ.get("DB_PATH", "data/bounty.db")
     path = Path(configured).expanduser()
     return path if path.is_absolute() else ROOT / path
 
