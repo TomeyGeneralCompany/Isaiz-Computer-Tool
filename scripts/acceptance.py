@@ -61,8 +61,8 @@ def main() -> int:
     if RESULTS["local_inference"]["passed"]:
         try:
             payload = json.dumps({
-                "model": "qwen3:4b", "max_tokens": 24,
-                "messages": [{"role": "user", "content": "Reply READY."}],
+                "model": "qwen3:4b", "max_tokens": 512,
+                "messages": [{"role": "user", "content": "/no_think\nReply READY."}],
             }).encode()
             request = urllib.request.Request(
                 "http://127.0.0.1:11434/v1/messages", data=payload,
@@ -74,9 +74,9 @@ def main() -> int:
                 data = json.load(response)
             content = data.get("content", [])
             answer = " ".join(block.get("text", "") for block in content if block.get("type") == "text")
-            record("anthropic_compatibility", bool(answer.strip()),
+            record("anthropic_compatibility", "READY" in answer.upper(),
                    "Ollama Anthropic Messages endpoint returned text"
-                   if answer.strip() else "Messages endpoint returned no text")
+                   if "READY" in answer.upper() else "Messages endpoint returned no READY text; response types: " + ", ".join(str(block.get("type")) for block in content))
         except Exception as exc:
             record("anthropic_compatibility", False,
                    "Ollama Anthropic Messages API failed: " + str(exc))
@@ -108,7 +108,7 @@ def main() -> int:
                 proc = subprocess.run(
                     [claude, "--print", "--model", "qwen3:4b",
                      "--max-turns", "1", "--tools", ""],
-                    input="Reply with the single word READY.",
+                    input="/no_think\nReply with the single word READY.",
                     capture_output=True, text=True, timeout=45,
                     cwd=ROOT, env=env,
                 )
