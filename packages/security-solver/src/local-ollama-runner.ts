@@ -1,7 +1,7 @@
 import { readdir, readFile, realpath, stat, appendFile } from "node:fs/promises";
 import { resolve, relative, sep } from "node:path";
 
-type Message = { role: string; content: string; tool_calls?: Array<{ function: { name: string; arguments: Record<string, unknown> } }> };
+type Message = { role: string; content: string; tool_name?: string; tool_calls?: Array<{ function: { name: string; arguments: Record<string, unknown> } }> };
 const tools = [
   { type: "function", function: { name: "list_files", description: "List files in the authorized local audit workspace", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } } },
   { type: "function", function: { name: "read_file", description: "Read a source file in the authorized local audit workspace", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } } },
@@ -44,6 +44,8 @@ export async function runLocalAudit(
         return message.content;
       }
       for (const call of message.tool_calls.slice(0, 8)) {
+        await appendFile(logFile, "[TOOL] " + call.function.name + "\
+");
         let output: string;
         try {
           const name = call.function.name;
@@ -61,7 +63,7 @@ export async function runLocalAudit(
         } catch (error) {
           output = "Tool error: " + String(error);
         }
-        messages.push({ role: "tool", content: output.slice(0, 30_000) });
+        messages.push({ role: "tool", tool_name: call.function.name, content: output.slice(0, 30_000) });
       }
     }
     throw new Error("Local audit reached its 20-turn inspection limit");
