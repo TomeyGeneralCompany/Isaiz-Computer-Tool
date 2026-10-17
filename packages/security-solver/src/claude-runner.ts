@@ -290,7 +290,7 @@ export async function spawnClaude(
 
     activeChild = child;
 
-    child.stdin.write(prompt);
+    child.stdin.write(process.env.LOCAL_OLLAMA_MODEL ? "/no_think\n" + prompt : prompt);
     child.stdin.end();
 
     let textOutput = ""; // Accumulated text for parseFindings
