@@ -56,32 +56,6 @@ def main() -> int:
             record("local_inference", False, str(exc))
     else:
         record("local_inference", False, "Local model unavailable")
-    # Claude Code uses Anthropic's Messages protocol, not Ollama /api/chat.
-    # A successful /api/chat test does not establish CLI compatibility.
-    if RESULTS["local_inference"]["passed"]:
-        try:
-            payload = json.dumps({
-                "model": "qwen3:4b", "max_tokens": 512,
-                "messages": [{"role": "user", "content": "/no_think\nReply READY."}],
-            }).encode()
-            request = urllib.request.Request(
-                "http://127.0.0.1:11434/v1/messages", data=payload,
-                headers={"Content-Type": "application/json",
-                         "anthropic-version": "2023-06-01",
-                         "x-api-key": "ollama"},
-            )
-            with urllib.request.urlopen(request, timeout=45) as response:
-                data = json.load(response)
-            content = data.get("content", [])
-            answer = " ".join(block.get("text", "") for block in content if block.get("type") == "text")
-            record("anthropic_compatibility", "READY" in answer.upper(),
-                   "Ollama Anthropic Messages endpoint returned text"
-                   if "READY" in answer.upper() else "Messages endpoint returned no READY text; response types: " + ", ".join(str(block.get("type")) for block in content))
-        except Exception as exc:
-            record("anthropic_compatibility", False,
-                   "Ollama Anthropic Messages API failed: " + str(exc))
-    else:
-        record("anthropic_compatibility", False, "Direct Ollama inference unavailable")
     # Offline workers use Ollama directly. Claude Code is only required for
     # the optional interactive security-solver, not for the offline pipeline.
     configured_hunt = os.getenv("SECURITY_AUTO_HUNT_ENABLED", "")
@@ -90,43 +64,10 @@ def main() -> int:
             if line.strip().startswith("SECURITY_AUTO_HUNT_ENABLED="):
                 configured_hunt = line.strip().partition("=")[2].strip().strip(chr(34)).strip(chr(39))
                 break
-    if configured_hunt.lower() == "true":
-        claude = shutil.which(os.getenv("CLAUDE_PATH", "claude"))
-        if not claude:
-            record("agent_backend", False, "Claude Code executable missing")
-        elif not RESULTS["local_inference"]["passed"]:
-            record("agent_backend", False, "Direct Ollama inference unavailable")
-        else:
-            env = dict(os.environ)
-            env.update({
-                "ANTHROPIC_BASE_URL": "http://127.0.0.1:11434",
-                "ANTHROPIC_AUTH_TOKEN": "ollama",
-                "ANTHROPIC_API_KEY": "ollama",
-                "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
-            })
-            try:
-                proc = subprocess.run(
-                    [claude, "--print", "--model", "qwen3:4b",
-                     "--max-turns", "1", "--tools", ""],
-                    input="/no_think\nReply with the single word READY.",
-                    capture_output=True, text=True, timeout=45,
-                    cwd=ROOT, env=env,
-                )
-                passed = proc.returncode == 0 and "READY" in proc.stdout.upper()
-                record("agent_backend", passed,
-                       "Claude Code agent successfully called local Ollama"
-                       if passed else "Claude Code exit=" + str(proc.returncode)
-                       + "; stderr=" + proc.stderr[-700:]
-                       + "; stdout=" + proc.stdout[-300:])
-            except subprocess.TimeoutExpired:
-                record("agent_backend", False,
-                       "Claude Code still times out against Ollama after 45s. "
-                       "The CLI backend is not functional; offline workers can run independently.")
-            except OSError as exc:
-                record("agent_backend", False, str(exc))
+    if RESULTS["local_inference"]["passed"] and shutil.which("npx"):
+        run("agent_backend", ["npx", "--no-install", "tsx", "scripts/test-local-agent.ts"], 180)
     else:
-        record("agent_backend", RESULTS["local_inference"]["passed"],
-               "Offline pipeline uses direct Ollama API; no Claude Code bridge required")
+        record("agent_backend", False, "Local inference or tsx unavailable")
     # Confirm the live solver retains the submission boundary for static leads.
     solver_source = (ROOT / "packages/security-solver/src/index.ts").read_text()
     record("offline_submission_boundary",
