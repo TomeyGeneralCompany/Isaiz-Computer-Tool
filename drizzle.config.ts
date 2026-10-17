@@ -5,6 +5,6 @@ export default defineConfig({
   out: "./packages/core/src/db/migrations",
   dialect: "sqlite",
   dbCredentials: {
-    url: process.env.DB_PATH || "data/algora.db",
+    url: process.env.DB_PATH || "data/bounty.db",
   },
 });
