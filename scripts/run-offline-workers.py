@@ -25,6 +25,7 @@ WORKERS = {
     "reproduction": STAGE / "investigator/reproduction/worker.py",
     "research": STAGE / "research-engine/worker.py",
     "evidence": STAGE / "autonomous/worker.py",
+    "import": ROOT / "scripts/import-offline-leads.py",
 }
 STOP = False
 
@@ -65,7 +66,7 @@ def main() -> int:
                     print(f"{name} exited with code {child.returncode}", flush=True)
                     children.pop(name, None)
                     streams.pop(name).close()
-                    retry_at[name] = time.monotonic() + (21600 if name == "scope" and child.returncode == 0 else 1800 if name == "scope" else delay)
+                    retry_at[name] = time.monotonic() + (21600 if name == "scope" and child.returncode == 0 else 1800 if name == "scope" else 120 if name == "import" and child.returncode == 0 else delay)
                 if time.monotonic() < retry_at[name]:
                     continue
                 stream = open(logs / f"{name}.log", "ab", buffering=0)
