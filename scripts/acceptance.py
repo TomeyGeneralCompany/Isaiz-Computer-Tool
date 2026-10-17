@@ -71,6 +71,13 @@ def main() -> int:
     else:
         record("agent_backend", RESULTS["local_inference"]["passed"],
                "Offline pipeline uses direct Ollama API; no Claude Code bridge required")
+    # Confirm the live solver retains the submission boundary for static leads.
+    solver_source = (ROOT / "packages/security-solver/src/index.ts").read_text()
+    record("offline_submission_boundary",
+           '!finding.id.startsWith("offline-")' in solver_source,
+           "Offline static leads excluded from unattended external submission"
+           if '!finding.id.startsWith("offline-")' in solver_source
+           else "Offline submission boundary missing")
     configured_db = os.getenv("DB_PATH")
     if not configured_db and (ROOT / ".env").is_file():
         for line in (ROOT / ".env").read_text().splitlines():
