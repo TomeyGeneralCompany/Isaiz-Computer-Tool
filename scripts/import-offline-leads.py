@@ -73,6 +73,9 @@ def import_leads(db: sqlite3.Connection) -> dict:
                 raise ValueError("Invalid commit")
             if not isinstance(lead, dict) or not isinstance(lead.get("file"), str):
                 raise ValueError("Missing source location")
+            triage = draft.get("triage")
+            if not isinstance(triage, dict) or triage.get("classification") != "needs_review":
+                raise ValueError("Triage did not recommend further review")
             if draft.get("verified_vulnerability") is not False or draft.get("status") != "unverified_draft":
                 raise ValueError("Unexpected verification status")
             # Program association must be unambiguous and sourced from the
