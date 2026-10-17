@@ -12,6 +12,8 @@ try {
     process.env.LOCAL_OLLAMA_MODEL || "qwen3:4b",
   );
   if (!answer.includes("FUNCTION_FOUND")) throw new Error("Agent did not complete fixture: " + answer.slice(0, 300));
+  const transcript = await readFile(join(dir, "agent.log"), "utf8");
+  if (!transcript.includes("[TOOL] read_file")) throw new Error("Agent never used read_file; fixture answer alone is insufficient");
   process.stdout.write("Direct Ollama tool-using agent passed local source fixture\n");
 } finally {
   await rm(dir, { recursive: true, force: true });
