@@ -72,7 +72,9 @@ def main() -> int:
                                   cwd=ROOT, env=env)
             record("agent_backend", proc.returncode == 0 and "READY" in proc.stdout.upper(),
                    ("Agent backend responded" if proc.returncode == 0 else proc.stderr[-500:]))
-        except (OSError, subprocess.TimeoutExpired) as exc:
+        except subprocess.TimeoutExpired:
+            record("agent_backend", False, "Claude Code did not complete the local Ollama handshake within 35s; direct Ollama inference works. Agent execution remains unavailable.")
+        except OSError as exc:
             record("agent_backend", False, str(exc))
     else:
         record("agent_backend", False, "Cannot test agent backend without local inference")
