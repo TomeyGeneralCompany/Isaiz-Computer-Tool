@@ -13,7 +13,6 @@ import sqlite3
 import subprocess
 import sys
 import urllib.request
-import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 RESULTS: dict[str, dict] = {}
@@ -57,6 +56,26 @@ def main() -> int:
             record("local_inference", False, str(exc))
     else:
         record("local_inference", False, "Local model unavailable")
+    claude = shutil.which(os.getenv("CLAUDE_PATH", "claude"))
+    if not claude:
+        record("agent_backend", False, "Claude Code CLI not found; security-solver still depends on it")
+    elif RESULTS["local_inference"]["passed"]:
+        try:
+            env = dict(os.environ)
+            env.update({"ANTHROPIC_BASE_URL": "http://127.0.0.1:11434",
+                        "ANTHROPIC_AUTH_TOKEN": "ollama", "ANTHROPIC_API_KEY": "ollama",
+                        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"})
+            proc = subprocess.run([claude, "--print", "--model", "qwen3:4b",
+                                   "--max-turns", "1", "--tools", ""],
+                                  input="Reply with the single word READY.",
+                                  capture_output=True, text=True, timeout=120,
+                                  cwd=ROOT, env=env)
+            record("agent_backend", proc.returncode == 0 and "READY" in proc.stdout.upper(),
+                   ("Agent backend responded" if proc.returncode == 0 else proc.stderr[-500:]))
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            record("agent_backend", False, str(exc))
+    else:
+        record("agent_backend", False, "Cannot test agent backend without local inference")
     path = Path(os.getenv("DB_PATH", "data/bounty.db")).expanduser()
     if not path.is_absolute():
         path = ROOT / path
