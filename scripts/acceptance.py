@@ -56,6 +56,32 @@ def main() -> int:
             record("local_inference", False, str(exc))
     else:
         record("local_inference", False, "Local model unavailable")
+    # Claude Code uses Anthropic's Messages protocol, not Ollama /api/chat.
+    # A successful /api/chat test does not establish CLI compatibility.
+    if RESULTS["local_inference"]["passed"]:
+        try:
+            payload = json.dumps({
+                "model": "qwen3:4b", "max_tokens": 24,
+                "messages": [{"role": "user", "content": "Reply READY."}],
+            }).encode()
+            request = urllib.request.Request(
+                "http://127.0.0.1:11434/v1/messages", data=payload,
+                headers={"Content-Type": "application/json",
+                         "anthropic-version": "2023-06-01",
+                         "x-api-key": "ollama"},
+            )
+            with urllib.request.urlopen(request, timeout=45) as response:
+                data = json.load(response)
+            content = data.get("content", [])
+            answer = " ".join(block.get("text", "") for block in content if block.get("type") == "text")
+            record("anthropic_compatibility", bool(answer.strip()),
+                   "Ollama Anthropic Messages endpoint returned text"
+                   if answer.strip() else "Messages endpoint returned no text")
+        except Exception as exc:
+            record("anthropic_compatibility", False,
+                   "Ollama Anthropic Messages API failed: " + str(exc))
+    else:
+        record("anthropic_compatibility", False, "Direct Ollama inference unavailable")
     # Offline workers use Ollama directly. Claude Code is only required for
     # the optional interactive security-solver, not for the offline pipeline.
     configured_hunt = os.getenv("SECURITY_AUTO_HUNT_ENABLED", "")
