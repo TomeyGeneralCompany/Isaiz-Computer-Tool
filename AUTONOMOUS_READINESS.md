@@ -1,0 +1,40 @@
+# AutoHack — operational truth and completion criteria
+
+Last updated: 2026-10-17.
+
+## Verified in user terminal
+- SQLite schema exists (security_findings and security_programs).
+- Python fixture and importer tests: six passed.
+- TypeScript typecheck passed at commit 5ea85d9.
+- Ollama qwen3:4b responds to its native /api/chat endpoint.
+- Claude Code through Ollama's Anthropic-compatible bridge **does not work**; it times out.
+- The original full autonomous hunt/review/submit workflow has **not** passed an end-to-end test.
+
+## Changes in repository
+- Local solver routes to native Ollama /api/chat when LOCAL_OLLAMA_MODEL is set.
+- Local model has bounded, read-only file inspection and literal search tools.
+- Agent fixture must record an actual read_file invocation.
+- Mock Ollama test exercises a tool-use round trip without depending on installed models.
+- The local-model review path cannot auto-submit to HackerOne. Offline imports also cannot auto-submit.
+- No remote targets are probed by the acceptance tests.
+
+## Known limitations
+- Native Ollama agent has no live HTTP probing, execution, debugger, or sandboxed PoC runner.
+- The original Claude agent's tools and capabilities have **not** been ported.
+- Program discovery, source acquisition, local analysis, verification, drafting, reviewer, and HackerOne submission have **not** been exercised together.
+- A model response is not proof of an exploitable vulnerability.
+- CI passing does not mean the local model or live bounty workflow works. GitHub Actions run 63f194a reported failure with zero jobs, so this is not a passing verification of the new mock test.
+
+## Required before calling complete
+1. Implement scoped, rate-limited investigation tools restricted to explicitly authorized program assets, and test denied targets.
+2. Implement sandboxed reproducible verification, retaining command/output evidence and distinguishing source hypotheses from runtime-confirmed issues.
+3. Exercise a full program -> finding -> verification -> report -> review workflow against an isolated, intentionally vulnerable fixture.
+4. Mock the HackerOne endpoint and verify the submission payload, program scope, duplicate checks, idempotency, and rejection behavior. Never submit a synthetic finding to a real program.
+5. Run TypeScript and deterministic integration tests on CI and run the local Ollama agent fixture on the actual CPU-only host.
+6. Validate restart/recovery, scheduling, queue limits, and safe unattended failure behavior.
+
+## User setup
+The existing entry point remains `bash setup-and-run.sh` from the repository root. Do not interpret a successful installer as proof that the complete bounty workflow is ready.
+
+## Policy
+Operate only on assets authorized by the published bounty program, within rate limits and restrictions. Never submit unsupported or synthetic vulnerability claims.
