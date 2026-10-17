@@ -76,7 +76,14 @@ def main() -> int:
             record("agent_backend", False, str(exc))
     else:
         record("agent_backend", False, "Cannot test agent backend without local inference")
-    path = Path(os.getenv("DB_PATH", "data/bounty.db")).expanduser()
+    configured_db = os.getenv("DB_PATH")
+    if not configured_db and (ROOT / ".env").is_file():
+        for line in (ROOT / ".env").read_text().splitlines():
+            stripped = line.strip()
+            if stripped.startswith("DB_PATH="):
+                configured_db = stripped.partition("=")[2].strip().strip(chr(34)).strip(chr(39))
+                break
+    path = Path(configured_db or "data/bounty.db").expanduser()
     if not path.is_absolute():
         path = ROOT / path
     if path.is_file():
