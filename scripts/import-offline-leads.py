@@ -85,12 +85,14 @@ def import_leads(db: sqlite3.Connection) -> dict:
                     scope_data = json.loads(scope_summary)
                 except (ValueError, TypeError):
                     continue
+                if isinstance(scope_data, dict):
+                    scope_data = scope_data.get("scopes", [])
                 if isinstance(scope_data, list) and any(
                     (isinstance(item, str) and item.rstrip("/") == "https://github.com/" + repo)
-                    or (isinstance(item, dict) and any(
+                    or (isinstance(item, dict) and item.get("eligibleForBounty") is not False and any(
                         isinstance(item.get(key), str) and
                         item[key].rstrip("/") == "https://github.com/" + repo
-                        for key in ("asset_url", "url", "target")
+                        for key in ("assetIdentifier", "asset_url", "url", "target")
                     ))
                     for item in scope_data
                 ):
