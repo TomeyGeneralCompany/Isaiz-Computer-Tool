@@ -50,8 +50,11 @@ python3 -u scripts/run-offline-workers.py --only scope investigator triage verif
   exploitability, impact, duplicates and current program eligibility require
   independent assessment.
 - The Python workers do **not** automatically submit reports or mark their
-  candidates verified. They are not yet wired into the TypeScript findings
-  database as a verified-finding ingestion channel.
+  candidates verified. The supervised importer transfers eligible triage drafts
+  to the shared findings database as **discovered, unverified** candidates only,
+  with stable deduplication IDs and an exact Immunefi source-asset match.
+  It deliberately does not convert offline leads into validated or report-ready
+  findings.
 - The TypeScript application has its own discovery, solver, review and
   HackerOne submission implementation. `SECURITY_AUTO_SUBMIT` defaults to
   false. Do not enable it without validating scope, API credentials, report
@@ -59,7 +62,7 @@ python3 -u scripts/run-offline-workers.py --only scope investigator triage verif
 
 ## Check results
 
-GitHub Actions runs Python syntax and TypeScript static checks on each push.
+GitHub Actions runs Python syntax, offline importer integration tests and TypeScript static checks on each push.
 These checks cannot prove that a local Ollama model, container runtime,
 credentials, database or platform submission works on your laptop.
 
