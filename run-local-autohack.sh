@@ -30,4 +30,6 @@ export ANTHROPIC_AUTH_TOKEN="${ANTHROPIC_AUTH_TOKEN:-ollama}"
 export ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-ollama}"
 export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 export CLAUDE_CODE_MAX_CONTEXT_TOKENS="${CLAUDE_CODE_MAX_CONTEXT_TOKENS:-32768}"
-exec npm run dev
+# Keep the orchestrator as the supervised PID. npm adds a shell/process layer
+# which can survive when only the launcher PID receives SIGTERM.
+exec node --import tsx "$ROOT/orchestrator.ts"

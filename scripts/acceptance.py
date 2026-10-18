@@ -6,12 +6,14 @@ Produces machine-readable pass/fail evidence for local deployment.
 """
 from __future__ import annotations
 import json
+import argparse
 import os
 from pathlib import Path
 import shutil
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -20,14 +22,18 @@ RESULTS: dict[str, dict] = {}
 def record(name: str, ok: bool, detail: str) -> None:
     RESULTS[name] = {"passed": ok, "detail": detail}
 
-def run(name: str, args: list[str], timeout: int = 120) -> None:
+def run(name: str, args: list[str], timeout: int = 120, env: dict | None = None) -> None:
     try:
-        proc = subprocess.run(args, cwd=ROOT, capture_output=True, text=True, timeout=timeout)
+        proc = subprocess.run(args, cwd=ROOT, capture_output=True, text=True, timeout=timeout, env=env)
         record(name, proc.returncode == 0, (proc.stdout + proc.stderr)[-1200:])
     except (OSError, subprocess.TimeoutExpired) as exc:
         record(name, False, str(exc))
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--offline", action="store_true",
+                        help="Run isolated regressions only; does not establish host/provider readiness")
+    args = parser.parse_args()
     run("python_integration_tests", [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py", "-v"])
     run("launcher_syntax", ["bash", "-n", "run-local-autohack.sh", "run-complete-autohack.sh", "setup-and-run.sh", "scripts/install-user-service.sh", "scripts/control-user-service.sh"])
     if shutil.which("npm") and (ROOT / "node_modules").is_dir():
@@ -45,10 +51,25 @@ def main() -> int:
             ("bounded_http", "scripts/test-scoped-http.ts"),
             ("offline_end_to_end_fixture", "scripts/test-offline-end-to-end.ts"),
         ]:
-            run(test_name, ["npx", "--no-install", "tsx", script], 180)
+            run(test_name, ["node", "--import", "tsx", script], 180)
+
+        # Compile/load the actual native addon and exercise the real database
+        # and dashboard with a temporary schema. Never touch the operator DB.
+        with tempfile.TemporaryDirectory(prefix="autohack-acceptance-") as temp:
+            env = {**os.environ, "GITHUB_TOKEN": "offline-acceptance-fixture",
+                   "DB_PATH": str(Path(temp) / "fixture.sqlite"),
+                   "CI_SQLITE_INTEGRATION": "1", "CI_DASHBOARD_SMOKE": "1"}
+            run("native_schema", ["npm", "run", "db:push"], 180, env)
+            if RESULTS["native_schema"]["passed"]:
+                run("native_sqlite_dashboard", ["node", "--import", "tsx", "scripts/test-sqlite-pipeline.ts"], 180, env)
+                run("service_restart", [sys.executable, "scripts/test-service-restart.py"], 240, env)
 
     else:
         record("typescript", False, "Local Node dependencies not installed")
+    if args.offline:
+        print(json.dumps({"profile": "offline_regression", "production_verified": False,
+                          "checks": RESULTS}, indent=2))
+        return 0 if all(result["passed"] for result in RESULTS.values()) else 1
     try:
         with urllib.request.urlopen("http://127.0.0.1:11434/api/tags", timeout=4) as response:
             models = json.load(response).get("models", [])
@@ -80,7 +101,7 @@ def main() -> int:
                 configured_hunt = line.strip().partition("=")[2].strip().strip(chr(34)).strip(chr(39))
                 break
     if RESULTS["local_inference"]["passed"] and shutil.which("npx"):
-        run("agent_backend", ["npx", "--no-install", "tsx", "scripts/test-local-agent.ts"], 180)
+        run("agent_backend", ["node", "--import", "tsx", "scripts/test-local-agent.ts"], 180)
     else:
         record("agent_backend", False, "Local inference or tsx unavailable")
     # Confirm the live solver retains the submission boundary for static leads.

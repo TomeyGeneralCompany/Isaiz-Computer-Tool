@@ -60,7 +60,7 @@ def smoke(iteration):
         "DASHBOARD_PORT":str(PORT),
     })
     with tempfile.TemporaryFile(mode="w+t") as output:
-        runner = subprocess.Popen(["npx","tsx","orchestrator.ts"],
+        runner = subprocess.Popen(["bash","run-local-autohack.sh"],
             cwd=ROOT,env=env,start_new_session=True,
             stdout=output,stderr=subprocess.STDOUT)
         try:
@@ -77,7 +77,9 @@ def smoke(iteration):
             raise AssertionError(f"Dashboard did not become healthy on iteration {iteration}:\n{logs}")
         finally:
             try:
-                os.killpg(runner.pid,signal.SIGTERM)
+                # Exercise the real operator action: signal the launcher PID,
+                # not all descendants (which concealed orphaned dashboards).
+                runner.terminate()
             except ProcessLookupError:
                 pass
             try:
@@ -87,6 +89,10 @@ def smoke(iteration):
                 except ProcessLookupError: pass
                 runner.wait(timeout=5)
             if not wait_for_shutdown():
+                # Cleanup is separate from the assertion; it must not turn
+                # a broken shutdown into a passing test.
+                try: os.killpg(runner.pid, signal.SIGKILL)
+                except ProcessLookupError: pass
                 raise AssertionError("Service left dashboard listening after shutdown")
 
 def main():
@@ -94,6 +100,9 @@ def main():
         raise SystemExit("CI_DASHBOARD_SMOKE=1 required")
     if not Path(os.environ.get("DB_PATH","")).is_file():
         raise SystemExit("Missing isolated initialized CI SQLite database")
+    with socket.socket() as s:
+        if s.connect_ex(("127.0.0.1", PORT)) == 0:
+            raise SystemExit("Dashboard port already occupied; refusing to test another instance")
     smoke(1)
     smoke(2)
     print("Real orchestrator/dashboard startup, shutdown and restart: PASSED")

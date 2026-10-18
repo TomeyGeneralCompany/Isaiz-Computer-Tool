@@ -11,6 +11,14 @@ target requests. CI also starts, stops and restarts the real orchestrator and HT
 against an isolated SQLite database, with all discovery and hunts disabled.
 CI does NOT demonstrate live end-to-end autonomous hunting.
 
+The launcher now keeps the Node orchestrator as its supervised PID. The
+dashboard streams logs without an output-buffer ceiling and owns a separate
+process group. Normal SIGTERM stops the dashboard group; unexpected dashboard
+exit fails the orchestrator so systemd can restart it. Worker shutdown and
+replacement also remove descendant processes, with one shared eight-second
+shutdown deadline. The restart smoke signals only the launcher PID, so it
+cannot conceal an orphan by killing the test's entire process group.
+
 The native Ollama agent remains read-only. It may clone up to two explicitly
 eligible public GitHub SOURCE_CODE repositories into its private workspace.
 The separate scoped HTTP observer library only allows GET/HEAD with exact
@@ -77,24 +85,21 @@ Back up the file before any manual reconciliation.
 
 ## Regression suite
 
-    npm ci --ignore-scripts
-    npx tsc --noEmit --project tsconfig.json
-    npx tsc --noEmit --project packages/dashboard/tsconfig.json
-    npx tsx scripts/test-mock-agent.ts
-    npx tsx scripts/test-earnings.ts
-    npx tsx scripts/test-scope.ts
-    npx tsx scripts/test-daily-quota.ts
-    npx tsx scripts/test-submission-outbox.ts
-    npx tsx scripts/test-mock-submission.ts
-    npx tsx scripts/test-scoped-http.ts
-    npx tsx scripts/test-offline-end-to-end.ts
-    python3 -m unittest discover -s tests -p 'test_*.py' -v
+    npm ci
+    python3 scripts/acceptance.py --offline
 
-The CI runner uses --ignore-scripts to prevent native package builds; it can
-typecheck and run self-contained integration mocks, but it CANNOT establish
-that the actual better-sqlite3 native binding and local Ollama model work.
-Run npm ci without that option on the host and validate dashboard, SQLite,
-and real model before production deployment.
+Use Node 22 for the locked native SQLite dependency. The offline profile runs
+the Python regressions, typechecks, all eight TypeScript fixtures, native
+SQLite/Drizzle/dashboard integration and launcher restart smoke. Its temporary
+database is separate from the operator database. It emits
+`production_verified: false`; passing proves these regressions only.
+
+CI has both a static job using --ignore-scripts and a native integration job
+using npm ci. The native job exercises actual SQLite and dashboard startup.
+Neither job establishes actual local Ollama or provider operation. The full
+host acceptance command remains:
+
+    python3 scripts/acceptance.py
 
 ## Outstanding host/provider-level acceptance gates
 

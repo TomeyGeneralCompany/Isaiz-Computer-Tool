@@ -64,6 +64,12 @@ def main() -> int:
                     continue
                 if child is not None:
                     print(f"{name} exited with code {child.returncode}", flush=True)
+                    # A crashed leader can leave descendants running. Reap its
+                    # group before starting another copy of that worker.
+                    try:
+                        os.killpg(child.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
                     children.pop(name, None)
                     streams.pop(name).close()
                     retry_at[name] = time.monotonic() + (21600 if name == "scope" and child.returncode == 0 else 1800 if name == "scope" else 120 if name == "import" and child.returncode == 0 else delay)
@@ -86,15 +92,25 @@ def main() -> int:
                 print(f"Started {name} (pid {child.pid})", flush=True)
             time.sleep(1)
     finally:
-        for child in children.values():
-            if child.poll() is None:
-                child.terminate()
+        # Every worker starts a new session and may spawn descendants. Signal
+        # the whole owned group, including when its original leader has exited.
         for child in children.values():
             try:
-                child.wait(timeout=8)
+                os.killpg(child.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+        deadline = time.monotonic() + 8
+        for child in children.values():
+            try:
+                child.wait(timeout=max(0, deadline - time.monotonic()))
             except subprocess.TimeoutExpired:
-                child.kill()
-                child.wait()
+                pass
+        for child in children.values():
+            try:
+                os.killpg(child.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            child.wait()
         for stream in streams.values():
             stream.close()
     return 0

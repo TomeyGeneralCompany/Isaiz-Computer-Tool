@@ -8,7 +8,8 @@ process.env.PROJECT_ROOT = dirname(__filename);
 
 import { readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { execFile } from "node:child_process";
+import { spawn } from "node:child_process";
+import { createRequire } from "node:module";
 import cron from "node-cron";
 import { loadConfig, getConfig, createLogger, claimDailyHuntSlot } from "@bounty/core";
 import { pollHackerOne, pollImmunefi, pollHuntr, pollAggregator, pollSubmissionStatuses, backfillSignalRequirements } from "@bounty/security-discovery";
@@ -40,9 +41,14 @@ function pollSchedule(minutes: number): string {
 }
 
 function startDashboard(port: number) {
-  const child = execFile("npx", ["next", "dev", "--hostname", "127.0.0.1", "--port", String(port)], {
-    cwd: new URL("./packages/dashboard", import.meta.url).pathname,
+  const require = createRequire(import.meta.url);
+  const child = spawn(process.execPath, [require.resolve("next/dist/bin/next"), "dev", "--hostname", "127.0.0.1", "--port", String(port)], {
+    cwd: fileURLToPath(new URL("./packages/dashboard", import.meta.url)),
     env: { ...process.env },
+    // Own Next's descendants as a group. Streaming avoids execFile's output
+    // buffer limit killing a healthy long-running dashboard after enough logs.
+    detached: process.platform !== "win32",
+    stdio: ["ignore", "pipe", "pipe"],
   });
   child.stdout?.on("data", (d: Buffer) => process.stdout.write(d));
   child.stderr?.on("data", (d: Buffer) => process.stderr.write(d));
@@ -53,6 +59,7 @@ function startDashboard(port: number) {
 
 function main() {
   const config = loadConfig();
+  let shuttingDown = false;
 
   log.info(
     {
@@ -150,7 +157,7 @@ function main() {
   // Allow operator pause to interrupt long idle waits promptly.
   async function waitWhileEnabled(ms: number) {
     for (let waited = 0; waited < ms; waited += 1000) {
-      if (!getConfig().SECURITY_AUTO_HUNT_ENABLED) return;
+      if (shuttingDown || !getConfig().SECURITY_AUTO_HUNT_ENABLED) return;
       await new Promise<void>(resolve => setTimeout(resolve, Math.min(1000, ms - waited)));
     }
   }
@@ -162,7 +169,7 @@ function main() {
     if (autoHuntScheduled) return;
     autoHuntScheduled = true;
     try {
-      while (true) {
+      while (!shuttingDown) {
         const currentConfig = getConfig();
         if (!currentConfig.SECURITY_AUTO_HUNT_ENABLED) break;
 
@@ -279,15 +286,37 @@ function main() {
   );
 
   // Graceful shutdown
-  const shutdown = () => {
+  const shutdown = (exitCode = 0) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     log.info("Shutting down...");
-    dashboard.kill();
     cron.getTasks().forEach((task) => task.stop());
-    process.exit(0);
+    const signalDashboard = (signal: NodeJS.Signals) => {
+      try {
+        if (process.platform !== "win32" && dashboard.pid) process.kill(-dashboard.pid, signal);
+        else dashboard.kill(signal);
+      } catch (err: any) {
+        if (err.code !== "ESRCH") log.error({ err }, "Dashboard shutdown failed");
+      }
+    };
+    signalDashboard("SIGTERM");
+    // Allow all Next descendants to finish; bound shutdown even if a child
+    // ignores SIGTERM. The complete launcher/systemd can then restart cleanly.
+    setTimeout(() => {
+      signalDashboard("SIGKILL");
+      process.exit(exitCode);
+    }, 5000);
   };
 
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
+  dashboard.on("exit", (code, signal) => {
+    if (!shuttingDown) {
+      log.error({ code, signal }, "Dashboard exited unexpectedly; restarting the service is required");
+      shutdown(1);
+    }
+  });
+  dashboard.on("error", () => shutdown(1));
+  process.on("SIGINT", () => shutdown());
+  process.on("SIGTERM", () => shutdown());
 }
 
 // Catch stray promises so they don't silently disappear
