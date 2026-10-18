@@ -18,8 +18,13 @@ import urllib.error
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
-PORT = 3456
-URL = "http://127.0.0.1:3456/api/trpc/securityEarnings"
+PORT = 0
+URL = ""
+
+def choose_port():
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        return listener.getsockname()[1]
 
 def check_url(expected_target):
     try:
@@ -108,13 +113,16 @@ def smoke(iteration):
                 raise AssertionError("Service left dashboard listening after shutdown")
 
 def main():
+    global PORT, URL
     if os.environ.get("CI_DASHBOARD_SMOKE") != "1":
         raise SystemExit("CI_DASHBOARD_SMOKE=1 required")
     if not Path(os.environ.get("DB_PATH","")).is_file():
         raise SystemExit("Missing isolated initialized CI SQLite database")
+    PORT = choose_port()
+    URL = f"http://127.0.0.1:{PORT}/api/trpc/securityEarnings"
     with socket.socket() as s:
         if s.connect_ex(("127.0.0.1", PORT)) == 0:
-            raise SystemExit("Dashboard port already occupied; refusing to test another instance")
+            raise SystemExit("Allocated smoke port already occupied; retry the isolated test")
     smoke(1)
     smoke(2)
     print("Real orchestrator/dashboard startup, shutdown and restart: PASSED")

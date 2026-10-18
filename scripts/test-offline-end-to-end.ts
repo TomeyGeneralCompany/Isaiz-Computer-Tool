@@ -5,6 +5,7 @@
  * This NEVER calls real bounty sites and does not prove live program readiness.
  */
 import "dotenv/config";
+import { hostModelTimeout, fixtureAuditLimits } from "./model-check-settings";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
@@ -68,8 +69,8 @@ try {
   }
   const hypothesis = await runLocalAudit(
     "Use read_file to inspect fixture.ts. Identify any HTML encoding risk. Start your answer with HYPOTHESIS: and do not claim verified exploitability.",
-    auditLog, realModel ? 120000 : 15000, workspace,
-    realModel ? (process.env.LOCAL_OLLAMA_MODEL || "qwen3:4b") : "mock",
+    auditLog, realModel ? hostModelTimeout() : 15000, workspace,
+    realModel ? (process.env.LOCAL_OLLAMA_MODEL || "qwen3:4b") : "mock", undefined, fixtureAuditLimits,
   );
   assert.ok(hypothesis.startsWith("HYPOTHESIS:"));
   if (!realModel) assert.equal(agentCalls,2);
@@ -137,6 +138,9 @@ try {
     ()=>submitReport({teamHandle:"offline-fixture",payload}),outbox),/already attempted/);
   assert.equal(reportsPosted,1);
   console.log((realModel ? "REAL LOCAL MODEL" : "Mocked model") + " -> owned source fixture -> deterministic replay -> report -> review -> MOCK submit -> recovery PASSED");
+} catch (error) {
+  console.error((await readFile(auditLog,"utf8").catch(()=>"No model transcript produced")).slice(-2000));
+  throw error;
 } finally {
   globalThis.fetch = originalFetch;
   if (savedOllamaUrl === undefined) delete process.env.AUTOHACK_OLLAMA_URL;

@@ -38,7 +38,8 @@ redirect following. This observer is not yet exposed as a local Ollama tool.
 5. Verify the host and read-only provider access: bash scripts/verify-host.sh
    This saves private evidence in data/host-acceptance.json and returns nonzero
    for any failed check. It never submits a report. Stop a running AutoHack
-   instance before this check so the isolated restart smoke can bind port 3456.
+   instance before changing dependencies. The isolated restart smoke now uses
+   its own free loopback port; it does not stop a different dashboard on 3456.
    It tests the configured model with a fresh file marker and runs an owned
    fixture through the actual model, deterministic replay, report assembly,
    evidence review and an intercepted submission. Real-program proof still
@@ -154,3 +155,26 @@ so an existing node_modules directory cannot silently retain the previous lock.
 
 Do not call full unattended bounty production readiness achieved until these
 gates have actually passed. The standalone offline fixture is not that proof.
+
+## Repairs after the first actual laptop check
+
+The initial clone lacked the configured database parent directory. Drizzle's
+CLI printed the error but returned zero. The config now creates that directory,
+and setup checks the actual tables before proceeding. A regression covers both
+fresh nested directories and a fake zero-exit initialization failure.
+
+Restart smoke uses an ephemeral loopback port and retains isolated runtime
+state. It does not commandeer an existing dashboard's listener.
+
+Host model fixtures now have a six-turn, 128-token-per-response limit with a
+2048-token context and four CPU threads. Their default budget is ten minutes;
+`LOCAL_AGENT_TEST_TIMEOUT_MS` can override it from 1000 to 1800000 ms. Timing
+logs identify the last requested/completed turn. These changes are regression
+tested with intercepted model responses; they do not establish that the real
+CPU/model timeouts have been resolved. Rerun the actual host acceptance.
+
+For a rejected HackerOne credential pair, run
+`bash scripts/configure-hackerone.sh` locally. It prompts for the username and a
+hidden API token, checks authenticated read access, then atomically saves .env
+with mode 0600 only if the check succeeds. Rejected credentials are not saved.
+Never paste the API token into chat.

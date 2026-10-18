@@ -30,7 +30,7 @@ class SetupVerification(unittest.TestCase):
             result = subprocess.run(['bash', 'setup-and-run.sh', '--verify-only'], cwd=base,
                 env=dict(os.environ, AUTOHACK_NODE_BIN=str(node)), capture_output=True, text=True, timeout=10)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual((base / 'npm-calls.txt').read_text().splitlines(), ['ci', 'run db:push'])
+            self.assertEqual((base / 'npm-calls.txt').read_text().splitlines(), ['ci'])
             self.assertIn('--provider', (base / 'acceptance-args.txt').read_text())
             self.assertFalse((base / 'launched').exists())
             self.assertEqual(stat.S_IMODE((base / '.env').stat().st_mode), 0o600)

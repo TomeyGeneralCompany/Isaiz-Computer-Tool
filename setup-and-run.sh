@@ -40,7 +40,7 @@ if ! node -e 'require("better-sqlite3") (":memory:").close()' >/dev/null 2>&1; t
 fi
 export PROJECT_ROOT="$ROOT"
 echo "Initializing application database..."
-npm run db:push
+node --import tsx scripts/initialize-db.ts
 echo "Checking local prerequisites..."
 python3 scripts/doctor.py
 echo "Running local acceptance checks..."

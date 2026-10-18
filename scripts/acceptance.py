@@ -24,6 +24,8 @@ def record(name: str, ok: bool, detail: str) -> None:
     RESULTS[name] = {"passed": ok, "detail": detail}
 
 def run(name: str, args: list[str], timeout: int = 120, env: dict | None = None) -> None:
+    if "--offline" not in sys.argv:
+        print("Checking " + name + "...", file=sys.stderr, flush=True)
     try:
         proc = subprocess.run(args, cwd=ROOT, capture_output=True, text=True, timeout=timeout, env=env)
         record(name, proc.returncode == 0, (proc.stdout + proc.stderr)[-1200:])
@@ -73,7 +75,7 @@ def main() -> int:
     if args.offline and args.provider:
         parser.error("--provider cannot be combined with --offline")
     run("python_integration_tests", [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py", "-v"])
-    run("launcher_syntax", ["bash", "-n", "run-local-autohack.sh", "run-complete-autohack.sh", "setup-and-run.sh", "scripts/install-user-service.sh", "scripts/control-user-service.sh", "scripts/node-runtime.sh", "scripts/verify-host.sh"])
+    run("launcher_syntax", ["bash", "-n", "run-local-autohack.sh", "run-complete-autohack.sh", "setup-and-run.sh", "scripts/install-user-service.sh", "scripts/control-user-service.sh", "scripts/node-runtime.sh", "scripts/verify-host.sh", "scripts/configure-hackerone.sh"])
     if shutil.which("npm") and (ROOT / "node_modules").is_dir():
         run("typescript", ["npx", "--no-install", "tsc", "--noEmit", "--project", "tsconfig.json"], 180)
         run("dashboard_typecheck", ["npx", "--no-install", "tsc", "--noEmit", "--project", "packages/dashboard/tsconfig.json"], 180)
@@ -101,6 +103,7 @@ def main() -> int:
                    "CI_SQLITE_INTEGRATION": "1", "CI_DASHBOARD_SMOKE": "1"}
             run("native_schema", ["npm", "run", "db:push"], 180, env)
             if RESULTS["native_schema"]["passed"]:
+                run("database_initialization", ["node", "--import", "tsx", "scripts/test-db-initialization.ts"], 180, env)
                 run("native_sqlite_dashboard", ["node", "--import", "tsx", "scripts/test-sqlite-pipeline.ts"], 180, env)
                 run("service_restart", [sys.executable, "scripts/test-service-restart.py"], 240, env)
 
@@ -126,7 +129,7 @@ def main() -> int:
         try:
             payload = json.dumps({"model": settings["model"], "stream": False, "think": False,
                                   "messages": [{"role": "user", "content": "Reply with the single word READY."}],
-                                  "options": {"num_predict": 24, "temperature": 0}}).encode()
+                                  "options": {"num_predict":24, "num_ctx":2048, "num_thread":4, "temperature":0}}).encode()
             request = urllib.request.Request(settings["ollamaUrl"], data=payload,
                                              headers={"Content-Type": "application/json"})
             with urllib.request.urlopen(request, timeout=120) as response:
@@ -140,8 +143,9 @@ def main() -> int:
     # Offline workers use Ollama directly. Claude Code is only required for
     # the optional interactive security-solver, not for the offline pipeline.
     if RESULTS["local_inference"]["passed"] and shutil.which("npx"):
-        run("agent_backend", ["node", "--import", "tsx", "scripts/test-local-agent.ts"], 180)
-        run("real_model_fixture_pipeline", ["node", "--import", "tsx", "scripts/test-offline-end-to-end.ts", "--real-model"], 180)
+        model_timeout = settings["agentTimeoutMs"] // 1000 + 30
+        run("agent_backend", ["node", "--import", "tsx", "scripts/test-local-agent.ts"], model_timeout)
+        run("real_model_fixture_pipeline", ["node", "--import", "tsx", "scripts/test-offline-end-to-end.ts", "--real-model"], model_timeout)
     else:
         record("agent_backend", False, "Local inference or tsx unavailable")
         record("real_model_fixture_pipeline", False, "Local inference or tsx unavailable")

@@ -7,10 +7,21 @@ const tools = [
   { type: "function", function: { name: "search_files", description: "Search tracked source files for a literal string inside the authorized workspace", parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } } },
   { type: "function", function: { name: "read_file", description: "Read a source file in the authorized local audit workspace", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } } },
 ];
+export interface LocalAuditLimits {
+  maxTurns: number;
+  numPredict: number;
+  numCtx: number;
+  numThreads: number;
+}
 export async function runLocalAudit(
   prompt: string, logFile: string, timeoutMs: number, cwd: string,
-  model: string, systemPrompt?: string,
+  model: string, systemPrompt?: string, limits: Partial<LocalAuditLimits> = {},
 ): Promise<string> {
+  const settings = {maxTurns:20, numPredict:512, numCtx:4096, numThreads:4, ...limits};
+  for (const [key, low, high] of [["maxTurns",1,20],["numPredict",32,2048],["numCtx",1024,32768],["numThreads",1,32]] as const) {
+    if (!Number.isSafeInteger(settings[key]) || settings[key] < low || settings[key] > high)
+      throw new Error("Invalid local audit limit: " + key);
+  }
   const root = await realpath(cwd);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -27,15 +38,20 @@ export async function runLocalAudit(
     return candidate;
   }
   try {
-    for (let turn = 0; turn < 20; turn++) {
+    for (let turn = 0; turn < settings.maxTurns; turn++) {
+      const started = Date.now();
+      await appendFile(logFile, `[OLLAMA] turn ${turn+1}/${settings.maxTurns}: request started; model=${model}; context=${settings.numCtx}; generation_limit=${settings.numPredict}\n`);
       const response = await fetch(process.env.AUTOHACK_OLLAMA_URL || "http://127.0.0.1:11434/api/chat", {
         method: "POST", signal: controller.signal,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ model, stream: false, think: false, messages, tools,
-          options: { num_predict: 2048, temperature: 0.1 } }),
+          keep_alive:"10m",
+          options: { num_predict:settings.numPredict, num_ctx:settings.numCtx,
+            num_thread:settings.numThreads, temperature:0.1 } }),
       });
       if (!response.ok) throw new Error("Ollama HTTP " + response.status);
-      const result = await response.json() as { message?: Message };
+      const result = await response.json() as { message?: Message; eval_count?: number; prompt_eval_count?: number };
+      await appendFile(logFile, `[OLLAMA] turn ${turn+1}: response received in ${Date.now()-started}ms; prompt_tokens=${result.prompt_eval_count ?? "unknown"}; generated_tokens=${result.eval_count ?? "unknown"}\n`);
       const message = result.message;
       if (!message) throw new Error("Ollama returned no assistant message");
       messages.push(message);
@@ -90,7 +106,11 @@ export async function runLocalAudit(
         messages.push({ role: "tool", tool_name: call.function.name, content: output.slice(0, 30_000) });
       }
     }
-    throw new Error("Local audit reached its 20-turn inspection limit");
+    throw new Error(`Local audit reached its ${settings.maxTurns}-turn inspection limit`);
+  } catch (error) {
+    if (controller.signal.aborted)
+      throw new Error(`Ollama audit timed out after ${Math.round(timeoutMs/1000)} seconds; check model load/CPU contention and the turn timing log`);
+    throw error;
   } finally {
     clearTimeout(timer);
   }
