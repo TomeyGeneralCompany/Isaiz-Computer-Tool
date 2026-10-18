@@ -46,5 +46,7 @@ jobs:
         run: npx tsx scripts/test-submission-outbox.ts
       - name: Mock real HackerOne serializer and rejection
         run: npx tsx scripts/test-mock-submission.ts
+      - name: Exercise offline scoped full fixture and mock submit
+        run: npx tsx scripts/test-offline-end-to-end.ts
       - name: Typecheck dashboard
         run: npx tsc --noEmit --project packages/dashboard/tsconfig.json
