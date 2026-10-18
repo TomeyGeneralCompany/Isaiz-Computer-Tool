@@ -52,3 +52,22 @@ jobs:
         run: npx tsx scripts/test-scoped-http.ts
       - name: Typecheck dashboard
         run: npx tsc --noEmit --project packages/dashboard/tsconfig.json
+
+  native-sqlite-integration:
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: offline-ci-fixture
+      DB_PATH: /tmp/autohack-native-ci-db.sqlite
+      CI_SQLITE_INTEGRATION: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Compile native SQLite dependency
+        run: npm ci
+      - name: Create isolated fixture schema through Drizzle
+        run: npm run db:push
+      - name: Exercise actual SQLite, Drizzle, tRPC dashboard and payment ledger
+        run: npx tsx scripts/test-sqlite-pipeline.ts
