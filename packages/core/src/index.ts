@@ -13,3 +13,4 @@ export { readVerifiedPayouts, recordVerifiedPayout, earningsProgress, ledgerFile
 export { targetInExplicitScope, assertAuthorizedTarget, assertAuthorizedProgram } from "./scope-authorization";
 export { claimDailyHuntSlot, readDailyQuota, dailyQuotaFile } from "./daily-hunt-limit";
 export { readSubmissionOutbox, claimSubmission, finishSubmission, markSubmissionUncertain, submitOnce, submissionOutboxFile } from "./submission-outbox";
+export { ScopedHttpInspector, isPublicIpv4, type HttpObservation } from "./authorized-http";
