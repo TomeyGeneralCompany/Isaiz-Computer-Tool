@@ -17,7 +17,7 @@ export async function runLocalAudit(
   prompt: string, logFile: string, timeoutMs: number, cwd: string,
   model: string, systemPrompt?: string, limits: Partial<LocalAuditLimits> = {},
 ): Promise<string> {
-  const settings = {maxTurns:20, numPredict:512, numCtx:4096, numThreads:4, ...limits};
+  const settings = {maxTurns:20, numPredict:2048, numCtx:4096, numThreads:4, ...limits};
   for (const [key, low, high] of [["maxTurns",1,20],["numPredict",32,2048],["numCtx",1024,32768],["numThreads",1,32]] as const) {
     if (!Number.isSafeInteger(settings[key]) || settings[key] < low || settings[key] > high)
       throw new Error("Invalid local audit limit: " + key);
@@ -40,14 +40,15 @@ export async function runLocalAudit(
   try {
     for (let turn = 0; turn < settings.maxTurns; turn++) {
       const started = Date.now();
-      await appendFile(logFile, `[OLLAMA] turn ${turn+1}/${settings.maxTurns}: request started; model=${model}; context=${settings.numCtx}; generation_limit=${settings.numPredict}\n`);
+      await appendFile(logFile, `[OLLAMA] turn ${turn+1}/${settings.maxTurns}: request started; model=${model}; context=${limits.numCtx ?? "server-default"}; generation_limit=${settings.numPredict}\n`);
       const response = await fetch(process.env.AUTOHACK_OLLAMA_URL || "http://127.0.0.1:11434/api/chat", {
         method: "POST", signal: controller.signal,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ model, stream: false, think: false, messages, tools,
           keep_alive:"10m",
-          options: { num_predict:settings.numPredict, num_ctx:settings.numCtx,
-            num_thread:settings.numThreads, temperature:0.1 } }),
+          options: { num_predict:settings.numPredict,
+            ...(limits.numCtx === undefined ? {} : {num_ctx:settings.numCtx}),
+            ...(limits.numThreads === undefined ? {} : {num_thread:settings.numThreads}), temperature:0.1 } }),
       });
       if (!response.ok) throw new Error("Ollama HTTP " + response.status);
       const result = await response.json() as { message?: Message; eval_count?: number; prompt_eval_count?: number };
