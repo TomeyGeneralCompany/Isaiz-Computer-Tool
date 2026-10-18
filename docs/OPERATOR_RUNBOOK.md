@@ -7,7 +7,9 @@ tool conversation, deterministic replay on an owned vulnerable fixture, report
 generation, the actual HackerOne request serializer intercepted in memory,
 rejection behavior, duplicate prevention, and persistent submission recovery.
 It sends **no** synthetic reports to real programs and makes **no** external
-target requests. CI does NOT demonstrate live end-to-end autonomous hunting.
+target requests. CI also starts, stops and restarts the real orchestrator and HTTP dashboard
+against an isolated SQLite database, with all discovery and hunts disabled.
+CI does NOT demonstrate live end-to-end autonomous hunting.
 
 The native Ollama agent remains read-only. It may clone up to two explicitly
 eligible public GitHub SOURCE_CODE repositories into its private workspace.
