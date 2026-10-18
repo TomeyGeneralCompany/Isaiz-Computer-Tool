@@ -13,7 +13,8 @@ try {
   const answer = await runLocalAudit(
     "Use read_file to inspect sample.ts. Return the exact value of acceptanceMarker from that file.",
     join(dir, "agent.log"), hostModelTimeout(), dir,
-    process.env.LOCAL_OLLAMA_MODEL || "qwen3:4b", undefined, fixtureAuditLimits,
+    process.env.LOCAL_OLLAMA_MODEL || "qwen3:4b", undefined, {...fixtureAuditLimits, validateFinal: answer => answer.includes(marker) ? null :
+      "Your returned value does not exactly match acceptanceMarker in sample.ts. Read sample.ts again and copy that value exactly, without explanation."},
   );
   if (!answer.includes(marker)) throw new Error("Agent did not complete fixture: " + answer.slice(0, 300));
   const transcript = await readFile(join(dir, "agent.log"), "utf8");

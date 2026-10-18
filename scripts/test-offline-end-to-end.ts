@@ -74,7 +74,8 @@ try {
   const hypothesis = await runLocalAudit(
     "Use read_file to inspect fixture.ts. Identify any HTML encoding risk. Start your answer with HYPOTHESIS: and do not claim verified exploitability.",
     auditLog, realModel ? hostModelTimeout() : 15000, workspace,
-    realModel ? (process.env.LOCAL_OLLAMA_MODEL || "qwen3:4b") : "mock", undefined, fixtureAuditLimits,
+    realModel ? (process.env.LOCAL_OLLAMA_MODEL || "qwen3:4b") : "mock", undefined, {...fixtureAuditLimits, validateFinal: answer => answer.startsWith("HYPOTHESIS:") ? null :
+      "Return your evidence-supported answer beginning exactly with HYPOTHESIS: as requested. Do not claim verified exploitability."},
   );
   assert.ok(hypothesis.startsWith("HYPOTHESIS:"));
   if (!realModel) assert.equal(agentCalls,2);

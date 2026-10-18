@@ -13,6 +13,7 @@ let calls = 0;
 let stall = false;
 let forbidden = false;
 let truncated = false;
+let repair = false;
 const limits = {maxTurns:6,numPredict:128,numCtx:2048,numThreads:4};
 const server = createServer(async (req, res) => {
   let body = "";
@@ -36,18 +37,18 @@ const server = createServer(async (req, res) => {
     res.end(JSON.stringify({done_reason:"length",message:{role:"assistant",content:'{"action":"read_file"'}}));
     return;
   }
-  if (calls === (truncated ? 2 : 1)) {
+  if (calls === (truncated ? 2 : 1) || (repair && calls === 3)) {
     const path = forbidden ? "../outside-secret.ts" : "sample.ts";
     res.end(JSON.stringify({message:{role:"assistant",content:structured ? JSON.stringify({action:"read_file",path,query:"",answer:""}) : "",
       ...(structured ? {} : {tool_calls:[{function:{name:"read_file",arguments:{path}}}]})}}));
   } else {
     const last = data.messages.at(-1);
-    if (!forbidden) {
+    if (!forbidden && !(repair && calls === 3)) {
       assert.equal(last.role,structured ? "user" : "tool");
       assert.ok(last.content.includes("return a + b"));
     }
     res.end(JSON.stringify({message:{role:"assistant",content:structured
-      ? JSON.stringify({action:"final",path:"",query:"",answer:"FUNCTION_FOUND"}) : "FUNCTION_FOUND"}}));
+      ? JSON.stringify({action:"final",path:"",query:"",answer:repair && calls===2 ? "WRONG" : "FUNCTION_FOUND"}) : "FUNCTION_FOUND"}}));
   }
 });
 try {
@@ -70,7 +71,12 @@ try {
   calls = 0; truncated = true;
   assert.equal(await runLocalAudit("Inspect sample.ts",join(dir,"truncated.log"),10000,dir,"mock",undefined,limits),"FUNCTION_FOUND");
   assert.equal(calls,3);
-  truncated = false; forbidden = true; calls = 0;
+  truncated = false; repair = true; calls = 0;
+  assert.equal(await runLocalAudit("Inspect sample.ts",join(dir,"repair.log"),10000,dir,"mock",undefined,
+    {...limits,validateFinal:answer=>answer==="FUNCTION_FOUND" ? null : "The value is incorrect; read sample.ts again."}),"FUNCTION_FOUND");
+  assert.equal(calls,4);
+  assert.match(await readFile(join(dir,"repair.log"),"utf8"),/FINAL_REJECTED/);
+  repair = false; forbidden = true; calls = 0;
   await assert.rejects(runLocalAudit("Inspect sample.ts",join(dir,"denied.log"),10000,dir,"mock",undefined,limits),/inspection limit/);
   assert.ok(!(await readFile(join(dir,"denied.log"),"utf8")).includes("[READ_OK]"));
   assert.throws(()=>decodeAuditAction(JSON.stringify({action:"exec",path:"",query:"",answer:""})),/Invalid read-only/);

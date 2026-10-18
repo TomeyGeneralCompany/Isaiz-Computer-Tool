@@ -212,3 +212,13 @@ Ollama version and laptop still need the same narrowed model check.
 References: Ollama structured outputs documentation
 (https://docs.ollama.com/capabilities/structured-outputs) and the upstream Qwen
 native-tool prompt report (https://github.com/ollama/ollama/issues/14601).
+
+A repeated real-model run exposed a one-character marker transcription error.
+The runner now accepts an optional final-answer validator; failed validation
+returns corrective feedback within the same bounded turn budget. The marker
+validator does not reveal the expected value or replace the model's answer.
+The original 24-character fresh marker comparison and successful-read checks
+remain unchanged. After this repair, the exact model-only command passed with
+real CPU Qwen3:4b, including the replay/report fixture, followed by two additional
+fresh-marker runs. A mock regression verifies rejected-final -> reread -> valid
+final recovery. These are owned-fixture checks, not real-program bounty proof.

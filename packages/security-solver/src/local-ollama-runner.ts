@@ -13,6 +13,8 @@ export interface LocalAuditLimits {
   numPredict: number;
   numCtx: number;
   numThreads: number;
+  /** Return corrective feedback to reject a final answer, or null to accept. */
+  validateFinal?: (answer: string) => string | null;
 }
 export async function runLocalAudit(
   prompt: string, logFile: string, timeoutMs: number, cwd: string,
@@ -84,6 +86,12 @@ export async function runLocalAudit(
           continue;
         }
         if (!message.content?.trim()) throw new Error("Ollama returned empty final response");
+        const feedback = limits.validateFinal?.(message.content);
+        if (feedback) {
+          await appendFile(logFile, "[FINAL_REJECTED] " + feedback + "\n");
+          messages.push({role:"user",content:feedback + "\nRe-read the source when necessary. /no_think"});
+          continue;
+        }
         return message.content;
       }
       for (const call of message.tool_calls.slice(0, 8)) {
