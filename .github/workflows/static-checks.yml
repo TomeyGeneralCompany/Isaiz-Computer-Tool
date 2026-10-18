@@ -38,5 +38,7 @@ jobs:
         run: npx tsx scripts/test-mock-agent.ts
       - name: Verify payout ledger behavior
         run: npx tsx scripts/test-earnings.ts
+      - name: Verify scope allowlist and denied targets
+        run: npx tsx scripts/test-scope.ts
       - name: Typecheck dashboard
         run: npx tsc --noEmit --project packages/dashboard/tsconfig.json
