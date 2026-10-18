@@ -3,7 +3,7 @@ import { eq, asc, desc, sql, inArray } from "drizzle-orm";
 import { readFile, writeFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
-import { getDb, schema, getConfig, setRuntimeOverride, getRuntimeOverrides, createLogger, getSecurityHuntHistory, readVerifiedPayouts, earningsProgress } from "@bounty/core";
+import { getDb, schema, getConfig, setRuntimeOverride, getRuntimeOverrides, createLogger, getSecurityHuntHistory, readVerifiedPayouts, earningsProgress, assertAuthorizedTarget, submitOnce } from "@bounty/core";
 import { pollAllSecurityProviders, submitReport, prepareSubmission, backfillSecurityRewards, backfillSignalRequirements, fetchProgramScopes } from "@bounty/security-discovery";
 import { analyzeProgram, analyzeAndRankFinding } from "@bounty/security-analyzer";
 import { huntProgram, solveSecurityFinding, forceStopSecuritySolver, pickBestFinding, pickBestProgram, rankEligiblePrograms, readSecuritySolverStatus, readAdversarialReviewStatus, processAdversarialQueue, isSecuritySolving, cancelAdversarialReview } from "@bounty/security-solver";
@@ -426,6 +426,8 @@ export const appRouter = router({
 
     let payload: any;
     try {
+      if (finding.reportId) throw new Error("Finding already submitted");
+      assertAuthorizedTarget(program.scopeSummary, finding.targetAsset ?? "");
       const scopeSummary = program.scopeSummary ? JSON.parse(program.scopeSummary) : {};
       const policy = scopeSummary.policy ?? undefined;
 
@@ -452,7 +454,8 @@ export const appRouter = router({
         policy,
       });
 
-      const result = await submitReport({ teamHandle, payload });
+      const result = await submitOnce(finding.id, teamHandle, payload,
+        () => submitReport({ teamHandle, payload }));
 
       db.update(schema.securityFindings)
         .set({
