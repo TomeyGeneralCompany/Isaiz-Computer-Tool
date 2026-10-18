@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync, unlinkSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { eq, desc, and, or, isNull, lt } from "drizzle-orm";
-import { getDb, schema, getConfig, createLogger, generateTraceId, classifyError, extractJsonWithKey, recordSecurityHuntOutcome, recordNearMiss, updateProgramNotes, getSecurityLearningContext, getSecurityProgramContext, type SecurityFinding, type SecurityProgram, assertAuthorizedProgram, targetInExplicitScope } from "@bounty/core";
+import { getDb, schema, getConfig, createLogger, generateTraceId, classifyError, extractJsonWithKey, recordSecurityHuntOutcome, recordNearMiss, updateProgramNotes, getSecurityLearningContext, getSecurityProgramContext, type SecurityFinding, type SecurityProgram, assertAuthorizedProgram, targetInExplicitScope, assertAuthorizedTarget, submitOnce } from "@bounty/core";
 import { fetchProgramPolicy, fetchProgramSignalRequirement, fetchAllDisclosedReports, prepareSubmission, submitReport, fetchProgramScopes } from "@bounty/security-discovery";
 import { runProgramHunt, runFindingSolver, killActiveSecurityProcess, detectHuntStrategy, prepareReviewWorkspace, spawnComprehensiveReview, deverbosifyReport, EXCLUDED_VULN_TYPES, type ReviewContext } from "./claude-runner";
 import { clearSecuritySolverStatus, writeAdversarialReviewStatus, clearAdversarialReviewStatus, readAdversarialReviewStatus, cancelAdversarialReview } from "./status";
@@ -972,6 +972,8 @@ export async function processAdversarialQueue(programId?: string): Promise<void>
         // Only HackerOne supports programmatic submission — other providers require manual submission
         if (config.SECURITY_AUTO_SUBMIT && !process.env.LOCAL_OLLAMA_MODEL && finalRecommendation === "submit" && program.provider === "hackerone" && program.providerProgramId && !finding.id.startsWith("offline-")) {
           try {
+            if (finding.reportId) throw new Error("Finding already has a provider report ID");
+            assertAuthorizedTarget(program.scopeSummary, finding.targetAsset ?? "");
             const handle = program.providerProgramId;
             const scopes = await fetchProgramScopes(handle);
             const reportBody = updateFields.reportBody ?? finding.reportBody ?? "";
@@ -992,7 +994,8 @@ export async function processAdversarialQueue(programId?: string): Promise<void>
             if (payload.policyExcluded) {
               log.warn({ findingId: finding.id }, "Auto-submit blocked: policy exclusion detected");
             } else {
-              const result = await submitReport({ teamHandle: handle, payload });
+              const result = await submitOnce(finding.id, handle, payload,
+                () => submitReport({ teamHandle: handle, payload }));
               db.update(schema.securityFindings)
                 .set({
                   status: "submitted",
