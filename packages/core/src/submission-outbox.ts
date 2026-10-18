@@ -109,3 +109,20 @@ export function markSubmissionUncertain(
     return entry;
   });
 }
+
+/** Inject a transport to test the real submission wrapper without network access. */
+export async function submitOnce(
+  findingId: string, programHandle: string, payload: unknown,
+  send: () => Promise<{ reportId: string; reportUrl: string }>,
+  path = submissionOutboxFile(),
+): Promise<{ reportId: string; reportUrl: string }> {
+  claimSubmission(findingId, programHandle, payload, path);
+  try {
+    const result = await send();
+    finishSubmission(findingId, result, path);
+    return result;
+  } catch (error) {
+    try { markSubmissionUncertain(findingId, String(error), path); } catch {}
+    throw error;
+  }
+}
