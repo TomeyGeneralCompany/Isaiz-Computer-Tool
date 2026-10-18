@@ -808,14 +808,14 @@ export default function SecurityPage() {
         </section>
       )}
 
-      {/* ── Overview Tab ── */
+      {/* ── Overview Tab ── */}
       {tab === "overview" && ds && (
         <div className="mt-5">
           {/* Stats + Model Config — single row */}
           <div className="grid items-stretch gap-3" style={{ gridTemplateColumns: "200px 1fr" }}>
             <div className="flex flex-col gap-3">
               <div className="flex-1 rounded-xl border p-5" style={{ background: "var(--bg-card)", borderColor: "var(--border)" }}>
-                <p className="text-xs uppercase tracking-wider" style={{ color: "var(--text-dim)" }}>Total Earned</p>
+                <p className="text-xs uppercase tracking-wider" style={{ color: "var(--text-dim)" }}>Awarded (not necessarily paid)</p>
                 <p className="mt-1.5 text-2xl font-bold tracking-tight" style={{ color: "var(--green)" }}>
                   {ds.totalRewardedCents > 0 ? `$${(ds.totalRewardedCents / 100).toFixed(0)}` : "$0"}
                 </p>
