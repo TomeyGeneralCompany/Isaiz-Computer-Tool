@@ -36,3 +36,7 @@ jobs:
       - run: npx tsc --noEmit --project tsconfig.json
       - name: Exercise direct Ollama agent with mock server
         run: npx tsx scripts/test-mock-agent.ts
+      - name: Verify payout ledger behavior
+        run: npx tsx scripts/test-earnings.ts
+      - name: Typecheck dashboard
+        run: npx tsc --noEmit --project packages/dashboard/tsconfig.json
