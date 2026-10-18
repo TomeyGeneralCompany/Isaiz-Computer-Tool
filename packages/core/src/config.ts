@@ -42,6 +42,7 @@ const configSchema = z.object({
   SECURITY_MIN_CONFIDENCE: z.coerce.number().default(0.65),
   SECURITY_MIN_RUBRIC_SCORE: z.coerce.number().default(8), // minimum adversarial review rubric total (out of 15) to pass
   SECURITY_HUNT_COOLDOWN_HOURS: z.coerce.number().default(2),
+  SECURITY_MONTHLY_EARNINGS_TARGET_CENTS: z.coerce.number().int().min(0).default(400000), // tracking goal, not a guarantee
   SECURITY_MIN_REWARD_CENTS: z.coerce.number().default(10000), // $100 minimum to justify 2h Opus
   SECURITY_MAX_DAILY_HUNTS: z.coerce.number().default(999), // effectively unlimited
   SECURITY_MAX_REVISE_ATTEMPTS: z.coerce.number().default(2), // deprecated — review is now binary approve/reject
