@@ -9,3 +9,4 @@ export { generateTraceId, classifyError } from "./trace";
 export { recordSecurityHuntOutcome, recordSecurityFindingOutcome, getSecurityLearningContext, getSecurityHuntHistory, recordNearMiss, updateProgramNotes, getSecurityProgramContext } from "./security-memory";
 export { EXCLUDE_PATTERNS, stageFilteredChanges } from "./git-utils";
 export { extractJsonWithKey } from "./json-utils";
+export { readVerifiedPayouts, recordVerifiedPayout, earningsProgress, ledgerFile, type VerifiedPayout } from "./earnings-ledger";
