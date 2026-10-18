@@ -20,7 +20,7 @@ shutdown deadline. The restart smoke signals only the launcher PID, so it
 cannot conceal an orphan by killing the test's entire process group.
 
 The native Ollama agent remains read-only. It may clone up to two explicitly
-eligible public GitHub SOURCE_CODE repositories into its private workspace.
+eligible public SOURCE_CODE repositories into its private workspace.
 The separate scoped HTTP observer library only allows GET/HEAD with exact
 scope, rate limit, total request budget, public IPv4 DNS pin, and disabled
 redirect following. This observer is not yet exposed as a local Ollama tool.
@@ -29,7 +29,11 @@ redirect following. This observer is not yet exposed as a local Ollama tool.
 
 1. On the CPU-only Linux host, use Node.js 22, npm, Python 3, Git and flock (util-linux).
 2. Store platform keys and model settings in a local .env (0600); never commit secrets.
-3. Run: bash setup-and-run.sh
+3. First installation or update: bash setup-and-run.sh --verify-only
+   This installs the exact lockfile under Node 22, initializes the schema, runs
+   local/model checks and a read-only provider check, and exits without starting
+   hunts. Inspect data/host-acceptance.json if a check fails.
+   For foreground operation after verification: bash run-complete-autohack.sh
 4. Open dashboard on http://127.0.0.1:3456 (loopback only).
 5. Verify the host and read-only provider access: bash scripts/verify-host.sh
    This saves private evidence in data/host-acceptance.json and returns nonzero
@@ -126,6 +130,17 @@ host acceptance command remains:
 - Provider preflight sends one bounded authenticated GET, reports actionable
   401/403/429 errors, and never emits tokens or provider response bodies.
   Existing HackerOne requests now have 30-second deadlines and reject redirects.
+
+## Dependency maintenance
+
+The lockfile was regenerated with patched Next.js and transitive dependencies.
+Drizzle ORM/Kit and node-cron were updated. Root overrides require patched
+PostCSS and esbuild, including nested copies. A clean Node 22 `npm ci` and all
+17 offline acceptance groups passed; lockfile and installed-package audits
+reported zero known vulnerabilities on October 18, 2026. The production
+dashboard build also passed against an isolated fixture database.
+Setup runs `npm ci` on updates as well as first install,
+so an existing node_modules directory cannot silently retain the previous lock.
 
 ## Outstanding host/provider-level acceptance gates
 

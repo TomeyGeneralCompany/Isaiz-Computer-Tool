@@ -23,7 +23,7 @@ Last updated: 2026-10-18.
 - The original Claude agent's tools and capabilities have **not** been ported.
 - Program discovery, source acquisition, local analysis, verification, drafting, reviewer, and HackerOne submission have **not** been exercised together.
 - A model response is not proof of an exploitable vulnerability.
-- CI passing does not mean the local model or live bounty workflow works. The latest verified baseline is commit d8cb799; later changes require their own check results.
+- CI passing does not mean the local model or live bounty workflow works. Read the acceptance profile and commit-specific CI results for the exact checks exercised.
 
 ## Implemented on development branch (2026-10-18)
 - Repaired malformed GitHub Actions workflow and local Ollama literal search/newline parsing.
@@ -62,3 +62,14 @@ Node 22 selection is shared by setup, launch and systemd. Duplicate launch
 locks and real dashboard restart checks cover normal local supervision.
 Review cloning no longer uses shell interpolation or URLs from report prose;
 only eligible source scopes can supply an acquired repository.
+
+## Clean-install verification
+
+A clean Node 22 installation passed all 17 offline acceptance groups (including
+14 Python tests), native SQLite/dashboard restart and duplicate denial, and a
+production dashboard build. Lockfile and installed-package audits reported zero
+known vulnerabilities after the dependency updates. Startup smoke uses private
+runtime state and checks a unique fixture override so it cannot silently load
+operator overrides. `bash setup-and-run.sh --verify-only` prepares the host,
+collects real-model and read-only account evidence, and exits without starting
+services. That actual-host command remains to be run on the operator machine.

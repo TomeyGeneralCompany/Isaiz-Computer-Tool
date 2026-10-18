@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PORT = 3456
 URL = "http://127.0.0.1:3456/api/trpc/securityEarnings"
 
-def check_url():
+def check_url(expected_target):
     try:
         with urllib.request.urlopen(URL, timeout=3) as r:
             if r.status != 200:
@@ -30,7 +30,7 @@ def check_url():
         result = data.get("result", {}).get("data", {})
         # superjson transformer returns {json: { ... }}.
         obj = result.get("json", result)
-        return (obj.get("monthlyTargetCents") == 400000
+        return (obj.get("monthlyTargetCents") == expected_target
                 and isinstance(obj.get("verifiedPaidCents"), int)
                 and isinstance(obj.get("pendingReports"), int))
     except (OSError, ValueError, TypeError, KeyError):
@@ -59,7 +59,15 @@ def smoke(iteration):
         "LOCAL_OLLAMA_MODEL":"",
         "DASHBOARD_PORT":str(PORT),
     })
-    with tempfile.TemporaryFile(mode="w+t") as output:
+    with tempfile.TemporaryDirectory(prefix="autohack-smoke-state-") as state, tempfile.TemporaryFile(mode="w+t") as output:
+        # Keep operator runtime overrides, locks and solver status out of this
+        # offline process, including when run from a configured installation.
+        env["PROJECT_ROOT"] = state
+        expected_target = 400000 + iteration
+        (Path(state) / "data").mkdir()
+        (Path(state) / "data/runtime-overrides.json").write_text(json.dumps({
+            "SECURITY_MONTHLY_EARNINGS_TARGET_CENTS": expected_target,
+        }))
         runner = subprocess.Popen(["bash","run-local-autohack.sh"],
             cwd=ROOT,env=env,start_new_session=True,
             stdout=output,stderr=subprocess.STDOUT)
@@ -68,7 +76,7 @@ def smoke(iteration):
             while time.monotonic()<deadline:
                 if runner.poll() is not None:
                     break
-                if check_url():
+                if check_url(expected_target):
                     duplicate = subprocess.run(["bash", "run-local-autohack.sh"], cwd=ROOT,
                         env=env, capture_output=True, text=True, timeout=10)
                     if duplicate.returncode != 2 or "already running" not in duplicate.stderr:

@@ -6,7 +6,7 @@ import { dirname } from "node:path";
 
 // Set PROJECT_ROOT so all packages resolve paths correctly
 const __filename = fileURLToPath(import.meta.url);
-process.env.PROJECT_ROOT = dirname(__filename);
+process.env.PROJECT_ROOT ||= dirname(__filename);
 
 import { readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
@@ -78,7 +78,7 @@ function main() {
 
   // Clear stale hunt lock from previous run
   try {
-    const lockFile = join(dirname(__filename), "data", "security-hunt.lock");
+    const lockFile = join(process.env.PROJECT_ROOT!, "data", "security-hunt.lock");
     const raw = readFileSync(lockFile, "utf-8");
     const lock = JSON.parse(raw);
     try {

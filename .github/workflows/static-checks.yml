@@ -71,6 +71,8 @@ jobs:
           cache: npm
       - name: Compile native SQLite dependency
         run: npm ci
+      - name: Audit locked dependencies
+        run: npm audit --audit-level=moderate
       - name: Create isolated fixture schema through Drizzle
         run: npm run db:push
       - name: Exercise actual SQLite, Drizzle, tRPC dashboard and payment ledger
@@ -80,3 +82,5 @@ jobs:
         env:
           CI_DASHBOARD_SMOKE: '1'
         run: python3 scripts/test-service-restart.py
+      - name: Build production dashboard against fixture database
+        run: npm run build --workspace=packages/dashboard
