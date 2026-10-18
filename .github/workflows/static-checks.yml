@@ -48,5 +48,7 @@ jobs:
         run: npx tsx scripts/test-mock-submission.ts
       - name: Exercise offline scoped full fixture and mock submit
         run: npx tsx scripts/test-offline-end-to-end.ts
+      - name: Test scoped bounded HTTP observation
+        run: npx tsx scripts/test-scoped-http.ts
       - name: Typecheck dashboard
         run: npx tsc --noEmit --project packages/dashboard/tsconfig.json
