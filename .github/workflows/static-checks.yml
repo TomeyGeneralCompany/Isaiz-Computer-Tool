@@ -71,3 +71,8 @@ jobs:
         run: npm run db:push
       - name: Exercise actual SQLite, Drizzle, tRPC dashboard and payment ledger
         run: npx tsx scripts/test-sqlite-pipeline.ts
+      - name: Smoke real orchestrator and dashboard startup/restart (offline)
+        timeout-minutes: 5
+        env:
+          CI_DASHBOARD_SMOKE: '1'
+        run: python3 scripts/test-service-restart.py
