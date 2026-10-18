@@ -33,4 +33,22 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci --ignore-scripts
-      - run: npx tsc --noEmit --project tsconfig.json\n      - name: Exercise direct Ollama agent with mock server\n        run: npx tsx scripts/test-mock-agent.ts
+      - run: npx tsc --noEmit --project tsconfig.json
+      - name: Exercise direct Ollama agent with mock server
+        run: npx tsx scripts/test-mock-agent.ts
+      - name: Verify payout ledger behavior
+        run: npx tsx scripts/test-earnings.ts
+      - name: Verify scope allowlist and denied targets
+        run: npx tsx scripts/test-scope.ts
+      - name: Verify durable daily dispatch quota
+        run: npx tsx scripts/test-daily-quota.ts
+      - name: Verify submission outbox restart and duplicate safety
+        run: npx tsx scripts/test-submission-outbox.ts
+      - name: Mock real HackerOne serializer and rejection
+        run: npx tsx scripts/test-mock-submission.ts
+      - name: Exercise offline scoped full fixture and mock submit
+        run: npx tsx scripts/test-offline-end-to-end.ts
+      - name: Test scoped bounded HTTP observation
+        run: npx tsx scripts/test-scoped-http.ts
+      - name: Typecheck dashboard
+        run: npx tsc --noEmit --project packages/dashboard/tsconfig.json

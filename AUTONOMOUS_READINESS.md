@@ -1,6 +1,6 @@
 # AutoHack — operational truth and completion criteria
 
-Last updated: 2026-10-17.
+Last updated: 2026-10-18.
 
 ## Verified in user terminal
 - SQLite schema exists (security_findings and security_programs).
@@ -24,6 +24,17 @@ Last updated: 2026-10-17.
 - Program discovery, source acquisition, local analysis, verification, drafting, reviewer, and HackerOne submission have **not** been exercised together.
 - A model response is not proof of an exploitable vulnerability.
 - CI passing does not mean the local model or live bounty workflow works. GitHub Actions run 63f194a reported failure with zero jobs, so this is not a passing verification of the new mock test.
+
+## Implemented on development branch (2026-10-18)
+- Repaired malformed GitHub Actions workflow and local Ollama literal search/newline parsing.
+- Added explicit eligible URL/repository allowlist, fail-closed program selection, out-of-scope finding rejection, and scope assertion before both automatic and manual submission.
+- Added separate bounded GET/HEAD observer with public IPv4 pinned DNS, request budget, response size and timeout caps, rate limiting and no redirect following. Not yet exposed to local model or verified against live target.
+- Added local read-only source acquisition limited to two explicitly eligible public GitHub source scopes; actual host checkout remains untested.
+- Added at-most-once submission outbox with persistent states and conservative ambiguous-failure handling. An intercepted actual HackerOne report serializer test checks payload, rejection and duplicate prevention.
+- Added durable per-UTC-day hunt dispatch quota, idle pause responsiveness and error backoff, plus loopback-only dashboard binding.
+- Added operator-reconciled USD payout ledger; dashboard separates actual verified paid receipts from unreconciled rewarded findings and pending reports. Configurable default monthly goal = $4,000 (not a guarantee).
+- Added a full offline *toy fixture* test: scoped program -> model read_file tool -> deterministic local replay -> evidence digest -> report -> evidence review -> intercepted/mock submission -> persistent recovery. This is not proof of live end-to-end bounty functionality.
+- Added operator runbook with exact setup, reconciliation, safety and remaining acceptance gates.
 
 ## Required before calling complete
 1. Implement scoped, rate-limited investigation tools restricted to explicitly authorized program assets, and test denied targets.

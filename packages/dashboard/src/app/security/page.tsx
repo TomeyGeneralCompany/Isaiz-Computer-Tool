@@ -539,6 +539,7 @@ export default function SecurityPage() {
   const signalBlockedCount = rawFindings?.filter((f: any) => f.programRequiresSignal).length ?? 0;
 
   const { data: detailedStats } = trpc.securityDetailedStats.useQuery(undefined, { refetchInterval: 5000 });
+  const { data: earnings } = trpc.securityEarnings.useQuery(undefined, { refetchInterval: 15000 });
   const { data: analyzeStatus } = trpc.securityAnalyzeStatus.useQuery(undefined, { refetchInterval: 2000 });
   const securityStatus = useSecurityStatus();
 
@@ -789,6 +790,24 @@ export default function SecurityPage() {
         ))}
       </div>
 
+      {/* Reconciled cash only: awards and pending reports are separate. */}
+      {earnings && (
+        <section className="mt-4 rounded-xl border p-4" style={{ background: "var(--bg-card)", borderColor: "var(--border)" }} aria-label="Verified payout progress">
+          <p className="text-xs uppercase" style={{ color: "var(--text-dim)" }}>
+            {earnings.month} Verified USD payouts — reconciled ledger
+          </p>
+          <div className="mt-2 grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <StatCard label="Cash received MTD" value={"$" + (earnings.verifiedPaidCents / 100).toFixed(2)} />
+            <StatCard label="Monthly floor (goal)" value={"$" + (earnings.monthlyTargetCents / 100).toFixed(2)} />
+            <StatCard label="Remaining to goal" value={"$" + (earnings.remainingCents / 100).toFixed(2)} />
+            <StatCard label="Pending / ready reports" value={earnings.pendingReports + " / " + earnings.awaitingSubmission} />
+          </div>
+          <p className="mt-2 text-xs" style={{ color: "var(--text-dim)" }}>
+            {earnings.progressPercent}% of target; {earnings.verifiedPayoutCount} verified transaction(s). Pending awards and database reward estimates do not count as paid.
+          </p>
+        </section>
+      )}
+
       {/* ── Overview Tab ── */}
       {tab === "overview" && ds && (
         <div className="mt-5">
@@ -796,7 +815,7 @@ export default function SecurityPage() {
           <div className="grid items-stretch gap-3" style={{ gridTemplateColumns: "200px 1fr" }}>
             <div className="flex flex-col gap-3">
               <div className="flex-1 rounded-xl border p-5" style={{ background: "var(--bg-card)", borderColor: "var(--border)" }}>
-                <p className="text-xs uppercase tracking-wider" style={{ color: "var(--text-dim)" }}>Total Earned</p>
+                <p className="text-xs uppercase tracking-wider" style={{ color: "var(--text-dim)" }}>Awarded (not necessarily paid)</p>
                 <p className="mt-1.5 text-2xl font-bold tracking-tight" style={{ color: "var(--green)" }}>
                   {ds.totalRewardedCents > 0 ? `$${(ds.totalRewardedCents / 100).toFixed(0)}` : "$0"}
                 </p>

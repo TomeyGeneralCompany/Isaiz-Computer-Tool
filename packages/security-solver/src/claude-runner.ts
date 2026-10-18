@@ -1470,6 +1470,35 @@ Use this file to jot down investigation notes that should survive context window
 `;
 
   await writeFile(join(workDir, "CLAUDE.md"), claudeMd, "utf-8");
+  // The native CPU-only Ollama runner cannot inspect a repository that has
+  // never been acquired. Fetch only public, explicitly eligible SOURCE_CODE
+  // GitHub repositories into the isolated audit workspace, bounded to two.
+  if (process.env.LOCAL_OLLAMA_MODEL) {
+    const { execFile: gitExec } = await import("node:child_process");
+    const { promisify } = await import("node:util");
+    const clone = promisify(gitExec);
+    const candidates = scopes.filter((scope: any) =>
+      scope.eligibleForBounty === true && scope.assetType === "SOURCE_CODE"
+      && typeof scope.assetIdentifier === "string"
+      && /^https:\/\/github\.com\/[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+(?:\.git)?\/?$/.test(scope.assetIdentifier)
+    ).slice(0, 2);
+    for (let i = 0; i < candidates.length; i++) {
+      const sourceUrl = candidates[i].assetIdentifier.replace(/\/$/, "");
+      const destination = join(workDir, "authorized-source-" + (i + 1));
+      try {
+        await clone("git", ["-c", "protocol.file.allow=never",
+          "-c", "core.hooksPath=/dev/null", "clone", "--depth", "1",
+          "--single-branch", "--", sourceUrl, destination], {
+            cwd: workDir, timeout: 90000, maxBuffer: 256 * 1024,
+          });
+        log.info({ sourceUrl, destination }, "Cloned explicitly authorized source for local audit");
+      } catch (error) {
+        log.warn({ sourceUrl, error }, "Authorized source acquisition failed");
+      }
+    }
+    return; // Local read-only model never needs active scanning tools installed.
+  }
+
 
   // Pre-install security tools if not available
   const { execSync } = await import("node:child_process");

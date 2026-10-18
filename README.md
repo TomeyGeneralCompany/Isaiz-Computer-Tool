@@ -1,5 +1,7 @@
 # autohack
 
+**Operational status (2026-10-18):** The local model and complete live bounty workflow are **not yet verified end-to-end**. See [operator setup, verified cash accounting, safety controls and acceptance gates](docs/OPERATOR_RUNBOOK.md) and [readiness evidence](AUTONOMOUS_READINESS.md). The CI fixture only tests an owned synthetic target with an intercepted submission backend; it is not live-provider proof.
+
 autohack is an autonomous security researcher for authorized bug bounty programs. It discovers programs, runs Claude sessions to hunt for vulnerabilities inside each program's declared scope, checks its own findings with a second adversarial model, drafts platform-ready reports, and submits behind a human approval gate.
 
 ![autohack dashboard overview](docs/screenshots/dashboard-overview.png)

@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync, unlinkSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { eq, desc, and, or, isNull, lt } from "drizzle-orm";
-import { getDb, schema, getConfig, createLogger, generateTraceId, classifyError, extractJsonWithKey, recordSecurityHuntOutcome, recordNearMiss, updateProgramNotes, getSecurityLearningContext, getSecurityProgramContext, type SecurityFinding, type SecurityProgram } from "@bounty/core";
+import { getDb, schema, getConfig, createLogger, generateTraceId, classifyError, extractJsonWithKey, recordSecurityHuntOutcome, recordNearMiss, updateProgramNotes, getSecurityLearningContext, getSecurityProgramContext, type SecurityFinding, type SecurityProgram, assertAuthorizedProgram, targetInExplicitScope, assertAuthorizedTarget, submitOnce } from "@bounty/core";
 import { fetchProgramPolicy, fetchProgramSignalRequirement, fetchAllDisclosedReports, prepareSubmission, submitReport, fetchProgramScopes } from "@bounty/security-discovery";
 import { runProgramHunt, runFindingSolver, killActiveSecurityProcess, detectHuntStrategy, prepareReviewWorkspace, spawnComprehensiveReview, deverbosifyReport, EXCLUDED_VULN_TYPES, type ReviewContext } from "./claude-runner";
 import { clearSecuritySolverStatus, writeAdversarialReviewStatus, clearAdversarialReviewStatus, readAdversarialReviewStatus, cancelAdversarialReview } from "./status";
@@ -70,6 +70,8 @@ export async function huntProgram(
   trigger?: "auto" | "manual",
 ): Promise<{ findingsCreated: number }> {
   const db = getDb();
+  if (program.status !== "active") throw new Error("Refusing hunt for inactive program");
+  assertAuthorizedProgram(program.scopeSummary);
 
   if (solving) {
     throw new Error("Security solver is already busy");
@@ -115,6 +117,12 @@ export async function huntProgram(
     const acceptedVulnTypes: string[] = [];
     let filtered = 0;
     for (const f of result.findings) {
+      if (!f.targetAsset || !targetInExplicitScope(program.scopeSummary, f.targetAsset)) {
+        log.warn({ programId: program.id, title: f.title, targetAsset: f.targetAsset },
+          "Rejecting finding outside explicitly eligible program scope");
+        filtered++;
+        continue;
+      }
       if (!ACCEPTED_SEVERITIES.has(f.severity)) {
         log.info({ title: f.title, severity: f.severity }, "Finding filtered: below minimum severity");
         filtered++;
@@ -518,6 +526,7 @@ export function rankEligiblePrograms(): RankedProgram[] {
   const ranked: RankedProgram[] = [];
 
   for (const p of programs) {
+    try { assertAuthorizedProgram(p.scopeSummary); } catch { continue; }
     if (p.providerProgramId && excludeHandles.has(p.providerProgramId.toLowerCase())) continue;
     if (p.requiresSignal && config.SKIP_SIGNAL_REQUIRED) continue;
 
@@ -963,6 +972,8 @@ export async function processAdversarialQueue(programId?: string): Promise<void>
         // Only HackerOne supports programmatic submission — other providers require manual submission
         if (config.SECURITY_AUTO_SUBMIT && !process.env.LOCAL_OLLAMA_MODEL && finalRecommendation === "submit" && program.provider === "hackerone" && program.providerProgramId && !finding.id.startsWith("offline-")) {
           try {
+            if (finding.reportId) throw new Error("Finding already has a provider report ID");
+            assertAuthorizedTarget(program.scopeSummary, finding.targetAsset ?? "");
             const handle = program.providerProgramId;
             const scopes = await fetchProgramScopes(handle);
             const reportBody = updateFields.reportBody ?? finding.reportBody ?? "";
@@ -983,7 +994,8 @@ export async function processAdversarialQueue(programId?: string): Promise<void>
             if (payload.policyExcluded) {
               log.warn({ findingId: finding.id }, "Auto-submit blocked: policy exclusion detected");
             } else {
-              const result = await submitReport({ teamHandle: handle, payload });
+              const result = await submitOnce(finding.id, handle, payload,
+                () => submitReport({ teamHandle: handle, payload }));
               db.update(schema.securityFindings)
                 .set({
                   status: "submitted",

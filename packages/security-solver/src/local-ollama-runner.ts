@@ -45,7 +45,7 @@ export async function runLocalAudit(
         return message.content;
       }
       for (const call of message.tool_calls.slice(0, 8)) {
-        await appendFile(logFile, "[TOOL] " + call.function.name + "\\n");
+        await appendFile(logFile, "[TOOL] " + call.function.name + "\n");
         let output: string;
         try {
           const name = call.function.name;
@@ -67,18 +67,18 @@ export async function runLocalAudit(
                 const target = resolve(dir, entry.name);
                 if (entry.isSymbolicLink()) continue;
                 if (entry.isDirectory()) { await walk(target, depth + 1); continue; }
-                if (!entry.isFile() || !/\\.(ts|tsx|js|jsx|py|go|rs|java|php|rb|sol|json|yaml|yml)$/.test(entry.name)) continue;
+                if (!entry.isFile() || !/\.(ts|tsx|js|jsx|py|go|rs|java|php|rb|sol|json|yaml|yml)$/.test(entry.name)) continue;
                 visited++;
                 const info = await stat(target);
                 if (info.size > 128000) continue;
-                const lines = (await readFile(target, "utf8")).split("\\n");
+                const lines = (await readFile(target, "utf8")).split("\n");
                 for (let i = 0; i < lines.length && results.length < 40; i++) {
                   if (lines[i].includes(query)) results.push(relative(root, target) + ":" + (i + 1) + ": " + lines[i].slice(0, 240));
                 }
               }
             }
             await walk(root, 0);
-            output = results.join("\\n") || "No matches";
+            output = results.join("\n") || "No matches";
           } else if (name === "read_file") {
             const info = await stat(full);
             if (!info.isFile() || info.size > 256_000) throw new Error("Not a readable source file under 256KB");
