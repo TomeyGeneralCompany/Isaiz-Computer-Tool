@@ -23,7 +23,7 @@ Last updated: 2026-10-18.
 - The original Claude agent's tools and capabilities have **not** been ported.
 - Program discovery, source acquisition, local analysis, verification, drafting, reviewer, and HackerOne submission have **not** been exercised together.
 - A model response is not proof of an exploitable vulnerability.
-- CI passing does not mean the local model or live bounty workflow works. GitHub Actions run 63f194a reported failure with zero jobs, so this is not a passing verification of the new mock test.
+- CI passing does not mean the local model or live bounty workflow works. The latest verified baseline is commit d8cb799; later changes require their own check results.
 
 ## Implemented on development branch (2026-10-18)
 - Repaired malformed GitHub Actions workflow and local Ollama literal search/newline parsing.
@@ -49,3 +49,16 @@ The existing entry point remains `bash setup-and-run.sh` from the repository roo
 
 ## Policy
 Operate only on assets authorized by the published bounty program, within rate limits and restrictions. Never submit unsupported or synthetic vulnerability claims.
+
+## Host handoff completed in source (October 18)
+
+The host entry point is `bash scripts/verify-host.sh`. It checks configured
+Ollama availability and actual tool use, runs the owned end-to-end fixture with
+the actual model, tests read-only HackerOne authentication, and saves a private
+JSON report. These checks are prepared for the host; a development fixture is
+not represented as a passed real-model or real-provider check.
+
+Node 22 selection is shared by setup, launch and systemd. Duplicate launch
+locks and real dashboard restart checks cover normal local supervision.
+Review cloning no longer uses shell interpolation or URLs from report prose;
+only eligible source scopes can supply an acquired repository.

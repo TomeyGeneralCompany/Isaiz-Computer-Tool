@@ -4,12 +4,7 @@
 set -Eeuo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
-if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
-  if [[ -s "$HOME/.nvm/nvm.sh" ]]; then
-    # shellcheck disable=SC1091
-    source "$HOME/.nvm/nvm.sh"
-  fi
-fi
+source "$ROOT/scripts/node-runtime.sh"
 for exe in node npm python3; do
   command -v "$exe" >/dev/null 2>&1 || { echo "Missing $exe" >&2; exit 127; }
 done
@@ -28,12 +23,18 @@ if [[ ! -f .env ]]; then
     exit 2
   fi
 fi
+chmod 600 "$ROOT/.env"
+# An existing node_modules may have been built by another Node version.
+if ! node -e 'require("better-sqlite3") (":memory:").close()' >/dev/null 2>&1; then
+  echo "Rebuilding SQLite for the selected Node runtime..."
+  npm rebuild better-sqlite3
+fi
 export PROJECT_ROOT="$ROOT"
 echo "Initializing application database..."
 npm run db:push
 echo "Checking local prerequisites..."
 python3 scripts/doctor.py
 echo "Running local acceptance checks..."
-python3 scripts/acceptance.py
+python3 scripts/acceptance.py --report data/host-acceptance.json
 echo "Starting AutoHack..."
 exec bash "$ROOT/run-complete-autohack.sh"

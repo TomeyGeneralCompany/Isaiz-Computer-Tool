@@ -4,6 +4,7 @@
  * evidence review -> intercepted provider submission -> restart/replay.
  * This NEVER calls real bounty sites and does not prove live program readiness.
  */
+import "dotenv/config";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
@@ -15,6 +16,8 @@ import { assertAuthorizedProgram, assertAuthorizedTarget } from "../packages/cor
 import { readSubmissionOutbox, submitOnce } from "../packages/core/src/submission-outbox";
 import { runLocalAudit } from "../packages/security-solver/src/local-ollama-runner";
 
+const realModel = process.argv.includes("--real-model");
+const savedOllamaUrl = process.env.AUTOHACK_OLLAMA_URL;
 const workspace = await mkdtemp(join(tmpdir(), "autohack-full-offline-"));
 const source = join(workspace, "fixture.ts");
 const auditLog = join(workspace, "audit.log");
@@ -38,6 +41,7 @@ try {
   assert.throws(()=>assertAuthorizedTarget(programScope,
     "https://github.com/unrelated/other-repo"),/not within/);
 
+  if (!realModel) {
   localModel.on("request",async(req,res)=>{
     let text = "";
     for await(const chunk of req) text += String(chunk);
@@ -61,12 +65,14 @@ try {
   const address = localModel.address();
   assert.ok(address && typeof address !== "string");
   process.env.AUTOHACK_OLLAMA_URL = "http://127.0.0.1:" + address.port + "/api/chat";
+  }
   const hypothesis = await runLocalAudit(
-    "Read fixture.ts and identify any risk; do not claim verified exploitability",
-    auditLog, 15000, workspace, "mock",
+    "Use read_file to inspect fixture.ts. Identify any HTML encoding risk. Start your answer with HYPOTHESIS: and do not claim verified exploitability.",
+    auditLog, realModel ? 120000 : 15000, workspace,
+    realModel ? (process.env.LOCAL_OLLAMA_MODEL || "qwen3:4b") : "mock",
   );
   assert.ok(hypothesis.startsWith("HYPOTHESIS:"));
-  assert.equal(agentCalls,2);
+  if (!realModel) assert.equal(agentCalls,2);
   const transcript = await readFile(auditLog,"utf8");
   assert.ok(transcript.includes("[TOOL] read_file"));
 
@@ -130,10 +136,11 @@ try {
   await assert.rejects(()=>submitOnce("offline-fixture-1","offline-fixture",payload,
     ()=>submitReport({teamHandle:"offline-fixture",payload}),outbox),/already attempted/);
   assert.equal(reportsPosted,1);
-  console.log("Offline program -> source audit -> replay -> report -> review -> MOCK submit -> recovery PASSED");
+  console.log((realModel ? "REAL LOCAL MODEL" : "Mocked model") + " -> owned source fixture -> deterministic replay -> report -> review -> MOCK submit -> recovery PASSED");
 } finally {
   globalThis.fetch = originalFetch;
-  delete process.env.AUTOHACK_OLLAMA_URL;
+  if (savedOllamaUrl === undefined) delete process.env.AUTOHACK_OLLAMA_URL;
+  else process.env.AUTOHACK_OLLAMA_URL = savedOllamaUrl;
   await new Promise<void>(resolve=>localModel.close(()=>resolve()));
   await rm(workspace,{recursive:true,force:true});
 }

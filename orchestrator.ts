@@ -1,4 +1,6 @@
 import "dotenv/config";
+// Defaults follow dotenv so the operator's selected model is honored.
+process.env.LOCAL_OLLAMA_MODEL ??= "qwen3:4b";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
 

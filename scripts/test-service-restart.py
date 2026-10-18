@@ -69,7 +69,11 @@ def smoke(iteration):
                 if runner.poll() is not None:
                     break
                 if check_url():
-                    print(f"Launch {iteration}: dashboard API and real SQLite answered", flush=True)
+                    duplicate = subprocess.run(["bash", "run-local-autohack.sh"], cwd=ROOT,
+                        env=env, capture_output=True, text=True, timeout=10)
+                    if duplicate.returncode != 2 or "already running" not in duplicate.stderr:
+                        raise AssertionError("Concurrent launcher did not reject duplicate instance")
+                    print(f"Launch {iteration}: dashboard/SQLite answered; duplicate launch rejected", flush=True)
                     return
                 time.sleep(0.8)
             output.seek(0)

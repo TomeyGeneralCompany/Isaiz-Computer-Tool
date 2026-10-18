@@ -14,8 +14,31 @@ SUPERVISOR = ROOT / 'scripts/run-offline-workers.py'
 
 def alive(pid):
     try:
-        # A reparented zombie is already dead; some CI init processes reap late.
-        return Path(f'/proc/{pid}/stat').read_text().split(') ')[1][0] != 'Z'
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    # Some container runners expose host /proc while kill() uses a nested PID
+    # namespace. Resolve NSpid in that namespace rather than inspecting an
+    # unrelated host process with the same numeric PID.
+    try:
+        if int(Path('/proc/self/stat').read_text().split()[0]) == os.getpid():
+            candidates = [Path(f'/proc/{pid}')]
+        else:
+            namespace = os.readlink('/proc/self/ns/pid')
+            candidates = []
+            for entry in Path('/proc').iterdir():
+                if not entry.name.isdigit():
+                    continue
+                try:
+                    if os.readlink(entry / 'ns/pid') != namespace:
+                        continue
+                    status = (entry / 'status').read_text()
+                    ids = next(line.split()[1:] for line in status.splitlines() if line.startswith('NSpid:'))
+                    if int(ids[-1]) == pid:
+                        candidates.append(entry)
+                except (OSError, StopIteration):
+                    continue
+        return any((entry / 'stat').read_text().split(') ')[1][0] != 'Z' for entry in candidates)
     except FileNotFoundError:
         return False
 
@@ -73,7 +96,10 @@ class WorkerLifecycle(unittest.TestCase):
                 runner.wait()
                 runner.stderr.close()
                 if descendant and alive(descendant):
-                    os.kill(descendant, signal.SIGKILL)
+                    try:
+                        os.kill(descendant, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
 
     def test_shutdown_removes_stubborn_descendant(self):
         self.exercise(False)

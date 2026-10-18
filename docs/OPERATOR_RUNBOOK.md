@@ -27,11 +27,18 @@ redirect following. This observer is not yet exposed as a local Ollama tool.
 
 ## Setup / operations
 
-1. On the CPU-only Linux host, use Node.js 22+, npm, Python 3 and Git.
+1. On the CPU-only Linux host, use Node.js 22, npm, Python 3, Git and flock (util-linux).
 2. Store platform keys and model settings in a local .env (0600); never commit secrets.
 3. Run: bash setup-and-run.sh
 4. Open dashboard on http://127.0.0.1:3456 (loopback only).
-5. Test the actual local model: npx tsx scripts/test-local-agent.ts
+5. Verify the host and read-only provider access: bash scripts/verify-host.sh
+   This saves private evidence in data/host-acceptance.json and returns nonzero
+   for any failed check. It never submits a report. Stop a running AutoHack
+   instance before this check so the isolated restart smoke can bind port 3456.
+   It tests the configured model with a fresh file marker and runs an owned
+   fixture through the actual model, deterministic replay, report assembly,
+   evidence review and an intercepted submission. Real-program proof still
+   requires a genuine authorized finding.
 6. Confirm the actual SQLite native addon builds: npm ci (not --ignore-scripts).
 7. After all acceptance checks pass, you can install a supervised per-user
    systemd service with: bash scripts/install-user-service.sh
@@ -89,7 +96,7 @@ Back up the file before any manual reconciliation.
     python3 scripts/acceptance.py --offline
 
 Use Node 22 for the locked native SQLite dependency. The offline profile runs
-the Python regressions, typechecks, all eight TypeScript fixtures, native
+the Python regressions, typechecks, all ten TypeScript fixtures, native
 SQLite/Drizzle/dashboard integration and launcher restart smoke. Its temporary
 database is separate from the operator database. It emits
 `production_verified: false`; passing proves these regressions only.
@@ -99,7 +106,26 @@ using npm ci. The native job exercises actual SQLite and dashboard startup.
 Neither job establishes actual local Ollama or provider operation. The full
 host acceptance command remains:
 
-    python3 scripts/acceptance.py
+    bash scripts/verify-host.sh
+
+## Deployment repairs verified in development
+
+- The setup and launch scripts select Node 22, matching the native SQLite ABI.
+  The systemd unit retains that executable and PATH instead of selecting a
+  potentially different nvm default after reboot. Setup rebuilds an incompatible
+  SQLite addon and protects .env with mode 0600.
+- Kernel-held locks prevent a second complete supervisor or local orchestrator
+  in the same checkout. The smoke test verifies duplicate launch rejection and
+  release of the lock across shutdown/restart.
+- Model and endpoint settings use the same dotenv parser as the application.
+  Environment values take precedence; the launcher does not replace a model
+  configured in .env with its default before dotenv runs.
+- Source acquisition and review share a validated repository-root selector.
+  Report prose never supplies clone commands. Git receives argv, disables hooks,
+  credential helpers, redirects and inherited Git configuration, and times out.
+- Provider preflight sends one bounded authenticated GET, reports actionable
+  401/403/429 errors, and never emits tokens or provider response bodies.
+  Existing HackerOne requests now have 30-second deadlines and reject redirects.
 
 ## Outstanding host/provider-level acceptance gates
 

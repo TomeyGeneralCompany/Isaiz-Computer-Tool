@@ -2,7 +2,7 @@
 # Safe human-facing service controls. No automatic bounty submission toggles.
 set -Eeuo pipefail
 command -v systemctl >/dev/null 2>&1 || { echo "systemctl unavailable" >&2; exit 127; }
-case "$1" in
+case "${1:-}" in
   start|stop|restart|status)
     exec systemctl --user "$1" autohack.service
     ;;

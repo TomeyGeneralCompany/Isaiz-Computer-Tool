@@ -16,6 +16,11 @@ if [[ "$ROOT" =~ [[:space:]%] ]]; then
   echo "Move the checkout to a path without whitespace or '%'." >&2
   exit 2
 fi
+source "$ROOT/scripts/node-runtime.sh"
+if [[ "$AUTOHACK_NODE_BIN" =~ [[:space:]%\"] ]]; then
+  echo "Node executable path must not contain whitespace, quotes, or percent signs." >&2
+  exit 2
+fi
 TARGET="$HOME/.config/systemd/user/autohack.service"
 mkdir -p "$(dirname "$TARGET")"
 cat > "$TARGET" <<UNIT
@@ -35,6 +40,8 @@ KillMode=control-group
 NoNewPrivileges=true
 UMask=0077
 Environment=PROJECT_ROOT=$ROOT
+Environment=AUTOHACK_NODE_BIN=$AUTOHACK_NODE_BIN
+Environment=PATH=$(dirname -- "$AUTOHACK_NODE_BIN"):$HOME/.local/bin:$HOME/.npm-global/bin:/usr/local/bin:/usr/bin:/bin
 
 [Install]
 WantedBy=default.target

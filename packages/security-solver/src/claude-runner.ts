@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { authorizedSourceUrls, cloneAuthorizedSource } from "./authorized-source";
 import { writeFile, mkdir, appendFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
@@ -1474,23 +1475,12 @@ Use this file to jot down investigation notes that should survive context window
   // never been acquired. Fetch only public, explicitly eligible SOURCE_CODE
   // GitHub repositories into the isolated audit workspace, bounded to two.
   if (process.env.LOCAL_OLLAMA_MODEL) {
-    const { execFile: gitExec } = await import("node:child_process");
-    const { promisify } = await import("node:util");
-    const clone = promisify(gitExec);
-    const candidates = scopes.filter((scope: any) =>
-      scope.eligibleForBounty === true && scope.assetType === "SOURCE_CODE"
-      && typeof scope.assetIdentifier === "string"
-      && /^https:\/\/github\.com\/[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+(?:\.git)?\/?$/.test(scope.assetIdentifier)
-    ).slice(0, 2);
+    const candidates = authorizedSourceUrls(scopes).slice(0, 2);
     for (let i = 0; i < candidates.length; i++) {
-      const sourceUrl = candidates[i].assetIdentifier.replace(/\/$/, "");
+      const sourceUrl = candidates[i];
       const destination = join(workDir, "authorized-source-" + (i + 1));
       try {
-        await clone("git", ["-c", "protocol.file.allow=never",
-          "-c", "core.hooksPath=/dev/null", "clone", "--depth", "1",
-          "--single-branch", "--", sourceUrl, destination], {
-            cwd: workDir, timeout: 90000, maxBuffer: 256 * 1024,
-          });
+        await cloneAuthorizedSource(sourceUrl, destination);
         log.info({ sourceUrl, destination }, "Cloned explicitly authorized source for local audit");
       } catch (error) {
         log.warn({ sourceUrl, error }, "Authorized source acquisition failed");
@@ -1620,49 +1610,17 @@ export async function prepareReviewWorkspace(
   await rm(workDir, { recursive: true, force: true });
   await mkdir(workDir, { recursive: true });
 
-  // Extract repo URL from scopes (SOURCE_CODE type) or finding target
-  const scopes = parseScopes(program);
-  let repoUrl: string | null = null;
-
-  // Check SOURCE_CODE scopes first
-  for (const scope of scopes) {
-    if (scope.assetType === "SOURCE_CODE" && scope.assetIdentifier) {
-      const match = scope.assetIdentifier.match(/https?:\/\/(github\.com|gitlab\.com|bitbucket\.org)\/[^\s]+/);
-      if (match) {
-        repoUrl = match[0].replace(/\/$/, "");
-        break;
-      }
-    }
-  }
-
-  // Fall back to finding's targetAsset
-  if (!repoUrl && finding.targetAsset) {
-    const match = finding.targetAsset.match(/https?:\/\/(github\.com|gitlab\.com|bitbucket\.org)\/[^\s]+/);
-    if (match) repoUrl = match[0].replace(/\/$/, "");
-  }
-
-  // Fall back to extracting from report body
-  if (!repoUrl && finding.reportBody) {
-    const match = finding.reportBody.match(/git clone\s+(https?:\/\/[^\s]+)/);
-    if (match) repoUrl = match[1].replace(/\/$/, "");
-    if (!repoUrl) {
-      const ghMatch = finding.reportBody.match(/https?:\/\/github\.com\/[\w.-]+\/[\w.-]+/);
-      if (ghMatch) repoUrl = ghMatch[0].replace(/\/$/, "");
-    }
-  }
+  // Only provider-authorized repository roots may be acquired. Finding text
+  // is untrusted and cannot expand the program's scope or become shell input.
+  const repoUrl = authorizedSourceUrls(parseScopes(program))[0];
 
   let repoCloned = false;
   let repoPath: string | undefined;
 
   if (repoUrl) {
-    const repoName = repoUrl.split("/").pop() ?? "repo";
-    repoPath = join(workDir, repoName);
+    repoPath = join(workDir, "authorized-source");
     try {
-      const { execSync } = await import("node:child_process");
-      execSync(`git clone --depth 50 ${repoUrl} ${repoPath}`, {
-        timeout: 60_000,
-        stdio: "ignore",
-      });
+      await cloneAuthorizedSource(repoUrl, repoPath);
       repoCloned = true;
       log.info({ repoUrl, repoPath }, "Cloned target repo for review");
     } catch (err) {

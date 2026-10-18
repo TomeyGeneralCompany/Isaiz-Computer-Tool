@@ -29,6 +29,8 @@ globalThis.fetch = async (url, init) => {
   assert.equal(String(url), "https://api.hackerone.com/v1/hackers/reports");
   requests++;
   assert.equal(init?.method, "POST");
+  assert.equal(init?.redirect, "error");
+  assert.ok(init?.signal, "Provider requests must have a deadline");
   const json = JSON.parse(String(init?.body));
   assert.equal(json.data.type, "report");
   assert.equal(json.data.attributes.team_handle, "offline-fixture");

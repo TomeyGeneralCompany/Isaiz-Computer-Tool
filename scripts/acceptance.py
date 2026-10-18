@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import urllib.request
+from urllib.parse import urlsplit, urlunsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 RESULTS: dict[str, dict] = {}
@@ -29,13 +30,50 @@ def run(name: str, args: list[str], timeout: int = 120, env: dict | None = None)
     except (OSError, subprocess.TimeoutExpired) as exc:
         record(name, False, str(exc))
 
+def runtime_settings() -> dict:
+    """Use the application's dotenv parser without exporting secrets."""
+    proc = subprocess.run(["node", "--import", "tsx", "scripts/runtime-settings.ts"],
+                          cwd=ROOT, capture_output=True, text=True, timeout=20)
+    if proc.returncode:
+        raise ValueError("Cannot read runtime settings; install Node dependencies first")
+    return json.loads(proc.stdout)
+
+
+def ollama_tags_url(chat_url: str) -> str:
+    url = urlsplit(chat_url)
+    if url.scheme not in ("http", "https") or not url.hostname or url.username or url.password or url.query or url.fragment:
+        raise ValueError("AUTOHACK_OLLAMA_URL must be an HTTP(S) chat endpoint without credentials or query")
+    if not url.path.endswith("/api/chat"):
+        raise ValueError("AUTOHACK_OLLAMA_URL must end in /api/chat")
+    return urlunsplit((url.scheme, url.netloc, url.path[:-len("chat")] + "tags", "", ""))
+
+
+def emit(args, profile: str) -> int:
+    result = {"profile": profile, "production_verified": False, "checks": RESULTS}
+    if args.report:
+        path = Path(args.report).expanduser().resolve()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as output:
+            os.fchmod(output.fileno(), 0o600)
+            output.write(json.dumps(result, indent=2) + "\n")
+    print(json.dumps(result, indent=2))
+    return 0 if all(check["passed"] for check in RESULTS.values()) else 1
+
+
 def main() -> int:
+    RESULTS.clear()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--offline", action="store_true",
                         help="Run isolated regressions only; does not establish host/provider readiness")
+    parser.add_argument("--provider", action="store_true",
+                        help="Also make one read-only authenticated HackerOne account request")
+    parser.add_argument("--report", help="Write acceptance evidence as a private JSON file")
     args = parser.parse_args()
+    if args.offline and args.provider:
+        parser.error("--provider cannot be combined with --offline")
     run("python_integration_tests", [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py", "-v"])
-    run("launcher_syntax", ["bash", "-n", "run-local-autohack.sh", "run-complete-autohack.sh", "setup-and-run.sh", "scripts/install-user-service.sh", "scripts/control-user-service.sh"])
+    run("launcher_syntax", ["bash", "-n", "run-local-autohack.sh", "run-complete-autohack.sh", "setup-and-run.sh", "scripts/install-user-service.sh", "scripts/control-user-service.sh", "scripts/node-runtime.sh", "scripts/verify-host.sh"])
     if shutil.which("npm") and (ROOT / "node_modules").is_dir():
         run("typescript", ["npx", "--no-install", "tsc", "--noEmit", "--project", "tsconfig.json"], 180)
         run("dashboard_typecheck", ["npx", "--no-install", "tsc", "--noEmit", "--project", "packages/dashboard/tsconfig.json"], 180)
@@ -43,6 +81,8 @@ def main() -> int:
         # They never submit to a real platform or contact program assets.
         for test_name, script in [
             ("mock_ollama", "scripts/test-mock-agent.ts"),
+            ("authorized_source", "scripts/test-authorized-source.ts"),
+            ("provider_preflight", "scripts/test-provider-preflight.ts"),
             ("earnings", "scripts/test-earnings.ts"),
             ("explicit_scope", "scripts/test-scope.ts"),
             ("daily_hunt_quota", "scripts/test-daily-quota.ts"),
@@ -67,22 +107,27 @@ def main() -> int:
     else:
         record("typescript", False, "Local Node dependencies not installed")
     if args.offline:
-        print(json.dumps({"profile": "offline_regression", "production_verified": False,
-                          "checks": RESULTS}, indent=2))
-        return 0 if all(result["passed"] for result in RESULTS.values()) else 1
+        return emit(args, "offline_regression")
     try:
-        with urllib.request.urlopen("http://127.0.0.1:11434/api/tags", timeout=4) as response:
+        settings = runtime_settings()
+        tags_url = ollama_tags_url(settings["ollamaUrl"])
+        record("runtime_settings", True, "Runtime settings loaded using application dotenv parser")
+    except (OSError, ValueError, KeyError, subprocess.TimeoutExpired):
+        record("runtime_settings", False, "Invalid Ollama URL or unavailable Node dependencies")
+        return emit(args, "host_acceptance")
+    try:
+        with urllib.request.urlopen(tags_url, timeout=4) as response:
             models = json.load(response).get("models", [])
         names = [m.get("name") for m in models]
-        record("local_model", "qwen3:4b" in names, "Available models: " + ", ".join(str(n) for n in names))
+        record("local_model", settings["model"] in names, "Available models: " + ", ".join(str(n) for n in names))
     except Exception as exc:
         record("local_model", False, type(exc).__name__ + ": " + str(exc))
     if RESULTS.get("local_model", {}).get("passed"):
         try:
-            payload = json.dumps({"model": "qwen3:4b", "stream": False, "think": False,
+            payload = json.dumps({"model": settings["model"], "stream": False, "think": False,
                                   "messages": [{"role": "user", "content": "Reply with the single word READY."}],
                                   "options": {"num_predict": 24, "temperature": 0}}).encode()
-            request = urllib.request.Request("http://127.0.0.1:11434/api/chat", data=payload,
+            request = urllib.request.Request(settings["ollamaUrl"], data=payload,
                                              headers={"Content-Type": "application/json"})
             with urllib.request.urlopen(request, timeout=120) as response:
                 answer = json.load(response).get("message", {}).get("content", "")
@@ -94,16 +139,12 @@ def main() -> int:
         record("local_inference", False, "Local model unavailable")
     # Offline workers use Ollama directly. Claude Code is only required for
     # the optional interactive security-solver, not for the offline pipeline.
-    configured_hunt = os.getenv("SECURITY_AUTO_HUNT_ENABLED", "")
-    if not configured_hunt and (ROOT / ".env").is_file():
-        for line in (ROOT / ".env").read_text().splitlines():
-            if line.strip().startswith("SECURITY_AUTO_HUNT_ENABLED="):
-                configured_hunt = line.strip().partition("=")[2].strip().strip(chr(34)).strip(chr(39))
-                break
     if RESULTS["local_inference"]["passed"] and shutil.which("npx"):
         run("agent_backend", ["node", "--import", "tsx", "scripts/test-local-agent.ts"], 180)
+        run("real_model_fixture_pipeline", ["node", "--import", "tsx", "scripts/test-offline-end-to-end.ts", "--real-model"], 180)
     else:
         record("agent_backend", False, "Local inference or tsx unavailable")
+        record("real_model_fixture_pipeline", False, "Local inference or tsx unavailable")
     # Confirm the live solver retains the submission boundary for static leads.
     solver_source = (ROOT / "packages/security-solver/src/index.ts").read_text()
     record("offline_submission_boundary",
@@ -111,14 +152,7 @@ def main() -> int:
            "Offline static leads excluded from unattended external submission"
            if '!finding.id.startsWith("offline-")' in solver_source
            else "Offline submission boundary missing")
-    configured_db = os.getenv("DB_PATH")
-    if not configured_db and (ROOT / ".env").is_file():
-        for line in (ROOT / ".env").read_text().splitlines():
-            stripped = line.strip()
-            if stripped.startswith("DB_PATH="):
-                configured_db = stripped.partition("=")[2].strip().strip(chr(34)).strip(chr(39))
-                break
-    path = Path(configured_db or "data/bounty.db").expanduser()
+    path = Path(settings["dbPath"]).expanduser()
     if not path.is_absolute():
         path = ROOT / path
     if path.is_file():
@@ -135,8 +169,9 @@ def main() -> int:
     else:
         record("database_schema", False, "Database not initialized")
     record("runtime_config", (ROOT / ".env").is_file(), "Local .env present" if (ROOT / ".env").is_file() else "Local .env absent")
-    print(json.dumps(RESULTS, indent=2))
-    return 0 if all(result["passed"] for result in RESULTS.values()) else 1
+    if args.provider:
+        run("hackerone_authenticated_read", ["node", "--import", "tsx", "scripts/provider-preflight.ts"], 25)
+    return emit(args, "host_acceptance")
 
 if __name__ == "__main__":
     raise SystemExit(main())

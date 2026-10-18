@@ -4,6 +4,12 @@ const log = createLogger("hackerone-client");
 
 const BASE_URL = "https://api.hackerone.com/v1";
 
+// A provider outage must not leave an unattended queue blocked indefinitely.
+// Never forward account credentials across an HTTP redirect.
+function providerFetch(url: string, init: RequestInit = {}): Promise<Response> {
+  return fetch(url, {...init, redirect:"error", signal:AbortSignal.timeout(30_000)});
+}
+
 interface HackerOneScope {
   id: string;
   type: string;
@@ -83,7 +89,7 @@ function getAuthHeaders(): Record<string, string> {
 
 async function hackerOnePost(path: string, body: unknown): Promise<any> {
   const url = `${BASE_URL}${path}`;
-  const response = await fetch(url, {
+  const response = await providerFetch(url, {
     method: "POST",
     headers: {
       ...getAuthHeaders(),
@@ -108,7 +114,7 @@ async function hackerOneGet(path: string, params?: Record<string, string>): Prom
     }
   }
 
-  const response = await fetch(url.toString(), {
+  const response = await providerFetch(url.toString(), {
     headers: getAuthHeaders(),
   });
 
@@ -194,7 +200,7 @@ export async function fetchProgramDetails(
     }
   }`;
 
-  const response = await fetch("https://hackerone.com/graphql", {
+  const response = await providerFetch("https://hackerone.com/graphql", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ query, variables: { handle: programHandle } }),
@@ -337,7 +343,7 @@ export async function fetchProgramPolicy(
   const disclosedReports: Array<{ title: string; severity: string; disclosedAt: string }> = [];
 
   try {
-    const response = await fetch("https://hackerone.com/graphql", {
+    const response = await providerFetch("https://hackerone.com/graphql", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ query, variables: { handle: programHandle } }),
@@ -402,7 +408,7 @@ export async function fetchAllDisclosedReports(
         }
       }`;
 
-      const response = await fetch("https://hackerone.com/graphql", {
+      const response = await providerFetch("https://hackerone.com/graphql", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ query, variables: { handle: programHandle } }),
@@ -790,7 +796,7 @@ export async function fetchProgramResponseEfficiency(
   }`;
 
   try {
-    const response = await fetch("https://hackerone.com/graphql", {
+    const response = await providerFetch("https://hackerone.com/graphql", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ query, variables: { handle: programHandle } }),
@@ -822,7 +828,7 @@ export async function fetchProgramSignalRequirement(
   }`;
 
   try {
-    const response = await fetch("https://hackerone.com/graphql", {
+    const response = await providerFetch("https://hackerone.com/graphql", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ query, variables: { handle: programHandle } }),
