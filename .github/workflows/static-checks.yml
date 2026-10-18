@@ -42,5 +42,9 @@ jobs:
         run: npx tsx scripts/test-scope.ts
       - name: Verify durable daily dispatch quota
         run: npx tsx scripts/test-daily-quota.ts
+      - name: Verify submission outbox restart and duplicate safety
+        run: npx tsx scripts/test-submission-outbox.ts
+      - name: Mock real HackerOne serializer and rejection
+        run: npx tsx scripts/test-mock-submission.ts
       - name: Typecheck dashboard
         run: npx tsc --noEmit --project packages/dashboard/tsconfig.json
