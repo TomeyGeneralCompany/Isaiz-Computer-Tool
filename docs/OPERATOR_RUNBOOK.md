@@ -178,3 +178,37 @@ For a rejected HackerOne credential pair, run
 hidden API token, checks authenticated read access, then atomically saves .env
 with mode 0600 only if the check succeeds. Rejected credentials are not saved.
 Never paste the API token into chat.
+
+## Qwen tool-protocol compatibility
+
+The actual laptop produced free-form intention/reasoning text instead of tool
+calls. The default native Ollama runner now uses `LOCAL_OLLAMA_TOOL_PROTOCOL=json`:
+a strict JSON schema selects one allowed read-only action, the runner executes
+it through the same workspace path checks, and the real filesystem result is
+returned to the model. The native API tools adapter remains available with
+`LOCAL_OLLAMA_TOOL_PROTOCOL=native`. JSON mode omits the API `tools` field to
+avoid its model-template rendering path. Neither mode executes model prose.
+
+A final answer is rejected until at least one file was read successfully;
+fixtures additionally require the correct fresh random marker or source read.
+Truncated JSON gets a bounded generation-budget increase, not a fabricated tool
+call or answer. Regression tests cover both protocols, forbidden paths, final
+answers without successful reads, malformed actions and timeouts.
+
+After infrastructure/account checks have passed, rerun only the outstanding
+model checks with `bash scripts/verify-model.sh`. This writes private evidence
+to data/model-acceptance.json. It never marks production verified or submits a
+real report. Full acceptance remains available through scripts/verify-host.sh.
+
+### Actual CPU model verification of the JSON protocol
+
+On October 18, 2026, Ollama 0.40.6 running CPU-only with the actual downloaded
+qwen3:4b model passed both the fresh-random-marker file-read fixture and the
+model -> owned source read -> deterministic replay -> evidence -> report ->
+review -> intercepted submission fixture. No real bounty report was submitted.
+This verifies the protocol against a real model in development; the operator's
+Ollama version and laptop still need the same narrowed model check.
+
+References: Ollama structured outputs documentation
+(https://docs.ollama.com/capabilities/structured-outputs) and the upstream Qwen
+native-tool prompt report (https://github.com/ollama/ollama/issues/14601).

@@ -68,53 +68,58 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--offline", action="store_true",
                         help="Run isolated regressions only; does not establish host/provider readiness")
+    parser.add_argument("--model-only", action="store_true",
+                        help="Only rerun configured model inference and tool/pipeline checks")
     parser.add_argument("--provider", action="store_true",
                         help="Also make one read-only authenticated HackerOne account request")
     parser.add_argument("--report", help="Write acceptance evidence as a private JSON file")
     args = parser.parse_args()
     if args.offline and args.provider:
         parser.error("--provider cannot be combined with --offline")
-    run("python_integration_tests", [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py", "-v"])
-    run("launcher_syntax", ["bash", "-n", "run-local-autohack.sh", "run-complete-autohack.sh", "setup-and-run.sh", "scripts/install-user-service.sh", "scripts/control-user-service.sh", "scripts/node-runtime.sh", "scripts/verify-host.sh", "scripts/configure-hackerone.sh"])
-    if shutil.which("npm") and (ROOT / "node_modules").is_dir():
-        run("typescript", ["npx", "--no-install", "tsc", "--noEmit", "--project", "tsconfig.json"], 180)
-        run("dashboard_typecheck", ["npx", "--no-install", "tsc", "--noEmit", "--project", "packages/dashboard/tsconfig.json"], 180)
-        # All of these tests are local-only and intercept or mock outbound traffic.
-        # They never submit to a real platform or contact program assets.
-        for test_name, script in [
-            ("mock_ollama", "scripts/test-mock-agent.ts"),
-            ("authorized_source", "scripts/test-authorized-source.ts"),
-            ("provider_preflight", "scripts/test-provider-preflight.ts"),
-            ("earnings", "scripts/test-earnings.ts"),
-            ("explicit_scope", "scripts/test-scope.ts"),
-            ("daily_hunt_quota", "scripts/test-daily-quota.ts"),
-            ("submission_recovery", "scripts/test-submission-outbox.ts"),
-            ("mock_provider_serializer", "scripts/test-mock-submission.ts"),
-            ("bounded_http", "scripts/test-scoped-http.ts"),
-            ("offline_end_to_end_fixture", "scripts/test-offline-end-to-end.ts"),
-        ]:
-            run(test_name, ["node", "--import", "tsx", script], 180)
+    if args.model_only and (args.offline or args.provider):
+        parser.error("--model-only cannot be combined with --offline or --provider")
+    if not args.model_only:
+        run("python_integration_tests", [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py", "-v"])
+        run("launcher_syntax", ["bash", "-n", "run-local-autohack.sh", "run-complete-autohack.sh", "setup-and-run.sh", "scripts/install-user-service.sh", "scripts/control-user-service.sh", "scripts/node-runtime.sh", "scripts/verify-host.sh", "scripts/configure-hackerone.sh", "scripts/verify-model.sh"])
+        if shutil.which("npm") and (ROOT / "node_modules").is_dir():
+            run("typescript", ["npx", "--no-install", "tsc", "--noEmit", "--project", "tsconfig.json"], 180)
+            run("dashboard_typecheck", ["npx", "--no-install", "tsc", "--noEmit", "--project", "packages/dashboard/tsconfig.json"], 180)
+            # All of these tests are local-only and intercept or mock outbound traffic.
+            # They never submit to a real platform or contact program assets.
+            for test_name, script in [
+                ("mock_ollama", "scripts/test-mock-agent.ts"),
+                ("authorized_source", "scripts/test-authorized-source.ts"),
+                ("provider_preflight", "scripts/test-provider-preflight.ts"),
+                ("earnings", "scripts/test-earnings.ts"),
+                ("explicit_scope", "scripts/test-scope.ts"),
+                ("daily_hunt_quota", "scripts/test-daily-quota.ts"),
+                ("submission_recovery", "scripts/test-submission-outbox.ts"),
+                ("mock_provider_serializer", "scripts/test-mock-submission.ts"),
+                ("bounded_http", "scripts/test-scoped-http.ts"),
+                ("offline_end_to_end_fixture", "scripts/test-offline-end-to-end.ts"),
+            ]:
+                run(test_name, ["node", "--import", "tsx", script], 180)
 
-        # Compile/load the actual native addon and exercise the real database
-        # and dashboard with a temporary schema. Never touch the operator DB.
-        with tempfile.TemporaryDirectory(prefix="autohack-acceptance-") as temp:
-            env = {**os.environ, "GITHUB_TOKEN": "offline-acceptance-fixture",
-                   "DB_PATH": str(Path(temp) / "fixture.sqlite"),
-                   "CI_SQLITE_INTEGRATION": "1", "CI_DASHBOARD_SMOKE": "1"}
-            run("native_schema", ["npm", "run", "db:push"], 180, env)
-            if RESULTS["native_schema"]["passed"]:
-                run("database_initialization", ["node", "--import", "tsx", "scripts/test-db-initialization.ts"], 180, env)
-                run("native_sqlite_dashboard", ["node", "--import", "tsx", "scripts/test-sqlite-pipeline.ts"], 180, env)
-                run("service_restart", [sys.executable, "scripts/test-service-restart.py"], 240, env)
+            # Compile/load the actual native addon and exercise the real database
+            # and dashboard with a temporary schema. Never touch the operator DB.
+            with tempfile.TemporaryDirectory(prefix="autohack-acceptance-") as temp:
+                env = {**os.environ, "GITHUB_TOKEN": "offline-acceptance-fixture",
+                       "DB_PATH": str(Path(temp) / "fixture.sqlite"),
+                       "CI_SQLITE_INTEGRATION": "1", "CI_DASHBOARD_SMOKE": "1"}
+                run("native_schema", ["npm", "run", "db:push"], 180, env)
+                if RESULTS["native_schema"]["passed"]:
+                    run("database_initialization", ["node", "--import", "tsx", "scripts/test-db-initialization.ts"], 180, env)
+                    run("native_sqlite_dashboard", ["node", "--import", "tsx", "scripts/test-sqlite-pipeline.ts"], 180, env)
+                    run("service_restart", [sys.executable, "scripts/test-service-restart.py"], 240, env)
 
-    else:
-        record("typescript", False, "Local Node dependencies not installed")
-    if args.offline:
-        return emit(args, "offline_regression")
+        else:
+            record("typescript", False, "Local Node dependencies not installed")
+        if args.offline:
+            return emit(args, "offline_regression")
     try:
         settings = runtime_settings()
         tags_url = ollama_tags_url(settings["ollamaUrl"])
-        record("runtime_settings", True, "Runtime settings loaded using application dotenv parser")
+        record("runtime_settings", True, f"Runtime settings loaded: model={settings['model']}; tool_protocol={settings['toolProtocol']}")
     except (OSError, ValueError, KeyError, subprocess.TimeoutExpired):
         record("runtime_settings", False, "Invalid Ollama URL or unavailable Node dependencies")
         return emit(args, "host_acceptance")
@@ -145,10 +150,15 @@ def main() -> int:
     if RESULTS["local_inference"]["passed"] and shutil.which("npx"):
         model_timeout = settings["agentTimeoutMs"] // 1000 + 30
         run("agent_backend", ["node", "--import", "tsx", "scripts/test-local-agent.ts"], model_timeout)
-        run("real_model_fixture_pipeline", ["node", "--import", "tsx", "scripts/test-offline-end-to-end.ts", "--real-model"], model_timeout)
+        if RESULTS["agent_backend"]["passed"]:
+            run("real_model_fixture_pipeline", ["node", "--import", "tsx", "scripts/test-offline-end-to-end.ts", "--real-model"], model_timeout)
+        else:
+            record("real_model_fixture_pipeline", False, "Blocked by failed file-read agent check; fix that result first")
     else:
         record("agent_backend", False, "Local inference or tsx unavailable")
         record("real_model_fixture_pipeline", False, "Local inference or tsx unavailable")
+    if args.model_only:
+        return emit(args, "model_acceptance")
     # Confirm the live solver retains the submission boundary for static leads.
     solver_source = (ROOT / "packages/security-solver/src/index.ts").read_text()
     record("offline_submission_boundary",

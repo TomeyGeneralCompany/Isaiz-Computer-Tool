@@ -58,7 +58,8 @@ class WorkerLifecycle(unittest.TestCase):
                 'child = subprocess.Popen([sys.executable, "-c", '
                 '"import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(90)"])\n'
                 'time.sleep(0.2)\n'
-                f'Path({str(marker)!r}).write_text(str(child.pid))\n'
+                f'Path({str(marker.with_suffix(".tmp"))!r}).write_text(str(child.pid))\n'
+                f'Path({str(marker.with_suffix(".tmp"))!r}).replace({str(marker)!r})\n'
                 + ('raise SystemExit(3)\n' if crash_leader else 'time.sleep(90)\n'))
             code = (
                 'import importlib.util, pathlib\n'

@@ -1,3 +1,4 @@
+import { auditActionSchema, auditProtocolPrompt, decodeAuditAction } from "./local-audit-protocol";
 import { readdir, readFile, realpath, stat, appendFile } from "node:fs/promises";
 import { resolve, relative, sep } from "node:path";
 
@@ -22,12 +23,17 @@ export async function runLocalAudit(
     if (!Number.isSafeInteger(settings[key]) || settings[key] < low || settings[key] > high)
       throw new Error("Invalid local audit limit: " + key);
   }
+  const protocol = process.env.LOCAL_OLLAMA_TOOL_PROTOCOL || "json";
+  if (!["json","native"].includes(protocol)) throw new Error("LOCAL_OLLAMA_TOOL_PROTOCOL must be json or native");
+  const structured = protocol === "json";
+  let successfulReads = 0;
+  let generationBudget = settings.numPredict;
   const root = await realpath(cwd);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   const messages: Message[] = [
-    { role: "system", content: (systemPrompt || "") + "\nYou are performing an OFFLINE, READ-ONLY source audit. Use tools to inspect actual source. Never invent findings or claim runtime verification. No network access or execution is available. Return only evidence-supported results." },
-    { role: "user", content: "/no_think\n" + prompt },
+    { role: "system", content: (systemPrompt || "") + "\nYou are performing an OFFLINE, READ-ONLY source audit. Use tools to inspect actual source. Never invent findings or claim runtime verification. No network access or execution is available. Return only evidence-supported results." + (structured ? auditProtocolPrompt : "") },
+    { role: "user", content: prompt + "\n/no_think" },
   ];
   async function safePath(path: string): Promise<string> {
     const candidate = await realpath(resolve(root, path || "."));
@@ -40,24 +46,43 @@ export async function runLocalAudit(
   try {
     for (let turn = 0; turn < settings.maxTurns; turn++) {
       const started = Date.now();
-      await appendFile(logFile, `[OLLAMA] turn ${turn+1}/${settings.maxTurns}: request started; model=${model}; context=${limits.numCtx ?? "server-default"}; generation_limit=${settings.numPredict}\n`);
+      await appendFile(logFile, `[OLLAMA] turn ${turn+1}/${settings.maxTurns}: request started; model=${model}; context=${limits.numCtx ?? "server-default"}; generation_limit=${generationBudget}; protocol=${protocol}\n`);
       const response = await fetch(process.env.AUTOHACK_OLLAMA_URL || "http://127.0.0.1:11434/api/chat", {
         method: "POST", signal: controller.signal,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model, stream: false, think: false, messages, tools,
+        body: JSON.stringify({ model, stream: false, think: false, messages, ...(structured ? {format:auditActionSchema} : {tools}),
           keep_alive:"10m",
-          options: { num_predict:settings.numPredict,
+          options: { num_predict:generationBudget,
             ...(limits.numCtx === undefined ? {} : {num_ctx:settings.numCtx}),
-            ...(limits.numThreads === undefined ? {} : {num_thread:settings.numThreads}), temperature:0.1 } }),
+            ...(limits.numThreads === undefined ? {} : {num_thread:settings.numThreads}), temperature:0 } }),
       });
       if (!response.ok) throw new Error("Ollama HTTP " + response.status);
-      const result = await response.json() as { message?: Message; eval_count?: number; prompt_eval_count?: number };
+      const result = await response.json() as { message?: Message; eval_count?: number; prompt_eval_count?: number; done_reason?: string };
       await appendFile(logFile, `[OLLAMA] turn ${turn+1}: response received in ${Date.now()-started}ms; prompt_tokens=${result.prompt_eval_count ?? "unknown"}; generated_tokens=${result.eval_count ?? "unknown"}\n`);
-      const message = result.message;
+      let message = result.message;
       if (!message) throw new Error("Ollama returned no assistant message");
-      messages.push(message);
+      if (structured) {
+        let action;
+        try {action = decodeAuditAction(message.content);}
+        catch {
+          if (result.done_reason === "length" && generationBudget < 2048) {
+            generationBudget = Math.min(generationBudget*2,2048);
+            await appendFile(logFile, `[OLLAMA] truncated JSON action; retrying with generation_limit=${generationBudget}\n`);
+            continue;
+          }
+          throw new Error("Ollama did not return a valid read-only JSON action; no tool was executed");
+        }
+        messages.push({role:"assistant",content:message.content});
+        message = action.action === "final" ? {role:"assistant",content:action.answer} : {
+          role:"assistant",content:"",tool_calls:[{function:{name:action.action,arguments:{path:action.path,query:action.query}}}],
+        };
+      } else {messages.push(message);}
       if (message.content) await appendFile(logFile, message.content + "\n");
       if (!message.tool_calls?.length) {
+        if (!successfulReads) {
+          messages.push({role:"user",content:"No source file has been successfully read. Choose read_file now; a final answer is not accepted before a successful file read. /no_think"});
+          continue;
+        }
         if (!message.content?.trim()) throw new Error("Ollama returned empty final response");
         return message.content;
       }
@@ -100,11 +125,15 @@ export async function runLocalAudit(
             const info = await stat(full);
             if (!info.isFile() || info.size > 256_000) throw new Error("Not a readable source file under 256KB");
             output = (await readFile(full, "utf8")).slice(0, 30_000);
+            successfulReads++;
+            await appendFile(logFile, "[READ_OK] " + relative(root,full) + "\n");
           } else throw new Error("Unknown tool");
         } catch (error) {
           output = "Tool error: " + String(error);
         }
-        messages.push({ role: "tool", tool_name: call.function.name, content: output.slice(0, 30_000) });
+        messages.push(structured
+          ? {role:"user",content:"TOOL_RESULT " + JSON.stringify({name:call.function.name,output:output.slice(0,30000)}) + "\nChoose the next JSON action. /no_think"}
+          : { role:"tool", tool_name:call.function.name, content:output.slice(0,30000) });
       }
     }
     throw new Error(`Local audit reached its ${settings.maxTurns}-turn inspection limit`);

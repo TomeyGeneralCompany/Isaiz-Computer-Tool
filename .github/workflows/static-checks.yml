@@ -21,7 +21,7 @@ jobs:
           print(f"Validated {len(paths)} Python files")
           PY
       - name: Validate launch scripts
-        run: bash -n run-local-autohack.sh run-complete-autohack.sh setup-and-run.sh scripts/install-user-service.sh scripts/control-user-service.sh scripts/node-runtime.sh scripts/verify-host.sh scripts/configure-hackerone.sh
+        run: bash -n run-local-autohack.sh run-complete-autohack.sh setup-and-run.sh scripts/install-user-service.sh scripts/control-user-service.sh scripts/node-runtime.sh scripts/verify-host.sh scripts/configure-hackerone.sh scripts/verify-model.sh
       - name: Test offline ingestion
         run: python3 -m unittest discover -s tests -p "test_*.py" -v
   typescript:

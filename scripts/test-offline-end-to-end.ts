@@ -19,6 +19,8 @@ import { runLocalAudit } from "../packages/security-solver/src/local-ollama-runn
 
 const realModel = process.argv.includes("--real-model");
 const savedOllamaUrl = process.env.AUTOHACK_OLLAMA_URL;
+const savedProtocol = process.env.LOCAL_OLLAMA_TOOL_PROTOCOL;
+if (!realModel) process.env.LOCAL_OLLAMA_TOOL_PROTOCOL = "json";
 const workspace = await mkdtemp(join(tmpdir(), "autohack-full-offline-"));
 const source = join(workspace, "fixture.ts");
 const auditLog = join(workspace, "audit.log");
@@ -50,16 +52,18 @@ try {
     agentCalls++;
     res.setHeader("Content-Type","application/json");
     if(agentCalls===1) {
-      assert.ok(request.tools.some((t: any)=>t.function.name==="read_file"));
-      res.end(JSON.stringify({message:{role:"assistant",content:"",tool_calls:[
-        {function:{name:"read_file",arguments:{path:"fixture.ts"}}}
-      ]}}));
+      assert.ok(request.format.properties.action.enum.includes("read_file"));
+      assert.equal(request.tools,undefined);
+      res.end(JSON.stringify({message:{role:"assistant",content:JSON.stringify({
+        action:"read_file",path:"fixture.ts",query:"",answer:"",
+      })}}));
     } else {
       const last = request.messages.at(-1);
-      assert.equal(last.role,"tool");
+      assert.equal(last.role,"user");
       assert.ok(last.content.includes("return"));
       res.end(JSON.stringify({message:{role:"assistant",
-        content:"HYPOTHESIS: HTML encoding missing in fixture.ts; requires deterministic replay."}}));
+        content:JSON.stringify({action:"final",path:"",query:"",
+          answer:"HYPOTHESIS: HTML encoding missing in fixture.ts; requires deterministic replay."})}}));
     }
   });
   await new Promise<void>(resolve=>localModel.listen(0,"127.0.0.1",resolve));
@@ -76,6 +80,7 @@ try {
   if (!realModel) assert.equal(agentCalls,2);
   const transcript = await readFile(auditLog,"utf8");
   assert.ok(transcript.includes("[TOOL] read_file"));
+  assert.ok(transcript.includes("[READ_OK] fixture.ts"));
 
   const { render } = await import(pathToFileURL(source).href);
   const harmlessMarker = "<em>injected-fixture-marker</em>";
@@ -143,6 +148,8 @@ try {
   throw error;
 } finally {
   globalThis.fetch = originalFetch;
+  if (savedProtocol === undefined) delete process.env.LOCAL_OLLAMA_TOOL_PROTOCOL;
+  else process.env.LOCAL_OLLAMA_TOOL_PROTOCOL = savedProtocol;
   if (savedOllamaUrl === undefined) delete process.env.AUTOHACK_OLLAMA_URL;
   else process.env.AUTOHACK_OLLAMA_URL = savedOllamaUrl;
   await new Promise<void>(resolve=>localModel.close(()=>resolve()));

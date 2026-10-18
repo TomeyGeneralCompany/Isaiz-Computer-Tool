@@ -17,7 +17,7 @@ try {
   );
   if (!answer.includes(marker)) throw new Error("Agent did not complete fixture: " + answer.slice(0, 300));
   const transcript = await readFile(join(dir, "agent.log"), "utf8");
-  if (!transcript.includes("[TOOL] read_file")) throw new Error("Agent never used read_file; fixture answer alone is insufficient");
+  if (!transcript.includes("[TOOL] read_file") || !transcript.includes("[READ_OK] sample.ts")) throw new Error("Agent never used read_file; fixture answer alone is insufficient");
   process.stdout.write("Direct Ollama tool-using agent passed local source fixture\n");
 } catch (error) {
   console.error((await readFile(join(dir,"agent.log"),"utf8").catch(()=>"No model transcript produced")).slice(-2000));
