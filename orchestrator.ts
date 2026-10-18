@@ -10,7 +10,7 @@ import { readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
 import cron from "node-cron";
-import { loadConfig, getConfig, createLogger } from "@bounty/core";
+import { loadConfig, getConfig, createLogger, claimDailyHuntSlot } from "@bounty/core";
 import { pollHackerOne, pollImmunefi, pollHuntr, pollAggregator, pollSubmissionStatuses, backfillSignalRequirements } from "@bounty/security-discovery";
 import { processSecurityProgramQueue } from "@bounty/security-analyzer";
 import {
@@ -147,6 +147,14 @@ function main() {
     log.info("Scheduled aggregator poll");
   }
 
+  // Allow operator pause to interrupt long idle waits promptly.
+  async function waitWhileEnabled(ms: number) {
+    for (let waited = 0; waited < ms; waited += 1000) {
+      if (!getConfig().SECURITY_AUTO_HUNT_ENABLED) return;
+      await new Promise<void>(resolve => setTimeout(resolve, Math.min(1000, ms - waited)));
+    }
+  }
+
   // Security auto-hunt: triggers immediately after previous hunt's evaluation pipeline completes
   let autoHuntScheduled = false;
 
@@ -161,7 +169,20 @@ function main() {
         const program = pickBestProgram();
         if (!program) {
           log.info("No eligible programs for auto-hunt — waiting 5 min for assessments/cooldowns");
-          await new Promise((r) => setTimeout(r, 5 * 60 * 1000));
+          await waitWhileEnabled(5 * 60 * 1000);
+          continue;
+        }
+
+        // Persist dispatch count before launching; crashes also consume quota.
+        try {
+          if (!claimDailyHuntSlot(currentConfig.SECURITY_MAX_DAILY_HUNTS)) {
+            log.info("Daily dispatch limit reached; waiting for next UTC day");
+            await waitWhileEnabled(60 * 1000);
+            continue;
+          }
+        } catch (error) {
+          log.error({ error }, "Daily quota unavailable; refusing unsafe dispatch");
+          await waitWhileEnabled(60 * 1000);
           continue;
         }
 
@@ -171,10 +192,11 @@ function main() {
         } catch (err: any) {
           if (err.message?.includes("already busy")) {
             log.info("Solver busy — waiting 2 min before retrying");
-            await new Promise((r) => setTimeout(r, 2 * 60 * 1000));
+            await waitWhileEnabled(2 * 60 * 1000);
             continue;
           }
-          log.error({ err, programId: program.id }, "Security hunt error — skipping program, continuing loop");
+          log.error({ err, programId: program.id }, "Security hunt error — backing off");
+          await waitWhileEnabled(60 * 1000);
           continue;
         }
 
@@ -185,7 +207,8 @@ function main() {
           log.error({ err }, "Post-hunt adversarial review error");
         }
 
-        // Loop immediately to pick next program (no waiting)
+        // Prevent immediate tight loops when hunts return unusually quickly.
+        await waitWhileEnabled(5000);
       }
     } finally {
       autoHuntScheduled = false;
