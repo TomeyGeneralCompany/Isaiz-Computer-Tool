@@ -86,6 +86,7 @@ async function publicPinnedTransport(url: URL, method: "GET" | "HEAD",
 export class ScopedHttpInspector {
   private requests = 0;
   private lastRequest = 0;
+  private tail: Promise<void> = Promise.resolve();
   private maxRequests: number;
   private minIntervalMs: number;
   private timeoutMs: number;
@@ -110,6 +111,13 @@ export class ScopedHttpInspector {
     if (method!=="GET" && method!=="HEAD") throw new Error("Only GET/HEAD observations permitted");
     if (this.requests>=this.maxRequests) throw new Error("Inspection request budget exhausted");
     this.requests++; // failures also consume the bounded budget
+    // Serialize concurrent requests; otherwise parallel model tool calls could
+    // bypass minIntervalMs by observing the same lastRequest timestamp.
+    const previous = this.tail;
+    let release!: () => void;
+    this.tail = new Promise<void>(resolve => { release = resolve; });
+    await previous;
+    try {
     const delay = Math.max(0,this.lastRequest+this.minIntervalMs-Date.now());
     if(delay) await new Promise(resolve=>setTimeout(resolve,delay));
     this.lastRequest = Date.now();
@@ -123,5 +131,8 @@ export class ScopedHttpInspector {
       bodySha256:createHash("sha256").update(result.body).digest("hex"),
       bodyExcerpt:method==="HEAD" ? "" : result.body.toString("utf8").slice(0,4096),
     };
+    } finally {
+      release();
+    }
   }
 }
