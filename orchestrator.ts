@@ -40,7 +40,7 @@ function pollSchedule(minutes: number): string {
 }
 
 function startDashboard(port: number) {
-  const child = execFile("npx", ["next", "dev", "--port", String(port)], {
+  const child = execFile("npx", ["next", "dev", "--hostname", "127.0.0.1", "--port", String(port)], {
     cwd: new URL("./packages/dashboard", import.meta.url).pathname,
     env: { ...process.env },
   });
