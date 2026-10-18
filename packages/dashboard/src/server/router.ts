@@ -3,7 +3,7 @@ import { eq, asc, desc, sql, inArray } from "drizzle-orm";
 import { readFile, writeFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
-import { getDb, schema, getConfig, setRuntimeOverride, getRuntimeOverrides, createLogger, getSecurityHuntHistory } from "@bounty/core";
+import { getDb, schema, getConfig, setRuntimeOverride, getRuntimeOverrides, createLogger, getSecurityHuntHistory, readVerifiedPayouts, earningsProgress } from "@bounty/core";
 import { pollAllSecurityProviders, submitReport, prepareSubmission, backfillSecurityRewards, backfillSignalRequirements, fetchProgramScopes } from "@bounty/security-discovery";
 import { analyzeProgram, analyzeAndRankFinding } from "@bounty/security-analyzer";
 import { huntProgram, solveSecurityFinding, forceStopSecuritySolver, pickBestFinding, pickBestProgram, rankEligiblePrograms, readSecuritySolverStatus, readAdversarialReviewStatus, processAdversarialQueue, isSecuritySolving, cancelAdversarialReview } from "@bounty/security-solver";
@@ -33,6 +33,7 @@ export const appRouter = router({
       SECURITY_MIN_CONFIDENCE: config.SECURITY_MIN_CONFIDENCE,
       SECURITY_HUNT_COOLDOWN_HOURS: config.SECURITY_HUNT_COOLDOWN_HOURS,
       SECURITY_MIN_REWARD_CENTS: config.SECURITY_MIN_REWARD_CENTS,
+      SECURITY_MONTHLY_EARNINGS_TARGET_CENTS: config.SECURITY_MONTHLY_EARNINGS_TARGET_CENTS,
       SKIP_WEB_ONLY_PROGRAMS: config.SKIP_WEB_ONLY_PROGRAMS,
       CLAUDE_MODEL: config.CLAUDE_MODEL,
       REVIEW_MODEL: config.REVIEW_MODEL,
@@ -52,6 +53,23 @@ export const appRouter = router({
       setRuntimeOverride(input.key as any, input.value);
       return { success: true };
     }),
+
+  // Verified payments only: report statuses and projected rewards never count as cash.
+  securityEarnings: publicProcedure.query(() => {
+    const db = getDb();
+    const findings = db.select({
+      status: schema.securityFindings.status,
+    }).from(schema.securityFindings).all();
+    const progress = earningsProgress(readVerifiedPayouts(),
+      getConfig().SECURITY_MONTHLY_EARNINGS_TARGET_CENTS);
+    return {
+      ...progress,
+      pendingReports: findings.filter(f =>
+        ["submitted", "triaged", "accepted"].includes(f.status)).length,
+      awaitingSubmission: findings.filter(f =>
+        ["report_ready", "reviewing"].includes(f.status)).length,
+    };
+  }),
 
   // ── Security Programs ────────────────────────────────────────
 
