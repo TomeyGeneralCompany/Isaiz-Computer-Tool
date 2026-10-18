@@ -23,7 +23,15 @@ redirect following. This observer is not yet exposed as a local Ollama tool.
 4. Open dashboard on http://127.0.0.1:3456 (loopback only).
 5. Test the actual local model: npx tsx scripts/test-local-agent.ts
 6. Confirm the actual SQLite native addon builds: npm ci (not --ignore-scripts).
-7. Run the full service under a restart-capable process manager after host validation.
+7. After all acceptance checks pass, you can install a supervised per-user
+   systemd service with: bash scripts/install-user-service.sh
+8. Explicit stop/start/restart/status: bash scripts/control-user-service.sh stop
+   (or start, restart, status). Check logs with:
+   bash scripts/control-user-service.sh logs
+   This service restarts after a crash. It cannot execute while the computer
+   is physically powered off or sleeping. To keep it running after logging out,
+   you may need to explicitly enable user lingering under your Linux policy.
+   Never run a second manually launched instance concurrently with systemd.
 
 Start or pause new hunts by changing SECURITY_AUTO_HUNT_ENABLED in the dashboard.
 Pausing stops *new* dispatches after an interruptible idle wait, not an
