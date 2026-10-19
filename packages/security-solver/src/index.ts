@@ -1,3 +1,4 @@
+import type { StaticLeadFocus } from "./local-program-flow";
 import { beginLocalJob } from "./local-job";
 import { randomBytes } from "node:crypto";
 import { readFileSync, writeFileSync, unlinkSync, mkdirSync } from "node:fs";
@@ -71,6 +72,7 @@ export type { SecuritySolverStatus, AdversarialReviewStatus } from "./status";
 export async function huntProgram(
   program: SecurityProgram,
   trigger?: "auto" | "manual",
+  focus?: StaticLeadFocus,
 ): Promise<{ findingsCreated: number }> {
   const db = getDb();
   if (program.status !== "active") throw new Error("Refusing hunt for inactive program");
@@ -109,7 +111,7 @@ export async function huntProgram(
     }
     log.info({ programId: program.id, name: program.name }, "Starting program hunt");
 
-    const result = await runProgramHunt(program, trigger, localJob?.signal);
+    const result = await runProgramHunt(program, trigger, localJob?.signal, focus);
     localJob?.signal.throwIfAborted();
     coverage = result.coverage ?? (result.success ? "completed" : "failed");
     coverageDetail = result.error || result.coverageDetail || "Supported inspection completed";
@@ -179,7 +181,7 @@ export async function huntProgram(
             status: "report_ready",
             confidenceScore: f.confidence,
             reportBody: f.reportBody,
-            analysisNotes:f.reproductionCaseId ? JSON.stringify({reproductionCaseId:f.reproductionCaseId,reproductionFingerprint:f.reproductionFingerprint}) : null,
+            analysisNotes:f.reproductionCaseId ? JSON.stringify({reproductionCaseId:f.reproductionCaseId,reproductionFingerprint:f.reproductionFingerprint,...(focus ? {originLeadId:focus.id} : {})}) : null,
             traceId,
             discoveredAt: new Date(),
             updatedAt: new Date(),
@@ -259,7 +261,7 @@ export async function huntProgram(
       const prevHuntCount = currentProgram?.huntCount ?? 0;
       const prevMissStreak = currentProgram?.huntMissStreak ?? 0;
 
-      const newMissStreak = !huntSucceeded
+      const newMissStreak = focus ? prevMissStreak : !huntSucceeded
         ? prevMissStreak  // don't penalize for broken/incomplete hunts
         : findingsCreated > 0 ? 0 : prevMissStreak + 1;
 
@@ -268,9 +270,9 @@ export async function huntProgram(
       db.update(schema.securityPrograms)
         .set({
           // Preserve the last completed hunt on acquisition/model failures.
-          lastHuntedAt: huntSucceeded ? new Date() : currentProgram?.lastHuntedAt,
-          scopeSummary:JSON.stringify(tracking),
-          huntCount: huntSucceeded ? prevHuntCount + 1 : prevHuntCount,
+          lastHuntedAt: !focus && huntSucceeded ? new Date() : currentProgram?.lastHuntedAt,
+          scopeSummary:focus ? currentProgram?.scopeSummary ?? program.scopeSummary : JSON.stringify(tracking),
+          huntCount: !focus && huntSucceeded ? prevHuntCount + 1 : prevHuntCount,
           huntMissStreak: newMissStreak,
           updatedAt: new Date(),
         })
@@ -304,6 +306,7 @@ export async function solveSecurityFinding(
   trigger?: "auto" | "manual",
 ): Promise<void> {
   const db = getDb();
+  if (finding.id.startsWith("offline-")) throw new Error("Static leads are handled by the automatic evidence queue, not status approval");
 
   if (solving) {
     throw new Error("Security solver is already busy");
@@ -1019,3 +1022,5 @@ export async function processAdversarialQueue(programId?: string): Promise<void>
     await clearAdversarialReviewStatus().catch(() => {});
   }
 }
+
+export { processStaticLeadQueue } from "./static-leads";

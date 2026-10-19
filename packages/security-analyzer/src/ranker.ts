@@ -76,6 +76,7 @@ export async function analyzeProgram(program: SecurityProgram): Promise<void> {
  * Analyze and rank a security finding — assess difficulty, confidence, severity.
  */
 export async function analyzeAndRankFinding(finding: SecurityFinding): Promise<void> {
+  if (finding.id.startsWith("offline-")) return; // The evidence queue owns static leads.
   const db = getDb();
   const traceId = generateTraceId();
 
@@ -215,7 +216,7 @@ export async function processSecurityFindingQueue(): Promise<number> {
   // Process in concurrent batches of 5
   const CONCURRENCY = 5;
   for (let i = 0; i < pending.length; i += CONCURRENCY) {
-    const batch = pending.slice(i, i + CONCURRENCY);
+    const batch = pending.slice(i, i + CONCURRENCY).filter(finding => !finding.id.startsWith("offline-"));
     const results = await Promise.allSettled(
       batch.map((finding) => analyzeAndRankFinding(finding)),
     );

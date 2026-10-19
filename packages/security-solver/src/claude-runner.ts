@@ -1,3 +1,4 @@
+import type { StaticLeadFocus } from "./local-program-flow";
 import { activeLocalJobCount, requestLocalJobCancellation } from "./local-job";
 import { spawn } from "node:child_process";
 import { activeLocalAuditCount, abortLocalAudits } from "./local-ollama-runner";
@@ -1927,10 +1928,11 @@ export async function runProgramHunt(
   program: SecurityProgram,
   trigger?: "auto" | "manual",
   signal?: AbortSignal,
+  focus?: StaticLeadFocus,
 ): Promise<SecuritySolveResult> {
   if(process.env.LOCAL_OLLAMA_MODEL) {
     const {runLocalProgramHunt}=await import("./local-program-flow");
-    return runLocalProgramHunt(program,signal);
+    return runLocalProgramHunt(program,signal,focus);
   }
   // Prepare workspace with CLAUDE.md and tools before spawning
   await prepareWorkspace(program);

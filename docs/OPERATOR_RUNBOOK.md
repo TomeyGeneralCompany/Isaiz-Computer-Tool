@@ -343,3 +343,24 @@ An existing explicit value such as 180000 continues to override the default.
 The dashboard's hunt timeout is a separate setting. The assessment deadline
 starts after the process-local Ollama queue is acquired and covers both output
 attempts together. The configured deadline is recorded in assessment-start logs.
+
+
+### Imported static leads
+
+With automatic hunting enabled, the orchestrator checks imported `offline-` leads
+without an Accept click. Python leads are passed to the existing source-function
+investigator at their recorded repository commit and file, subject to current
+program eligibility, scope, daily quota and the shared hunt lock. Qualifying
+reports become separate findings with `originLeadId` and pass through normal
+independent replay/review. The original static lead stays unverified.
+
+The existing reproduction driver supports only Python string functions for
+HTML reflection and path construction. JavaScript, Solidity and other languages
+are marked `unsupported`, with the reason displayed in the finding. This repair
+does not add reproduction support for those languages or claim that these
+heuristic matches are valid vulnerabilities. Infrastructure/model failures stay
+unverified and retry with backoff. Unsupported leads are retained for future
+engine support; they are not automatically rejected as false positives.
+
+Generic finding assessment and manual Accept cannot promote imported leads or
+erase their provenance. The legacy finding-solver path does not handle them.

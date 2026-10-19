@@ -17,6 +17,7 @@ import { pollHackerOne, pollImmunefi, pollHuntr, pollAggregator, pollSubmissionS
 import { processSecurityProgramQueue } from "@bounty/security-analyzer";
 import {
   huntProgram,
+  processStaticLeadQueue,
   pickBestProgram,
   readSecuritySolverStatus,
   clearSecuritySolverStatus as clearSecurityStatus,
@@ -162,6 +163,12 @@ function main() {
       while (!shuttingDown) {
         const currentConfig = getConfig();
         if (!currentConfig.SECURITY_AUTO_HUNT_ENABLED) break;
+
+        if (await processStaticLeadQueue()) {
+          await processAdversarialQueue();
+          await waitWhileEnabled(5000);
+          continue;
+        }
 
         const program = pickBestProgram();
         if (!program) {

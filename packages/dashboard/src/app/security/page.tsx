@@ -1887,10 +1887,17 @@ export default function SecurityPage() {
                             )}
                           </div>
                         )}
+                        {f.id.startsWith("offline-") && (
+                          <p className="mt-2 text-xs" style={{ color: "var(--text-dim)" }}>
+                            {(() => { try { const work = JSON.parse(f.analysisNotes || "{}").staticInvestigation;
+                              return work ? `${work.state}: ${work.detail}` : "Queued for automatic evidence investigation; no approval click is required.";
+                            } catch { return "Static lead metadata unavailable."; } })()}
+                          </p>
+                        )}
                         {/* Actions below finding details */}
                         <div className="mt-2 flex flex-wrap gap-2">
                           {/* Accept — available on bot-rejected, discovered, validated, failed (not dismissed — user must undo reject first) */}
-                          {["bot_rejected", "discovered", "validated", "failed"].includes(f.status) && (
+                          {!f.id.startsWith("offline-") && ["bot_rejected", "discovered", "validated", "failed"].includes(f.status) && (
                             <button
                               onClick={() => acceptMutation.mutate(f.id)}
                               disabled={acceptMutation.isPending}
@@ -2055,7 +2062,7 @@ export default function SecurityPage() {
                         {timeAgo(f.discoveredAt)}
                       </td>
                       <td className="py-3 pl-4 align-top">
-                        <StatusBadge status={f.status} />
+                        {f.id.startsWith("offline-") ? <span className="text-xs" style={{color:"var(--text-dim)"}}>Unverified lead</span> : <StatusBadge status={f.status} />}
                         {f.retryCount > 0 && (
                           <span className="ml-1 text-xs" style={{ color: "var(--text-dim)" }}>
                             (retry {f.retryCount})

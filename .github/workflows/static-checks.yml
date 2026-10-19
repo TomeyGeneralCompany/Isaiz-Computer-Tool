@@ -81,6 +81,8 @@ jobs:
         run: npm run db:push
       - name: Verify failed source acquisition preserves hunt history
         run: npx tsx scripts/test-hunt-failure.ts
+      - name: Verify static lead evidence routing with an owned database
+        run: npx tsx scripts/test-static-lead-queue.ts
       - name: Test fresh database directory and false-success rejection
         run: npx tsx scripts/test-db-initialization.ts
       - name: Exercise actual SQLite, Drizzle, tRPC dashboard and payment ledger

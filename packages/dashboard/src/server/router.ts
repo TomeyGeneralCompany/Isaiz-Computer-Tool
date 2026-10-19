@@ -366,6 +366,7 @@ export const appRouter = router({
     if (!finding) return { success: false, error: "Finding not found" };
     const terminal = ["submitted", "triaged", "accepted", "rewarded"];
     if (terminal.includes(finding.status)) return { success: false, error: `Cannot accept a "${finding.status}" finding` };
+    if (finding.id.startsWith("offline-")) return { success: false, error: "Static leads require automatic evidence investigation; Accept cannot establish a vulnerability." };
     const nextStatus = finding.reportBody ? "report_ready" : "validated";
     db.update(schema.securityFindings)
       .set({ status: nextStatus, updatedAt: new Date() })
@@ -412,6 +413,7 @@ export const appRouter = router({
     const db = getDb();
     const finding = db.select().from(schema.securityFindings).where(eq(schema.securityFindings.id, input)).get();
     if (!finding) return { success: false, error: "Finding not found" };
+    if (finding.id.startsWith("offline-")) return { success: false, error: "Static leads cannot be submitted without a separate evidence-backed report." };
     if (finding.status !== "reviewing" && finding.status !== "report_ready") return { success: false, error: `Finding is in "${finding.status}" status, expected "reviewing" (or "report_ready" to override)` };
     if (!finding.programId) return { success: false, error: "Finding has no associated program" };
 
