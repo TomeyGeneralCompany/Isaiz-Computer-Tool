@@ -21,7 +21,7 @@ jobs:
           print(f"Validated {len(paths)} Python files")
           PY
       - name: Validate launch scripts
-        run: bash -n run-local-autohack.sh run-complete-autohack.sh setup-and-run.sh scripts/install-user-service.sh scripts/control-user-service.sh scripts/node-runtime.sh scripts/verify-host.sh scripts/configure-hackerone.sh scripts/verify-model.sh
+        run: bash -n run-local-autohack.sh run-complete-autohack.sh setup-and-run.sh scripts/install-user-service.sh scripts/control-user-service.sh scripts/node-runtime.sh scripts/verify-host.sh scripts/configure-hackerone.sh scripts/verify-model.sh scripts/verify-assessment.sh
       - name: Test offline ingestion
         run: python3 -m unittest discover -s tests -p "test_*.py" -v
   typescript:
@@ -36,6 +36,8 @@ jobs:
       - run: npx tsc --noEmit --project tsconfig.json
       - name: Exercise direct Ollama agent with mock server
         run: npx tsx scripts/test-mock-agent.ts
+      - name: Exercise production program assessment and truncated output recovery
+        run: npx tsx scripts/test-mock-assessment.ts
       - name: Verify authorized source acquisition boundaries
         run: npx tsx scripts/test-authorized-source.ts
       - name: Verify read-only provider preflight and credential redaction

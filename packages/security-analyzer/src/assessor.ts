@@ -1,3 +1,4 @@
+import { z } from "zod";
 import {
   getConfig,
   createLogger,
@@ -38,6 +39,24 @@ export interface ProgramAssessmentResult {
   hasSourceCode: boolean; // deterministically computed from scopes, not LLM
   recommendedApproach: "code_review" | "web_testing" | "api_testing" | "mixed";
 }
+
+// Validate nested assessment output before it influences ranking.
+const rubricValue = z.number().int().min(0).max(3);
+const programAssessmentOutput = z.object({
+  rubric:z.object({
+    sourceCodeQuality:rubricValue, webApiSurface:rubricValue,
+    techStackMatch:rubricValue, scopeBreadth:rubricValue, rewardEfficiency:rubricValue,
+  }).strict(),
+  targetCount:z.number().int().nonnegative(),
+  topTargets:z.array(z.object({
+    asset:z.string().max(2048), type:z.string().max(80),
+    reasoning:z.string().max(300),
+    strategy:z.enum(["code_review","web_testing","api_testing","domain_recon"]).optional(),
+  }).strict()).max(5),
+  techStack:z.array(z.string().max(80)).max(12),
+  attackSurface:z.string().max(500),
+  recommendedApproach:z.enum(["code_review","web_testing","api_testing","mixed"]),
+}).strict();
 
 /** Check if a scope entry represents source code. */
 function isScopeSourceCode(s: { assetIdentifier: string; assetType: string }): boolean {
@@ -156,6 +175,7 @@ RUBRIC:
    - 2: Decent reward ($500-$5000 max) AND decent efficiency (50-70%)
    - 3: High reward (>$5000 max) AND high efficiency (>70%)
 
+Return at most five topTargets, at most twelve techStack entries, concise reasoning (300 characters each), and a brief attackSurface (500 characters). targetCount is the total promising target count, not the number returned.
 Respond with ONLY valid JSON, no markdown fences:
 {"rubric": {"sourceCodeQuality": 0-3, "webApiSurface": 0-3, "techStackMatch": 0-3, "scopeBreadth": 0-3, "rewardEfficiency": 0-3}, "targetCount": number, "topTargets": [{"asset": string, "type": string, "reasoning": string, "strategy": "code_review"|"web_testing"|"api_testing"|"domain_recon"}], "techStack": string[], "attackSurface": string, "recommendedApproach": "code_review"|"web_testing"|"api_testing"|"mixed"}`;
 
@@ -183,30 +203,37 @@ Respond with ONLY valid JSON, no markdown fences:
               rewardEfficiency: { type: "integer", minimum: 0, maximum: 3 },
             },
             required: ["sourceCodeQuality", "webApiSurface", "techStackMatch", "scopeBreadth", "rewardEfficiency"],
+            additionalProperties: false,
           },
-          targetCount: { type: "integer" },
+          targetCount: { type: "integer", minimum: 0 },
           topTargets: {
-            type: "array",
+            type: "array", maxItems: 5,
             items: {
               type: "object",
               properties: {
-                asset: { type: "string" },
-                type: { type: "string" },
-                reasoning: { type: "string" },
+                asset: { type: "string", maxLength: 2048 },
+                type: { type: "string", maxLength: 80 },
+                reasoning: { type: "string", maxLength: 300 },
                 strategy: { type: "string", enum: ["code_review", "web_testing", "api_testing", "domain_recon"] },
               },
               required: ["asset", "type", "reasoning"],
+              additionalProperties: false,
             },
           },
-          techStack: { type: "array", items: { type: "string" } },
-          attackSurface: { type: "string" },
+          techStack: { type: "array", maxItems: 12, items: { type: "string", maxLength: 80 } },
+          attackSurface: { type: "string", maxLength: 500 },
           recommendedApproach: { type: "string", enum: ["code_review", "web_testing", "api_testing", "mixed"] },
         },
         required: ["rubric", "targetCount", "topTargets", "techStack", "attackSurface", "recommendedApproach"],
+        additionalProperties: false,
       },
     });
     if (!parsed) {
       throw new Error("Could not parse program assessment — no valid JSON returned");
+    }
+
+    if (!programAssessmentOutput.safeParse(parsed).success) {
+      throw new Error("Program assessment did not match the required schema");
     }
 
     // Normalize rubric scores to 0-3 integers

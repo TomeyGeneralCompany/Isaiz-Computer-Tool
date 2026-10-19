@@ -56,76 +56,93 @@ export async function runClaude(
 
 // CPU-friendly discovery assessments: one local inference request at a time.
 let ollamaQueue: Promise<void> = Promise.resolve();
-async function runLocalOllama(prompt: string, opts?: RunClaudeOpts, structured = false): Promise<string> {
+async function runLocalOllama(
+  prompt: string,
+  opts?: RunClaudeOpts,
+  schema?: Record<string, unknown>,
+): Promise<string> {
   const prior = ollamaQueue;
   let unlock!: () => void;
   ollamaQueue = new Promise<void>(resolve => { unlock = resolve; });
   await prior;
   try {
-    const { request } = await import("node:http");
-    const timeoutMs = Number(process.env.OLLAMA_ASSESSMENT_TIMEOUT_MS || 180000);
-    // Keep the task specification and the most recent program facts.
+    const timeoutMs = opts?.timeoutMs ?? Number(process.env.OLLAMA_ASSESSMENT_TIMEOUT_MS || 180000);
     const limit = Number(process.env.OLLAMA_PROMPT_CHARS || 5800);
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 1800000 ||
+        !Number.isSafeInteger(limit) || limit < 3000 || limit > 24000) {
+      throw new Error("Invalid Ollama assessment timeout or prompt limit");
+    }
+    const requestedTokens = opts?.maxTokens ?? (schema ? 1024 : 256);
+    if (!Number.isSafeInteger(requestedTokens) || requestedTokens < 1 || requestedTokens > 8192) {
+      throw new Error("Ollama assessment maxTokens must be between 1 and 8192");
+    }
+    const endpoint = new URL(process.env.AUTOHACK_OLLAMA_URL || "http://127.0.0.1:11434/api/chat");
+    if (!["http:", "https:"].includes(endpoint.protocol) || endpoint.username || endpoint.password ||
+        endpoint.search || endpoint.hash || !endpoint.pathname.endsWith("/api/chat")) {
+      throw new Error("Invalid Ollama chat endpoint");
+    }
+    const model = process.env.OLLAMA_MODEL || process.env.LOCAL_OLLAMA_MODEL || "qwen3:4b";
     const bounded = prompt.length > limit
       ? prompt.slice(0, 2400) + "\n[Additional program text omitted]\n" + prompt.slice(-(limit - 2500))
       : prompt;
-    const body = JSON.stringify({
-      model: process.env.OLLAMA_MODEL || "qwen3:0.6b",
-      stream: true, think: false,
-      ...(structured ? { format: "json" } : {}),
-      keep_alive: "10m",
-      messages: [
-        { role: "system", content: structured
-          ? "Return one valid JSON object using the exact fields and types required by the task. No markdown, explanation, or reasoning. /no_think"
-          : "Answer concisely, without reasoning traces. /no_think" },
-        ...(opts?.systemPrompt ? [{role:"system",content:opts.systemPrompt.slice(0,1200)}] : []),
-        { role: "user", content: bounded + (structured ? "\nRespond with JSON only. /no_think" : "") },
-      ],
-      options: { num_ctx: 2048, num_predict: structured ? 700 : 256, temperature: 0, num_thread: 6 },
-    });
-    return await new Promise<string>((resolve, reject) => {
-      let done = false, timer: ReturnType<typeof setTimeout>;
-      const finish = (error?: Error, value?: string) => {
-        if (done) return;
-        done = true; clearTimeout(timer);
-        if (error) reject(error); else resolve(value || "");
-      };
-      const req = request("http://127.0.0.1:11434/api/chat", {
-        method:"POST", headers:{"Content-Type":"application/json","Content-Length":Buffer.byteLength(body)},
-      }, res => {
-        let buffer="", output="", errorBody="", completed=false;
-        res.setEncoding("utf8");
-        res.on("data", (chunk:string) => {
-          if ((res.statusCode || 500)>=400) { errorBody+=chunk; return; }
-          buffer+=chunk;
-          let idx:number;
-          while ((idx=buffer.indexOf("\n"))>=0) {
-            const line=buffer.slice(0,idx).trim(); buffer=buffer.slice(idx+1);
-            if (!line) continue;
-            try {
-              const part=JSON.parse(line) as {message?:{content?:string};error?:string;done?:boolean};
-              if (part.error) {req.destroy(new Error(part.error)); return;}
-              output+=part.message?.content || "";
-              if (part.done) completed=true;
-            } catch (err) {req.destroy(new Error(`Malformed Ollama response: ${String(err)}`));return;}
-          }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      // A single retry shares the deadline. Never repair or accept partial JSON.
+      for (let attempt = 0, tokens = requestedTokens; attempt < 2; attempt++, tokens = Math.min(tokens * 2, 8192)) {
+        log.info({model, attempt:attempt + 1, generationLimit:tokens}, "Ollama assessment started");
+        const response = await fetch(endpoint, {
+          method: "POST", redirect: "error", signal: controller.signal,
+          headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({
+            model, stream:false, think:false,
+            ...(schema ? {format:schema} : {}),
+            keep_alive:"10m",
+            messages: [
+              {role:"system", content:schema
+                ? "Return one complete JSON object matching the provided schema. Use concise strings, at most five targets, no markdown or reasoning. /no_think"
+                : "Answer concisely, without reasoning traces. /no_think"},
+              ...(opts?.systemPrompt ? [{role:"system",content:opts.systemPrompt.slice(0,1200)}] : []),
+              {role:"user",content:bounded + (schema ? "\nRespond with JSON only. /no_think" : "")},
+            ],
+            options:{num_ctx:Math.max(4096,tokens + 2048),num_predict:tokens,temperature:opts?.temperature ?? 0,num_thread:4},
+          }),
         });
-        res.on("end",()=>{
-          if ((res.statusCode||500)>=400) return finish(new Error(`Ollama HTTP ${res.statusCode}: ${errorBody.slice(0,300)}`));
-          if (!completed) return finish(new Error("Ollama stream incomplete"));
-          if (!output.trim()) return finish(new Error("Ollama returned no content"));
-          if (structured) {
-            try { const parsed=JSON.parse(output); if (!parsed || typeof parsed!=="object" || Array.isArray(parsed)) throw new Error("not object"); }
-            catch {return finish(new Error(`Ollama did not produce a JSON object: ${output.slice(0,180)}`));}
+        if (!response.ok) {
+          await response.body?.cancel();
+          throw new Error(`Ollama assessment HTTP ${response.status}`);
+        }
+        const result = await response.json().catch(() => {throw new Error("Ollama assessment returned malformed response");}) as {
+          message?:{content?:string}; done?:boolean; done_reason?:string;
+          error?:unknown; eval_count?:number;
+        };
+        if (result.error) throw new Error("Ollama assessment server error");
+        log.info({model, attempt:attempt + 1, reason:result.done_reason, generatedTokens:result.eval_count}, "Ollama assessment response received");
+        if (result.done_reason === "length") {
+          if (schema && attempt === 0 && tokens < 8192) continue;
+          throw new Error("Ollama assessment exhausted its output token budget");
+        }
+        if (result.done !== true) throw new Error("Ollama assessment response incomplete");
+        const output = result.message?.content;
+        if (typeof output !== "string" || !output.trim()) throw new Error("Ollama assessment returned no content");
+        if (schema) {
+          let parsed: unknown;
+          try {parsed = JSON.parse(output);} catch {throw new Error("Ollama assessment returned invalid JSON");}
+          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+            throw new Error("Ollama assessment did not return a JSON object");
           }
-          finish(undefined,output.trim());
-        });
-        res.on("error",err=>finish(err));
-      });
-      timer=setTimeout(()=>req.destroy(new Error(`Ollama assessment exceeded ${timeoutMs}ms`)),timeoutMs);
-      req.on("error",err=>finish(err));
-      req.end(body);
-    });
+          const required = schema.required;
+          if (Array.isArray(required) && required.some(key => typeof key !== "string" || !Object.hasOwn(parsed, key))) {
+            throw new Error("Ollama assessment omitted required fields");
+          }
+        }
+        return output.trim();
+      }
+      throw new Error("Ollama assessment did not complete");
+    } catch (error) {
+      if (controller.signal.aborted) throw new Error(`Ollama assessment exceeded ${timeoutMs}ms`);
+      throw error;
+    } finally {clearTimeout(timer);}
   } finally {unlock();}
 }
 
@@ -266,10 +283,13 @@ export async function runClaudeStructured<T = Record<string, unknown>>(
   }
 
   // CLI fallback: text generation + JSON extraction
-  const text = process.env.OLLAMA_DISCOVERY_DIRECT === "true"
-    ? await runLocalOllama(prompt, opts, true)
-    : await runClaudeCLI(prompt, opts);
-  return extractJsonWithKey<T>(text, opts.fallbackKey);
+  if (process.env.OLLAMA_DISCOVERY_DIRECT === "true") {
+    const text = await runLocalOllama(prompt, opts, opts.inputSchema);
+    const parsed = JSON.parse(text);
+    if (!Object.hasOwn(parsed, opts.fallbackKey)) throw new Error("Ollama assessment omitted its result field");
+    return parsed as T;
+  }
+  return extractJsonWithKey<T>(await runClaudeCLI(prompt, opts), opts.fallbackKey);
 }
 
 async function runClaudeStructuredAPI<T>(

@@ -3,6 +3,8 @@
 import "dotenv/config";
 import { hostModelTimeout } from "./model-check-settings";
 console.log(JSON.stringify({
+  discoveryDirect:process.env.OLLAMA_DISCOVERY_DIRECT === "true",
+  assessmentModel:process.env.OLLAMA_MODEL || process.env.LOCAL_OLLAMA_MODEL || "qwen3:4b",
   toolProtocol:process.env.LOCAL_OLLAMA_TOOL_PROTOCOL || "json",
   agentTimeoutMs:hostModelTimeout(),
   model:process.env.LOCAL_OLLAMA_MODEL || "qwen3:4b",

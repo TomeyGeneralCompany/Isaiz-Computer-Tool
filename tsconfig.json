@@ -4,6 +4,14 @@
     "rootDir": ".",
     "outDir": "dist"
   },
-  "include": ["orchestrator.ts", "packages/*/src/**/*"],
-  "exclude": ["packages/dashboard/**"]
+  "include": [
+    "orchestrator.ts",
+    "packages/*/src/**/*",
+    "scripts/assessment-fixture.ts",
+    "scripts/test-local-assessment.ts",
+    "scripts/test-mock-assessment.ts"
+  ],
+  "exclude": [
+    "packages/dashboard/**"
+  ]
 }

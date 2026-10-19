@@ -222,3 +222,24 @@ remain unchanged. After this repair, the exact model-only command passed with
 real CPU Qwen3:4b, including the replay/report fixture, followed by two additional
 fresh-marker runs. A mock regression verifies rejected-final -> reread -> valid
 final recovery. These are owned-fixture checks, not real-program bounty proof.
+
+
+## Program assessment JSON recovery
+
+Program ranking uses a separate text adapter from the source-reading agent.
+The local assessment adapter now sends the caller's actual JSON Schema to
+Ollama, honors its token budget, checks the completion reason, and retries a
+truncated structured response once with a larger budget. Both attempts share
+one deadline. It never repairs or accepts partial JSON. Program assessments
+also validate nested fields before ranking. Error logs omit generated text and
+provider response bodies. The configured `AUTOHACK_OLLAMA_URL` is shared with
+the source-reading agent; `OLLAMA_MODEL` selects the assessment model, falling
+back to `LOCAL_OLLAMA_MODEL` and then qwen3:4b.
+
+Run `bash scripts/verify-assessment.sh` to exercise the actual program assessor
+with the configured local model and fictional source-scope data. This performs
+only local model inference, with no repository clone, target request, provider
+call, database update or submission. Host/model acceptance now includes this
+check when `OLLAMA_DISCOVERY_DIRECT=true`. CI covers schema propagation,
+truncation and exhausted budgets, malformed/nested output, HTTP failures,
+request deadlines and queue recovery through the production adapter.

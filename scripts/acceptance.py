@@ -80,7 +80,7 @@ def main() -> int:
         parser.error("--model-only cannot be combined with --offline or --provider")
     if not args.model_only:
         run("python_integration_tests", [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py", "-v"])
-        run("launcher_syntax", ["bash", "-n", "run-local-autohack.sh", "run-complete-autohack.sh", "setup-and-run.sh", "scripts/install-user-service.sh", "scripts/control-user-service.sh", "scripts/node-runtime.sh", "scripts/verify-host.sh", "scripts/configure-hackerone.sh", "scripts/verify-model.sh"])
+        run("launcher_syntax", ["bash", "-n", "run-local-autohack.sh", "run-complete-autohack.sh", "setup-and-run.sh", "scripts/install-user-service.sh", "scripts/control-user-service.sh", "scripts/node-runtime.sh", "scripts/verify-host.sh", "scripts/configure-hackerone.sh", "scripts/verify-model.sh", "scripts/verify-assessment.sh"])
         if shutil.which("npm") and (ROOT / "node_modules").is_dir():
             run("typescript", ["npx", "--no-install", "tsc", "--noEmit", "--project", "tsconfig.json"], 180)
             run("dashboard_typecheck", ["npx", "--no-install", "tsc", "--noEmit", "--project", "packages/dashboard/tsconfig.json"], 180)
@@ -88,6 +88,7 @@ def main() -> int:
             # They never submit to a real platform or contact program assets.
             for test_name, script in [
                 ("mock_ollama", "scripts/test-mock-agent.ts"),
+                ("mock_program_assessment", "scripts/test-mock-assessment.ts"),
                 ("authorized_source", "scripts/test-authorized-source.ts"),
                 ("provider_preflight", "scripts/test-provider-preflight.ts"),
                 ("earnings", "scripts/test-earnings.ts"),
@@ -157,6 +158,11 @@ def main() -> int:
     else:
         record("agent_backend", False, "Local inference or tsx unavailable")
         record("real_model_fixture_pipeline", False, "Local inference or tsx unavailable")
+    if settings.get("discoveryDirect"):
+        if RESULTS.get("local_model", {}).get("passed") and settings["assessmentModel"] in names:
+            run("local_program_assessment", ["node", "--import", "tsx", "scripts/test-local-assessment.ts"], 210)
+        else:
+            record("local_program_assessment", False, "Configured discovery assessment model unavailable")
     if args.model_only:
         return emit(args, "model_acceptance")
     # Confirm the live solver retains the submission boundary for static leads.
