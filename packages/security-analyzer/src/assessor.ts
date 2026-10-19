@@ -202,7 +202,8 @@ Respond with ONLY valid JSON, no markdown fences:
       model: config.ANALYSIS_MODEL,
       maxTokens: 1024,
       temperature: 0,
-      timeoutMs: 180_000,
+      // Local inference uses OLLAMA_ASSESSMENT_TIMEOUT_MS in the adapter.
+      timeoutMs: process.env.OLLAMA_DISCOVERY_DIRECT === "true" ? undefined : 180_000,
       disableTools: true,
       toolName: "assess_program",
       fallbackKey: "rubric",
@@ -356,7 +357,8 @@ Respond with ONLY valid JSON, no markdown fences:
       model: config.ANALYSIS_MODEL,
       maxTokens: 1024,
       temperature: 0,
-      timeoutMs: 180_000,
+      // Local inference uses OLLAMA_ASSESSMENT_TIMEOUT_MS in the adapter.
+      timeoutMs: process.env.OLLAMA_DISCOVERY_DIRECT === "true" ? undefined : 180_000,
       disableTools: true,
       toolName: "assess_finding",
       fallbackKey: "difficulty",

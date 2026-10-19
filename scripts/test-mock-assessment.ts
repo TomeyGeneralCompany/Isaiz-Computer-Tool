@@ -81,6 +81,18 @@ try {
   mode = "stall";
   const opts = {toolName:"fixture",fallbackKey:"rubric",inputSchema:{type:"object",required:["rubric"]},timeoutMs:50};
   await assert.rejects(runClaudeStructured("fixture",opts),/exceeded 50ms/);
+  // Exercise the production assessor, not only a direct adapter call: the old
+  // hardcoded 180s option prevented this configured deadline from taking effect.
+  const priorTimeout = process.env.OLLAMA_ASSESSMENT_TIMEOUT_MS;
+  try {
+    process.env.OLLAMA_ASSESSMENT_TIMEOUT_MS = "50";
+    await assert.rejects(assessProgram(assessmentFixture), /exceeded 50ms/);
+    process.env.OLLAMA_ASSESSMENT_TIMEOUT_MS = "-1";
+    await assert.rejects(assessProgram(assessmentFixture), /Invalid Ollama assessment timeout/);
+  } finally {
+    if (priorTimeout === undefined) delete process.env.OLLAMA_ASSESSMENT_TIMEOUT_MS;
+    else process.env.OLLAMA_ASSESSMENT_TIMEOUT_MS = priorTimeout;
+  }
   mode = "normal";
   checkAssessment(await assessProgram(assessmentFixture)); // Failed calls must release the queue.
   await Promise.all([assessProgram(assessmentFixture),assessProgram(assessmentFixture)]);

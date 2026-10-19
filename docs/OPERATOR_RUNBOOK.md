@@ -331,3 +331,15 @@ browser opens the dashboard. This is a launcher for the existing local service.
 Closing its window leaves the service running. Use the shortcut's Stop Tomey Gun
 action or `systemctl --user stop autohack.service` to stop it. The laptop must
 remain powered on and awake for the service to run.
+
+
+### Local assessment timeout
+
+Direct Ollama program and finding assessments honor
+`OLLAMA_ASSESSMENT_TIMEOUT_MS`. The default is 600000 ms (10 minutes); valid
+values are integer milliseconds from 1 through 1800000 (30 minutes). Set this
+in the checkout's `.env` and restart `autohack.service` to apply a change.
+An existing explicit value such as 180000 continues to override the default.
+The dashboard's hunt timeout is a separate setting. The assessment deadline
+starts after the process-local Ollama queue is acquired and covers both output
+attempts together. The configured deadline is recorded in assessment-start logs.

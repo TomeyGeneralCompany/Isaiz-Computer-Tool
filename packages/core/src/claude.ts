@@ -66,7 +66,7 @@ async function runLocalOllama(
   ollamaQueue = new Promise<void>(resolve => { unlock = resolve; });
   await prior;
   try {
-    const timeoutMs = opts?.timeoutMs ?? Number(process.env.OLLAMA_ASSESSMENT_TIMEOUT_MS || 180000);
+    const timeoutMs = opts?.timeoutMs ?? Number(process.env.OLLAMA_ASSESSMENT_TIMEOUT_MS || 600000);
     const limit = Number(process.env.OLLAMA_PROMPT_CHARS || 5800);
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 1800000 ||
         !Number.isSafeInteger(limit) || limit < 3000 || limit > 24000) {
@@ -90,7 +90,7 @@ async function runLocalOllama(
     try {
       // A single retry shares the deadline. Never repair or accept partial JSON.
       for (let attempt = 0, tokens = requestedTokens; attempt < 2; attempt++, tokens = Math.min(tokens * 2, 8192)) {
-        log.info({model, attempt:attempt + 1, generationLimit:tokens}, "Ollama assessment started");
+        log.info({model, attempt:attempt + 1, generationLimit:tokens, timeoutMs}, "Ollama assessment started");
         const response = await fetch(endpoint, {
           method: "POST", redirect: "error", signal: controller.signal,
           headers: {"Content-Type":"application/json"},
