@@ -542,9 +542,10 @@ function extractVulnerabilityInfo(reportBody: string): string {
  * In the HackerOne format, Impact is the last section before ===FINDING_END===.
  */
 function extractImpact(reportBody: string): string {
-  // New HackerOne format: **Impact:** is the last section
+  // Accept both the legacy bold label and the local workflow's Markdown
+  // heading. Stop before the next section so evidence ratings stay separate.
   const match = reportBody.match(
-    /\*\*Impact:\*\*\s*([\s\S]*?)(?=={3}FINDING_END={3}|$)/,
+    /(?:\*\*Impact:\*\*|^#{1,6}[ \t]+Impact[ \t]*:?[ \t]*\r?$)[ \t]*(?:\r?\n)?([\s\S]*?)(?=^#{1,6}[ \t]+|^\*\*[^*\r\n]+:\*\*|={3}FINDING_END={3}|(?![\s\S]))/im,
   );
   return match?.[1]?.trim() || "";
 }

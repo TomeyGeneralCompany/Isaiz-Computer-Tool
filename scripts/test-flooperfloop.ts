@@ -47,6 +47,7 @@ const model=createServer(async(req,res)=>{
         const probe=results.find((r:any)=>r.name==="verify_python");
         if(!probe)action={action:"verify_python",path:"source-1/renderer.py",query:"render",answer:"html_reflection"};
         else {
+          if (probe.output.startsWith("Tool error:")) throw new Error(probe.output);
           const evidence=JSON.parse(probe.output);
           assert.ok(["behavior_observed","behavior_not_observed"].includes(evidence.status),probe.output);
           action={action:"final",path:"",query:"",answer:JSON.stringify({findings:evidence.caseId?[{
@@ -70,7 +71,7 @@ const model=createServer(async(req,res)=>{
         cvss:{attack_vector:"network",attack_complexity:"low",privileges_required:"none",user_interaction:"required",scope:"unchanged",confidentiality:"none",integrity:"low",availability:"none"}}});
     }
     res.setHeader("content-type","application/json");res.end(JSON.stringify({done:true,done_reason:"stop",message:{role:"assistant",content}}));
-  }catch(error){res.statusCode=500;res.end(String(error));}
+  }catch(error){console.error("Fictional model fixture error:",error);res.statusCode=500;res.end(String(error));}
 });
 try {
   mkdirSync(repository);
@@ -92,6 +93,33 @@ elif "fetch" not in args and "checkout" not in args and "rev-parse" not in args:
     raise SystemExit("Unexpected Git operation blocked")
 os.execv("/usr/bin/git",["git","-c","protocol.file.allow=always"]+args)
 `);chmodSync(transport,0o700);
+  // The host denies creating a network namespace. Emulate only the sandbox
+  // launcher for this wiring check; execute the real fixed Python probe and
+  // owned source under the driver's existing resource limits. This does not
+  // establish that actual Bubblewrap isolation works on the operator's laptop.
+  if (process.env.FLOOPERFLOOP_MOCK_SANDBOX === "1") {
+    const shim = join(bin,"bwrap");
+    writeFileSync(shim, `#!/usr/bin/env python3
+import os, pathlib, sys
+args=sys.argv[1:]
+bindings={}
+for i, value in enumerate(args):
+    if value == "--ro-bind": bindings[args[i+2]]=args[i+1]
+owned=pathlib.Path(${JSON.stringify(root)}).resolve()
+if not pathlib.Path(bindings["/repo"]).resolve().is_relative_to(owned): raise SystemExit("Non-fixture repository blocked")
+probe_file=pathlib.Path(bindings["/probe.py"]).resolve()
+spec_file=pathlib.Path(bindings["/spec.json"]).resolve()
+if probe_file.parent != spec_file.parent or not probe_file.parent.name.startswith("autohack-reproduction-"):
+    raise SystemExit("Non-fixture probe driver blocked")
+if probe_file.stat().st_uid != os.getuid() or spec_file.stat().st_uid != os.getuid():
+    raise SystemExit("Unowned probe blocked")
+probe=probe_file.read_text()
+probe=probe.replace("'/spec.json'",repr(bindings["/spec.json"]))
+probe=probe.replace("'/repo'",repr(bindings["/repo"]))
+os.execve("/usr/bin/python3",["python3","-I","-c",probe],{"PATH":"/usr/bin:/bin"})
+`);
+    chmodSync(shim,0o700);
+  }
   process.env.PATH=bin+":"+process.env.PATH;
   execFileSync(process.execPath,["--import","tsx","scripts/initialize-db.ts"],{stdio:"pipe"});
   await new Promise<void>(resolve=>model.listen(0,"127.0.0.1",resolve));
@@ -117,7 +145,7 @@ os.execv("/usr/bin/git",["git","-c","protocol.file.allow=always"]+args)
       assert.match(reportPayload.data.attributes.impact,/owned caller returns unescaped user text/, "The report impact must survive preparation and serialization");
       assert.equal(reportPayload.data.attributes.severity_rating,"medium");
       assert.equal(reportPayload.data.attributes.structured_scope_id,"flooper-scope");
-      return json({data:{id:"flooperfloop-mock-receipt",attributes:{url:"https://reports.example.invalid/flooperfloop"}}});
+      return json({data:{id:"flooperfloop-mock-receipt",attributes:{url:"https://hackerone.com/reports/flooperfloop-fictional-receipt"}}});
     }
     throw new Error("All unexpected network traffic blocked: "+url);
   }) as typeof fetch;
@@ -156,7 +184,8 @@ os.execv("/usr/bin/git",["git","-c","protocol.file.allow=always"]+args)
   assert.deepEqual(await huntProgram(current),{findingsCreated:0});
   assert.equal(submitted,1);
   assert.ok(huntTurns>=8);assert.ok(reviewTurns>=3);
-  console.log("FLOOPERFLOOP A -> B -> C -> D PASSED: fictional discovery/assessment -> actual isolated source reproduction -> report/independent replay -> intercepted submission/recovery; fixed-source negative control passed; zero real target/report requests.");
+  console.log("Sandbox launcher mocked: " + (process.env.FLOOPERFLOOP_MOCK_SANDBOX === "1"));
+  console.log("FLOOPERFLOOP A -> B -> C -> D PASSED: fictional discovery/assessment -> actual owned Python source execution -> report/independent replay -> intercepted submission/recovery; fixed-source negative control passed; zero real target/report requests.");
 }finally{
   globalThis.fetch=originalFetch;model.closeAllConnections();await new Promise<void>(resolve=>model.close(()=>resolve()));
   rmSync(root,{recursive:true,force:true});
