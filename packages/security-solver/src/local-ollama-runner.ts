@@ -1,8 +1,15 @@
 import { auditActionSchema, auditProtocolPrompt, decodeAuditAction } from "./local-audit-protocol";
 import { readdir, readFile, realpath, stat, appendFile } from "node:fs/promises";
-import { resolve, relative, sep } from "node:path";
+import { resolve, relative, sep, join } from "node:path";
 
 type Message = { role: string; content: string; tool_name?: string; tool_calls?: Array<{ function: { name: string; arguments: Record<string, unknown> } }> };
+const activeControllers=new Set<AbortController>();
+export function activeLocalAuditCount():number {return activeControllers.size;}
+export function abortLocalAudits():boolean {
+  const active=activeControllers.size>0;
+  for(const controller of activeControllers)controller.abort("operator_cancelled");
+  return active;
+}
 const tools = [
   { type: "function", function: { name: "list_files", description: "List files in the authorized local audit workspace", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } } },
   { type: "function", function: { name: "search_files", description: "Search tracked source files for a literal string inside the authorized workspace", parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } } },
@@ -15,6 +22,8 @@ export interface LocalAuditLimits {
   numThreads: number;
   /** Return corrective feedback to reject a final answer, or null to accept. */
   validateFinal?: (answer: string) => string | null;
+  onRead?: (path:string) => void;
+  verifyPython?: (path:string,functionName:string,kind:string) => Promise<string>;
 }
 export async function runLocalAudit(
   prompt: string, logFile: string, timeoutMs: number, cwd: string,
@@ -32,9 +41,25 @@ export async function runLocalAudit(
   let generationBudget = settings.numPredict;
   const root = await realpath(cwd);
   const controller = new AbortController();
+  const auditStartedAt=Date.now();
+  activeControllers.add(controller);
+  const cancellationPath=join(process.env.PROJECT_ROOT || process.cwd(),"data","cancel-local-"+process.pid+".json");
+  let checkingCancellation=false;
+  const cancellationTimer=setInterval(async()=>{
+    if(checkingCancellation)return;checkingCancellation=true;
+    try {const request=JSON.parse(await readFile(cancellationPath,"utf8"));if(request.requestedAt>=auditStartedAt)controller.abort("operator_cancelled");}catch{}
+    finally{checkingCancellation=false;}
+  },250);
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const actionSchema = limits.verifyPython ? {...auditActionSchema,properties:{...auditActionSchema.properties,
+    action:{type:"string",enum:[...auditActionSchema.properties.action.enum,"verify_python"]}}} : auditActionSchema;
+  const probePrompt = limits.verifyPython ? "\nThe verify_python action invokes a fixed, isolated Python function probe. Set path to a source .py file, query to its public top-level function name, answer to html_reflection or path_construction. The function must take one string and return a string. Use returned observations honestly; they do not prove full exploitability. No arbitrary commands are available." : "";
+  const availableTools = limits.verifyPython ? [...tools,{type:"function",function:{
+    name:"verify_python",description:probePrompt,parameters:{type:"object",
+      properties:{path:{type:"string"},query:{type:"string"},kind:{type:"string"}},required:["path","query","kind"]},
+  }}] : tools;
   const messages: Message[] = [
-    { role: "system", content: (systemPrompt || "") + "\nYou are performing an OFFLINE, READ-ONLY source audit. Use tools to inspect actual source. Never invent findings or claim runtime verification. No network access or execution is available. Return only evidence-supported results." + (structured ? auditProtocolPrompt : "") },
+    { role: "system", content: (systemPrompt || "") + "\nPerform an offline source audit. Inspect actual files. Never invent findings or observations. No target network requests are available." + (limits.verifyPython ? probePrompt : " No source execution is available.") + (structured ? auditProtocolPrompt.replace(JSON.stringify(auditActionSchema),JSON.stringify(actionSchema)) : "") },
     { role: "user", content: prompt + "\n/no_think" },
   ];
   async function safePath(path: string): Promise<string> {
@@ -47,12 +72,14 @@ export async function runLocalAudit(
   }
   try {
     for (let turn = 0; turn < settings.maxTurns; turn++) {
+      controller.signal.throwIfAborted();
       const started = Date.now();
       await appendFile(logFile, `[OLLAMA] turn ${turn+1}/${settings.maxTurns}: request started; model=${model}; context=${limits.numCtx ?? "server-default"}; generation_limit=${generationBudget}; protocol=${protocol}\n`);
       const response = await fetch(process.env.AUTOHACK_OLLAMA_URL || "http://127.0.0.1:11434/api/chat", {
         method: "POST", signal: controller.signal,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model, stream: false, think: false, messages, ...(structured ? {format:auditActionSchema} : {tools}),
+        body: JSON.stringify({ model, stream: false, think: false, messages,
+          ...(structured ? {format:actionSchema} : {tools:availableTools}),
           keep_alive:"10m",
           options: { num_predict:generationBudget,
             ...(limits.numCtx === undefined ? {} : {num_ctx:settings.numCtx}),
@@ -65,7 +92,7 @@ export async function runLocalAudit(
       if (!message) throw new Error("Ollama returned no assistant message");
       if (structured) {
         let action;
-        try {action = decodeAuditAction(message.content);}
+        try {action = decodeAuditAction(message.content,!!limits.verifyPython);}
         catch {
           if (result.done_reason === "length" && generationBudget < 2048) {
             generationBudget = Math.min(generationBudget*2,2048);
@@ -76,7 +103,7 @@ export async function runLocalAudit(
         }
         messages.push({role:"assistant",content:message.content});
         message = action.action === "final" ? {role:"assistant",content:action.answer} : {
-          role:"assistant",content:"",tool_calls:[{function:{name:action.action,arguments:{path:action.path,query:action.query}}}],
+          role:"assistant",content:"",tool_calls:[{function:{name:action.action,arguments:{path:action.path,query:action.query,kind:action.answer}}}],
         };
       } else {messages.push(message);}
       if (message.content) await appendFile(logFile, message.content + "\n");
@@ -101,7 +128,9 @@ export async function runLocalAudit(
           const name = call.function.name;
           const path = String(call.function.arguments?.path ?? ".");
           const full = await safePath(path);
-          if (name === "list_files") {
+          if(name === "verify_python" && limits.verifyPython) {
+            output=await limits.verifyPython(path,String(call.function.arguments?.query || ""),String(call.function.arguments?.kind || ""));
+          } else if (name === "list_files") {
             const entries = await readdir(full, { withFileTypes: true });
             output = entries.filter(e => !e.name.startsWith(".") && e.name !== "node_modules")
               .slice(0, 100).map(e => (e.isDirectory() ? "dir " : "file ") + e.name).join("\n");
@@ -134,6 +163,7 @@ export async function runLocalAudit(
             if (!info.isFile() || info.size > 256_000) throw new Error("Not a readable source file under 256KB");
             output = (await readFile(full, "utf8")).slice(0, 30_000);
             successfulReads++;
+            limits.onRead?.(relative(root,full).split(sep).join("/"));
             await appendFile(logFile, "[READ_OK] " + relative(root,full) + "\n");
           } else throw new Error("Unknown tool");
         } catch (error) {
@@ -146,10 +176,13 @@ export async function runLocalAudit(
     }
     throw new Error(`Local audit reached its ${settings.maxTurns}-turn inspection limit`);
   } catch (error) {
+    if(controller.signal.reason === "operator_cancelled")throw new Error("Local audit cancelled by operator");
     if (controller.signal.aborted)
       throw new Error(`Ollama audit timed out after ${Math.round(timeoutMs/1000)} seconds; check model load/CPU contention and the turn timing log`);
     throw error;
   } finally {
     clearTimeout(timer);
+    clearInterval(cancellationTimer);
+    activeControllers.delete(controller);
   }
 }

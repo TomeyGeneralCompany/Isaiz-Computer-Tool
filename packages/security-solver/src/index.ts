@@ -1,9 +1,9 @@
 import { randomBytes } from "node:crypto";
-import { readFileSync, writeFileSync, unlinkSync } from "node:fs";
+import { readFileSync, writeFileSync, unlinkSync, mkdirSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { eq, desc, and, or, isNull, lt } from "drizzle-orm";
-import { getDb, schema, getConfig, createLogger, generateTraceId, classifyError, extractJsonWithKey, recordSecurityHuntOutcome, recordNearMiss, updateProgramNotes, getSecurityLearningContext, getSecurityProgramContext, type SecurityFinding, type SecurityProgram, assertAuthorizedProgram, targetInExplicitScope, assertAuthorizedTarget, submitOnce } from "@bounty/core";
+import { getDb, schema, getConfig, createLogger, generateTraceId, classifyError, extractJsonWithKey, recordSecurityHuntOutcome, recordNearMiss, updateProgramNotes, getSecurityLearningContext, getSecurityProgramContext, type SecurityFinding, type SecurityProgram, programCandidateBlocker, recordHuntAttempt, assertAuthorizedProgram, targetInExplicitScope, assertAuthorizedTarget, submitOnce } from "@bounty/core";
 import { fetchProgramPolicy, fetchProgramSignalRequirement, fetchAllDisclosedReports, prepareSubmission, submitReport, fetchProgramScopes } from "@bounty/security-discovery";
 import { runProgramHunt, runFindingSolver, killActiveSecurityProcess, detectHuntStrategy, prepareReviewWorkspace, spawnComprehensiveReview, deverbosifyReport, EXCLUDED_VULN_TYPES, type ReviewContext } from "./claude-runner";
 import { clearSecuritySolverStatus, writeAdversarialReviewStatus, clearAdversarialReviewStatus, readAdversarialReviewStatus, cancelAdversarialReview } from "./status";
@@ -15,40 +15,26 @@ let solving = false;
 // Cross-process lock file to prevent concurrent hunts from orchestrator + dashboard
 const HUNT_LOCK_FILE = join(process.env.PROJECT_ROOT || process.cwd(), "data", "security-hunt.lock");
 
+let huntLockToken: string | null = null;
 function acquireHuntLock(): boolean {
-  // Check existing lock
   try {
-    const raw = readFileSync(HUNT_LOCK_FILE, "utf-8");
-    const lock = JSON.parse(raw);
-
-    // If we (same PID) hold the lock, it's stale from a previous crashed hunt
-    if (lock.pid === process.pid) {
-      log.info("Reclaiming own stale hunt lock from previous run");
-    } else {
-      // Check if the locking process is still alive
-      try {
-        process.kill(lock.pid, 0); // signal 0 = just check existence
-        // Process is alive — lock is held
-        return false;
-      } catch {
-        // Process is dead — stale lock, we can take it
-        log.info({ stalePid: lock.pid }, "Removing stale hunt lock");
-      }
-    }
-  } catch {
-    // No lock file or invalid — safe to acquire
-  }
-
-  try {
-    writeFileSync(HUNT_LOCK_FILE, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }));
+    mkdirSync(join(process.env.PROJECT_ROOT || process.cwd(),"data"),{recursive:true});
+    const token = randomBytes(16).toString("hex");
+    // Exclusive creation is atomic across the orchestrator and dashboard.
+    // Stale legacy locks are checked once during orchestrator startup.
+    writeFileSync(HUNT_LOCK_FILE,JSON.stringify({pid:process.pid,token,startedAt:new Date().toISOString()}),{flag:"wx",mode:0o600});
+    huntLockToken = token;
     return true;
-  } catch {
-    return false;
-  }
+  } catch {return false;}
 }
 
 function releaseHuntLock(): void {
-  try { unlinkSync(HUNT_LOCK_FILE); } catch {}
+  if (!huntLockToken) return;
+  try {
+    const owner = JSON.parse(readFileSync(HUNT_LOCK_FILE,"utf8"));
+    if (owner.pid === process.pid && owner.token === huntLockToken) unlinkSync(HUNT_LOCK_FILE);
+  } catch {}
+  huntLockToken = null;
 }
 
 export function isSecuritySolving(): boolean { return solving; }
@@ -86,6 +72,18 @@ export async function huntProgram(
   let huntSucceeded = false;
 
   try {
+    if (program.provider === "hackerone" && program.providerProgramId) {
+      const [freshScopes,freshPolicy] = await Promise.all([
+        fetchProgramScopes(program.providerProgramId),fetchProgramPolicy(program.providerProgramId),
+      ]);
+      let previous: Record<string,unknown> = {};
+      try {const parsed = JSON.parse(program.scopeSummary || "{}"); previous = Array.isArray(parsed) ? {scopes:parsed} : parsed;} catch {}
+      program = {...program,scopeSummary:JSON.stringify({...previous,scopes:freshScopes,
+        policy:freshPolicy.policy || "",scopeRefreshedAt:new Date().toISOString()})};
+      db.update(schema.securityPrograms).set({scopeSummary:program.scopeSummary,updatedAt:new Date()})
+        .where(eq(schema.securityPrograms.id,program.id)).run();
+      assertAuthorizedProgram(program.scopeSummary);
+    }
     log.info({ programId: program.id, name: program.name }, "Starting program hunt");
 
     const result = await runProgramHunt(program, trigger);
@@ -133,6 +131,12 @@ export async function huntProgram(
         continue;
       }
 
+      if(f.reproductionFingerprint) {
+        const duplicates=db.select().from(schema.securityFindings).where(eq(schema.securityFindings.programId,program.id)).all();
+        if(duplicates.some(existing=>{try{return JSON.parse(existing.analysisNotes || "{}").reproductionFingerprint===f.reproductionFingerprint;}catch{return false;}})) {
+          log.info({programId:program.id},"Reproduced finding already recorded for this source version");continue;
+        }
+      }
       const findingId = `sf-${randomBytes(8).toString("hex")}`;
       const traceId = generateTraceId();
 
@@ -149,6 +153,7 @@ export async function huntProgram(
             status: "report_ready",
             confidenceScore: f.confidence,
             reportBody: f.reportBody,
+            analysisNotes:f.reproductionCaseId ? JSON.stringify({reproductionCaseId:f.reproductionCaseId,reproductionFingerprint:f.reproductionFingerprint}) : null,
             traceId,
             discoveredAt: new Date(),
             updatedAt: new Date(),
@@ -237,6 +242,7 @@ export async function huntProgram(
         .set({
           // Preserve the last completed hunt on acquisition/model failures.
           lastHuntedAt: huntSucceeded ? new Date() : currentProgram?.lastHuntedAt,
+          scopeSummary:recordHuntAttempt(currentProgram?.scopeSummary ?? program.scopeSummary,huntSucceeded),
           huntCount: huntSucceeded ? prevHuntCount + 1 : prevHuntCount,
           huntMissStreak: newMissStreak,
           updatedAt: new Date(),
@@ -348,8 +354,9 @@ export async function solveSecurityFinding(
  */
 export async function forceStopSecuritySolver(): Promise<{ killed: boolean; resetFindingId: string | null }> {
   const killed = killActiveSecurityProcess();
-  solving = false;
-  releaseHuntLock();
+  // The owning hunt/review releases its lock in finally after cancellation and
+  // any bounded reproduction cleanup; never let another job reuse it early.
+  if(!process.env.LOCAL_OLLAMA_MODEL){solving=false;releaseHuntLock();}
 
   const db = getDb();
   const stuck = db
@@ -501,56 +508,11 @@ export interface RankedProgram {
 export function rankEligiblePrograms(): RankedProgram[] {
   const db = getDb();
   const config = getConfig();
-  const baseCooldownMs = config.SECURITY_HUNT_COOLDOWN_HOURS * 60 * 60 * 1000;
-  const minRewardCents = config.SECURITY_MIN_REWARD_CENTS;
-  const excludeHandles = new Set(
-    (config.EXCLUDE_SECURITY_PROGRAMS ?? []).map((h: string) => h.toLowerCase()),
-  );
-  const now = Date.now();
-
-  const programs = db
-    .select()
-    .from(schema.securityPrograms)
-    .where(eq(schema.securityPrograms.status, "active"))
-    .all();
-
+  const programs = db.select().from(schema.securityPrograms)
+    .where(eq(schema.securityPrograms.status,"active")).all();
   const ranked: RankedProgram[] = [];
-
   for (const p of programs) {
-    try { assertAuthorizedProgram(p.scopeSummary); } catch { continue; }
-    if (p.providerProgramId && excludeHandles.has(p.providerProgramId.toLowerCase())) continue;
-    if (p.requiresSignal && config.SKIP_SIGNAL_REQUIRED) continue;
-
-    // Skip previously hunted programs entirely (user wants to try everything once first)
-    if (p.lastHuntedAt && config.SKIP_PREVIOUSLY_HUNTED) continue;
-
-    // Cooldown with exponential backoff (only applies when re-hunting is enabled)
-    if (p.lastHuntedAt) {
-      const missStreak = p.huntMissStreak ?? 0;
-      const cooldownMs = baseCooldownMs * Math.pow(2, Math.min(missStreak, 6));
-      if (now - p.lastHuntedAt.getTime() < cooldownMs) continue;
-    }
-
-    if ((p.rewardMaxCents ?? 0) < minRewardCents) continue;
-
-    // Skip web-only programs (no source code in scope)
-    if (config.SKIP_WEB_ONLY_PROGRAMS) {
-      const hasSourceCode = (() => {
-        try {
-          const parsed = JSON.parse(p.scopeSummary || "{}");
-          const scopes = parsed.scopes ?? [];
-          return scopes.some(
-            (s: any) =>
-              s.assetType === "SOURCE_CODE" ||
-              (s.assetIdentifier?.includes("github.com")) ||
-              (s.assetIdentifier?.includes("gitlab.com")),
-          );
-        } catch {
-          return false;
-        }
-      })();
-      if (!hasSourceCode) continue;
-    }
+    if (programCandidateBlocker(p,config,!!process.env.LOCAL_OLLAMA_MODEL)) continue;
 
     const score = scoreProgram(p);
     if (score === null || score === 0) continue;
@@ -685,6 +647,13 @@ function buildBatchContext(currentFindingId: string, allFindings: SecurityFindin
  * Transitions findings to "reviewing" (passed) or "bot_rejected" (rejected).
  */
 export async function processAdversarialQueue(programId?: string): Promise<void> {
+  if(process.env.LOCAL_OLLAMA_MODEL) {
+    if(solving || !acquireHuntLock())return;
+    solving=true;
+    try {const {processLocalReviewQueue}=await import("./local-program-flow");await processLocalReviewQueue(programId);}
+    finally {solving=false;releaseHuntLock();await clearAdversarialReviewStatus().catch(()=>{});}
+    return;
+  }
   const db = getDb();
   const config = getConfig();
 

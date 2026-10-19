@@ -93,10 +93,11 @@ function main() {
 
   // Security analysis runs after HackerOne discovery to assess programs
   let securityAnalysisRunning = false;
+  let assessmentRevision = 0;
   function runSecurityAnalysisQueue() {
     if (securityAnalysisRunning) return;
     securityAnalysisRunning = true;
-    processSecurityProgramQueue()
+    processSecurityProgramQueue({onProgramAssessed:() => {assessmentRevision++;}})
       .catch((err) => log.error({ err }, "Security program analysis queue error"))
       .finally(() => { securityAnalysisRunning = false; });
   }
@@ -157,9 +158,10 @@ function main() {
   }
 
   // Allow operator pause to interrupt long idle waits promptly.
-  async function waitWhileEnabled(ms: number) {
+  async function waitWhileEnabled(ms: number, wakeForAssessment = false) {
+    const initialRevision = assessmentRevision;
     for (let waited = 0; waited < ms; waited += 1000) {
-      if (shuttingDown || !getConfig().SECURITY_AUTO_HUNT_ENABLED) return;
+      if (shuttingDown || !getConfig().SECURITY_AUTO_HUNT_ENABLED || (wakeForAssessment && initialRevision !== assessmentRevision)) return;
       await new Promise<void>(resolve => setTimeout(resolve, Math.min(1000, ms - waited)));
     }
   }
@@ -178,7 +180,7 @@ function main() {
         const program = pickBestProgram();
         if (!program) {
           log.info("No eligible programs for auto-hunt — waiting 5 min for assessments/cooldowns");
-          await waitWhileEnabled(5 * 60 * 1000);
+          await waitWhileEnabled(5 * 60 * 1000,true);
           continue;
         }
 
@@ -223,6 +225,8 @@ function main() {
       autoHuntScheduled = false;
     }
   }
+
+  cron.schedule("*/1 * * * *",runSecurityAnalysisQueue);
 
   // Check every 1 minute if auto-hunt should start (lightweight config check)
   cron.schedule("*/1 * * * *", () => {

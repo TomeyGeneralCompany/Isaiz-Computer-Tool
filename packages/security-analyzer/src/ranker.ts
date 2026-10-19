@@ -1,6 +1,8 @@
 import { eq, sql, desc } from "drizzle-orm";
 import {
   getDb,
+  getConfig,
+  programCandidateBlocker,
   schema,
   createLogger,
   generateTraceId,
@@ -161,46 +163,38 @@ export async function analyzeAndRankFinding(finding: SecurityFinding): Promise<v
  * Process the analysis queue for security programs.
  * Analyzes all unassessed active programs.
  */
-export async function processSecurityProgramQueue(opts?: { skipSignalRequired?: boolean }): Promise<number> {
+export async function processSecurityProgramQueue(opts?: {
+  skipSignalRequired?: boolean;
+  onProgramAssessed?: (programId: string) => void;
+}): Promise<number> {
   const db = getDb();
   let analyzed = 0;
-
-  // Get programs that haven't been assessed yet (no assessment in scopeSummary)
-  const programs = db
-    .select()
-    .from(schema.securityPrograms)
-    .where(eq(schema.securityPrograms.status, "active"))
-    .orderBy(desc(schema.securityPrograms.rewardMaxCents))
-    .all();
-
-  const unassessed = programs.filter((program) => {
-    // Skip Signal-required programs if option is set
-    if (opts?.skipSignalRequired && program.requiresSignal) return false;
-    try {
-      const parsed = JSON.parse(program.scopeSummary || "{}");
-      return parsed.assessment?.opportunityScore == null;
-    } catch {
-      return true;
-    }
-  });
-
-  // Process in concurrent batches of 5
-  const CONCURRENCY = 5;
-  for (let i = 0; i < unassessed.length; i += CONCURRENCY) {
-    const batch = unassessed.slice(i, i + CONCURRENCY);
-    const results = await Promise.allSettled(
-      batch.map((program) => analyzeProgram(program)),
-    );
-
-    for (let j = 0; j < results.length; j++) {
-      if (results[j].status === "fulfilled") {
+  const attempted = new Set<string>();
+  const local = process.env.OLLAMA_DISCOVERY_DIRECT === "true";
+  // Refresh the catalog between small batches, so initial HackerOne discovery
+  // is not stranded behind a snapshot of hundreds of older entries.
+  while (true) {
+    const config = getConfig();
+    const eligible = db.select().from(schema.securityPrograms)
+      .where(eq(schema.securityPrograms.status,"active"))
+      .orderBy(desc(schema.securityPrograms.rewardMaxCents)).all().filter(program => {
+        if (attempted.has(program.id) || programCandidateBlocker(program,config,!!process.env.LOCAL_OLLAMA_MODEL)) return false;
+        if (opts?.skipSignalRequired && program.requiresSignal) return false;
+        try {return JSON.parse(program.scopeSummary || "{}").assessment?.opportunityScore == null;} catch {return true;}
+      }).sort((a,b) => Number(b.provider === "hackerone") - Number(a.provider === "hackerone"));
+    const batch = eligible.slice(0,local ? 1 : 5);
+    if (!batch.length) break;
+    batch.forEach(program => attempted.add(program.id));
+    const results = await Promise.allSettled(batch.map(program => analyzeProgram(program)));
+    for (let i = 0; i < results.length; i++) {
+      if (results[i].status === "fulfilled") {
         analyzed++;
+        opts?.onProgramAssessed?.(batch[i].id);
       } else {
-        log.error({ err: (results[j] as PromiseRejectedResult).reason, programId: batch[j].id }, "Error analyzing program, continuing");
+        log.error({err:(results[i] as PromiseRejectedResult).reason,programId:batch[i].id},"Error analyzing program, continuing");
       }
     }
   }
-
   return analyzed;
 }
 

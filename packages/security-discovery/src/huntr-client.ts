@@ -18,7 +18,12 @@ export interface HuntrProgram {
  * page links as program scope or invent reward amounts. A replacement requires
  * a documented feed with explicit repository eligibility and reward metadata.
  */
+let reported = false;
 export async function fetchHuntrPrograms(): Promise<HuntrProgram[]> {
-  log.warn("Huntr repository discovery unavailable: retired /bounties feed; no programs imported");
+  if (!reported) {
+    reported = true;
+    log.warn({ provider: "huntr", state: "unsupported_feed" },
+      "Huntr repository discovery unavailable: retired /bounties feed; no programs imported");
+  }
   return [];
 }

@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import { activeLocalAuditCount, abortLocalAudits } from "./local-ollama-runner";
+import { readFileSync, writeFileSync } from "node:fs";
 import { authorizedSourceUrls, cloneAuthorizedSource } from "./authorized-source";
 import { writeFile, mkdir, appendFile, rm } from "node:fs/promises";
 import { join } from "node:path";
@@ -45,10 +47,21 @@ export function setActiveChild(child: ReturnType<typeof spawn> | null): void {
 }
 
 export function getActiveChildPid(): number | null {
-  return activeChild?.pid ?? null;
+  return activeChild?.pid ?? (activeLocalAuditCount() ? process.pid : null);
 }
 
 export function killActiveSecurityProcess(): boolean {
+  if(abortLocalAudits())return true;
+  if(process.env.LOCAL_OLLAMA_MODEL) {
+    try {
+      const root=process.env.PROJECT_ROOT || process.cwd();
+      const lock=JSON.parse(readFileSync(join(root,"data","security-hunt.lock"),"utf8"));
+      if(!Number.isSafeInteger(lock.pid) || lock.pid<1)return false;
+      process.kill(lock.pid,0);
+      writeFileSync(join(root,"data","cancel-local-"+lock.pid+".json"),JSON.stringify({requestedAt:Date.now()}),{mode:0o600});
+      return true;
+    }catch{return false;}
+  }
   if (activeChild && !activeChild.killed) {
     log.warn({ pid: activeChild.pid }, "Force-killing active security solver process");
     activeChild.kill("SIGTERM");
@@ -1185,6 +1198,8 @@ export interface ParsedFinding {
   targetAsset: string;
   confidence: number;
   reportBody: string;
+  reproductionCaseId?: string;
+  reproductionFingerprint?: string;
 }
 
 export interface SecuritySolveResult {
@@ -1917,6 +1932,10 @@ export async function runProgramHunt(
   program: SecurityProgram,
   trigger?: "auto" | "manual",
 ): Promise<SecuritySolveResult> {
+  if(process.env.LOCAL_OLLAMA_MODEL) {
+    const {runLocalProgramHunt}=await import("./local-program-flow");
+    return runLocalProgramHunt(program);
+  }
   // Prepare workspace with CLAUDE.md and tools before spawning
   await prepareWorkspace(program);
 

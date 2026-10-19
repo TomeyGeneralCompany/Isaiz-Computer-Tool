@@ -55,7 +55,7 @@ export async function fetchAggregatorPrograms(opts?: { sourceCodeOnly?: boolean 
 }
 
 async function fetchPlatformData(platform: string, fileUrl: string): Promise<AggregatorProgram[]> {
-  const response = await fetch(fileUrl, { signal: AbortSignal.timeout(30_000) });
+  const response = await fetch(fileUrl, { signal: AbortSignal.timeout(30_000), redirect: "error" });
   if (!response.ok) {
     throw new Error(`Aggregator fetch ${platform} ${response.status}`);
   }

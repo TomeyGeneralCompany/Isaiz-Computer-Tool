@@ -14,3 +14,6 @@ export { targetInExplicitScope, assertAuthorizedTarget, assertAuthorizedProgram 
 export { claimDailyHuntSlot, readDailyQuota, dailyQuotaFile } from "./daily-hunt-limit";
 export { readSubmissionOutbox, claimSubmission, finishSubmission, markSubmissionUncertain, submitOnce, submissionOutboxFile } from "./submission-outbox";
 export { ScopedHttpInspector, isPublicIpv4, type HttpObservation } from "./authorized-http";
+
+export { authorizedSourceUrls } from "./source-repository";
+export { programCandidateBlocker, recordHuntAttempt } from "./program-eligibility";
