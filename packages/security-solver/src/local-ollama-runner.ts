@@ -22,6 +22,7 @@ export interface LocalAuditLimits {
   numThreads: number;
   /** Return corrective feedback to reject a final answer, or null to accept. */
   validateFinal?: (answer: string) => string | null;
+  signal?: AbortSignal;
   onRead?: (path:string) => void;
   verifyPython?: (path:string,functionName:string,kind:string) => Promise<string>;
 }
@@ -41,6 +42,9 @@ export async function runLocalAudit(
   let generationBudget = settings.numPredict;
   const root = await realpath(cwd);
   const controller = new AbortController();
+  const forwardCancellation = () => controller.abort(limits.signal?.reason);
+  limits.signal?.throwIfAborted();
+  limits.signal?.addEventListener("abort", forwardCancellation, {once:true});
   const auditStartedAt=Date.now();
   activeControllers.add(controller);
   const cancellationPath=join(process.env.PROJECT_ROOT || process.cwd(),"data","cancel-local-"+process.pid+".json");
@@ -119,9 +123,11 @@ export async function runLocalAudit(
           messages.push({role:"user",content:feedback + "\nRe-read the source when necessary. /no_think"});
           continue;
         }
+        controller.signal.throwIfAborted();
         return message.content;
       }
       for (const call of message.tool_calls.slice(0, 8)) {
+        controller.signal.throwIfAborted();
         await appendFile(logFile, "[TOOL] " + call.function.name + "\n");
         let output: string;
         try {
@@ -167,6 +173,7 @@ export async function runLocalAudit(
             await appendFile(logFile, "[READ_OK] " + relative(root,full) + "\n");
           } else throw new Error("Unknown tool");
         } catch (error) {
+          controller.signal.throwIfAborted();
           output = "Tool error: " + String(error);
         }
         messages.push(structured
@@ -181,6 +188,7 @@ export async function runLocalAudit(
       throw new Error(`Ollama audit timed out after ${Math.round(timeoutMs/1000)} seconds; check model load/CPU contention and the turn timing log`);
     throw error;
   } finally {
+    limits.signal?.removeEventListener("abort", forwardCancellation);
     clearTimeout(timer);
     clearInterval(cancellationTimer);
     activeControllers.delete(controller);

@@ -8,7 +8,6 @@ import { dirname } from "node:path";
 const __filename = fileURLToPath(import.meta.url);
 process.env.PROJECT_ROOT ||= dirname(__filename);
 
-import { readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
@@ -76,20 +75,7 @@ function main() {
   clearSecurityStatus().catch(() => {});
   clearAdversarialReviewStatus().catch(() => {});
 
-  // Clear stale hunt lock from previous run
-  try {
-    const lockFile = join(process.env.PROJECT_ROOT!, "data", "security-hunt.lock");
-    const raw = readFileSync(lockFile, "utf-8");
-    const lock = JSON.parse(raw);
-    try {
-      process.kill(lock.pid, 0);
-      // Process alive — don't remove
-    } catch {
-      // Process dead — stale lock
-      unlinkSync(lockFile);
-      log.info({ stalePid: lock.pid }, "Removed stale hunt lock from previous run");
-    }
-  } catch {}
+  // Hunt-lock recovery is serialized by the solver whenever a job acquires it.
 
   // Security analysis runs after HackerOne discovery to assess programs
   let securityAnalysisRunning = false;
@@ -213,7 +199,7 @@ function main() {
 
         // Run adversarial review on report_ready findings from this hunt
         try {
-          await processAdversarialQueue(program.id);
+          await processAdversarialQueue(process.env.LOCAL_OLLAMA_MODEL ? undefined : program.id);
         } catch (err) {
           log.error({ err }, "Post-hunt adversarial review error");
         }
@@ -227,6 +213,23 @@ function main() {
   }
 
   cron.schedule("*/1 * * * *",runSecurityAnalysisQueue);
+
+  // Resume report work even if its program will not receive another hunt.
+  // This also recovers confirmations from the durable submission outbox.
+  let reviewRecoveryRunning = false;
+  function recoverPendingReviews() {
+    if (shuttingDown || reviewRecoveryRunning) return;
+    const settings = getConfig();
+    if (!settings.SECURITY_AUTO_HUNT_ENABLED && !settings.SECURITY_AUTO_SUBMIT) return;
+    reviewRecoveryRunning = true;
+    processAdversarialQueue()
+      .catch(error => log.error({error}, "Pending review recovery interrupted"))
+      .finally(() => { reviewRecoveryRunning = false; });
+  }
+  if (process.env.LOCAL_OLLAMA_MODEL) {
+    cron.schedule("*/1 * * * *", recoverPendingReviews);
+    recoverPendingReviews();
+  }
 
   // Check every 1 minute if auto-hunt should start (lightweight config check)
   cron.schedule("*/1 * * * *", () => {

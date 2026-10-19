@@ -23,13 +23,15 @@ export type ProbeRepository = {directory:string;url:string};
 function caseDirectory():string {return join(process.env.PROJECT_ROOT || process.cwd(),"data","reproduction");}
 export function sourceCaseId(record:SourceCase):string {return sha(JSON.stringify(record));}
 
-async function commitAt(directory:string):Promise<string> {
+async function commitAt(directory:string, signal?:AbortSignal):Promise<string> {
   const result = await execute("git",["-c","core.hooksPath=/dev/null","rev-parse","HEAD"],{
-    cwd:directory,timeout:10000,maxBuffer:4096,env:{PATH:process.env.PATH,GIT_CONFIG_NOSYSTEM:"1",GIT_CONFIG_GLOBAL:"/dev/null"},
+    cwd:directory,timeout:10000,maxBuffer:4096,signal,env:{PATH:process.env.PATH,GIT_CONFIG_NOSYSTEM:"1",GIT_CONFIG_GLOBAL:"/dev/null"},
   });
   return z.string().regex(/^[a-f0-9]{40}$/).parse(result.stdout.trim());
 }
-async function executeProbe(directory:string,spec:z.infer<typeof specSchema>):Promise<z.infer<typeof resultSchema>> {
+async function executeProbe(directory:string,spec:z.infer<typeof specSchema>,signal?:AbortSignal):Promise<z.infer<typeof resultSchema>> {
+  signal?.throwIfAborted();
+  await mkdir(caseDirectory(),{recursive:true,mode:0o700});
   const temporary = await mkdtemp(join(caseDirectory(),"pending-"));
   try {
     const path=join(temporary,"spec.json");
@@ -37,9 +39,10 @@ async function executeProbe(directory:string,spec:z.infer<typeof specSchema>):Pr
     let output:string;
     try {
       output=(await execute("python3",[driver,"--repository",directory,"--spec",path],{
-        timeout:35000,maxBuffer:128000,env:{PATH:process.env.PATH},
+        timeout:35000,maxBuffer:128000,signal,env:{PATH:process.env.PATH},
       })).stdout;
     } catch(error:any) {
+      signal?.throwIfAborted();
       if(typeof error.stdout!=="string" || !error.stdout.trim()) throw new Error("Source reproduction process failed or timed out");
       output=error.stdout;
     }
@@ -57,11 +60,15 @@ export async function readSourceCase(id:string,program:SecurityProgram):Promise<
     throw new Error("Reproduction case has no successful observation");
   return record;
 }
-export async function createProbeSession(program:SecurityProgram,workspace:string,repositories:ProbeRepository[]) {
+export async function createProbeSession(program:SecurityProgram,workspace:string,repositories:ProbeRepository[],signal?:AbortSignal) {
   await mkdir(caseDirectory(),{recursive:true,mode:0o700});
   const cases = new Map<string,SourceCase>();
+  let completedProbes = 0;
+  let blockedReason: string | null = null;
+  let unsupportedProbes = 0;
   const workspaceRoot=await realpath(workspace);
   const probe=async(path:string,functionName:string,kind:string):Promise<string> => {
+    signal?.throwIfAborted();
     const file=await realpath(resolve(workspaceRoot,path));
     const repo = repositories.find(candidate => {
       const rel=relative(candidate.directory,file);
@@ -71,9 +78,25 @@ export async function createProbeSession(program:SecurityProgram,workspace:strin
     const filePath=relative(repo.directory,file).split(sep).join("/");
     const spec=specSchema.parse({file:filePath,function:functionName,kind,nonce:randomBytes(16).toString("hex")});
     if(!targetInExplicitScope(program.scopeSummary,repo.url+"/"+filePath))throw new Error("Probe is outside program scope");
-    const commit=await commitAt(repo.directory);
-    const sourceSha256=sha(await readFile(file));
-    const result=await executeProbe(repo.directory,spec);
+    let commit: string;
+    let sourceSha256: string;
+    let result: z.infer<typeof resultSchema>;
+    try {
+      commit = await commitAt(repo.directory,signal);
+      sourceSha256 = sha(await readFile(file));
+      result = await executeProbe(repo.directory,spec,signal);
+    } catch (error) {
+      signal?.throwIfAborted();
+      blockedReason = "Reproduction infrastructure failed: " + String(error);
+      throw error;
+    }
+    signal?.throwIfAborted();
+    if (["behavior_observed", "behavior_not_observed"].includes(result.status)) completedProbes++;
+    else if (result.status === "invalid_probe") unsupportedProbes++;
+    else {
+      blockedReason = result.status + (result.detail ? ": " + result.detail : "");
+      throw new Error("Reproduction unavailable: " + blockedReason);
+    }
     if(!result.behavior_observed)return JSON.stringify(result);
     if(result.source_sha256!==sourceSha256 || sha(await readFile(file))!==sourceSha256)throw new Error("Reproduction source changed");
     const record=caseSchema.parse({version:1,programId:program.id,repositoryUrl:repo.url,commit,sourceSha256,spec,result});
@@ -84,14 +107,18 @@ export async function createProbeSession(program:SecurityProgram,workspace:strin
     cases.set(id,record);
     return JSON.stringify({caseId:id,...result});
   };
-  return {cases,probe};
+  return {cases,probe,
+    get completedProbes() { return completedProbes; },
+    get blockedReason() { return blockedReason; },
+    get unsupportedProbes() { return unsupportedProbes; },
+  };
 }
-export async function replaySourceCase(record:SourceCase,directory:string):Promise<z.infer<typeof resultSchema>> {
-  if(await commitAt(directory)!==record.commit)throw new Error("Reproduction commit changed before review");
+export async function replaySourceCase(record:SourceCase,directory:string,signal?:AbortSignal):Promise<z.infer<typeof resultSchema>> {
+  if(await commitAt(directory,signal)!==record.commit)throw new Error("Reproduction commit changed before review");
   const file=await realpath(resolve(directory,record.spec.file));
   const rel=relative(await realpath(directory),file);
   if(rel===".." || rel.startsWith(".."+sep) || sha(await readFile(file))!==record.sourceSha256)throw new Error("Reproduction source changed before review");
-  const result=await executeProbe(directory,record.spec);
+  const result=await executeProbe(directory,record.spec,signal);
   if(!result.behavior_observed || result.source_sha256!==record.sourceSha256 ||
      JSON.stringify(result.observations)!==JSON.stringify(record.result.observations))throw new Error("Independent reproduction did not match recorded observation");
   return result;

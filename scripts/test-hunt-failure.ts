@@ -35,7 +35,7 @@ try {
   assert.equal(after.lastHuntedAt, null, "Failed acquisition must not mark a program previously hunted");
   assert.equal(after.huntCount, 0);
   assert.equal(after.huntMissStreak, 0);
-  assert.match(String(outcome), /No authorized source repository acquired/);
+  assert.match(String(outcome), /No authorized source repository (?:was )?acquired/);
   assert.equal(modelCalls, 0, "A model cannot audit source that was never acquired");
   // Successful acquisition with incomplete model output is also a failed hunt.
   writeFileSync(git, `#!/usr/bin/env python3
@@ -51,24 +51,33 @@ root.mkdir(parents=True)
       message.content.includes("TOOL_RESULT") && message.content.includes("ownedFixture"));
     return Response.json({message:{role:"assistant",content:JSON.stringify(hasRead
       ? {action:"final",path:"",query:"",answer}
-      : {action:"read_file",path:"authorized-source-1/sample.ts",query:"",answer:""})}});
+      : {action:"read_file",path:"source-1/sample.ts",query:"",answer:""})}});
   }) as typeof fetch;
-  await assert.rejects(huntProgram(program), /incomplete_output/);
+  await assert.rejects(huntProgram(program), /inspection limit/);
   assert.equal(db.select().from(schema.securityPrograms).get()!.lastHuntedAt, null);
-  answer = "===NO_FINDINGS===";
-  assert.deepEqual(await huntProgram(program), {findingsCreated:0});
+  answer = JSON.stringify({findings:[]});
+  // A read-only model answer without a completed probe is incomplete coverage.
+  await assert.rejects(huntProgram(program), /No supported function reproduction completed/);
+  const incomplete = db.select().from(schema.securityPrograms).get()!;
+  assert.equal(incomplete.lastHuntedAt, null);
+  assert.equal(incomplete.huntCount, 0);
+  assert.equal(JSON.parse(incomplete.scopeSummary!).huntCoverage.status, "unsupported");
+  // Preserve an existing completed-hunt history when a later acquisition fails.
+  const { eq } = await import("drizzle-orm");
+  db.update(schema.securityPrograms).set({lastHuntedAt:now,huntCount:1,huntMissStreak:1})
+    .where(eq(schema.securityPrograms.id,program.id)).run();
   const completed = db.select().from(schema.securityPrograms).get()!;
   assert.ok(completed.lastHuntedAt);
   assert.equal(completed.huntCount, 1);
   assert.equal(completed.huntMissStreak, 1);
   // A later failed attempt preserves the existing completed-hunt timestamp.
   writeFileSync(git, "#!/bin/sh\nexit 42\n");
-  await assert.rejects(huntProgram(completed), /No authorized source repository acquired/);
+  await assert.rejects(huntProgram(completed), /No authorized source repository (?:was )?acquired/);
   const preserved = db.select().from(schema.securityPrograms).get()!;
   assert.deepEqual(preserved.lastHuntedAt, completed.lastHuntedAt);
   assert.equal(preserved.huntCount, 1);
   assert.equal(preserved.huntMissStreak, 1);
-  console.log("Acquisition failure, incomplete output, successful no-findings and preserved history: PASSED");
+  console.log("Acquisition failure, incomplete coverage and preserved history: PASSED");
 } finally {
   globalThis.fetch = originalFetch;
   process.env.PATH = originalPath;

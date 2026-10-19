@@ -1,3 +1,4 @@
+import { beginLocalJob } from "./local-job";
 import { randomBytes } from "node:crypto";
 import { readFileSync, writeFileSync, unlinkSync, mkdirSync } from "node:fs";
 import { rm } from "node:fs/promises";
@@ -18,14 +19,30 @@ const HUNT_LOCK_FILE = join(process.env.PROJECT_ROOT || process.cwd(), "data", "
 let huntLockToken: string | null = null;
 function acquireHuntLock(): boolean {
   try {
-    mkdirSync(join(process.env.PROJECT_ROOT || process.cwd(),"data"),{recursive:true});
-    const token = randomBytes(16).toString("hex");
-    // Exclusive creation is atomic across the orchestrator and dashboard.
-    // Stale legacy locks are checked once during orchestrator startup.
-    writeFileSync(HUNT_LOCK_FILE,JSON.stringify({pid:process.pid,token,startedAt:new Date().toISOString()}),{flag:"wx",mode:0o600});
-    huntLockToken = token;
-    return true;
-  } catch {return false;}
+    mkdirSync(join(process.env.PROJECT_ROOT || process.cwd(), "data"), {recursive:true});
+    // SQLite serializes all updated callers while inspecting/reclaiming the
+    // shared file. Its transaction lock is released by the OS if a process dies.
+    return getDb().transaction(() => {
+      let previous: string | undefined;
+      try { previous = readFileSync(HUNT_LOCK_FILE, "utf8"); }
+      catch (error:any) { if (error.code !== "ENOENT") return false; }
+      if (previous !== undefined) {
+        let owner: {pid:number};
+        try { owner = JSON.parse(previous); } catch { return false; }
+        if (!Number.isSafeInteger(owner.pid) || owner.pid < 1) return false;
+        try { process.kill(owner.pid, 0); return false; }
+        catch (error:any) { if (error.code !== "ESRCH") return false; }
+        if (readFileSync(HUNT_LOCK_FILE, "utf8") !== previous) return false;
+        unlinkSync(HUNT_LOCK_FILE);
+        log.info({stalePid:owner.pid}, "Recovered hunt lock from dead owner");
+      }
+      const token = randomBytes(16).toString("hex");
+      writeFileSync(HUNT_LOCK_FILE, JSON.stringify({pid:process.pid,token,startedAt:new Date().toISOString()}),
+        {flag:"wx",mode:0o600});
+      huntLockToken = token;
+      return true;
+    }, {behavior:"immediate"});
+  } catch { return false; }
 }
 
 function releaseHuntLock(): void {
@@ -70,12 +87,18 @@ export async function huntProgram(
   solving = true;
   let findingsCreated = 0;
   let huntSucceeded = false;
+  let coverage: "completed" | "unsupported" | "failed" = "failed";
+  let coverageDetail = "Hunt did not complete";
+  let localJob: ReturnType<typeof beginLocalJob> | undefined;
 
   try {
+    if (process.env.LOCAL_OLLAMA_MODEL) localJob = beginLocalJob();
+    localJob?.signal.throwIfAborted();
     if (program.provider === "hackerone" && program.providerProgramId) {
       const [freshScopes,freshPolicy] = await Promise.all([
         fetchProgramScopes(program.providerProgramId),fetchProgramPolicy(program.providerProgramId),
       ]);
+      localJob?.signal.throwIfAborted();
       let previous: Record<string,unknown> = {};
       try {const parsed = JSON.parse(program.scopeSummary || "{}"); previous = Array.isArray(parsed) ? {scopes:parsed} : parsed;} catch {}
       program = {...program,scopeSummary:JSON.stringify({...previous,scopes:freshScopes,
@@ -86,7 +109,10 @@ export async function huntProgram(
     }
     log.info({ programId: program.id, name: program.name }, "Starting program hunt");
 
-    const result = await runProgramHunt(program, trigger);
+    const result = await runProgramHunt(program, trigger, localJob?.signal);
+    localJob?.signal.throwIfAborted();
+    coverage = result.coverage ?? (result.success ? "completed" : "failed");
+    coverageDetail = result.error || result.coverageDetail || "Supported inspection completed";
 
     if (!result.success) {
       log.error({ programId: program.id, error: result.error }, "Program hunt failed");
@@ -208,6 +234,7 @@ export async function huntProgram(
 
     return { findingsCreated };
   } catch (err: any) {
+    coverageDetail = err?.message || String(err);
     log.error({ err, programId: program.id }, "Program hunt error");
     // Record the failed outcome so it shows up in Recent Hunts
     await recordSecurityHuntOutcome({
@@ -222,8 +249,6 @@ export async function huntProgram(
     }).catch(() => {});
     throw err;
   } finally {
-    solving = false;
-    releaseHuntLock();
     await clearSecuritySolverStatus().catch(() => {});
 
     // Update hunt tracking: count, miss streak (for exponential backoff), last hunted.
@@ -238,11 +263,13 @@ export async function huntProgram(
         ? prevMissStreak  // don't penalize for broken/incomplete hunts
         : findingsCreated > 0 ? 0 : prevMissStreak + 1;
 
+      const tracking = JSON.parse(recordHuntAttempt(currentProgram?.scopeSummary ?? program.scopeSummary,huntSucceeded));
+      tracking.huntCoverage = {status:coverage,detail:coverageDetail,recordedAt:new Date().toISOString()};
       db.update(schema.securityPrograms)
         .set({
           // Preserve the last completed hunt on acquisition/model failures.
           lastHuntedAt: huntSucceeded ? new Date() : currentProgram?.lastHuntedAt,
-          scopeSummary:recordHuntAttempt(currentProgram?.scopeSummary ?? program.scopeSummary,huntSucceeded),
+          scopeSummary:JSON.stringify(tracking),
           huntCount: huntSucceeded ? prevHuntCount + 1 : prevHuntCount,
           huntMissStreak: newMissStreak,
           updatedAt: new Date(),
@@ -260,6 +287,10 @@ export async function huntProgram(
       }
     } catch (finallyErr) {
       log.error({ err: finallyErr, programId: program.id }, "Failed to update hunt tracking in finally block");
+    } finally {
+      localJob?.dispose();
+      solving = false;
+      releaseHuntLock();
     }
   }
 }

@@ -276,3 +276,36 @@ Run
 regression suite. It includes service reinstall tests using a fake systemctl,
 intercepted discovery requests, and temporary SQLite hunt-history tests with
 fake Git and model responses. No real bounty assets or submissions are used.
+
+
+
+## Local integration repairs after the connection commit
+
+A local hunt now records coverage independently from findings. Missing or failed
+reproduction infrastructure is a failed attempt; a model answer without any
+completed supported probe is unsupported coverage. Neither advances completed
+hunt history. Completed negative probes may produce a valid empty finding list.
+Coverage details and retry state remain in the program scope-summary metadata.
+This is bounded inspection coverage, not a claim that an entire repository is
+free of vulnerabilities.
+
+Review acquires the exact recorded source commit before verifying source hashes
+and replaying its observations. Pending local reviews and confirmed submission
+receipts are recovered at startup and every minute while automatic hunting or
+submission is enabled. Manual and cautious completed reviews wait for operator
+action. Existing uncertain/rejected outbox entries are not resubmitted.
+
+Local cancellation spans the complete hunt or review queue, including Git and
+Python subprocesses. Cancellation stops further review items and prevents a new
+submission from starting; a submission already in flight retains its outbox
+state and receipt handling. The job keeps its lock through cleanup and history
+updates. Dead-process hunt locks are reclaimed under an immediate SQLite
+transaction during normal acquisition, not only at startup.
+
+Hunter and independent reviewer responses must provide severity, confidence
+and an evidence-based rating explanation. Ratings are validated and reviewed
+against configured thresholds; no fixed medium/0.8 rating is assigned.
+
+These edits were published without executing tests or CI at the operator's
+request. The existing hunt-failure regression was updated to the current local
+workspace paths, JSON response contract and incomplete-coverage behavior.

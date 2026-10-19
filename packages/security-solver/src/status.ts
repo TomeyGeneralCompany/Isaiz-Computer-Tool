@@ -1,3 +1,4 @@
+import { requestLocalJobCancellation } from "./local-job";
 import { writeFile, readFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
@@ -95,6 +96,7 @@ export async function cancelAdversarialReview(): Promise<boolean> {
   const status = await readAdversarialReviewStatus();
   if (!status.active) return false;
   await writeAdversarialReviewStatus({ ...status, cancelled: true });
+  if (process.env.LOCAL_OLLAMA_MODEL) requestLocalJobCancellation();
   return true;
 }
 
