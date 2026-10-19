@@ -90,6 +90,7 @@ def main() -> int:
                 ("mock_ollama", "scripts/test-mock-agent.ts"),
                 ("mock_program_assessment", "scripts/test-mock-assessment.ts"),
                 ("authorized_source", "scripts/test-authorized-source.ts"),
+                ("discovery_feeds", "scripts/test-discovery-feeds.ts"),
                 ("provider_preflight", "scripts/test-provider-preflight.ts"),
                 ("earnings", "scripts/test-earnings.ts"),
                 ("explicit_scope", "scripts/test-scope.ts"),
@@ -109,6 +110,7 @@ def main() -> int:
                        "CI_SQLITE_INTEGRATION": "1", "CI_DASHBOARD_SMOKE": "1"}
                 run("native_schema", ["npm", "run", "db:push"], 180, env)
                 if RESULTS["native_schema"]["passed"]:
+                    run("hunt_failure", ["node", "--import", "tsx", "scripts/test-hunt-failure.ts"], 180, env)
                     run("database_initialization", ["node", "--import", "tsx", "scripts/test-db-initialization.ts"], 180, env)
                     run("native_sqlite_dashboard", ["node", "--import", "tsx", "scripts/test-sqlite-pipeline.ts"], 180, env)
                     run("service_restart", [sys.executable, "scripts/test-service-restart.py"], 240, env)

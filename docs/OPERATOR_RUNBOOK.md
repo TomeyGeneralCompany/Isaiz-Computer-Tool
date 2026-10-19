@@ -47,6 +47,8 @@ redirect following. This observer is not yet exposed as a local Ollama tool.
 6. Confirm the actual SQLite native addon builds: npm ci (not --ignore-scripts).
 7. After all acceptance checks pass, you can install a supervised per-user
    systemd service with: bash scripts/install-user-service.sh
+   Reinstalling explicitly restarts the service so the process uses this checkout,
+   including when an older checkout was already running. This interrupts active work.
 8. Explicit stop/start/restart/status: bash scripts/control-user-service.sh stop
    (or start, restart, status). Check logs with:
    bash scripts/control-user-service.sh logs
@@ -254,3 +256,23 @@ scope data produces zero targets without inference. These assessment hints do
 not replace the solver's separate eligibility and exact-scope authorization.
 The real assessment fixture retains exact asset checks and requires its one
 supplied repository to be the single selected target with a count of one.
+
+## Existing runtime repair checks
+
+The aggregator adapter requests the supported Bugcrowd, Intigriti and YesWeHack
+JSON feeds, with a 30-second deadline per request. The nonexistent Federacy data
+file is no longer requested. The former Huntr repository feed at `/bounties` is
+unavailable; its adapter logs that state and returns no programs instead of
+inventing repository eligibility or rewards from page links.
+
+A native local-model hunt requires at least one successfully acquired eligible
+source repository. Acquisition failure stops before inference. Acquisition and
+incomplete-model failures preserve the last completed hunt timestamp, hunt count
+and miss streak, and propagate to the orchestrator's existing error backoff.
+Failed dispatches still consume the existing daily dispatch quota.
+
+Run
+`python3 scripts/acceptance.py --offline` with Node 22 selected for the offline
+regression suite. It includes service reinstall tests using a fake systemctl,
+intercepted discovery requests, and temporary SQLite hunt-history tests with
+fake Git and model responses. No real bounty assets or submissions are used.

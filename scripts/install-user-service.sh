@@ -48,7 +48,9 @@ WantedBy=default.target
 UNIT
 chmod 0644 "$TARGET"
 systemctl --user daemon-reload
-systemctl --user enable --now autohack.service
+# enable --now leaves an already-running process in its previous checkout.
+systemctl --user enable autohack.service
+systemctl --user restart autohack.service
 systemctl --user is-active --quiet autohack.service || {
   echo "AutoHack service is not active. See: journalctl --user -u autohack -n 60" >&2
   exit 1

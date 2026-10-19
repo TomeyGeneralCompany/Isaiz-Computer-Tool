@@ -40,6 +40,8 @@ jobs:
         run: npx tsx scripts/test-mock-assessment.ts
       - name: Verify authorized source acquisition boundaries
         run: npx tsx scripts/test-authorized-source.ts
+      - name: Verify supported discovery feeds without network requests
+        run: npx tsx scripts/test-discovery-feeds.ts
       - name: Verify read-only provider preflight and credential redaction
         run: npx tsx scripts/test-provider-preflight.ts
       - name: Verify payout ledger behavior
@@ -77,6 +79,8 @@ jobs:
         run: npm audit --audit-level=moderate
       - name: Create isolated fixture schema through Drizzle
         run: npm run db:push
+      - name: Verify failed source acquisition preserves hunt history
+        run: npx tsx scripts/test-hunt-failure.ts
       - name: Test fresh database directory and false-success rejection
         run: npx tsx scripts/test-db-initialization.ts
       - name: Exercise actual SQLite, Drizzle, tRPC dashboard and payment ledger

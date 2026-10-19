@@ -92,17 +92,7 @@ export async function huntProgram(
 
     if (!result.success) {
       log.error({ programId: program.id, error: result.error }, "Program hunt failed");
-      await recordSecurityHuntOutcome({
-        programId: program.id,
-        programName: program.name,
-        findingsReported: 0,
-        findingsAccepted: 0,
-        findingsDuplicate: 0,
-        findingsRejected: 0,
-        strategyUsed: "failed" as any,
-        timestamp: new Date().toISOString(),
-      }).catch(() => {});
-      return { findingsCreated: 0 };
+      throw new Error(result.error || "Program hunt did not complete");
     }
 
     huntSucceeded = true;
@@ -245,7 +235,8 @@ export async function huntProgram(
 
       db.update(schema.securityPrograms)
         .set({
-          lastHuntedAt: new Date(),
+          // Preserve the last completed hunt on acquisition/model failures.
+          lastHuntedAt: huntSucceeded ? new Date() : currentProgram?.lastHuntedAt,
           huntCount: huntSucceeded ? prevHuntCount + 1 : prevHuntCount,
           huntMissStreak: newMissStreak,
           updatedAt: new Date(),

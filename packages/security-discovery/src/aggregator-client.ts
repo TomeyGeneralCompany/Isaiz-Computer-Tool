@@ -4,7 +4,7 @@ const log = createLogger("aggregator-client");
 
 /**
  * Program data from the bounty-targets-data aggregator.
- * Provides hourly-updated scope dumps from Bugcrowd, Intigriti, YesWeHack, and Federacy.
+ * Provides hourly-updated scope dumps from Bugcrowd, Intigriti, and YesWeHack.
  * We filter to programs with source code in scope.
  */
 export interface AggregatorProgram {
@@ -29,7 +29,6 @@ const PLATFORM_FILES: Record<string, string> = {
   bugcrowd: `${BASE_URL}/bugcrowd_data.json`,
   intigriti: `${BASE_URL}/intigriti_data.json`,
   yeswehack: `${BASE_URL}/yeswehack_data.json`,
-  federacy: `${BASE_URL}/federacy_data.json`,
 };
 
 /**
@@ -56,7 +55,7 @@ export async function fetchAggregatorPrograms(opts?: { sourceCodeOnly?: boolean 
 }
 
 async function fetchPlatformData(platform: string, fileUrl: string): Promise<AggregatorProgram[]> {
-  const response = await fetch(fileUrl);
+  const response = await fetch(fileUrl, { signal: AbortSignal.timeout(30_000) });
   if (!response.ok) {
     throw new Error(`Aggregator fetch ${platform} ${response.status}`);
   }
@@ -80,7 +79,6 @@ async function fetchPlatformData(platform: string, fileUrl: string): Promise<Agg
  * Bugcrowd:  { name, url, max_payout, targets: { in_scope: [{ target, uri, type, name }] } }
  * Intigriti: { name, handle, url, max_bounty, min_bounty, targets: { in_scope: [{ endpoint, type, description }] } }
  * YesWeHack: { name, url, targets: { in_scope: [{ target, type }] } }
- * Federacy:  { name, url, targets: { in_scope: [{ target, type }] } }
  */
 function parsePlatformItem(platform: string, item: any): AggregatorProgram | null {
   if (!item) return null;
@@ -103,7 +101,7 @@ function parsePlatformItem(platform: string, item: any): AggregatorProgram | nul
     if (!t) continue;
 
     // Each platform uses different field names for the target URL:
-    // Bugcrowd: uri or target, Intigriti: endpoint, YesWeHack/Federacy: target
+    // Bugcrowd: uri or target, Intigriti: endpoint, YesWeHack: target
     const identifier = t.uri ?? t.endpoint ?? t.target ?? "";
     if (!identifier) continue;
 

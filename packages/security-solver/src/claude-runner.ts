@@ -1476,16 +1476,19 @@ Use this file to jot down investigation notes that should survive context window
   // GitHub repositories into the isolated audit workspace, bounded to two.
   if (process.env.LOCAL_OLLAMA_MODEL) {
     const candidates = authorizedSourceUrls(scopes).slice(0, 2);
+    let acquired = 0;
     for (let i = 0; i < candidates.length; i++) {
       const sourceUrl = candidates[i];
       const destination = join(workDir, "authorized-source-" + (i + 1));
       try {
         await cloneAuthorizedSource(sourceUrl, destination);
+        acquired++;
         log.info({ sourceUrl, destination }, "Cloned explicitly authorized source for local audit");
       } catch (error) {
         log.warn({ sourceUrl, error }, "Authorized source acquisition failed");
       }
     }
+    if (acquired === 0) throw new Error("No authorized source repository acquired; hunt not completed");
     return; // Local read-only model never needs active scanning tools installed.
   }
 
