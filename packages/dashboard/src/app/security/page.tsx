@@ -1092,7 +1092,7 @@ export default function SecurityPage() {
             const unassessedBounties = (programs ?? []).filter((p: any) => {
               if (analyzeSkipSignal && p.requiresSignal) return false;
               const { assessment } = parseAssessment(p.scopeSummary);
-              return !assessment?.opportunityScore;
+              return assessment?.opportunityScore == null;
             });
 
             // Use server-provided hunt queue (same scoring + filters as pickBestProgram)

@@ -545,7 +545,7 @@ export const appRouter = router({
       if (skipSignal && p.requiresSignal) return false;
       try {
         const parsed = JSON.parse(p.scopeSummary || "{}");
-        return !parsed.assessment?.opportunityScore;
+        return parsed.assessment?.opportunityScore == null;
       } catch {
         return true;
       }
