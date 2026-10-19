@@ -309,3 +309,25 @@ against configured thresholds; no fixed medium/0.8 rating is assigned.
 These edits were published without executing tests or CI at the operator's
 request. The existing hunt-failure regression was updated to the current local
 workspace paths, JSON response contract and incomplete-coverage behavior.
+
+
+## Tomey Gun desktop launcher
+
+After verification and user-service installation, run:
+
+```bash
+bash scripts/install-desktop.sh
+```
+
+This installs the Constanzo icon and Tomey Gun entry in your application menu
+and desktop directory (when desktop icons are enabled). If prompted, right-click
+the desktop icon and choose Allow Launching. Re-run the installer after moving
+the checkout so the shortcut points to its new location.
+
+Opening Tomey Gun starts `autohack.service` if needed, waits up to 60 seconds for
+the configured local dashboard, then opens it. Chrome or Chromium opens a
+dedicated app window with a separate browser profile; otherwise the default
+browser opens the dashboard. This is a launcher for the existing local service.
+Closing its window leaves the service running. Use the shortcut's Stop Tomey Gun
+action or `systemctl --user stop autohack.service` to stop it. The laptop must
+remain powered on and awake for the service to run.
