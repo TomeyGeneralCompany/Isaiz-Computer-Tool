@@ -366,7 +366,7 @@ function ModelConfigPanel() {
                   className="rounded-md px-2 py-1.5 text-xs font-medium transition-all"
                   style={{
                     background: a.model === m ? "var(--accent)" : "var(--bg-hover, rgba(255,255,255,0.05))",
-                    color: a.model === m ? "#fff" : "var(--text-dim)",
+                    color: a.model === m ? "var(--on-accent)" : "var(--text-dim)",
                     border: `1px solid ${a.model === m ? "var(--accent)" : "var(--border)"}`,
                   }}
                 >
@@ -1131,7 +1131,7 @@ export default function SecurityPage() {
                         onClick={() => analyzeProgramsMutation.mutate({ skipSignalRequired: analyzeSkipSignal })}
                         disabled={unassessedBounties.length === 0 || isBusy}
                         className="flex-1 rounded-lg py-2 text-sm font-semibold transition-colors disabled:opacity-40"
-                        style={{ background: "var(--accent)", color: "#fff" }}
+                        style={{ background: "var(--accent)", color: "var(--on-accent)" }}
                       >
                         {isBusy && !isAnalyzing ? "Busy" : `Analyze ${unassessedBounties.length} Bount${unassessedBounties.length === 1 ? "y" : "ies"}`}
                       </button>
@@ -1346,7 +1346,7 @@ export default function SecurityPage() {
                         className="rounded-md px-2.5 py-1 text-xs font-medium transition-all"
                         style={{
                           background: active ? "var(--accent)" : "var(--bg-hover, rgba(255,255,255,0.05))",
-                          color: active ? "#fff" : "var(--text-dim)",
+                          color: active ? "var(--on-accent)" : "var(--text-dim)",
                           border: `1px solid ${active ? "var(--accent)" : "var(--border)"}`,
                           opacity: active ? 1 : 0.6,
                         }}
@@ -1652,7 +1652,7 @@ export default function SecurityPage() {
                 className="rounded-md px-3 py-1 text-xs font-medium transition-colors"
                 style={{
                   background: filter === s ? "var(--accent)" : "var(--bg-card)",
-                  color: filter === s ? "#fff" : "var(--text-dim)",
+                  color: filter === s ? "var(--on-accent)" : "var(--text-dim)",
                   border: `1px solid ${filter === s ? "var(--accent)" : "var(--border)"}`,
                 }}
               >
@@ -1692,7 +1692,7 @@ export default function SecurityPage() {
                         className="rounded-md px-2 py-0.5 text-[10px] font-medium transition-all"
                         style={{
                           background: active ? "var(--accent)" : "var(--bg-hover, rgba(255,255,255,0.05))",
-                          color: active ? "#fff" : "var(--text-dim)",
+                          color: active ? "var(--on-accent)" : "var(--text-dim)",
                           border: `1px solid ${active ? "var(--accent)" : "var(--border)"}`,
                           opacity: active ? 1 : 0.6,
                         }}
@@ -1852,7 +1852,7 @@ export default function SecurityPage() {
                                   className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium"
                                   style={{
                                     background: "rgba(99, 102, 241, 0.1)",
-                                    color: "#818cf8",
+                                    color: "var(--accent)",
                                     border: "1px solid rgba(99, 102, 241, 0.4)",
                                   }}
                                 >
@@ -1924,7 +1924,7 @@ export default function SecurityPage() {
                               onClick={() => undoRejectMutation.mutate(f.id)}
                               disabled={undoRejectMutation.isPending}
                               className="rounded-md px-3 py-1 text-xs font-medium"
-                              style={{ background: "#1e1b4b", color: "#818cf8" }}
+                              style={{ background: "var(--accent-soft)", color: "var(--accent)" }}
                             >
                               Undo Reject
                             </button>
@@ -1955,7 +1955,7 @@ export default function SecurityPage() {
                                 <button
                                   onClick={() => setExpandedManualSubmit(expandedManualSubmit === f.id ? null : f.id)}
                                   className="rounded-md px-3 py-1 text-xs font-medium"
-                                  style={{ background: "#1e1b4b", color: "#818cf8" }}
+                                  style={{ background: "var(--accent-soft)", color: "var(--accent)" }}
                                 >
                                   {expandedManualSubmit === f.id ? "Hide Copy Panel" : "Copy Report"}
                                 </button>
@@ -1984,7 +1984,7 @@ export default function SecurityPage() {
                               onClick={() => retryMutation.mutate(f.id)}
                               disabled={retryMutation.isPending}
                               className="rounded-md px-3 py-1 text-xs font-medium"
-                              style={{ background: "#1e1b4b", color: "#818cf8" }}
+                              style={{ background: "var(--accent-soft)", color: "var(--accent)" }}
                             >
                               Retry
                             </button>
@@ -2119,13 +2119,13 @@ export default function SecurityPage() {
                           <td colSpan={7} className="px-4 pb-4">
                             <div
                               className="rounded-lg p-4"
-                              style={{ background: "#1a1625", border: "1px solid #7c3aed44" }}
+                              style={{ background: "var(--bg-card)", border: "1px solid var(--accent-dim)" }}
                             >
                               <div className="flex items-center justify-between mb-4">
                                 <span className="text-sm font-semibold" style={{ color: "#c4b5fd" }}>
                                   Manual Submission
                                   {provider !== "hackerone" && (
-                                    <span className="ml-2 text-[10px] font-normal px-1.5 py-0.5 rounded" style={{ background: "#2d2640", color: "#a78bfa" }}>
+                                    <span className="ml-2 text-[10px] font-normal px-1.5 py-0.5 rounded" style={{ background: "var(--accent-soft)", color: "var(--accent)" }}>
                                       {provider}
                                     </span>
                                   )}
@@ -2134,7 +2134,7 @@ export default function SecurityPage() {
                                   <button
                                     onClick={() => copyField(`${f.id}-fullreport`, fullReport)}
                                     className="rounded-md px-3 py-1.5 text-xs font-semibold"
-                                    style={{ background: "#2d2640", color: "#c4b5fd" }}
+                                    style={{ background: "var(--accent-soft)", color: "#c4b5fd" }}
                                   >
                                     {copiedId === `${f.id}-fullreport` ? "Copied!" : "Copy Full Report"}
                                   </button>
@@ -2143,7 +2143,7 @@ export default function SecurityPage() {
                                     target="_blank"
                                     rel="noopener noreferrer"
                                     className="rounded-md px-3 py-1.5 text-xs font-semibold"
-                                    style={{ background: "#7c3aed", color: "#fff" }}
+                                    style={{ background: "var(--brand-crimson)", color: "#fff" }}
                                   >
                                     {sub.label} ↗
                                   </a>
@@ -2157,15 +2157,15 @@ export default function SecurityPage() {
 
                               <div className="space-y-3">
                                 {/* Title */}
-                                <div className="rounded-md p-3" style={{ background: "#0f0a1a", border: "1px solid #2d2640" }}>
+                                <div className="rounded-md p-3" style={{ background: "var(--bg)", border: "1px solid var(--accent-soft)" }}>
                                   <div className="flex items-center justify-between mb-1">
-                                    <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "#a78bfa" }}>
+                                    <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "var(--accent)" }}>
                                       Report Title
                                     </span>
                                     <button
                                       onClick={() => copyField(`${f.id}-title`, sections.title || f.title)}
                                       className="text-[10px] px-2 py-0.5 rounded font-medium"
-                                      style={{ background: "#2d2640", color: "#a78bfa" }}
+                                      style={{ background: "var(--accent-soft)", color: "var(--accent)" }}
                                     >
                                       {copiedId === `${f.id}-title` ? "Copied" : "Copy"}
                                     </button>
@@ -2177,24 +2177,24 @@ export default function SecurityPage() {
 
                                 {/* Dropdowns row: Severity, Weakness, Asset */}
                                 <div className="grid grid-cols-3 gap-2">
-                                  <div className="rounded-md p-3" style={{ background: "#0f0a1a", border: "1px solid #2d2640" }}>
-                                    <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "#a78bfa" }}>
+                                  <div className="rounded-md p-3" style={{ background: "var(--bg)", border: "1px solid var(--accent-soft)" }}>
+                                    <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "var(--accent)" }}>
                                       Severity
                                     </span>
                                     <p className="mt-1 text-xs font-medium capitalize" style={{ color: "var(--text)" }}>
                                       {sections.severity || f.severity || "medium"}
                                     </p>
                                   </div>
-                                  <div className="rounded-md p-3" style={{ background: "#0f0a1a", border: "1px solid #2d2640" }}>
-                                    <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "#a78bfa" }}>
+                                  <div className="rounded-md p-3" style={{ background: "var(--bg)", border: "1px solid var(--accent-soft)" }}>
+                                    <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "var(--accent)" }}>
                                       Weakness (CWE)
                                     </span>
                                     <p className="mt-1 text-xs font-medium" style={{ color: "var(--text)" }}>
                                       {sections.vulnType || f.vulnerabilityType || "--"}
                                     </p>
                                   </div>
-                                  <div className="rounded-md p-3" style={{ background: "#0f0a1a", border: "1px solid #2d2640" }}>
-                                    <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "#a78bfa" }}>
+                                  <div className="rounded-md p-3" style={{ background: "var(--bg)", border: "1px solid var(--accent-soft)" }}>
+                                    <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "var(--accent)" }}>
                                       Asset
                                     </span>
                                     <p className="mt-1 text-xs font-medium truncate" style={{ color: "var(--text)" }} title={sections.targetAsset || f.targetAsset || ""}>
@@ -2204,9 +2204,9 @@ export default function SecurityPage() {
                                 </div>
 
                                 {/* Vulnerability Information */}
-                                <div className="rounded-md p-3" style={{ background: "#0f0a1a", border: "1px solid #2d2640" }}>
+                                <div className="rounded-md p-3" style={{ background: "var(--bg)", border: "1px solid var(--accent-soft)" }}>
                                   <div className="flex items-center justify-between mb-2">
-                                    <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "#a78bfa" }}>
+                                    <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "var(--accent)" }}>
                                       Vulnerability Information
                                       <span className="ml-2 normal-case font-normal" style={{ color: "var(--text-dim)" }}>
                                         ({sections.vulnerabilityInfo.length.toLocaleString()} chars)
@@ -2215,7 +2215,7 @@ export default function SecurityPage() {
                                     <button
                                       onClick={() => copyField(`${f.id}-vulninfo`, sections.vulnerabilityInfo)}
                                       className="text-[10px] px-2 py-0.5 rounded font-medium"
-                                      style={{ background: "#7c3aed", color: "#fff" }}
+                                      style={{ background: "var(--brand-crimson)", color: "#fff" }}
                                     >
                                       {copiedId === `${f.id}-vulninfo` ? "Copied" : "Copy"}
                                     </button>
@@ -2229,9 +2229,9 @@ export default function SecurityPage() {
                                 </div>
 
                                 {/* Impact */}
-                                <div className="rounded-md p-3" style={{ background: "#0f0a1a", border: "1px solid #2d2640" }}>
+                                <div className="rounded-md p-3" style={{ background: "var(--bg)", border: "1px solid var(--accent-soft)" }}>
                                   <div className="flex items-center justify-between mb-2">
-                                    <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "#a78bfa" }}>
+                                    <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "var(--accent)" }}>
                                       Impact
                                       <span className="ml-2 normal-case font-normal" style={{ color: "var(--text-dim)" }}>
                                         ({sections.impact.length.toLocaleString()} chars)
@@ -2240,7 +2240,7 @@ export default function SecurityPage() {
                                     <button
                                       onClick={() => copyField(`${f.id}-impact`, sections.impact)}
                                       className="text-[10px] px-2 py-0.5 rounded font-medium"
-                                      style={{ background: "#7c3aed", color: "#fff" }}
+                                      style={{ background: "var(--brand-crimson)", color: "#fff" }}
                                     >
                                       {copiedId === `${f.id}-impact` ? "Copied" : "Copy"}
                                     </button>
@@ -2255,8 +2255,8 @@ export default function SecurityPage() {
 
                                 {/* CVSS if available from prepareSubmission */}
                                 {ms?.cvss && (
-                                  <div className="rounded-md p-3" style={{ background: "#0f0a1a", border: "1px solid #2d2640" }}>
-                                    <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "#a78bfa" }}>CVSS v3.1</span>
+                                  <div className="rounded-md p-3" style={{ background: "var(--bg)", border: "1px solid var(--accent-soft)" }}>
+                                    <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "var(--accent)" }}>CVSS v3.1</span>
                                     <div className="grid grid-cols-4 gap-1 mt-2">
                                       {(
                                         [

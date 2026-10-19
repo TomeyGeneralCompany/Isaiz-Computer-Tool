@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import Image from "next/image";
 import { useSecurityStatus } from "@/components/use-security-status";
 
 function SecurityAgentIndicator() {
@@ -26,7 +26,7 @@ function SecurityAgentIndicator() {
         </span>
         {detail && (
           <span
-            className="max-w-[180px] truncate text-[11px]"
+            className="hidden max-w-[180px] truncate text-[11px] sm:block"
             style={{ color: "var(--text-dim)" }}
           >
             {detail}
@@ -44,17 +44,18 @@ function SecurityAgentIndicator() {
 }
 
 export function Nav() {
-  const pathname = usePathname();
 
   return (
-    <nav className="border-b" style={{ borderColor: "var(--border)" }}>
+    <nav className="border-b border-t-4" style={{ borderBottomColor: "var(--border)", borderTopColor: "var(--brand-crimson)", background: "var(--bg-card)" }}>
       <div className="mx-auto max-w-7xl px-6">
         <div className="flex items-center justify-between py-4">
-          <div className="flex items-center gap-8">
-            <span className="text-lg font-semibold tracking-tight" style={{ color: "var(--accent)" }}>
-              bounty hunter
-            </span>
-          </div>
+          <Link href="/security" className="flex items-center gap-3" aria-label="Tomey Gun dashboard">
+            <Image src="/constanzo.png" alt="Constanzo, the computer mascot" width={48} height={48} className="rounded-xl" unoptimized />
+            <div>
+              <div className="text-xl font-bold tracking-tight" style={{ color: "var(--text)" }}>Tomey <span style={{ color: "var(--accent)" }}>Gun</span></div>
+              <div className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: "var(--text-dim)" }}>Tomey General Company</div>
+            </div>
+          </Link>
           <div className="flex items-center gap-3">
             <SecurityAgentIndicator />
           </div>

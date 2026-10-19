@@ -1,6 +1,6 @@
 const statusColors: Record<string, { bg: string; text: string }> = {
   discovered: { bg: "#1e293b", text: "#94a3b8" },
-  analyzing: { bg: "#1e1b4b", text: "#818cf8" },
+  analyzing: { bg: "var(--accent-soft)", text: "var(--accent)" },
   selected: { bg: "#172554", text: "#60a5fa" },
   attempting: { bg: "#422006", text: "#fbbf24" },
   solving: { bg: "#431407", text: "#fb923c" },
@@ -10,7 +10,7 @@ const statusColors: Record<string, { bg: string; text: string }> = {
   rejected: { bg: "#450a0a", text: "#f87171" },
   failed: { bg: "#450a0a", text: "#f87171" },
   // Security finding statuses
-  scanning: { bg: "#1e1b4b", text: "#818cf8" },
+  scanning: { bg: "var(--accent-soft)", text: "var(--accent)" },
   validated: { bg: "#172554", text: "#60a5fa" },
   drafting: { bg: "#422006", text: "#fbbf24" },
   report_ready: { bg: "#422006", text: "#fbbf24" },

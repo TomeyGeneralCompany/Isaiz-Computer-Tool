@@ -1,18 +1,22 @@
 @import "tailwindcss";
 
 :root {
-  --bg: #0a0a0f;
-  --bg-card: #12121a;
-  --bg-hover: #1a1a26;
-  --border: #1e1e2e;
-  --text: #e4e4ef;
-  --text-dim: #6e6e8a;
-  --accent: #7c5cfc;
-  --accent-dim: #5a3fd6;
-  --green: #22c55e;
-  --yellow: #eab308;
-  --red: #ef4444;
-  --blue: #3b82f6;
+  --bg: #0b1113;
+  --bg-card: #121d20;
+  --bg-hover: #1a2b2e;
+  --border: #2b4145;
+  --text: #f5f8f8;
+  --text-dim: #a2b6b9;
+  --accent: #01cac4;
+  --accent-dim: #098d90;
+  --on-accent: #06282b;
+  --accent-soft: #15383b;
+  --brand-crimson: #be0a2f;
+  --brand-crimson-soft: #34151e;
+  --green: #34d399;
+  --yellow: #fbbf24;
+  --red: #fb7185;
+  --blue: #67c7de;
 }
 
 body {
@@ -35,3 +39,8 @@ body {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }
 }
+
+/* Tomey General: crimson brand stripe, teal controls, white type. */
+::selection { background: var(--accent); color: var(--on-accent); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+input[type="checkbox"] { accent-color: var(--accent-dim); }
