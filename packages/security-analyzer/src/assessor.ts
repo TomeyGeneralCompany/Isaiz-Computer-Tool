@@ -99,7 +99,11 @@ export async function assessProgram(
   let weaknessNames: string[] = [];
   try {
     const parsed = JSON.parse(program.scopeSummary || "[]");
-    scopes = parsed.scopes ?? (Array.isArray(parsed) ? parsed : []);
+    const entries = parsed?.scopes ?? (Array.isArray(parsed) ? parsed : []);
+    scopes = Array.isArray(entries) ? entries.filter(s =>
+      s && typeof s.assetIdentifier === "string" && s.assetIdentifier.length > 0 && s.assetIdentifier.length <= 2048 &&
+      typeof s.assetType === "string" && s.assetType.length > 0 && s.assetType.length <= 80
+    ) : [];
     if (parsed.policy) {
       policyText = `\nProgram Policy (excerpt):\n${String(parsed.policy).slice(0, 1500)}\n`;
     }
@@ -117,6 +121,18 @@ export async function assessProgram(
     ...sourceCodeScopes,
     ...scopes.filter((s) => !sourceCodeScopes.includes(s)),
   ];
+
+  // Model suggestions can only name the explicitly supplied, visible assets.
+  const visibleScopes = orderedScopes.filter((scope, i, all) =>
+    all.findIndex(other => other.assetIdentifier === scope.assetIdentifier && other.assetType === scope.assetType) === i
+  ).slice(0, 40);
+  if (!visibleScopes.length) {
+    return {opportunityScore:0, rubric:{sourceCodeQuality:0,webApiSurface:0,techStackMatch:0,scopeBreadth:0,rewardEfficiency:0},
+      targetCount:0,topTargets:[],techStack:[],attackSurface:"No supplied scope assets",hasSourceCode:false,recommendedApproach:"mixed"};
+  }
+  const allowedAssets = [...new Set(visibleScopes.map(scope => scope.assetIdentifier))];
+  const allowedTypes = [...new Set(visibleScopes.map(scope => scope.assetType))];
+  const maxTargets = Math.min(5, allowedAssets.length);
 
   const sourceCodeNote = hasSourceCode
     ? `\n**NOTE: This program has ${sourceCodeScopes.length} source code repositor${sourceCodeScopes.length === 1 ? "y" : "ies"} in scope. sourceCodeQuality should be at least 1.**\n`
@@ -139,7 +155,7 @@ Source Code in Scope: ${hasSourceCode ? `YES (${sourceCodeScopes.length} repos)`
 ${weaknessNames.length > 0 ? `Accepted Weakness Types: ${weaknessNames.slice(0, 20).join(", ")}${weaknessNames.length > 20 ? ` (and ${weaknessNames.length - 20} more)` : ""}\n` : ""}${policyText}${sourceCodeNote}
 
 In-Scope Assets (${scopes.length} total):
-${orderedScopes.slice(0, 40).map((s, i) => `${i + 1}. [${s.assetType}] ${s.assetIdentifier}${s.instruction ? ` — ${s.instruction}` : ""}`).join("\n")}
+${visibleScopes.map((s, i) => `${i + 1}. [${s.assetType}] ${s.assetIdentifier}${s.instruction ? ` — ${s.instruction}` : ""}`).join("\n")}
 ${scopes.length > 40 ? `... and ${scopes.length - 40} more` : ""}
 
 Evaluate this program using the rubric below. Score each dimension 0-3 independently.
@@ -175,7 +191,7 @@ RUBRIC:
    - 2: Decent reward ($500-$5000 max) AND decent efficiency (50-70%)
    - 3: High reward (>$5000 max) AND high efficiency (>70%)
 
-Return at most five topTargets, at most twelve techStack entries, concise reasoning (300 characters each), and a brief attackSurface (500 characters). targetCount is the total promising target count, not the number returned.
+Return between one and ${maxTargets} distinct topTargets selected ONLY from the displayed In-Scope Assets. Copy each asset identifier and type exactly. Never invent an asset or infer additional hosts or repositories. targetCount must be between topTargets.length and ${allowedAssets.length}, counting only displayed distinct assets. Return at most twelve techStack entries, concise reasoning (300 characters each), and a brief attackSurface (500 characters).
 Respond with ONLY valid JSON, no markdown fences:
 {"rubric": {"sourceCodeQuality": 0-3, "webApiSurface": 0-3, "techStackMatch": 0-3, "scopeBreadth": 0-3, "rewardEfficiency": 0-3}, "targetCount": number, "topTargets": [{"asset": string, "type": string, "reasoning": string, "strategy": "code_review"|"web_testing"|"api_testing"|"domain_recon"}], "techStack": string[], "attackSurface": string, "recommendedApproach": "code_review"|"web_testing"|"api_testing"|"mixed"}`;
 
@@ -205,14 +221,14 @@ Respond with ONLY valid JSON, no markdown fences:
             required: ["sourceCodeQuality", "webApiSurface", "techStackMatch", "scopeBreadth", "rewardEfficiency"],
             additionalProperties: false,
           },
-          targetCount: { type: "integer", minimum: 0 },
+          targetCount: { type: "integer", enum: allowedAssets.map((_, i) => i + 1) },
           topTargets: {
-            type: "array", maxItems: 5,
+            type: "array", minItems: 1, maxItems: maxTargets,
             items: {
               type: "object",
               properties: {
-                asset: { type: "string", maxLength: 2048 },
-                type: { type: "string", maxLength: 80 },
+                asset: { type: "string", enum: allowedAssets },
+                type: { type: "string", enum: allowedTypes },
                 reasoning: { type: "string", maxLength: 300 },
                 strategy: { type: "string", enum: ["code_review", "web_testing", "api_testing", "domain_recon"] },
               },
@@ -234,6 +250,15 @@ Respond with ONLY valid JSON, no markdown fences:
 
     if (!programAssessmentOutput.safeParse(parsed).success) {
       throw new Error("Program assessment did not match the required schema");
+    }
+
+    const selectedAssets = new Set(parsed.topTargets.map((target: {asset:string}) => target.asset));
+    if (!parsed.topTargets.length || parsed.topTargets.length > maxTargets ||
+        selectedAssets.size !== parsed.topTargets.length ||
+        parsed.targetCount < parsed.topTargets.length || parsed.targetCount > allowedAssets.length ||
+        parsed.topTargets.some((target: {asset:string;type:string}) =>
+          !visibleScopes.some(scope => scope.assetIdentifier === target.asset && scope.assetType === target.type))) {
+      throw new Error("Program assessment targets do not match the supplied scope");
     }
 
     // Normalize rubric scores to 0-3 integers

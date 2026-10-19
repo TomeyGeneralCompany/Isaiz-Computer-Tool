@@ -243,3 +243,14 @@ call, database update or submission. Host/model acceptance now includes this
 check when `OLLAMA_DISCOVERY_DIRECT=true`. CI covers schema propagation,
 truncation and exhausted budgets, malformed/nested output, HTTP failures,
 request deadlines and queue recovery through the production adapter.
+
+
+Program assessment output is now grounded in the displayed scope entries.
+Its response schema enumerates exact asset identifiers and types, bounds the
+number of targets, and enumerates counts no larger than the supplied distinct
+asset set. Independent validation rejects invented asset/type pairs, duplicate
+targets, empty target selections and inconsistent counts before ranking. Empty
+scope data produces zero targets without inference. These assessment hints do
+not replace the solver's separate eligibility and exact-scope authorization.
+The real assessment fixture retains exact asset checks and requires its one
+supplied repository to be the single selected target with a count of one.

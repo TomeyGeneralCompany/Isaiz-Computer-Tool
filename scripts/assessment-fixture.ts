@@ -20,6 +20,8 @@ export function checkAssessment(result: ProgramAssessmentResult): void {
   assert.equal(result.hasSourceCode,true);
   assert.ok(result.opportunityScore >= 0 && result.opportunityScore <= 1);
   assert.ok(result.rubric.sourceCodeQuality >= 1);
-  assert.ok(result.topTargets.length > 0 && result.topTargets.length <= 5);
+  assert.equal(result.targetCount,1);
+  assert.equal(result.topTargets.length,1);
+  assert.equal(result.topTargets[0].type,"SOURCE_CODE");
   assert.ok(result.topTargets.every(target => target.asset === "https://github.com/example/owned-assessment-fixture"));
 }

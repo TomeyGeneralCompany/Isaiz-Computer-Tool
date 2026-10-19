@@ -34,9 +34,14 @@ const server = createServer(async (req,res) => {
     res.end(JSON.stringify({done:true,done_reason:"length",message:{content:'{"rubric":{"sourceCodeQuality":2,"topTarget'}}));
     return;
   }
+  const scopedAnswer = mode === "invented" ? {...answer,topTargets:[{...answer.topTargets[0],asset:"https://not-in-scope.example"}]} :
+    mode === "wrongType" ? {...answer,topTargets:[{...answer.topTargets[0],type:"URL"}]} :
+    mode === "excessCount" ? {...answer,targetCount:5} :
+    mode === "duplicates" ? {...answer,topTargets:[answer.topTargets[0],answer.topTargets[0]]} :
+    mode === "noTargets" ? {...answer,topTargets:[]} : answer;
   const content = mode === "plain" ? "READY" : mode === "invalid" ? '{"rubric":' :
     JSON.stringify(mode === "array" ? [] : mode === "missing" ? {rubric:{}} : mode === "nested" ?
-      {...answer,rubric:{...answer.rubric,targetCount:1}} : answer);
+      {...answer,rubric:{...answer.rubric,targetCount:1}} : scopedAnswer);
   res.end(JSON.stringify({done:mode !== "incomplete",done_reason:"stop",message:{content}}));
 });
 try {
@@ -50,14 +55,18 @@ try {
   checkAssessment(await assessProgram(assessmentFixture));
   assert.equal(calls,2);
   assert.deepEqual(requests.map(r => r.options.num_predict),[1024,2048]);
-  assert.equal(requests[0].format.properties.topTargets.maxItems,5);
+  assert.equal(requests[0].format.properties.topTargets.maxItems,1);
+  assert.deepEqual(requests[0].format.properties.targetCount.enum,[1]);
+  assert.deepEqual(requests[0].format.properties.topTargets.items.properties.asset.enum,[answer.topTargets[0].asset]);
+  assert.deepEqual(requests[0].format.properties.topTargets.items.properties.type.enum,["SOURCE_CODE"]);
   assert.equal(requests[0].format.properties.rubric.additionalProperties,false);
   assert.ok(requests[0].format.required.includes("topTargets"));
   for (const [next,pattern] of [
     ["truncated",/output token budget/], ["invalid",/invalid JSON/],
     ["array",/JSON object/], ["missing",/required fields/],
     ["nested",/required schema/], ["incomplete",/response incomplete/],
-    ["http",/HTTP 401/],
+    ["http",/HTTP 401/], ["invented",/supplied scope/], ["wrongType",/supplied scope/],
+    ["excessCount",/supplied scope/], ["duplicates",/supplied scope/], ["noTargets",/supplied scope/],
   ] as const) {
     mode = next; calls = 0;
     await assert.rejects(assessProgram(assessmentFixture),pattern);
@@ -75,6 +84,11 @@ try {
   mode = "normal";
   checkAssessment(await assessProgram(assessmentFixture)); // Failed calls must release the queue.
   await Promise.all([assessProgram(assessmentFixture),assessProgram(assessmentFixture)]);
+  const before = calls;
+  const empty = await assessProgram({...assessmentFixture,scopeSummary:"[]"});
+  assert.equal(empty.targetCount,0);
+  assert.deepEqual(empty.topTargets,[]);
+  assert.equal(calls,before,"Empty scopes must not trigger inference");
   console.log("Production assessment adapter: schema, token budget, truncation recovery, nested validation, deadline, HTTP errors and queue recovery PASSED");
 } finally {
   server.closeAllConnections(); server.close();
