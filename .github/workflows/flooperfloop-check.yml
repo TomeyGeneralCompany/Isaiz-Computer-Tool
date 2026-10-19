@@ -2,6 +2,9 @@ name: Fictional Flooperfloop integration check
 on:
   push:
     branches: [verification/flooperfloop-20261019]
+concurrency:
+  group: fictional-flooperfloop
+  cancel-in-progress: true
 permissions:
   contents: read
 jobs:

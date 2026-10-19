@@ -114,6 +114,9 @@ os.execv("/usr/bin/git",["git","-c","protocol.file.allow=always"]+args)
       assert.equal(reportPayload.data.attributes.team_handle,handle);
       assert.match(reportPayload.data.attributes.vulnerability_information,/Flooperfloop/);
       assert.match(reportPayload.data.attributes.vulnerability_information,/Reproduction case: [a-f0-9]{64}/);
+      assert.match(reportPayload.data.attributes.impact,/owned caller returns unescaped user text/, "The report impact must survive preparation and serialization");
+      assert.equal(reportPayload.data.attributes.severity_rating,"medium");
+      assert.equal(reportPayload.data.attributes.structured_scope_id,"flooper-scope");
       return json({data:{id:"flooperfloop-mock-receipt",attributes:{url:"https://reports.example.invalid/flooperfloop"}}});
     }
     throw new Error("All unexpected network traffic blocked: "+url);
