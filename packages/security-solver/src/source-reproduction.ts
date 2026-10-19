@@ -25,7 +25,7 @@ export function sourceCaseId(record:SourceCase):string {return sha(JSON.stringif
 
 async function commitAt(directory:string, signal?:AbortSignal):Promise<string> {
   const result = await execute("git",["-c","core.hooksPath=/dev/null","rev-parse","HEAD"],{
-    cwd:directory,timeout:10000,maxBuffer:4096,signal,env:{PATH:process.env.PATH,GIT_CONFIG_NOSYSTEM:"1",GIT_CONFIG_GLOBAL:"/dev/null"},
+    cwd:directory,timeout:10000,maxBuffer:4096,signal,env:{PATH:process.env.PATH,NODE_ENV:process.env.NODE_ENV ?? "production",GIT_CONFIG_NOSYSTEM:"1",GIT_CONFIG_GLOBAL:"/dev/null"},
   });
   return z.string().regex(/^[a-f0-9]{40}$/).parse(result.stdout.trim());
 }
@@ -39,7 +39,7 @@ async function executeProbe(directory:string,spec:z.infer<typeof specSchema>,sig
     let output:string;
     try {
       output=(await execute("python3",[driver,"--repository",directory,"--spec",path],{
-        timeout:35000,maxBuffer:128000,signal,env:{PATH:process.env.PATH},
+        timeout:35000,maxBuffer:128000,signal,env:{PATH:process.env.PATH,NODE_ENV:process.env.NODE_ENV ?? "production"},
       })).stdout;
     } catch(error:any) {
       signal?.throwIfAborted();
