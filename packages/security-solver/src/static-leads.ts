@@ -44,7 +44,8 @@ export async function processStaticLeadQueue(investigate?: (program:SecurityProg
       }
       const program=finding.programId ? db.select().from(schema.securityPrograms).where(eq(schema.securityPrograms.id,finding.programId)).get() : undefined;
       if (!program) {save("invalid","No associated program exists.");continue;}
-      // A new lead can follow a previous hunt, while provider/scope/reward/Signal gates remain.
+      // A new lead can follow a prior hunt; provider/scope/reward gates remain.
+      // Local report submission checks Signal separately after evidence review.
       const blocker=programCandidateBlocker({...program,lastHuntedAt:null},config,true);
       if (blocker) {save("blocked","Current program eligibility: "+blocker,{retryAfter:new Date(Date.now()+300000).toISOString()});continue;}
       const repositoryUrl="https://github.com/"+value.repository;

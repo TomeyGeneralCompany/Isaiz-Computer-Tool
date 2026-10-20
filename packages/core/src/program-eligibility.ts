@@ -13,11 +13,20 @@ export function programCandidateBlocker(program: SecurityProgram, config: Config
   if (!enabled) return "provider_disabled_or_unsupported";
   try {assertAuthorizedProgram(program.scopeSummary);} catch {return "no_explicit_scope";}
   if (program.providerProgramId && config.EXCLUDE_SECURITY_PROGRAMS.some(h => h.toLowerCase() === program.providerProgramId!.toLowerCase())) return "excluded";
-  if (program.requiresSignal && config.SKIP_SIGNAL_REQUIRED) return "signal_required";
+  // A submission threshold does not prevent an offline source inspection.
+  // The local review/submission path checks fresh Signal requirements again
+  // before any report is sent. Nonlocal hunting keeps the legacy skip policy.
+  if (!localModel && program.requiresSignal && config.SKIP_SIGNAL_REQUIRED) return "signal_required";
   if ((program.rewardMaxCents ?? 0) < config.SECURITY_MIN_REWARD_CENTS) return "below_reward_threshold";
-  if (program.lastHuntedAt && config.SKIP_PREVIOUSLY_HUNTED) return "previously_hunted";
+  // Imported installations may have marked regex scans/incomplete attempts as
+  // "hunted". In the local engine, only recorded completed coverage establishes
+  // completion. Keep legacy timestamps intact for history and cooldowns.
+  let completedCoverage = false;
+  try { completedCoverage = JSON.parse(program.scopeSummary || "{}").huntCoverage?.status === "completed"; } catch {}
+  if (program.lastHuntedAt && config.SKIP_PREVIOUSLY_HUNTED && (!localModel || completedCoverage)) return "previously_hunted";
   if (program.lastHuntedAt) {
-    const cooldown = config.SECURITY_HUNT_COOLDOWN_HOURS * 3600000 * 2 ** Math.min(program.huntMissStreak ?? 0,6);
+    const verifiedMissStreak = localModel && !completedCoverage ? 0 : (program.huntMissStreak ?? 0);
+    const cooldown = config.SECURITY_HUNT_COOLDOWN_HOURS * 3600000 * 2 ** Math.min(verifiedMissStreak,6);
     if (now - program.lastHuntedAt.getTime() < cooldown) return "cooldown";
   }
   let scopes: unknown;

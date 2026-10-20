@@ -49,8 +49,8 @@ const configSchema = z.object({
   SECURITY_SUBMISSION_POLL_MINUTES: z.coerce.number().default(60),
   SECURITY_AUTO_SUBMIT: envBoolean.default(false), // auto-submit findings that pass review with "submit" recommendation
   EXCLUDE_SECURITY_PROGRAMS: commaSplit.default(""), // comma-separated program handles to skip (e.g. "okg,spotify")
-  SKIP_SIGNAL_REQUIRED: envBoolean.default(true), // skip programs that require HackerOne Signal score
-  SKIP_PREVIOUSLY_HUNTED: envBoolean.default(true), // skip programs that have been hunted at least once
+  SKIP_SIGNAL_REQUIRED: envBoolean.default(true), // hold Signal-required submissions; nonlocal hunts also skip these programs
+  SKIP_PREVIOUSLY_HUNTED: envBoolean.default(true), // skip completed hunts; local completion requires recorded coverage
   SKIP_WEB_ONLY_PROGRAMS: envBoolean.default(true), // skip programs without source code in scope
 
   // Models

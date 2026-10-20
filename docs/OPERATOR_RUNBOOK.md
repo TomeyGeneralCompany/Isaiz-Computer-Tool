@@ -400,8 +400,11 @@ A missing assessment, a completed zero-opportunity assessment, and a ranking red
 to zero by reward/response efficiency are separate reasons. Counts explain selection,
 not whether a discovered repository is supported by the reproduction engine.
 
-`signal_required` means the program advertises a threshold and the operator enabled
-`SKIP_SIGNAL_REQUIRED`; it does not mean this researcher's account fails that threshold.
+`signal_required` applies to nonlocal hunting when the program advertises a threshold
+and the operator enabled `SKIP_SIGNAL_REQUIRED`; it does not establish this researcher's
+account eligibility. Local source-only assessment/inspection no longer treats this
+submission setting as a research ban. The local submission path still fetches the
+current requirement and holds the report when the skip setting applies.
 Zero and negative thresholds remain actual requirements. Missing fields, malformed
 values and partial GraphQL errors are inconclusive and preserve the existing database
 value. This repair does not guess account Signal, consume trial reports or disable
@@ -411,3 +414,28 @@ https://docs.hackerone.com/en/articles/8505319-signal-requirements
 The local reproduction path remains limited to Python string-in/string-out HTML
 reflection and path-construction probes. JavaScript, Solidity and Go static leads do
 not acquire reproduction support merely by passing selection or assessment.
+
+
+### Signal does not block local source inspection
+
+The shared candidate filter used to exclude every Signal-required program before
+local assessment or repository inspection. When discovery marked all HackerOne
+programs as Signal-required, this removed the entire provider from the local queue.
+For the local source-only model path, that early Signal exclusion has been removed.
+Provider enablement, explicit scope, reward, source repository, exclusions, prior-hunt
+policy, cooldowns and retry limits still apply. The nonlocal hunt skip policy and the
+fresh Signal check immediately before local automatic submission remain in place.
+This change permits inspection; it neither asserts account submission eligibility nor
+consumes trial reports. Existing explicit per-call assessment filters are preserved.
+
+
+### Imported hunt timestamps do not establish local coverage
+
+With `SKIP_PREVIOUSLY_HUNTED` enabled, local source selection skips a previous hunt
+only when `scopeSummary.huntCoverage.status` is `completed`. An older installation's
+timestamp without a completed coverage record is eligible for another local inspection
+after the base cooldown/backoff. An unverified legacy miss streak does not multiply
+that cooldown into days of delay. No timestamps, hunt counts, findings or research history
+are erased. Nonlocal selection retains its existing prior-hunt behavior. Unsupported
+and failed inspections still use the existing bounded retry backoff; this change does
+not label them successful or create reproduction support for additional languages.

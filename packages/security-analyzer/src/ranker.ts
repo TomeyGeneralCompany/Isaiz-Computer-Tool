@@ -180,6 +180,8 @@ export async function processSecurityProgramQueue(opts?: {
       .where(eq(schema.securityPrograms.status,"active"))
       .orderBy(desc(schema.securityPrograms.rewardMaxCents)).all().filter(program => {
         if (attempted.has(program.id) || programCandidateBlocker(program,config,!!process.env.LOCAL_OLLAMA_MODEL)) return false;
+        // An explicit per-call filter is still honored. The default automatic
+        // local queue may inspect source even when submission needs Signal.
         if (opts?.skipSignalRequired && program.requiresSignal) return false;
         try {return JSON.parse(program.scopeSummary || "{}").assessment?.opportunityScore == null;} catch {return true;}
       }).sort((a,b) => Number(b.provider === "hackerone") - Number(a.provider === "hackerone"));

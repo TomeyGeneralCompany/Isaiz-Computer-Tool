@@ -11,7 +11,7 @@ const base = { id: "fictional", provider: "immunefi", name: "Flooperfloop", stat
 const variants = [
   base,
   { ...base, provider: "hackerone", requiresSignal: true },
-  { ...base, lastHuntedAt: new Date() },
+  { ...base, lastHuntedAt: new Date(), scopeSummary: JSON.stringify({ ...JSON.parse(summary()), huntCoverage: { status: "completed" } }) },
   { ...base, scopeSummary: summary(null) },
   { ...base, scopeSummary: summary({ opportunityScore: 0 }) },
   { ...base, responseEfficiency: 0 },
@@ -20,11 +20,19 @@ const variants = [
 ];
 const report = summarizeProgramSelection(variants, config, true);
 assert.equal(report.total, 8);
-assert.equal(report.eligible, 1);
+assert.equal(report.eligible, 2);
 assert.equal(Object.values(report.firstBlockingReasonCounts).reduce((a,b) => a+b, 0), 8);
-for (const reason of ["signal_required", "previously_hunted", "assessment_missing", "assessment_zero_opportunity", "ranking_zero_reward_or_efficiency", "inactive", "invalid_ranking_score"]) assert.equal(report.firstBlockingReasonCounts[reason], 1, reason);
+for (const reason of ["previously_hunted", "assessment_missing", "assessment_zero_opportunity", "ranking_zero_reward_or_efficiency", "inactive", "invalid_ranking_score"]) assert.equal(report.firstBlockingReasonCounts[reason], 1, reason);
 assert.equal(programSelectionDecision({ ...base, requiresSignal: true, provider: "hackerone" }, { ...config, SKIP_SIGNAL_REQUIRED: false }, true).reason, "eligible", "Operator preference is preserved");
-assert.equal(report.providers.hackerone.signal_required, 1);
+assert.equal(report.providers.hackerone.eligible, 1);
+assert.equal(programSelectionDecision({ ...base, requiresSignal: true, provider: "hackerone" }, config, false).reason, "signal_required", "Nonlocal skip policy remains intact");
+assert.equal(programSelectionDecision({ ...base, requiresSignal: true, provider: "hackerone", scopeSummary: JSON.stringify({scopes: []}) }, config, true).reason, "no_explicit_scope", "Signal inspection change must not admit unscoped programs");
+const legacy = { ...base, lastHuntedAt: new Date(Date.now() - 48 * 3600000), huntCount: 7, huntMissStreak: 6 };
+assert.equal(programSelectionDecision(legacy, config, true).reason, "eligible", "Legacy timestamps without completed coverage cannot permanently exclude local work");
+assert.equal(legacy.huntCount, 7, "Selection must preserve history");
+assert.equal(programSelectionDecision(legacy, config, false).reason, "previously_hunted", "Nonlocal completed-hunt policy remains intact");
+assert.equal(programSelectionDecision({ ...legacy, lastHuntedAt: new Date() }, config, true).reason, "cooldown", "Legacy history still respects cooldown");
+assert.equal(programSelectionDecision({ ...legacy, scopeSummary: JSON.stringify({ ...JSON.parse(summary()), huntCoverage: {status: "unsupported"}, huntFailure: {retryAfter: new Date(Date.now() + 60000).toISOString()} }) }, config, true).reason, "failed_hunt_backoff", "Incomplete attempts remain bounded by retry backoff");
 const saved = globalThis.fetch;
 try {
   const cases: [unknown, boolean | null][] = [

@@ -468,8 +468,8 @@ export interface RankedProgram {
  *
  * Filters applied:
  * - Excluded program handles (EXCLUDE_SECURITY_PROGRAMS)
- * - Signal-required programs (when SKIP_SIGNAL_REQUIRED is true)
- * - Cooldown (exponential backoff based on miss streak)
+ * - Signal submission restrictions remain enforced at local submission
+ * - Completed local coverage, cooldowns and bounded retry backoff
  * - Minimum reward threshold (SECURITY_MIN_REWARD_CENTS)
  * - Must have an assessment (opportunityScore > 0)
  */
