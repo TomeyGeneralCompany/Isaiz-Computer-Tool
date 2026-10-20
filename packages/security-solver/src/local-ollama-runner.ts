@@ -57,10 +57,10 @@ export async function runLocalAudit(
   },250);
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   const actionSchema = limits.verifyPython ? {...auditActionSchema,properties:{...auditActionSchema.properties,
-    action:{type:"string",enum:[...auditActionSchema.properties.action.enum,"verify_python"]}}} : auditActionSchema;
-  const probePrompt = limits.verifyPython ? "\nThe verify_python action invokes a fixed, isolated Python function probe. Set path to a source .py file, query to its public top-level function name, answer to html_reflection or path_construction. The function must take one string and return a string. Use returned observations honestly; they do not prove full exploitability. No arbitrary commands are available." : "";
+    action:{type:"string",enum:[...auditActionSchema.properties.action.enum,"verify_source","verify_python"]}}} : auditActionSchema;
+  const probePrompt = limits.verifyPython ? "\nThe verify_source action invokes a fixed, isolated source function probe. Set path to a .py, .js, .mjs, .cjs or .sol source file, query to its public/exported function name (Contract.function for Solidity), answer to html_reflection or path_construction. The function must take one string and return a string. JavaScript exports may be async. Solidity requires a deployable zero-argument constructor and a public/external view or pure function compatible with installed solc 0.8.30; runs on an in-memory local EVM. Use returned observations honestly; they do not prove full exploitability. No arbitrary commands are available." : "";
   const availableTools = limits.verifyPython ? [...tools,{type:"function",function:{
-    name:"verify_python",description:probePrompt,parameters:{type:"object",
+    name:"verify_source",description:probePrompt,parameters:{type:"object",
       properties:{path:{type:"string"},query:{type:"string"},kind:{type:"string"}},required:["path","query","kind"]},
   }}] : tools;
   const messages: Message[] = [
@@ -129,7 +129,7 @@ export async function runLocalAudit(
           const name = call.function.name;
           const path = String(call.function.arguments?.path ?? ".");
           const full = await safePath(path);
-          if(name === "verify_python" && limits.verifyPython) {
+          if((name === "verify_source" || name === "verify_python") && limits.verifyPython) {
             output=await limits.verifyPython(path,String(call.function.arguments?.query || ""),String(call.function.arguments?.kind || ""));
           } else if (name === "list_files") {
             const entries = await readdir(full, { withFileTypes: true });

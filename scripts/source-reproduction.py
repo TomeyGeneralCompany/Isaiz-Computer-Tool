@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded offline probes of actual Python source functions in bubblewrap.
+"""Bounded offline probes of Python, JavaScript and Solidity source functions in bubblewrap.
 
 A probe confirms only its named behavior, never complete exploitability.
 No model-generated commands or scripts are executed. Source code runs only
@@ -40,9 +40,9 @@ if len(normal)>16000 or len(observed)>16000: raise ValueError('Probe output too 
 print(json.dumps({'control_input':control,'control_output':normal,'attack_input':attack,'attack_output':observed}))
 '''
 
-def limits():
+def limits(node=False):
     resource.setrlimit(resource.RLIMIT_CPU,(15,15))
-    resource.setrlimit(resource.RLIMIT_AS,(1024**3,1024**3))
+    resource.setrlimit(resource.RLIMIT_AS,((32 if node else 1)*1024**3,)*2)
     resource.setrlimit(resource.RLIMIT_FSIZE,(1024**2,1024**2))
     resource.setrlimit(resource.RLIMIT_NOFILE,(64,64))
     resource.setrlimit(resource.RLIMIT_CORE,(0,0))
@@ -55,12 +55,20 @@ def run_probe(repository: Path, specification: dict) -> dict:
     function=specification.get('function','')
     kind=specification.get('kind','')
     nonce=specification.get('nonce','')
-    if not isinstance(file,str) or len(file)>4096 or not file.endswith('.py'): raise ValueError('Python source path required')
+    if not isinstance(file,str) or len(file)>4096 or Path(file).suffix not in ('.py','.js','.mjs','.cjs','.sol'): raise ValueError('Python, JavaScript or Solidity source path required')
     target=(repository/file).resolve(strict=True)
     if not target.is_relative_to(repository) or not target.is_file() or target.stat().st_size>256000: raise ValueError('Source outside repository or too large')
-    if not isinstance(function,str) or not re.fullmatch(r'[A-Za-z][A-Za-z0-9_]{0,79}',function): raise ValueError('Public top-level function name required')
+    if not isinstance(function,str) or not re.fullmatch(r'[A-Za-z][A-Za-z0-9_]{0,79}(?:\.[A-Za-z][A-Za-z0-9_]{0,79})?',function): raise ValueError('Public top-level function name required')
     if kind not in ('html_reflection','path_construction'): raise ValueError('Unsupported probe kind')
     if not isinstance(nonce,str) or not re.fullmatch(r'[a-f0-9]{32}',nonce): raise ValueError('Invalid probe nonce')
+    language = 'python' if file.endswith('.py') else 'solidity' if file.endswith('.sol') else 'javascript'
+    if language != 'solidity' and '.' in function: raise ValueError('Top-level function name required')
+    runtime = Path(__file__).resolve().parent / 'reproduction-runtime'
+    node = shutil.which('node') if language != 'python' else None
+    if language != 'python' and not node:
+        return {'status':'blocked_no_runtime','behavior_observed':False,'detail':'Node.js is required'}
+    if language == 'solidity' and not all((runtime/'node_modules'/name).is_dir() for name in ('solc','ethers','ganache')):
+        return {'status':'blocked_no_runtime','behavior_observed':False,'detail':'Run npm install --prefix scripts/reproduction-runtime'}
     sandbox=shutil.which('bwrap')
     if not sandbox: return {'status':'blocked_no_sandbox','behavior_observed':False}
     source_hash=hashlib.sha256(target.read_bytes()).hexdigest()
@@ -68,16 +76,21 @@ def run_probe(repository: Path, specification: dict) -> dict:
         work=Path(temporary)
         (work/'probe.py').write_text(PROBE)
         (work/'spec.json').write_text(json.dumps(specification))
+        runtime_binds = [] if language == 'python' else [
+            '--ro-bind',str(Path(node).resolve()),'/probe-node',
+            '--ro-bind',str(runtime),'/runtime']
+        invocation = ['/usr/bin/python3','-I','/probe.py'] if language == 'python' else [
+            '/probe-node','--max-old-space-size=256','--disable-proto=throw','/runtime/probe.cjs']
         command=[sandbox,'--unshare-all','--die-with-parent','--new-session','--cap-drop','ALL','--clearenv',
                  '--ro-bind','/usr','/usr','--ro-bind','/lib','/lib','--ro-bind-try','/lib64','/lib64',
                  '--proc','/proc','--dev','/dev','--tmpfs','/tmp','--ro-bind',str(repository),'/repo',
                  '--ro-bind',str(work/'probe.py'),'/probe.py','--ro-bind',str(work/'spec.json'),'/spec.json',
                  '--chdir','/repo','--setenv','PATH','/usr/bin:/bin','--setenv','HOME','/tmp',
                  '--setenv','PYTHONNOUSERSITE','1','--setenv','PYTHONDONTWRITEBYTECODE','1',
-                 '--','/usr/bin/python3','-I','/probe.py']
+                 *runtime_binds,'--',*invocation]
         with (work/'stdout').open('wb') as output,(work/'stderr').open('wb') as error:
             process=subprocess.Popen(command,stdout=output,stderr=error,env={'PATH':'/usr/bin:/bin'},
-                                     start_new_session=True,preexec_fn=limits)
+                                     start_new_session=True,preexec_fn=lambda: limits(language != 'python'))
             try: code=process.wait(timeout=25)
             except subprocess.TimeoutExpired:
                 os.killpg(process.pid,signal.SIGKILL);process.wait()

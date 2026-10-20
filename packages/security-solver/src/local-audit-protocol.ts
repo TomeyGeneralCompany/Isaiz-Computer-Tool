@@ -25,7 +25,7 @@ export function decodeAuditAction(raw: string, allowProbe = false): {action:stri
   const record = value as Record<string,unknown>;
   if (Object.keys(record).some(key=>!["action","path","query","answer"].includes(key))
       || !["action","path","query","answer"].every(key=>typeof record[key] === "string")
-      || !["read_file","list_files","search_files","final",...(allowProbe ? ["verify_python"] : [])].includes(String(record.action)))
+      || !["read_file","list_files","search_files","final",...(allowProbe ? ["verify_source","verify_python"] : [])].includes(String(record.action)))
     throw new Error("Invalid read-only JSON action");
   if ((record.path as string).length > 4096 || (record.query as string).length > 120)
     throw new Error("JSON action arguments exceed allowed bounds");

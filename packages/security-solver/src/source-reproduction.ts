@@ -11,7 +11,7 @@ const execute = promisify(execFile);
 const driver = fileURLToPath(new URL("../../../scripts/source-reproduction.py",import.meta.url));
 const sha = (value:string | Buffer) => createHash("sha256").update(value).digest("hex");
 const digest = z.string().regex(/^[a-f0-9]{64}$/);
-const specSchema = z.object({file:z.string().min(1).max(4096),function:z.string().regex(/^[A-Za-z][A-Za-z0-9_]{0,79}$/),
+const specSchema = z.object({file:z.string().min(1).max(4096),function:z.string().regex(/^[A-Za-z][A-Za-z0-9_]{0,79}(?:\.[A-Za-z][A-Za-z0-9_]{0,79})?$/),
   kind:z.enum(["html_reflection","path_construction"]),nonce:z.string().regex(/^[a-f0-9]{32}$/)}).strict();
 const resultSchema = z.object({status:z.string(),behavior_observed:z.boolean(),source_sha256:digest.optional(),
   kind:z.string().optional(),observations:z.object({control_input:z.string(),control_output:z.string(),attack_input:z.string(),attack_output:z.string()}).optional(),
