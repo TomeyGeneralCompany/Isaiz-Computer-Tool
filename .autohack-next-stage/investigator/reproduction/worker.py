@@ -20,6 +20,19 @@ def run_case(spec):
     # A case must be explicitly configured with a local fixture and an expected assertion.
     # The worker never executes AI-generated commands or downloads target code.
     fixture = pathlib.Path(str(spec.get('fixture_dir', ''))).expanduser().resolve()
+    if 'source_probe' in spec:
+        if not fixture.is_dir() or not fixture.is_relative_to(CASES.resolve()):
+            return {'status':'inconclusive', 'reason':'Fixture must be a local directory under reproduction/cases'}
+        driver = pathlib.Path(__file__).resolve().parents[3] / 'scripts/source-reproduction.py'
+        with tempfile.TemporaryDirectory(prefix='tomey-case-') as temporary:
+            manifest = pathlib.Path(temporary) / 'spec.json'
+            manifest.write_text(json.dumps(spec['source_probe']))
+            try:
+                result = subprocess.run(['/usr/bin/python3', str(driver), '--repository', str(fixture),
+                                         '--spec', str(manifest)], capture_output=True, text=True, timeout=35)
+                return json.loads(result.stdout)
+            except (subprocess.TimeoutExpired, ValueError, OSError) as exc:
+                return {'status':'inconclusive', 'reason':str(exc)[:500]}
     args = spec.get('argv')
     if not isinstance(args, list) or not args or any(not isinstance(x, str) for x in args):
         return {'status':'inconclusive', 'reason':'Invalid argv in case manifest'}
