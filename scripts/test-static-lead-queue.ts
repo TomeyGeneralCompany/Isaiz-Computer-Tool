@@ -30,23 +30,30 @@ try {
     analysisNotes:JSON.stringify({source:"offline_static_triage",repository:"fixture/owned",commit:"a".repeat(40),lead:{file,line:3,rule:"OWNED_FIXTURE"},...more})}).run();
   const get=(id:string)=>db.select().from(schema.securityFindings).where(eq(schema.securityFindings.id,id)).get()!;
   const notes=(id:string)=>JSON.parse(get(id).analysisNotes!);
-  insert("offline-js","case.js");
   let dispatches=0;
-  const inspect=async(_p:unknown,focus:any)=>{dispatches++;assert.equal(focus.commit,"a".repeat(40));assert.equal(focus.file,"case.py");return {findingsCreated:1};};
-  assert.equal(await processStaticLeadQueue(inspect),false);
-  assert.equal(dispatches,0);assert.equal(notes("offline-js").staticInvestigation.state,"unsupported");
-  assert.equal(get("offline-js").status,"discovered","No stale validated badge without evidence");
-  insert("offline-python","case.py");
-  assert.equal(await processStaticLeadQueue(inspect),true);
-  assert.equal(dispatches,1);assert.equal(notes("offline-python").staticInvestigation.state,"completed");
-  assert.equal(notes("offline-python").staticInvestigation.reportsCreated,1);
-  assert.equal(get("offline-python").status,"discovered","The lead itself is never promoted into a report");
-  await processStaticLeadQueue(inspect);assert.equal(dispatches,1,"A completed lead must not dispatch repeatedly");
+  const inspect=async(_p:unknown,focus:any)=>{dispatches++;assert.equal(focus.commit,"a".repeat(40));return {findingsCreated:1};};
+  for (const [id,file,legacy] of [
+    ["offline-js","case.js",true],["offline-mjs","case.mjs",false],
+    ["offline-cjs","case.cjs",false],["offline-sol","Case.sol",true],
+    ["offline-python","case.py",false],
+  ] as const) {
+    insert(id,file,legacy ? {staticInvestigation:{state:"unsupported",detail:"Old Python-only gate"}} : {});
+    let seen="";
+    assert.equal(await processStaticLeadQueue(async(p,focus)=>{seen=focus.file;return inspect(p,focus);}),true);
+    assert.equal(seen,file);
+    assert.equal(notes(id).staticInvestigation.state,"completed");
+    assert.equal(get(id).status,"discovered","The lead is never promoted without evidence");
+  }
+  assert.equal(dispatches,5);
+  await processStaticLeadQueue(inspect);assert.equal(dispatches,5,"Completed leads must not repeat");
+  insert("offline-other","case.rs");
+  await processStaticLeadQueue(inspect);
+  assert.equal(notes("offline-other").staticInvestigation.state,"unsupported");
   insert("offline-retry","case.py");
   await processStaticLeadQueue(async()=>{throw new Error("Owned model interruption");});
   assert.equal(notes("offline-retry").staticInvestigation.state,"retry");
   assert.equal(get("offline-retry").status,"discovered");
-  await processStaticLeadQueue(inspect);assert.equal(dispatches,1,"Retry backoff must be respected");
+  await processStaticLeadQueue(inspect);assert.equal(dispatches,5,"Retry backoff must be respected");
   insert("offline-bad","../case.py");
   await processStaticLeadQueue(inspect);assert.equal(notes("offline-bad").staticInvestigation.state,"invalid");
   insert("offline-outside","case.py",{repository:"fixture/outside"});

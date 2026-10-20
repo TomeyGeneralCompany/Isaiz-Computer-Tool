@@ -1,6 +1,12 @@
 """Real isolated language probes; opt in with TOMEY_REPRODUCTION_INTEGRATION=1."""
 import importlib.util
 import os
+import base64
+import hashlib
+import io
+import json
+import tarfile
+from unittest.mock import patch
 from pathlib import Path
 import tempfile
 import unittest
@@ -31,6 +37,7 @@ class LanguageTests(unittest.TestCase):
             repo = Path(directory)
             (repo / name).write_text(source)
             for file, content in (extra or {}).items():
+                (repo / file).parent.mkdir(parents=True, exist_ok=True)
                 (repo / file).write_text(content)
             result = driver.run_probe(repo, {"file":name, "function":function,
                 "kind":kind, "nonce":"a"*32})
@@ -77,6 +84,48 @@ class LanguageTests(unittest.TestCase):
                 "kind":"html_reflection","nonce":"a"*32})
             self.assertEqual(result["status"], "probe_failed", result)
             self.assertFalse(result["behavior_observed"])
+
+
+    def test_javascript_locked_package_dependency_without_scripts(self):
+        content = b"exports.wrap = x => '<p>'+x+'</p>';"
+        data = io.BytesIO()
+        with tarfile.open(fileobj=data, mode="w:gz") as archive:
+            info = tarfile.TarInfo("package/index.js"); info.size = len(content)
+            archive.addfile(info, io.BytesIO(content))
+        tarball = data.getvalue()
+        lock = {"lockfileVersion":3,"packages":{"":{},"node_modules/owned-wrap":{
+            "resolved":"https://registry.npmjs.org/owned-wrap/-/owned-wrap-1.0.0.tgz",
+            "integrity":"sha512-"+base64.b64encode(hashlib.sha512(tarball).digest()).decode()}}}
+        with patch("source_dependencies.download", return_value=tarball) as download:
+            self.probe("render.cjs", "exports.render = require('owned-wrap').wrap;",
+                extra={"package.json":json.dumps({"dependencies":{"owned-wrap":"1.0.0"}}),
+                       "package-lock.json":json.dumps(lock)})
+            self.assertEqual(download.call_count,1)
+
+    def test_solidity_node_modules_import(self):
+        self.probe("Render.sol", 'pragma solidity ^0.8.20; import "@owned/Wrap.sol";'
+            'contract Render {function render(string memory x) public pure returns(string memory) {return Wrap.wrap(x);}}',
+            function="Render.render", extra={"node_modules/@owned/Wrap.sol":
+            'pragma solidity ^0.8.20; library Wrap {function wrap(string memory x) internal pure returns(string memory) {return string.concat("<p>",x,"</p>");}}'})
+
+    def test_solidity_foundry_remapping(self):
+        self.probe("Render.sol", 'pragma solidity ^0.8.20; import "owned/Wrap.sol";'
+            'contract Render {function render(string memory x) public pure returns(string memory) {return Wrap.wrap(x);}}',
+            function="Render.render", extra={"foundry.toml":'[profile.default]\nremappings = ["owned/=lib/owned/src/"]\n',
+            "lib/owned/src/Wrap.sol":'pragma solidity ^0.8.20; library Wrap {function wrap(string memory x) internal pure returns(string memory) {return string.concat("<p>",x,"</p>");}}'})
+
+    def test_solidity_longest_remapping_wins(self):
+        self.probe("Render.sol", 'pragma solidity ^0.8.20; import "owned/deep/Wrap.sol";'
+            'contract Render {function render(string memory x) public pure returns(string memory) {return Wrap.wrap(x);}}',
+            function="Render.render", extra={"remappings.txt":"owned/=lib/wrong/\nowned/deep/=lib/right/\n",
+            "lib/wrong/deep/Wrap.sol":'pragma solidity ^0.8.20; library Wrap {function wrap(string memory) internal pure returns(string memory) {return "safe";}}',
+            "lib/right/Wrap.sol":'pragma solidity ^0.8.20; library Wrap {function wrap(string memory x) internal pure returns(string memory) {return string.concat("<p>",x,"</p>");}}'})
+
+    def test_solidity_text_remapping(self):
+        self.probe("Render.sol", 'pragma solidity ^0.8.20; import "owned/Wrap.sol";'
+            'contract Render {function render(string memory x) public pure returns(string memory) {return Wrap.wrap(x);}}',
+            function="Render.render", extra={"remappings.txt":"owned/=lib/owned/src/\n",
+            "lib/owned/src/Wrap.sol":'pragma solidity ^0.8.20; library Wrap {function wrap(string memory x) internal pure returns(string memory) {return string.concat("<p>",x,"</p>");}}'})
 
 
 if __name__ == "__main__":

@@ -39,7 +39,7 @@ async function executeProbe(directory:string,spec:z.infer<typeof specSchema>,sig
     let output:string;
     try {
       output=(await execute("python3",[driver,"--repository",directory,"--spec",path],{
-        timeout:35000,maxBuffer:128000,signal,env:{PATH:process.env.PATH,NODE_ENV:process.env.NODE_ENV ?? "production"},
+        timeout:150000,maxBuffer:128000,signal,env:{PATH:process.env.PATH,NODE_ENV:process.env.NODE_ENV ?? "production"},
       })).stdout;
     } catch(error:any) {
       signal?.throwIfAborted();
@@ -66,6 +66,7 @@ export async function createProbeSession(program:SecurityProgram,workspace:strin
   let completedProbes = 0;
   let blockedReason: string | null = null;
   let unsupportedProbes = 0;
+  let failedProbes = 0;
   const workspaceRoot=await realpath(workspace);
   const probe=async(path:string,functionName:string,kind:string):Promise<string> => {
     signal?.throwIfAborted();
@@ -92,7 +93,8 @@ export async function createProbeSession(program:SecurityProgram,workspace:strin
     }
     signal?.throwIfAborted();
     if (["behavior_observed", "behavior_not_observed"].includes(result.status)) completedProbes++;
-    else if (result.status === "invalid_probe") unsupportedProbes++;
+    else if (["invalid_probe","unsupported_dependencies"].includes(result.status)) unsupportedProbes++;
+    else if (["probe_failed","timeout"].includes(result.status)) failedProbes++;
     else {
       blockedReason = result.status + (result.detail ? ": " + result.detail : "");
       throw new Error("Reproduction unavailable: " + blockedReason);
@@ -108,6 +110,7 @@ export async function createProbeSession(program:SecurityProgram,workspace:strin
     return JSON.stringify({caseId:id,...result});
   };
   return {cases,probe,
+    get failedProbes() { return failedProbes; },
     get completedProbes() { return completedProbes; },
     get blockedReason() { return blockedReason; },
     get unsupportedProbes() { return unsupportedProbes; },

@@ -2,7 +2,7 @@ name: Source reproduction languages
 on:
   pull_request:
   push:
-    branches: [main, codex/javascript-solidity-reproduction]
+    branches: [main, codex/reproduction-integration-fixes]
 jobs:
   isolated-language-probes:
     runs-on: ubuntu-latest
@@ -18,9 +18,13 @@ jobs:
           sudo apt-get install -y bubblewrap
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           npm install --prefix scripts/reproduction-runtime --ignore-scripts --no-audit --no-fund
+      - name: Install application dependencies for workflow integration
+        run: npm ci
       - name: Check harness syntax
         run: node --check scripts/reproduction-runtime/probe.cjs
       - name: Run actual Python, JavaScript and Solidity sandbox probes
         env:
           TOMEY_REPRODUCTION_INTEGRATION: '1'
         run: python3 -m unittest discover -s tests -p test_source_reproduction.py -v
+      - name: Test real source audit, report creation and independent replay
+        run: npx tsx scripts/test-source-workflow.ts

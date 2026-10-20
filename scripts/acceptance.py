@@ -80,6 +80,9 @@ def main() -> int:
         parser.error("--model-only cannot be combined with --offline or --provider")
     if not args.model_only:
         run("python_integration_tests", [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py", "-v"])
+        if not args.offline:
+            run("source_reproduction_languages", [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_source_reproduction.py", "-v"],
+                env={**os.environ,"TOMEY_REPRODUCTION_INTEGRATION":"1"})
         run("launcher_syntax", ["bash", "-n", "run-local-autohack.sh", "run-complete-autohack.sh", "setup-and-run.sh", "scripts/install-user-service.sh", "scripts/control-user-service.sh", "scripts/node-runtime.sh", "scripts/verify-host.sh", "scripts/configure-hackerone.sh", "scripts/verify-model.sh", "scripts/verify-assessment.sh"])
         if shutil.which("npm") and (ROOT / "node_modules").is_dir():
             run("typescript", ["npx", "--no-install", "tsc", "--noEmit", "--project", "tsconfig.json"], 180)

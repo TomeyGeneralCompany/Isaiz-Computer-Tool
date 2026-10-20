@@ -17,6 +17,9 @@ import shutil
 import signal
 import subprocess
 import tempfile
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from source_dependencies import prepare_dependencies, DependencyError
 
 PROBE = r'''
 import contextlib, importlib.util, io, json, os, pathlib, sys, resource
@@ -71,6 +74,23 @@ def run_probe(repository: Path, specification: dict) -> dict:
         return {'status':'blocked_no_runtime','behavior_observed':False,'detail':'Run npm install --prefix scripts/reproduction-runtime'}
     sandbox=shutil.which('bwrap')
     if not sandbox: return {'status':'blocked_no_sandbox','behavior_observed':False}
+    if language != 'python':
+        try: prepare_dependencies(repository)
+        except (DependencyError, OSError, ValueError) as error:
+            return {'status':'unsupported_dependencies','behavior_observed':False,'detail':str(error)[:1000]}
+    if language == 'solidity' and (repository/'foundry.toml').is_file():
+        try:
+            import tomllib
+            config_file = (repository/'foundry.toml').resolve()
+            if not config_file.is_relative_to(repository): raise ValueError('Foundry config outside repository')
+            if config_file.stat().st_size > 256000: raise ValueError('Foundry config too large')
+            profile = tomllib.loads(config_file.read_text()).get('profile',{}).get('default',{})
+            remappings = profile.get('remappings',[])
+            if not isinstance(remappings,list) or any(not isinstance(x,str) for x in remappings):
+                raise ValueError('Invalid Foundry remappings')
+            specification = {**specification,'remappings':remappings}
+        except (ImportError, OSError, ValueError) as error:
+            return {'status':'unsupported_dependencies','behavior_observed':False,'detail':str(error)[:1000]}
     source_hash=hashlib.sha256(target.read_bytes()).hexdigest()
     with tempfile.TemporaryDirectory(prefix='autohack-reproduction-') as temporary:
         work=Path(temporary)
