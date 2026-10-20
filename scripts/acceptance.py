@@ -91,6 +91,7 @@ def main() -> int:
                 ("mock_ollama", "scripts/test-mock-agent.ts"),
                 ("mock_program_assessment", "scripts/test-mock-assessment.ts"),
                 ("authorized_source", "scripts/test-authorized-source.ts"),
+                ("program_selection", "scripts/test-program-selection.ts"),
                 ("discovery_feeds", "scripts/test-discovery-feeds.ts"),
                 ("provider_preflight", "scripts/test-provider-preflight.ts"),
                 ("earnings", "scripts/test-earnings.ts"),
@@ -113,6 +114,7 @@ def main() -> int:
                 if RESULTS["native_schema"]["passed"]:
                     run("static_lead_queue", ["node", "--import", "tsx", "scripts/test-static-lead-queue.ts"], 180, env)
                     run("hunt_failure", ["node", "--import", "tsx", "scripts/test-hunt-failure.ts"], 180, env)
+                    run("progress_diagnostic", ["node", "--import", "tsx", "scripts/test-progress-diagnostic.ts"], 180, env)
                     run("database_initialization", ["node", "--import", "tsx", "scripts/test-db-initialization.ts"], 180, env)
                     run("native_sqlite_dashboard", ["node", "--import", "tsx", "scripts/test-sqlite-pipeline.ts"], 180, env)
                     run("service_restart", [sys.executable, "scripts/test-service-restart.py"], 240, env)

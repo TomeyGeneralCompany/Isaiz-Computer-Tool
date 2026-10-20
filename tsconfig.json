@@ -11,7 +11,10 @@
     "scripts/test-local-assessment.ts",
     "scripts/test-mock-assessment.ts",
     "scripts/test-discovery-feeds.ts",
-    "scripts/test-hunt-failure.ts"
+    "scripts/test-hunt-failure.ts",
+    "scripts/test-program-selection.ts",
+    "scripts/diagnose-progress.ts",
+    "scripts/test-progress-diagnostic.ts"
   ],
   "exclude": [
     "packages/dashboard/**"

@@ -1,3 +1,5 @@
+import { programSelectionDecision, summarizeProgramSelection } from "./program-selection";
+export { scoreProgram, summarizeProgramSelection } from "./program-selection";
 import type { StaticLeadFocus } from "./local-program-flow";
 import { beginLocalJob } from "./local-job";
 import { randomBytes } from "node:crypto";
@@ -5,7 +7,7 @@ import { readFileSync, writeFileSync, unlinkSync, mkdirSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { eq, desc, and, or, isNull, lt } from "drizzle-orm";
-import { getDb, schema, getConfig, createLogger, generateTraceId, classifyError, extractJsonWithKey, recordSecurityHuntOutcome, recordNearMiss, updateProgramNotes, getSecurityLearningContext, getSecurityProgramContext, type SecurityFinding, type SecurityProgram, programCandidateBlocker, recordHuntAttempt, assertAuthorizedProgram, targetInExplicitScope, assertAuthorizedTarget, submitOnce } from "@bounty/core";
+import { getDb, schema, getConfig, createLogger, generateTraceId, classifyError, extractJsonWithKey, recordSecurityHuntOutcome, recordNearMiss, updateProgramNotes, getSecurityLearningContext, getSecurityProgramContext, type SecurityFinding, type SecurityProgram, recordHuntAttempt, assertAuthorizedProgram, targetInExplicitScope, assertAuthorizedTarget, submitOnce } from "@bounty/core";
 import { fetchProgramPolicy, fetchProgramSignalRequirement, fetchAllDisclosedReports, prepareSubmission, submitReport, fetchProgramScopes } from "@bounty/security-discovery";
 import { runProgramHunt, runFindingSolver, killActiveSecurityProcess, detectHuntStrategy, prepareReviewWorkspace, spawnComprehensiveReview, deverbosifyReport, EXCLUDED_VULN_TYPES, type ReviewContext } from "./claude-runner";
 import { clearSecuritySolverStatus, writeAdversarialReviewStatus, clearAdversarialReviewStatus, readAdversarialReviewStatus, cancelAdversarialReview } from "./status";
@@ -453,74 +455,6 @@ export function pickBestFinding(): SecurityFinding | null {
   return best;
 }
 
-/**
- * Score a single program for hunt priority using saturation-aware scoring.
- *
- * Score = opportunityScore² × log₁₀(reward+1) × responseEfficiency × sourceCodeBoost
- *         × freshnessMult × saturationMult / (1 + missStreak)
- *
- * Returns the score, or null if the program can't be scored (no assessment).
- */
-export function scoreProgram(p: SecurityProgram): number | null {
-  const now = Date.now();
-  try {
-    const parsed = JSON.parse(p.scopeSummary || "{}");
-    const opportunityScore = parsed.assessment?.opportunityScore ?? 0;
-    if (opportunityScore === 0) return null; // not yet assessed
-
-    const rewardMaxDollars = (p.rewardMaxCents ?? 0) / 100;
-    const efficiency = p.responseEfficiency ?? 0.5;
-    const missStreak = p.huntMissStreak ?? 0;
-
-    // Boost programs with source code in scope
-    const scopes = parsed.scopes ?? [];
-    const hasSourceCode = scopes.some(
-      (s: any) =>
-        s.assetType === "SOURCE_CODE" ||
-        (s.assetIdentifier?.includes("github.com")) ||
-        (s.assetIdentifier?.includes("gitlab.com")),
-    );
-    const sourceCodeBoost = hasSourceCode ? 1.5 : 1.0;
-
-    // Boost low-barrier platforms (no ID verification, no reputation gate)
-    const lowBarrierBoost = p.provider === "huntr" ? 1.5 : 1.0;
-
-    // Freshness: newer programs = less picked over
-    let freshnessMult = 1.0;
-    if (p.launchedAt) {
-      const ageMonths = (now - p.launchedAt.getTime()) / (30.44 * 24 * 60 * 60 * 1000);
-      if (ageMonths < 6) freshnessMult = 2.0;
-      else if (ageMonths < 12) freshnessMult = 1.5;
-      else if (ageMonths < 24) freshnessMult = 1.0;
-      else if (ageMonths < 48) freshnessMult = 0.7;
-      else freshnessMult = 0.5;
-    }
-
-    // Saturation: fewer disclosed reports = more low-hanging fruit
-    let saturationMult = 1.0;
-    const reportCount = p.disclosedReportCount;
-    if (reportCount != null) {
-      if (reportCount <= 5) saturationMult = 2.0;
-      else if (reportCount <= 20) saturationMult = 1.5;
-      else if (reportCount <= 50) saturationMult = 1.0;
-      else if (reportCount <= 100) saturationMult = 0.7;
-      else saturationMult = 0.4;
-    }
-
-    return 100
-      * opportunityScore * opportunityScore
-      * Math.log10(rewardMaxDollars + 1)
-      * efficiency
-      * sourceCodeBoost
-      * lowBarrierBoost
-      * freshnessMult
-      * saturationMult
-      / (1 + missStreak);
-  } catch {
-    return null;
-  }
-}
-
 export interface RankedProgram {
   program: SecurityProgram;
   score: number;
@@ -546,16 +480,18 @@ export function rankEligiblePrograms(): RankedProgram[] {
     .where(eq(schema.securityPrograms.status,"active")).all();
   const ranked: RankedProgram[] = [];
   for (const p of programs) {
-    if (programCandidateBlocker(p,config,!!process.env.LOCAL_OLLAMA_MODEL)) continue;
-
-    const score = scoreProgram(p);
-    if (score === null || score === 0) continue;
-
-    ranked.push({ program: p, score });
+    const decision = programSelectionDecision(p, config, !!process.env.LOCAL_OLLAMA_MODEL);
+    if (decision.score === null) continue;
+    ranked.push({ program: p, score: decision.score });
   }
 
   ranked.sort((a, b) => b.score - a.score);
   return ranked;
+}
+
+/** Explain the current database using exactly the dispatch selection gates. */
+export function getProgramSelectionSummary() {
+  return summarizeProgramSelection(getDb().select().from(schema.securityPrograms).all());
 }
 
 /**

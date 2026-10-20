@@ -19,6 +19,7 @@ import {
   huntProgram,
   processStaticLeadQueue,
   pickBestProgram,
+  getProgramSelectionSummary,
   readSecuritySolverStatus,
   clearSecuritySolverStatus as clearSecurityStatus,
   clearAdversarialReviewStatus,
@@ -172,7 +173,7 @@ function main() {
 
         const program = pickBestProgram();
         if (!program) {
-          log.info("No eligible programs for auto-hunt — waiting 5 min for assessments/cooldowns");
+          log.info({ selection: getProgramSelectionSummary() }, "No eligible programs for auto-hunt — see selection exclusion counts; rechecking within 5 min");
           await waitWhileEnabled(5 * 60 * 1000,true);
           continue;
         }

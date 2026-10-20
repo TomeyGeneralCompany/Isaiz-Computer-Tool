@@ -837,10 +837,17 @@ export async function fetchProgramSignalRequirement(
 
     if (!response.ok) return null; // inconclusive — don't change existing value
     const result = await response.json();
-    if (!result?.data?.team) return null; // query failed or program not found
-    const targetSignal = result.data.team.signal_requirements_setting?.target_signal;
-    // target_signal: null = no requirement, any number (0, -1, positive) = signal required to submit
-    return targetSignal != null;
+    if (result?.errors?.length || !result?.data?.team) return null;
+    const team = result.data.team;
+    if (!Object.hasOwn(team, "signal_requirements_setting")) return null;
+    const setting = team.signal_requirements_setting;
+    if (setting === null) return false;
+    if (!setting || !Object.hasOwn(setting, "target_signal")) return null;
+    const targetSignal = setting.target_signal;
+    if (targetSignal === null) return false;
+    // Zero and negative thresholds are real requirements, not an off switch.
+    // This flag does not establish whether the authenticated researcher meets it.
+    return typeof targetSignal === "number" && Number.isFinite(targetSignal) ? true : null;
   } catch {
     return null; // inconclusive — don't change existing value
   }

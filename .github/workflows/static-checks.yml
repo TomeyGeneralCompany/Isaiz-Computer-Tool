@@ -42,6 +42,8 @@ jobs:
         run: npx tsx scripts/test-mock-assessment.ts
       - name: Verify authorized source acquisition boundaries
         run: npx tsx scripts/test-authorized-source.ts
+      - name: Explain dispatch exclusions and validate Signal response parsing
+        run: npx tsx scripts/test-program-selection.ts
       - name: Verify supported discovery feeds without network requests
         run: npx tsx scripts/test-discovery-feeds.ts
       - name: Verify read-only provider preflight and credential redaction
@@ -81,6 +83,8 @@ jobs:
         run: npm audit --audit-level=moderate
       - name: Create isolated fixture schema through Drizzle
         run: npm run db:push
+      - name: Verify progress diagnostic is read-only
+        run: npx tsx scripts/test-progress-diagnostic.ts
       - name: Verify failed source acquisition preserves hunt history
         run: npx tsx scripts/test-hunt-failure.ts
       - name: Verify static lead evidence routing with an owned database

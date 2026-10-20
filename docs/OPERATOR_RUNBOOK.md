@@ -385,3 +385,29 @@ retains the original asset/type pair, removes repeated asset selections, and
 sets `targetCount` to the selected distinct asset count. Unknown IDs and malformed
 responses are rejected. The stored assessment shape is unchanged. Selection
 IDs are metadata references; they do not establish authorization for testing.
+
+
+### Empty hunt queue: inspect the selection funnel
+
+Run `node --import tsx scripts/diagnose-progress.ts` from the checkout after loading
+`scripts/node-runtime.sh`. This opens the existing configured database read-only;
+it does not initialize or migrate it, launch inference, fetch targets or submit reports.
+It prints only selected nonsecret settings, daily dispatch totals, mutually exclusive
+first-blocking reasons by provider, recorded coverage and static-investigation states.
+The report uses the same selection gates as dispatch. The scheduler now logs these
+counts whenever no program is eligible, instead of assuming assessments/cooldowns.
+A missing assessment, a completed zero-opportunity assessment, and a ranking reduced
+to zero by reward/response efficiency are separate reasons. Counts explain selection,
+not whether a discovered repository is supported by the reproduction engine.
+
+`signal_required` means the program advertises a threshold and the operator enabled
+`SKIP_SIGNAL_REQUIRED`; it does not mean this researcher's account fails that threshold.
+Zero and negative thresholds remain actual requirements. Missing fields, malformed
+values and partial GraphQL errors are inconclusive and preserve the existing database
+value. This repair does not guess account Signal, consume trial reports or disable
+operator filters. Official reference:
+https://docs.hackerone.com/en/articles/8505319-signal-requirements
+
+The local reproduction path remains limited to Python string-in/string-out HTML
+reflection and path-construction probes. JavaScript, Solidity and Go static leads do
+not acquire reproduction support merely by passing selection or assessment.
