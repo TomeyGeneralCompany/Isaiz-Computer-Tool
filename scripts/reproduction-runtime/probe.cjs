@@ -22,6 +22,24 @@ async function javascript() {
   if (typeof fn !== 'function') throw new Error('Exported function required');
   return [await fn(control), await fn(attack)];
 }
+function solidityImport(name) {
+  const candidates = [name, 'node_modules/' + name, 'lib/' + name];
+  // Read only declarative remappings; never load Hardhat/Foundry executable config.
+  const remappingsFile = '/repo/remappings.txt';
+  {
+    const text = (spec.remappings || []).join('\n') + '\n' + (fs.existsSync(remappingsFile) ? fs.readFileSync(sourceFile('remappings.txt'), 'utf8') : '');
+    const remappings = text.split(/\r?\n/).map(s => s.trim())
+      .filter(s => s && !s.startsWith('#'))
+      .map(s => s.split('=')).filter(p => p.length === 2 && p[0] && !p[0].includes(':'))
+      .sort((a,b) => b[0].length-a[0].length);
+    for (const [prefix, replacement] of remappings)
+      if (name.startsWith(prefix)) candidates.unshift(replacement + name.slice(prefix.length));
+  }
+  for (const candidate of candidates) {
+    try { return {contents: fs.readFileSync(sourceFile(candidate), 'utf8')}; } catch {}
+  }
+  return {error: 'Unresolved repository/package/remapping import: ' + name};
+}
 async function solidity() {
   const solc = require('solc');
   const ganache = require('ganache');
@@ -30,10 +48,7 @@ async function solidity() {
     language: 'Solidity',
     sources: {[spec.file]: {content: fs.readFileSync(sourceFile(spec.file), 'utf8')}},
     settings: {evmVersion: 'shanghai', outputSelection: {'*': {'*': ['abi', 'evm.bytecode.object']}}}
-  }), {import: name => {
-    try { return {contents: fs.readFileSync(sourceFile(name), 'utf8')}; }
-    catch (error) { return {error: String(error)}; }
-  }}));
+  }), {import: solidityImport}));
   const errors = (compiled.errors || []).filter(e => e.severity === 'error');
   if (errors.length) throw new Error(errors.map(e => e.formattedMessage).join('\n').slice(0, 2000));
   const parts = spec.function.split('.');

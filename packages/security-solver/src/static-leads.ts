@@ -20,7 +20,8 @@ export async function processStaticLeadQueue(investigate?: (program:SecurityProg
       if (!finding.id.startsWith("offline-") || ["dismissed","submitted","triaged","accepted","rewarded","bot_rejected","duplicate","not_applicable","informative"].includes(finding.status)) continue;
       let notes:any={}; try {const raw=JSON.parse(finding.analysisNotes || "{}");if(raw && typeof raw === "object" && !Array.isArray(raw)) notes=raw;} catch {}
       const prior=notes.staticInvestigation;
-      if (["unsupported","completed","invalid"].includes(prior?.state)) continue;
+      if (["completed","invalid"].includes(prior?.state) ||
+          prior?.state === "unsupported" && (prior?.reproductionVersion === 2 || !/\.(js|mjs|cjs|sol)$/.test(notes.lead?.file || ""))) continue;
       if (prior?.retryAfter && Date.parse(prior.retryAfter)>Date.now()) continue;
       const save=(state:string,detail:string,extra:Record<string,unknown>={}) => {
         // Re-read to preserve an operator dismissal that happened during inference.
@@ -28,7 +29,7 @@ export async function processStaticLeadQueue(investigate?: (program:SecurityProg
         if (!current || current.status === "dismissed") return;
         let currentNotes:any={};try {currentNotes=JSON.parse(current.analysisNotes || "{}");} catch {}
         db.update(schema.securityFindings).set({status:"discovered",analysisNotes:JSON.stringify({...currentNotes,
-          submission_eligible:false,verification:"NOT VERIFIED",staticInvestigation:{state,detail,updatedAt:new Date().toISOString(),...extra}}),updatedAt:new Date()})
+          submission_eligible:false,verification:"NOT VERIFIED",staticInvestigation:{state,detail,reproductionVersion:2,updatedAt:new Date().toISOString(),...extra}}),updatedAt:new Date()})
           .where(eq(schema.securityFindings.id,finding.id)).run();
       };
       const parsed=record.safeParse(notes);
@@ -38,8 +39,8 @@ export async function processStaticLeadQueue(investigate?: (program:SecurityProg
       if (file.startsWith("/") || file.includes("\\") || file.split("/").some(part=>part === ".." || !part)) {
         save("invalid","Invalid repository-relative source path.");continue;
       }
-      if (!file.endsWith(".py")) {
-        save("unsupported","Automatic reproduction currently supports Python string functions (HTML reflection/path construction). This lead's language is unsupported; no vulnerability is established.");
+      if (!/\.(py|js|mjs|cjs|sol)$/.test(file)) {
+        save("unsupported","Automatic reproduction supports Python, JavaScript and Solidity string functions (HTML reflection/path construction). This lead's language is unsupported; no vulnerability is established.");
         continue;
       }
       const program=finding.programId ? db.select().from(schema.securityPrograms).where(eq(schema.securityPrograms.id,finding.programId)).get() : undefined;
