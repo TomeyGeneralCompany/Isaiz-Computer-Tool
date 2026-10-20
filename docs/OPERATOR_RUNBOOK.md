@@ -374,3 +374,14 @@ This avoids fetch/Undici's independent headers timeout ending a valid model call
 before the configured assessment or audit deadline. Redirects are rejected, TLS
 validation stays enabled, and response bodies are limited to 1 MiB.
 A longer deadline permits slower responses; it does not improve model throughput.
+
+
+### Assessment scope selections
+
+The program assessor asks the model for integer `scopeId` row selections rather
+than asset URLs, asset types, or an independently estimated target count. The
+application resolves each selected ID against the exact supplied scope table,
+retains the original asset/type pair, removes repeated asset selections, and
+sets `targetCount` to the selected distinct asset count. Unknown IDs and malformed
+responses are rejected. The stored assessment shape is unchanged. Selection
+IDs are metadata references; they do not establish authorization for testing.

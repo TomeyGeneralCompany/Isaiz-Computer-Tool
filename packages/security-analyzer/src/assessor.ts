@@ -58,6 +58,13 @@ const programAssessmentOutput = z.object({
   recommendedApproach:z.enum(["code_review","web_testing","api_testing","mixed"]),
 }).strict();
 
+// The model selects a supplied row ID. Asset identifiers, types and selected
+// target count are resolved by code, never copied or invented by the model.
+const indexedAssessmentOutput = programAssessmentOutput.omit({targetCount:true,topTargets:true}).extend({
+  topTargets:z.array(z.object({scopeId:z.number().int().positive(),reasoning:z.string().max(300),
+    strategy:z.enum(["code_review","web_testing","api_testing","domain_recon"]).optional()}).strict()).min(1).max(5),
+}).strict();
+
 /** Check if a scope entry represents source code. */
 function isScopeSourceCode(s: { assetIdentifier: string; assetType: string }): boolean {
   return (
@@ -131,7 +138,6 @@ export async function assessProgram(
       targetCount:0,topTargets:[],techStack:[],attackSurface:"No supplied scope assets",hasSourceCode:false,recommendedApproach:"mixed"};
   }
   const allowedAssets = [...new Set(visibleScopes.map(scope => scope.assetIdentifier))];
-  const allowedTypes = [...new Set(visibleScopes.map(scope => scope.assetType))];
   const maxTargets = Math.min(5, allowedAssets.length);
 
   const sourceCodeNote = hasSourceCode
@@ -191,14 +197,14 @@ RUBRIC:
    - 2: Decent reward ($500-$5000 max) AND decent efficiency (50-70%)
    - 3: High reward (>$5000 max) AND high efficiency (>70%)
 
-Return between one and ${maxTargets} distinct topTargets selected ONLY from the displayed In-Scope Assets. Copy each asset identifier and type exactly. Never invent an asset or infer additional hosts or repositories. targetCount must be between topTargets.length and ${allowedAssets.length}, counting only displayed distinct assets. Return at most twelve techStack entries, concise reasoning (300 characters each), and a brief attackSurface (500 characters).
+Return between one and ${maxTargets} distinct topTargets selected ONLY from the displayed In-Scope Assets. Use scopeId, the integer row number shown before the asset. Do not return asset, type, or targetCount: the application resolves the exact asset/type and counts selected distinct assets. Never invent a scopeId or infer additional hosts or repositories. Return at most twelve techStack entries, concise reasoning (300 characters each), and a brief attackSurface (500 characters).
 Respond with ONLY valid JSON, no markdown fences:
-{"rubric": {"sourceCodeQuality": 0-3, "webApiSurface": 0-3, "techStackMatch": 0-3, "scopeBreadth": 0-3, "rewardEfficiency": 0-3}, "targetCount": number, "topTargets": [{"asset": string, "type": string, "reasoning": string, "strategy": "code_review"|"web_testing"|"api_testing"|"domain_recon"}], "techStack": string[], "attackSurface": string, "recommendedApproach": "code_review"|"web_testing"|"api_testing"|"mixed"}`;
+{"rubric": {"sourceCodeQuality": 0-3, "webApiSurface": 0-3, "techStackMatch": 0-3, "scopeBreadth": 0-3, "rewardEfficiency": 0-3}, "topTargets": [{"scopeId": integer row number, "reasoning": string, "strategy": "code_review"|"web_testing"|"api_testing"|"domain_recon"}], "techStack": string[], "attackSurface": string, "recommendedApproach": "code_review"|"web_testing"|"api_testing"|"mixed"}`;
 
   log.debug({ name: program.name, hasSourceCode }, "Assessing program opportunity");
 
   try {
-    const parsed = await runClaudeStructured<any>(prompt, {
+    const raw = await runClaudeStructured<any>(prompt, {
       model: config.ANALYSIS_MODEL,
       maxTokens: 1024,
       temperature: 0,
@@ -222,18 +228,16 @@ Respond with ONLY valid JSON, no markdown fences:
             required: ["sourceCodeQuality", "webApiSurface", "techStackMatch", "scopeBreadth", "rewardEfficiency"],
             additionalProperties: false,
           },
-          targetCount: { type: "integer", enum: allowedAssets.map((_, i) => i + 1) },
           topTargets: {
             type: "array", minItems: 1, maxItems: maxTargets,
             items: {
               type: "object",
               properties: {
-                asset: { type: "string", enum: allowedAssets },
-                type: { type: "string", enum: allowedTypes },
+                scopeId: { type: "integer", enum: visibleScopes.map((_, i) => i + 1) },
                 reasoning: { type: "string", maxLength: 300 },
                 strategy: { type: "string", enum: ["code_review", "web_testing", "api_testing", "domain_recon"] },
               },
-              required: ["asset", "type", "reasoning"],
+              required: ["scopeId", "reasoning"],
               additionalProperties: false,
             },
           },
@@ -241,26 +245,28 @@ Respond with ONLY valid JSON, no markdown fences:
           attackSurface: { type: "string", maxLength: 500 },
           recommendedApproach: { type: "string", enum: ["code_review", "web_testing", "api_testing", "mixed"] },
         },
-        required: ["rubric", "targetCount", "topTargets", "techStack", "attackSurface", "recommendedApproach"],
+        required: ["rubric", "topTargets", "techStack", "attackSurface", "recommendedApproach"],
         additionalProperties: false,
       },
     });
-    if (!parsed) {
-      throw new Error("Could not parse program assessment — no valid JSON returned");
+    if (!raw) throw new Error("Could not parse program assessment — no valid JSON returned");
+    const checked = indexedAssessmentOutput.safeParse(raw);
+    if (!checked.success) throw new Error("Program assessment did not match the required schema");
+    const topTargets: ProgramAssessmentResult["topTargets"] = [];
+    const selectedAssets = new Set<string>();
+    for (const target of checked.data.topTargets) {
+      const scope = visibleScopes[target.scopeId - 1];
+      if (!scope) throw new Error("Program assessment selected an unknown scope ID");
+      // Repeated row selections and the same asset with multiple types are one
+      // target, not a scope violation or a reason to discard a valid assessment.
+      if (selectedAssets.has(scope.assetIdentifier)) continue;
+      selectedAssets.add(scope.assetIdentifier);
+      topTargets.push({asset:scope.assetIdentifier,type:scope.assetType,
+        reasoning:target.reasoning,...(target.strategy ? {strategy:target.strategy} : {})});
     }
-
-    if (!programAssessmentOutput.safeParse(parsed).success) {
+    const parsed = {...checked.data,topTargets,targetCount:topTargets.length};
+    if (!programAssessmentOutput.safeParse(parsed).success || parsed.topTargets.length > maxTargets)
       throw new Error("Program assessment did not match the required schema");
-    }
-
-    const selectedAssets = new Set(parsed.topTargets.map((target: {asset:string}) => target.asset));
-    if (!parsed.topTargets.length || parsed.topTargets.length > maxTargets ||
-        selectedAssets.size !== parsed.topTargets.length ||
-        parsed.targetCount < parsed.topTargets.length || parsed.targetCount > allowedAssets.length ||
-        parsed.topTargets.some((target: {asset:string;type:string}) =>
-          !visibleScopes.some(scope => scope.assetIdentifier === target.asset && scope.assetType === target.type))) {
-      throw new Error("Program assessment targets do not match the supplied scope");
-    }
 
     // Normalize rubric scores to 0-3 integers
     const rubric: ProgramAssessmentRubric = {

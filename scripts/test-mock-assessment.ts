@@ -16,7 +16,7 @@ let calls = 0;
 const requests: any[] = [];
 const answer = {
   rubric:{sourceCodeQuality:3,webApiSurface:0,techStackMatch:3,scopeBreadth:0,rewardEfficiency:2},
-  targetCount:1,topTargets:[{asset:"https://github.com/example/owned-assessment-fixture",type:"SOURCE_CODE",reasoning:"Review TypeScript source",strategy:"code_review"}],
+  topTargets:[{scopeId:1,reasoning:"Review TypeScript source",strategy:"code_review"}],
   techStack:["TypeScript"],attackSurface:"Owned source fixture",recommendedApproach:"code_review",
 };
 const server = createServer(async (req,res) => {
@@ -34,8 +34,8 @@ const server = createServer(async (req,res) => {
     res.end(JSON.stringify({done:true,done_reason:"length",message:{content:'{"rubric":{"sourceCodeQuality":2,"topTarget'}}));
     return;
   }
-  const scopedAnswer = mode === "invented" ? {...answer,topTargets:[{...answer.topTargets[0],asset:"https://not-in-scope.example"}]} :
-    mode === "wrongType" ? {...answer,topTargets:[{...answer.topTargets[0],type:"URL"}]} :
+  const scopedAnswer = mode === "second" ? {...answer,topTargets:[{...answer.topTargets[0],scopeId:2}]} : mode === "invented" ? {...answer,topTargets:[{...answer.topTargets[0],scopeId:999}]} :
+    mode === "wrongType" ? {...answer,topTargets:[{...answer.topTargets[0],scopeId:"1"}]} :
     mode === "excessCount" ? {...answer,targetCount:5} :
     mode === "duplicates" ? {...answer,topTargets:[answer.topTargets[0],answer.topTargets[0]]} :
     mode === "noTargets" ? {...answer,topTargets:[]} : answer;
@@ -56,22 +56,40 @@ try {
   assert.equal(calls,2);
   assert.deepEqual(requests.map(r => r.options.num_predict),[1024,2048]);
   assert.equal(requests[0].format.properties.topTargets.maxItems,1);
-  assert.deepEqual(requests[0].format.properties.targetCount.enum,[1]);
-  assert.deepEqual(requests[0].format.properties.topTargets.items.properties.asset.enum,[answer.topTargets[0].asset]);
-  assert.deepEqual(requests[0].format.properties.topTargets.items.properties.type.enum,["SOURCE_CODE"]);
+  assert.equal(requests[0].format.properties.targetCount,undefined);
+  assert.deepEqual(requests[0].format.properties.topTargets.items.properties.scopeId.enum,[1]);
+  assert.equal(requests[0].format.properties.topTargets.items.properties.asset,undefined);
+  assert.equal(requests[0].format.properties.topTargets.items.properties.type,undefined);
   assert.equal(requests[0].format.properties.rubric.additionalProperties,false);
   assert.ok(requests[0].format.required.includes("topTargets"));
   for (const [next,pattern] of [
     ["truncated",/output token budget/], ["invalid",/invalid JSON/],
     ["array",/JSON object/], ["missing",/required fields/],
     ["nested",/required schema/], ["incomplete",/response incomplete/],
-    ["http",/HTTP 401/], ["invented",/supplied scope/], ["wrongType",/supplied scope/],
-    ["excessCount",/supplied scope/], ["duplicates",/supplied scope/], ["noTargets",/supplied scope/],
+    ["http",/HTTP 401/], ["invented",/unknown scope ID/], ["wrongType",/required schema/],
+    ["excessCount",/required schema/], ["noTargets",/required schema/],
   ] as const) {
     mode = next; calls = 0;
     await assert.rejects(assessProgram(assessmentFixture),pattern);
     assert.equal(calls,next === "truncated" ? 2 : 1);
   }
+  mode = "duplicates";
+  checkAssessment(await assessProgram(assessmentFixture));
+  mode = "normal";
+  const multi = await assessProgram({...assessmentFixture, scopeSummary:JSON.stringify({scopes:[
+    {assetIdentifier:"https://example.invalid/owned",assetType:"URL",eligibleForBounty:true},
+    {assetIdentifier:"https://github.com/example/owned-assessment-fixture",assetType:"SOURCE_CODE",eligibleForBounty:true},
+  ]})});
+  checkAssessment(multi); // Source-first row IDs resolve the exact original pair.
+  assert.deepEqual(requests.at(-1).format.properties.topTargets.items.properties.scopeId.enum,[1,2]);
+  mode = "second";
+  const exactPair = await assessProgram({...assessmentFixture,scopeSummary:JSON.stringify({scopes:[
+    {assetIdentifier:"https://example.invalid/owned",assetType:"URL",eligibleForBounty:true},
+    {assetIdentifier:"https://github.com/example/owned-assessment-fixture",assetType:"SOURCE_CODE",eligibleForBounty:true},
+  ]})});
+  assert.equal(exactPair.topTargets[0].asset,"https://example.invalid/owned");
+  assert.equal(exactPair.topTargets[0].type,"URL");
+  assert.equal(exactPair.targetCount,1);
   mode = "plain";
   assert.equal(await runClaude("Reply READY",{maxTokens:37}),"READY");
   assert.equal(requests.at(-1).options.num_predict,37);
