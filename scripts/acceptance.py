@@ -87,6 +87,7 @@ def main() -> int:
             # All of these tests are local-only and intercept or mock outbound traffic.
             # They never submit to a real platform or contact program assets.
             for test_name, script in [
+                ("ollama_http_deadline", "scripts/test-ollama-http.ts"),
                 ("mock_ollama", "scripts/test-mock-agent.ts"),
                 ("mock_program_assessment", "scripts/test-mock-assessment.ts"),
                 ("authorized_source", "scripts/test-authorized-source.ts"),

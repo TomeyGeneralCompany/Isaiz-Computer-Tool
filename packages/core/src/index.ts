@@ -17,3 +17,5 @@ export { ScopedHttpInspector, isPublicIpv4, type HttpObservation } from "./autho
 
 export { authorizedSourceUrls } from "./source-repository";
 export { programCandidateBlocker, recordHuntAttempt } from "./program-eligibility";
+
+export { postOllamaJson } from "./ollama-http";

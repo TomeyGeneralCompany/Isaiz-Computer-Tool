@@ -1,3 +1,4 @@
+import { postOllamaJson } from "@bounty/core";
 import { auditActionSchema, auditProtocolPrompt, decodeAuditAction } from "./local-audit-protocol";
 import { readdir, readFile, realpath, stat, appendFile } from "node:fs/promises";
 import { resolve, relative, sep, join } from "node:path";
@@ -79,18 +80,12 @@ export async function runLocalAudit(
       controller.signal.throwIfAborted();
       const started = Date.now();
       await appendFile(logFile, `[OLLAMA] turn ${turn+1}/${settings.maxTurns}: request started; model=${model}; context=${limits.numCtx ?? "server-default"}; generation_limit=${generationBudget}; protocol=${protocol}\n`);
-      const response = await fetch(process.env.AUTOHACK_OLLAMA_URL || "http://127.0.0.1:11434/api/chat", {
-        method: "POST", signal: controller.signal,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model, stream: false, think: false, messages,
+      const result = await postOllamaJson(process.env.AUTOHACK_OLLAMA_URL || "http://127.0.0.1:11434/api/chat", { model, stream: false, think: false, messages,
           ...(structured ? {format:actionSchema} : {tools:availableTools}),
           keep_alive:"10m",
           options: { num_predict:generationBudget,
             ...(limits.numCtx === undefined ? {} : {num_ctx:settings.numCtx}),
-            ...(limits.numThreads === undefined ? {} : {num_thread:settings.numThreads}), temperature:0 } }),
-      });
-      if (!response.ok) throw new Error("Ollama HTTP " + response.status);
-      const result = await response.json() as { message?: Message; eval_count?: number; prompt_eval_count?: number; done_reason?: string };
+            ...(limits.numThreads === undefined ? {} : {num_thread:settings.numThreads}), temperature:0 } }, controller.signal) as { message?: Message; eval_count?: number; prompt_eval_count?: number; done_reason?: string };
       await appendFile(logFile, `[OLLAMA] turn ${turn+1}: response received in ${Date.now()-started}ms; prompt_tokens=${result.prompt_eval_count ?? "unknown"}; generated_tokens=${result.eval_count ?? "unknown"}\n`);
       let message = result.message;
       if (!message) throw new Error("Ollama returned no assistant message");

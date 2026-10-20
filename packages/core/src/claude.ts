@@ -1,3 +1,4 @@
+import { postOllamaJson } from "./ollama-http";
 import { spawn } from "node:child_process";
 import { getConfig } from "./config";
 import { extractJsonWithKey } from "./json-utils";
@@ -91,10 +92,7 @@ async function runLocalOllama(
       // A single retry shares the deadline. Never repair or accept partial JSON.
       for (let attempt = 0, tokens = requestedTokens; attempt < 2; attempt++, tokens = Math.min(tokens * 2, 8192)) {
         log.info({model, attempt:attempt + 1, generationLimit:tokens, timeoutMs}, "Ollama assessment started");
-        const response = await fetch(endpoint, {
-          method: "POST", redirect: "error", signal: controller.signal,
-          headers: {"Content-Type":"application/json"},
-          body: JSON.stringify({
+        const result = await postOllamaJson(endpoint, {
             model, stream:false, think:false,
             ...(schema ? {format:schema} : {}),
             keep_alive:"10m",
@@ -106,13 +104,7 @@ async function runLocalOllama(
               {role:"user",content:bounded + (schema ? "\nRespond with JSON only. /no_think" : "")},
             ],
             options:{num_ctx:Math.max(4096,tokens + 2048),num_predict:tokens,temperature:opts?.temperature ?? 0,num_thread:4},
-          }),
-        });
-        if (!response.ok) {
-          await response.body?.cancel();
-          throw new Error(`Ollama assessment HTTP ${response.status}`);
-        }
-        const result = await response.json().catch(() => {throw new Error("Ollama assessment returned malformed response");}) as {
+          }, controller.signal, "Ollama assessment") as {
           message?:{content?:string}; done?:boolean; done_reason?:string;
           error?:unknown; eval_count?:number;
         };

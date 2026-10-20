@@ -364,3 +364,13 @@ engine support; they are not automatically rejected as false positives.
 
 Generic finding assessment and manual Accept cannot promote imported leads or
 erase their provenance. The legacy finding-solver path does not handle them.
+
+
+### Long-running Ollama HTTP replies
+
+Both local assessment and tool-using audit calls use Node's HTTP/HTTPS client
+with the caller's abort deadline covering connection, response headers and body.
+This avoids fetch/Undici's independent headers timeout ending a valid model call
+before the configured assessment or audit deadline. Redirects are rejected, TLS
+validation stays enabled, and response bodies are limited to 1 MiB.
+A longer deadline permits slower responses; it does not improve model throughput.

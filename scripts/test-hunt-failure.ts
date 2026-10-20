@@ -1,5 +1,6 @@
 /** Own temporary SQLite, fake Git and intercepted model; no target traffic. */
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
 import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,20 +8,33 @@ import { execFileSync } from "node:child_process";
 const root = mkdtempSync(join(tmpdir(), "autohack-failed-hunt-"));
 const originalFetch = globalThis.fetch;
 const originalPath = process.env.PATH;
+const originalUrl = process.env.AUTOHACK_OLLAMA_URL;
+let modelCalls = 0;
+let answer = "Incomplete owned fixture output";
+const model = createServer(async (req,res) => {
+  let raw="";for await(const part of req) raw+=part.toString();
+  const request=JSON.parse(raw);modelCalls++;
+  const hasRead=request.messages.some((message:{content:string}) => message.content.includes("TOOL_RESULT") && message.content.includes("ownedFixture"));
+  res.end(JSON.stringify({message:{role:"assistant",content:JSON.stringify(hasRead
+    ? {action:"final",path:"",query:"",answer}
+    : {action:"read_file",path:"source-1/sample.ts",query:"",answer:""})}}));
+});
 process.env.PROJECT_ROOT = root;
 process.env.DB_PATH = join(root, "data", "fixture.sqlite");
 process.env.GITHUB_TOKEN = "owned-offline-fixture";
 process.env.LOCAL_OLLAMA_MODEL = "owned-mock";
 process.env.SECURITY_AUTO_SUBMIT = "false";
 try {
+  await new Promise<void>(resolve=>model.listen(0,"127.0.0.1",resolve));
+  const address=model.address();assert.ok(address && typeof address !== "string");
+  process.env.AUTOHACK_OLLAMA_URL=`http://127.0.0.1:${address.port}/api/chat`;
   execFileSync(process.execPath, ["--import", "tsx", "scripts/initialize-db.ts"], {stdio:"pipe"});
   mkdirSync(join(root, "bin"));
   const git = join(root, "bin", "git");
   writeFileSync(git, "#!/bin/sh\nexit 42\n");
   chmodSync(git, 0o700);
   process.env.PATH = join(root, "bin") + ":" + originalPath;
-  let modelCalls = 0;
-  globalThis.fetch = (async () => { modelCalls++; throw new Error("Owned model fixture unavailable"); }) as typeof fetch;
+  globalThis.fetch = (async () => { throw new Error("Unexpected outbound fetch in owned fixture"); }) as typeof fetch;
   const { getDb, schema } = await import("../packages/core/src/db/index");
   const { huntProgram } = await import("../packages/security-solver/src/index");
   const db = getDb();
@@ -44,15 +58,6 @@ root = pathlib.Path(sys.argv[-1])
 root.mkdir(parents=True)
 (root / "sample.ts").write_text("export const ownedFixture = true;\\n")
 `);
-  let answer = "Incomplete owned fixture output";
-  globalThis.fetch = (async (_input, init) => {
-    const request = JSON.parse(String(init?.body));
-    const hasRead = request.messages.some((message: {content:string}) =>
-      message.content.includes("TOOL_RESULT") && message.content.includes("ownedFixture"));
-    return Response.json({message:{role:"assistant",content:JSON.stringify(hasRead
-      ? {action:"final",path:"",query:"",answer}
-      : {action:"read_file",path:"source-1/sample.ts",query:"",answer:""})}});
-  }) as typeof fetch;
   await assert.rejects(huntProgram(program), /inspection limit/);
   assert.equal(db.select().from(schema.securityPrograms).get()!.lastHuntedAt, null);
   answer = JSON.stringify({findings:[]});
@@ -79,6 +84,9 @@ root.mkdir(parents=True)
   assert.equal(preserved.huntMissStreak, 1);
   console.log("Acquisition failure, incomplete coverage and preserved history: PASSED");
 } finally {
+  model.closeAllConnections();model.close();
+  if(originalUrl === undefined) delete process.env.AUTOHACK_OLLAMA_URL;
+  else process.env.AUTOHACK_OLLAMA_URL=originalUrl;
   globalThis.fetch = originalFetch;
   process.env.PATH = originalPath;
   rmSync(root, {recursive:true,force:true});
