@@ -31,7 +31,7 @@ function solidityImport(name) {
     const remappings = text.split(/\r?\n/).map(s => s.trim())
       .filter(s => s && !s.startsWith('#'))
       .map(s => s.split('=')).filter(p => p.length === 2 && p[0] && !p[0].includes(':'))
-      .sort((a,b) => b[0].length-a[0].length);
+      .sort((a,b) => a[0].length-b[0].length);
     for (const [prefix, replacement] of remappings)
       if (name.startsWith(prefix)) candidates.unshift(replacement + name.slice(prefix.length));
   }
