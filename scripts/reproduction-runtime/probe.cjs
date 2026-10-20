@@ -52,6 +52,7 @@ async function solidity() {
     logging: {quiet: true}, wallet: {deterministic: true, totalAccounts: 1},
     chain: {hardfork: 'shanghai'}, miner: {blockGasLimit: 12000000}
   });
+  await transport.request({method: 'eth_chainId', params: []});
   try {
     const provider = new BrowserProvider(transport);
     const signer = await provider.getSigner();
