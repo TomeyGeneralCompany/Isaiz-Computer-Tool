@@ -103,7 +103,8 @@ def prepare_dependencies(repository: Path) -> None:
     for name, item in entries:
         if "node_modules" not in PurePosixPath(name).parts:
             continue  # Workspace source entries are already in the checkout.
-        if not name.startswith("node_modules/") or "\\" in name:
+        if (not name.startswith("node_modules/") or "\\" in name
+                or any(part in ("", ".", "..") for part in name.split("/"))):
             raise DependencyError("Unsupported npm package location")
         destination = inside(repository, name)
         if item.get("link"):
