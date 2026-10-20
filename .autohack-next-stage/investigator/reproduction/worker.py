@@ -23,7 +23,7 @@ def run_case(spec):
     if 'source_probe' in spec:
         if not fixture.is_dir() or not fixture.is_relative_to(CASES.resolve()):
             return {'status':'inconclusive', 'reason':'Fixture must be a local directory under reproduction/cases'}
-        driver = pathlib.Path(__file__).resolve().parents[4] / 'scripts/source-reproduction.py'
+        driver = pathlib.Path(__file__).resolve().parents[3] / 'scripts/source-reproduction.py'
         with tempfile.TemporaryDirectory(prefix='tomey-case-') as temporary:
             manifest = pathlib.Path(temporary) / 'spec.json'
             manifest.write_text(json.dumps(spec['source_probe']))
