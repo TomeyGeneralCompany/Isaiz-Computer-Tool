@@ -114,6 +114,13 @@ class LanguageTests(unittest.TestCase):
             function="Render.render", extra={"foundry.toml":'[profile.default]\nremappings = ["owned/=lib/owned/src/"]\n',
             "lib/owned/src/Wrap.sol":'pragma solidity ^0.8.20; library Wrap {function wrap(string memory x) internal pure returns(string memory) {return string.concat("<p>",x,"</p>");}}'})
 
+    def test_solidity_longest_remapping_wins(self):
+        self.probe("Render.sol", 'pragma solidity ^0.8.20; import "owned/deep/Wrap.sol";'
+            'contract Render {function render(string memory x) public pure returns(string memory) {return Wrap.wrap(x);}}',
+            function="Render.render", extra={"remappings.txt":"owned/=lib/wrong/\nowned/deep/=lib/right/\n",
+            "lib/wrong/deep/Wrap.sol":'pragma solidity ^0.8.20; library Wrap {function wrap(string memory) internal pure returns(string memory) {return "safe";}}',
+            "lib/right/Wrap.sol":'pragma solidity ^0.8.20; library Wrap {function wrap(string memory x) internal pure returns(string memory) {return string.concat("<p>",x,"</p>");}}'})
+
     def test_solidity_text_remapping(self):
         self.probe("Render.sol", 'pragma solidity ^0.8.20; import "owned/Wrap.sol";'
             'contract Render {function render(string memory x) public pure returns(string memory) {return Wrap.wrap(x);}}',
