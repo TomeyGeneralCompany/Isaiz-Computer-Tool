@@ -80,7 +80,7 @@ def run_probe(repository: Path, specification: dict) -> dict:
             '--ro-bind',str(Path(node).resolve()),'/probe-node',
             '--ro-bind',str(runtime),'/runtime']
         invocation = ['/usr/bin/python3','-I','/probe.py'] if language == 'python' else [
-            '/probe-node','--max-old-space-size=256','--disable-proto=throw','/runtime/probe.cjs']
+            '/probe-node','--disable-wasm-trap-handler','--max-old-space-size=256','--disable-proto=throw','/runtime/probe.cjs']
         command=[sandbox,'--unshare-all','--die-with-parent','--new-session','--cap-drop','ALL','--clearenv',
                  '--ro-bind','/usr','/usr','--ro-bind','/lib','/lib','--ro-bind-try','/lib64','/lib64',
                  '--proc','/proc','--dev','/dev','--tmpfs','/tmp','--ro-bind',str(repository),'/repo',
