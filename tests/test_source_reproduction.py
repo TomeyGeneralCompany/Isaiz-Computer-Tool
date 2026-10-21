@@ -128,5 +128,64 @@ class LanguageTests(unittest.TestCase):
             "lib/owned/src/Wrap.sol":'pragma solidity ^0.8.20; library Wrap {function wrap(string memory x) internal pure returns(string memory) {return string.concat("<p>",x,"</p>");}}'})
 
 
+@unittest.skipUnless(os.getenv("TOMEY_REPRODUCTION_INTEGRATION") == "1", "requires installed sandbox/runtime")
+class StatefulSolidityTests(unittest.TestCase):
+    SOURCE = """pragma solidity ^0.8.20;
+contract Store {
+ uint256 public value; address public owner;
+ constructor(uint256 initial) payable { value=initial;owner=msg.sender; }
+ function set(uint256 x) external {require(msg.sender==owner,"owner"); value=x;}
+ function deposit() external payable {value+=msg.value;}
+ function balance() external view returns(uint256) {return address(this).balance;}
+}
+"""
+    def run_sequence(self, sequence):
+        with tempfile.TemporaryDirectory() as directory:
+            repo=Path(directory)
+            (repo/"Store.sol").write_text(self.SOURCE)
+            return driver.run_probe(repo,{"file":"Store.sol","function":"Store.set",
+                "kind":"solidity_sequence","nonce":"a"*32,"sequence":sequence})
+
+    def sequence(self):
+        return {"constructorArgs":["9007199254740993"],"constructorValueWei":"10","steps":[
+            {"operation":"call","function":"value()","args":[],"expect":"9007199254740993"},
+            {"operation":"send","function":"set(uint256)","args":["7"]},
+            {"operation":"call","function":"value()","args":[],"expect":"7"},
+            {"operation":"send","function":"deposit()","args":[],"sender":2,"valueWei":"5"},
+            {"operation":"call","function":"balance()","args":[],"expect":"15"}]}
+
+    def test_constructor_state_changes_payable_and_deterministic_replay(self):
+        sequence=self.sequence()
+        first=self.run_sequence(sequence)
+        self.assertEqual(first['status'],'behavior_not_observed',first)
+        self.assertFalse(first['behavior_observed'])
+        self.assertTrue(all(step['passed'] for step in first['observations']['steps']))
+        self.assertEqual(self.run_sequence(sequence)['observations'],first['observations'])
+
+    def test_assertion_mismatch_is_recorded(self):
+        sequence=self.sequence();sequence['steps'][2]['expect']='8'
+        result=self.run_sequence(sequence)
+        self.assertEqual(result['status'],'behavior_observed',result)
+        self.assertFalse(result['observations']['steps'][2]['passed'])
+        self.assertEqual(result['observations']['steps'][2]['actual'],'7')
+
+    def test_expected_and_unexpected_revert(self):
+        sequence=self.sequence()
+        sequence['steps'].insert(1,{'operation':'send','function':'set(uint256)','args':['2'],'sender':1,'expectRevert':True})
+        result=self.run_sequence(sequence)
+        self.assertEqual(result['status'],'behavior_not_observed',result)
+        self.assertTrue(result['observations']['steps'][1]['reverted'])
+        sequence['steps'][1]['expectRevert']=False
+        self.assertEqual(self.run_sequence(sequence)['status'],'probe_failed')
+
+    def test_invalid_setup_does_not_become_a_finding(self):
+        sequence=self.sequence();sequence['constructorArgs']=[]
+        result=self.run_sequence(sequence)
+        self.assertEqual(result['status'],'probe_failed',result)
+        self.assertFalse(result['behavior_observed'])
+        sequence=self.sequence();sequence['steps'][1]['args']=['not a number'];sequence['steps'][1]['expectRevert']=True
+        self.assertEqual(self.run_sequence(sequence)['status'],'probe_failed')
+
+
 if __name__ == "__main__":
     unittest.main()

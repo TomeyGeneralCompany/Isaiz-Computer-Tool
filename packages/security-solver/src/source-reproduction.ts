@@ -1,3 +1,4 @@
+import { soliditySequenceSchema, type SoliditySequence } from "./solidity-sequence";
 import { createHash, randomBytes } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -12,9 +13,20 @@ const driver = fileURLToPath(new URL("../../../scripts/source-reproduction.py",i
 const sha = (value:string | Buffer) => createHash("sha256").update(value).digest("hex");
 const digest = z.string().regex(/^[a-f0-9]{64}$/);
 const specSchema = z.object({file:z.string().min(1).max(4096),function:z.string().regex(/^[A-Za-z][A-Za-z0-9_]{0,79}(?:\.[A-Za-z][A-Za-z0-9_]{0,79})?$/),
-  kind:z.enum(["html_reflection","path_construction"]),nonce:z.string().regex(/^[a-f0-9]{32}$/)}).strict();
+  kind:z.enum(["html_reflection","path_construction","solidity_sequence"]),sequence:soliditySequenceSchema.optional(),nonce:z.string().regex(/^[a-f0-9]{32}$/)}).strict().superRefine((spec,ctx)=>{
+    if(spec.kind === "solidity_sequence") {
+      if(!spec.file.endsWith(".sol") || !spec.function.includes(".") || !spec.sequence ||
+         !spec.sequence.steps.some(step=>step.function.split("(")[0]===spec.function.split(".")[1]))
+        ctx.addIssue({code:z.ZodIssueCode.custom,message:"Solidity sequence must exercise the selected Contract.function"});
+    } else if(spec.sequence)ctx.addIssue({code:z.ZodIssueCode.custom,message:"Sequence requires solidity_sequence kind"});
+  });
+const sequenceObservations = z.object({contract:z.string(),accounts:z.array(z.string()).length(3),deploymentGasUsed:z.string(),
+  steps:z.array(z.union([
+    z.object({operation:z.literal("call"),function:z.string(),sender:z.number(),actual:z.unknown(),expected:z.unknown(),passed:z.boolean()}),
+    z.object({operation:z.literal("send"),function:z.string(),sender:z.number(),valueWei:z.string(),reverted:z.boolean(),gasUsed:z.string(),passed:z.boolean()}),
+  ])).min(1).max(16)});
 const resultSchema = z.object({status:z.string(),behavior_observed:z.boolean(),source_sha256:digest.optional(),
-  kind:z.string().optional(),observations:z.object({control_input:z.string(),control_output:z.string(),attack_input:z.string(),attack_output:z.string()}).optional(),
+  kind:z.string().optional(),observations:z.union([z.object({control_input:z.string(),control_output:z.string(),attack_input:z.string(),attack_output:z.string()}),sequenceObservations]).optional(),
   limitation:z.string().optional(),detail:z.string().optional(),exit_code:z.number().optional()});
 const caseSchema = z.object({version:z.literal(1),programId:z.string(),repositoryUrl:z.string(),commit:z.string().regex(/^[a-f0-9]{40}$/),
   sourceSha256:digest,spec:specSchema,result:resultSchema});
@@ -68,7 +80,7 @@ export async function createProbeSession(program:SecurityProgram,workspace:strin
   let unsupportedProbes = 0;
   let failedProbes = 0;
   const workspaceRoot=await realpath(workspace);
-  const probe=async(path:string,functionName:string,kind:string):Promise<string> => {
+  const probe=async(path:string,functionName:string,kind:string,sequence?:SoliditySequence):Promise<string> => {
     signal?.throwIfAborted();
     const file=await realpath(resolve(workspaceRoot,path));
     const repo = repositories.find(candidate => {
@@ -77,7 +89,7 @@ export async function createProbeSession(program:SecurityProgram,workspace:strin
     });
     if(!repo) throw new Error("Probe file is not in an acquired source repository");
     const filePath=relative(repo.directory,file).split(sep).join("/");
-    const spec=specSchema.parse({file:filePath,function:functionName,kind,nonce:randomBytes(16).toString("hex")});
+    const spec=specSchema.parse({file:filePath,function:functionName,kind,...(sequence ? {sequence} : {}),nonce:randomBytes(16).toString("hex")});
     if(!targetInExplicitScope(program.scopeSummary,repo.url+"/"+filePath))throw new Error("Probe is outside program scope");
     let commit: string;
     let sourceSha256: string;

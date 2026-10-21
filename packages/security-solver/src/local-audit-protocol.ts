@@ -3,7 +3,7 @@ export const auditActionSchema = {
   type:"object", additionalProperties:false,
   properties:{
     action:{type:"string",enum:["read_file","list_files","search_files","final"]},
-    offset:{type:"integer",minimum:0}, path:{type:"string"}, query:{type:"string"}, answer:{type:"string"},
+    sequence:{type:"object"}, offset:{type:"integer",minimum:0}, path:{type:"string"}, query:{type:"string"}, answer:{type:"string"},
   },
   required:["action","path","query","answer"],
 };
@@ -19,11 +19,11 @@ Do not describe intentions or emit reasoning. Select an action immediately.
 For a file request, choose read_file with the exact filename supplied by the task.
 After reading: {"action":"final","path":"","query":"","answer":"your evidence-supported answer"}.
 `;
-export function decodeAuditAction(raw: string, allowProbe = false): {action:string;path:string;query:string;answer:string;offset?:number} {
+export function decodeAuditAction(raw: string, allowProbe = false): {action:string;path:string;query:string;answer:string;offset?:number;sequence?:unknown} {
   const value: unknown = JSON.parse(raw);
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Expected a JSON action object");
   const record = value as Record<string,unknown>;
-  if (Object.keys(record).some(key=>!["action","path","query","answer","offset"].includes(key))
+  if (Object.keys(record).some(key=>!["action","path","query","answer","offset","sequence"].includes(key))
       || !["action","path","query","answer"].every(key=>typeof record[key] === "string")
       || !["read_file","list_files","search_files","final",...(allowProbe ? ["verify_source","verify_python"] : [])].includes(String(record.action)))
     throw new Error("Invalid read-only JSON action");
