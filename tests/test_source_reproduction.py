@@ -18,6 +18,17 @@ spec.loader.exec_module(driver)
 
 
 class ValidationTests(unittest.TestCase):
+    def test_foundry_compiler_settings(self):
+        self.assertEqual(driver.foundry_settings({}), {})
+        self.assertEqual(driver.foundry_settings({'optimizer': True, 'optimizer_runs': 500, 'via_ir': True}),
+                         {'optimizer': {'enabled': True, 'runs': 500}, 'viaIR': True})
+        self.assertEqual(driver.foundry_settings({'optimizer': False, 'via_ir': False}),
+                         {'optimizer': {'enabled': False, 'runs': 200}, 'viaIR': False})
+        for profile in ([], {'via_ir': 'true'}, {'optimizer': 1}, {'optimizer_runs': True},
+                        {'optimizer_runs': -1}, {'optimizer_runs': 4294967296}):
+            with self.assertRaises(ValueError):
+                driver.foundry_settings(profile)
+
     def test_rejects_escape_and_unsupported_extension(self):
         with tempfile.TemporaryDirectory() as directory:
             repo = Path(directory) / "repo"
@@ -65,6 +76,24 @@ class LanguageTests(unittest.TestCase):
         self.probe("Render.sol", 'pragma solidity ^0.8.20; contract Render {'
                    'function render(string memory x) public pure returns(string memory) {'
                    'return string.concat("<p>",x,"</p>"); }}', function="Render.render")
+
+    def test_solidity_foundry_optimizer_and_via_ir(self):
+        arguments = ','.join('uint a' + str(i) for i in range(18))
+        expression = '+'.join('a' + str(i) for i in range(18))
+        source = ('pragma solidity ^0.8.20; contract Render {'
+                  'function render(string memory x) public pure returns(string memory) {return x;}'
+                  'function sum(' + arguments + ') external pure returns(uint) {return ' + expression + ';}}')
+        # The extra function makes legacy compilation fail even though render is simple.
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            (repo/'Render.sol').write_text(source)
+            spec = {'file':'Render.sol','function':'Render.render','kind':'html_reflection','nonce':'a'*32}
+            failed = driver.run_probe(repo, spec)
+            self.assertEqual(failed['status'], 'probe_failed', failed)
+            self.assertIn('Stack too deep', failed['detail'])
+            (repo/'foundry.toml').write_text('[profile.default]\noptimizer = true\noptimizer_runs = 200\nvia_ir = true\n')
+            passed = driver.run_probe(repo, spec)
+            self.assertEqual(passed['status'], 'behavior_observed', passed)
 
     def test_solidity_negative_control(self):
         self.probe("Render.sol", 'pragma solidity ^0.8.20; contract Render {'

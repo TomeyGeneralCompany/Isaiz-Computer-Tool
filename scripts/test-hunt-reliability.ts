@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {mkdtemp,writeFile,rm,symlink} from 'node:fs/promises';
+import {mkdtemp,writeFile,rm,symlink,mkdir} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {execFileSync} from 'node:child_process';
@@ -37,6 +37,25 @@ try {
  execFileSync('git',['-C',root,'add','.']);
  const withLink=await inspectSourceCapability(root);
  assert.equal(withLink.blocked,false);assert.ok(withLink.unsupported.some(x=>x.includes('symlink')));
+ // Only the nested gitlink contains runnable code; recurse through two levels.
+ const parent=join(root,'parent'), child=join(parent,'child'), nested=join(child,'nested');
+ await mkdir(nested,{recursive:true});
+ for(const dir of [parent,child,nested])execFileSync('git',['init','-q',dir]);
+ await writeFile(join(nested,'Owned.sol'),'pragma solidity ^0.8.20; contract Owned {}');
+ for(const [dir,name] of [[parent,'child'],[child,'nested']]) {
+   await writeFile(join(dir,'.gitmodules'),`[submodule "${name}"]\n path = ${name}\n url = https://github.com/fixture/${name}\n`);
+   execFileSync('git',['-C',dir,'config',`submodule.${name}.url`,`https://github.com/fixture/${name}`]);
+ }
+ for(const dir of [nested,child]) {
+   execFileSync('git',['-C',dir,'add','.'],{stdio:'pipe'});
+   execFileSync('git',['-C',dir,'-c','user.name=Fixture','-c','user.email=fixture@example.test','commit','-qm','fixture']);
+ }
+ execFileSync('git',['-C',parent,'add','.'],{stdio:'pipe'});
+ const nestedCapability=await inspectSourceCapability(parent);
+ assert.equal(nestedCapability.blocked,false,'Nested submodule sources must be inspected');
+ assert.equal(nestedCapability.compatibleFiles,1);
+ await writeFile(join(nested,'Owned.sol'),'pragma solidity ^0.7.0; contract Owned {}');
+ assert.equal((await inspectSourceCapability(parent)).blocked,true,'Unsupported nested source still blocks');
  process.env.GITHUB_TOKEN='fixture';
  const config={...loadConfig(),IMMUNEFI_ENABLED:true,SECURITY_MIN_REWARD_CENTS:0};
  const scopes=[{assetType:'SOURCE_CODE',eligibleForBounty:true,assetIdentifier:'https://github.com/fixture/owned'}];

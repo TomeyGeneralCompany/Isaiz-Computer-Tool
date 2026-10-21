@@ -119,3 +119,5 @@ HTTPS repository URLs (including relative repository URLs), at most four levels
 and 32 submodules. Each manifest and path is checked before checkout; custom Git
 update commands are not executed. Submodule dependencies do not independently
 become eligible bounty targets.
+
+Capability preflight includes initialized nested Git submodules. Foundry `profile.default` options `optimizer`, `optimizer_runs`, and `via_ir` are validated and passed to solc. The runtime still uses solc 0.8.30 and the Shanghai EVM; other compiler versions, EVM targets, named profiles and executable build configuration are not implemented.
