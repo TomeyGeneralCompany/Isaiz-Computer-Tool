@@ -8,7 +8,7 @@ import { readFileSync, writeFileSync, unlinkSync, mkdirSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { eq, desc, and, or, isNull, lt } from "drizzle-orm";
-import { getDb, schema, getConfig, createLogger, generateTraceId, classifyError, extractJsonWithKey, recordSecurityHuntOutcome, recordNearMiss, updateProgramNotes, getSecurityLearningContext, getSecurityProgramContext, type SecurityFinding, type SecurityProgram, claimDailyHuntSlot, recordHuntAttempt, assertAuthorizedProgram, targetInExplicitScope, assertAuthorizedTarget, submitOnce } from "@bounty/core";
+import { getDb, schema, getConfig, createLogger, generateTraceId, classifyError, extractJsonWithKey, recordSecurityHuntOutcome, recordNearMiss, updateProgramNotes, getSecurityLearningContext, getSecurityProgramContext, type SecurityFinding, type SecurityProgram, claimDailyHuntSlot, recordHuntAttempt, authorizedSourceUrls, assertAuthorizedProgram, targetInExplicitScope, assertAuthorizedTarget, submitOnce } from "@bounty/core";
 import { fetchProgramPolicy, fetchProgramSignalRequirement, fetchAllDisclosedReports, prepareSubmission, submitReport, fetchProgramScopes } from "@bounty/security-discovery";
 import { runProgramHunt, runFindingSolver, killActiveSecurityProcess, detectHuntStrategy, prepareReviewWorkspace, spawnComprehensiveReview, deverbosifyReport, EXCLUDED_VULN_TYPES, type ReviewContext } from "./claude-runner";
 import { clearSecuritySolverStatus, writeAdversarialReviewStatus, clearAdversarialReviewStatus, readAdversarialReviewStatus, cancelAdversarialReview } from "./status";
@@ -101,6 +101,8 @@ export async function huntProgram(
   let huntSucceeded = false;
   let coverage: "completed" | "partial" | "unsupported" | "failed" = "failed";
   let coverageDetail = "Hunt did not complete";
+  let capabilityBlock:string | undefined;
+  let capabilityChecks: Array<{repository:string;blocked:boolean;reason:string|null;checkedAt:number}> | undefined;
   let localJob: ReturnType<typeof beginLocalJob> | undefined;
 
   try {
@@ -124,6 +126,8 @@ export async function huntProgram(
     const result = await runProgramHunt(program, trigger, localJob?.signal, focus);
     localJob?.signal.throwIfAborted();
     coverage = result.coverage ?? (result.success ? "completed" : "failed");
+    capabilityBlock = result.capabilityBlock;
+    capabilityChecks = result.capabilityChecks;
     coverageDetail = result.error || result.coverageDetail || "Supported inspection completed";
 
     if (!result.success) {
@@ -278,6 +282,19 @@ export async function huntProgram(
 
       const tracking = JSON.parse(recordHuntAttempt(currentProgram?.scopeSummary ?? program.scopeSummary,huntSucceeded));
       if (process.env.LOCAL_OLLAMA_MODEL) tracking.inspectionPass = (Number.isSafeInteger(tracking.inspectionPass) ? tracking.inspectionPass : 0) + 1;
+      const scopeKey=JSON.stringify(tracking.scopes || []);
+      if(capabilityChecks) {
+        const old=tracking.sourceCapabilities;
+        const checks=old?.version===LOCAL_REPRODUCTION_CAPABILITY_VERSION && old.scopes===scopeKey ? old.checks : {};
+        for(const check of capabilityChecks)checks[check.repository]=check;
+        tracking.sourceCapabilities={version:LOCAL_REPRODUCTION_CAPABILITY_VERSION,scopes:scopeKey,checks};
+        const urls=authorizedSourceUrls(tracking.scopes || []);
+        if(urls.length && urls.every(url=>checks[url]?.blocked && Date.now()-checks[url].checkedAt<24*3600000))
+          capabilityBlock="All scoped repositories have unsupported source capability";
+      }
+      if(capabilityBlock)tracking.capabilityBlock={version:LOCAL_REPRODUCTION_CAPABILITY_VERSION,
+        scopes:JSON.stringify(tracking.scopes || []),reason:capabilityBlock,refreshAfter:new Date(Date.now()+24*3600000).toISOString()};
+      else delete tracking.capabilityBlock;
       tracking.huntCoverage = {capabilityVersion:LOCAL_REPRODUCTION_CAPABILITY_VERSION,status:coverage,detail:coverageDetail,recordedAt:new Date().toISOString()};
       db.update(schema.securityPrograms)
         .set({

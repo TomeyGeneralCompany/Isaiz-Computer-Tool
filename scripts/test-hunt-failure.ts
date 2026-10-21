@@ -1,7 +1,7 @@
 /** Own temporary SQLite, fake Git and intercepted model; no target traffic. */
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, chmodSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -17,13 +17,14 @@ const model = createServer(async (req,res) => {
   const hasRead=request.messages.some((message:{content:string}) => message.content.includes("TOOL_RESULT") && message.content.includes("ownedFixture"));
   res.end(JSON.stringify({message:{role:"assistant",content:JSON.stringify(hasRead
     ? {action:"final",path:"",query:"",answer}
-    : {action:"read_file",path:"source-1/sample.ts",query:"",answer:""})}}));
+    : {action:"read_file",path:"source-1/sample.cjs",query:"",answer:""})}}));
 });
 process.env.PROJECT_ROOT = root;
 process.env.DB_PATH = join(root, "data", "fixture.sqlite");
 process.env.GITHUB_TOKEN = "owned-offline-fixture";
 process.env.LOCAL_OLLAMA_MODEL = "owned-mock";
 process.env.SECURITY_AUTO_SUBMIT = "false";
+process.env.LOCAL_HUNT_MAX_TURNS = "4";
 try {
   await new Promise<void>(resolve=>model.listen(0,"127.0.0.1",resolve));
   const address=model.address();assert.ok(address && typeof address !== "string");
@@ -65,19 +66,33 @@ try {
   // Successful acquisition with incomplete model output is also a failed hunt.
   writeFileSync(git, `#!/usr/bin/env python3
 import pathlib, sys
-root = pathlib.Path(sys.argv[-1])
-root.mkdir(parents=True)
-(root / "sample.ts").write_text("export const ownedFixture = true;\\n")
+if "ls-files" in sys.argv:
+    sys.stdout.write("sample.cjs" + chr(0))
+elif "rev-parse" in sys.argv:
+    print("a" * 40)
+else:
+    root = pathlib.Path(sys.argv[-1])
+    root.mkdir(parents=True)
+    (root / "sample.cjs").write_text("exports.ownedFixture = true;" )
 `);
   await assert.rejects(huntProgram(program), /inspection limit/);
   assert.equal(db.select().from(schema.securityPrograms).get()!.lastHuntedAt, null);
   answer = JSON.stringify({findings:[]});
   // A read-only model answer without a completed probe is incomplete coverage.
-  await assert.rejects(huntProgram(program), /No supported function reproduction completed/);
+  await assert.rejects(huntProgram(program), /inspection limit/);
   const incomplete = db.select().from(schema.securityPrograms).get()!;
   assert.equal(incomplete.lastHuntedAt, null);
   assert.equal(incomplete.huntCount, 0);
   assert.equal(JSON.parse(incomplete.scopeSummary!).huntCoverage.status, "failed");
+  // A complete unsupported inventory is stored without consuming model turns.
+  const previousCalls=modelCalls;
+  writeFileSync(git,readFileSync(git,"utf8").replaceAll("sample.cjs","sample.ts"));
+  await assert.rejects(huntProgram(program), /Source capability preflight/);
+  assert.equal(modelCalls,previousCalls);
+  const unsupported=JSON.parse(db.select().from(schema.securityPrograms).get()!.scopeSummary!);
+  assert.equal(unsupported.huntCoverage.status,"unsupported");
+  assert.ok(unsupported.capabilityBlock);
+  assert.equal(unsupported.sourceCapabilities.checks["https://github.com/fixture/owned"].blocked,true);
   // Preserve an existing completed-hunt history when a later acquisition fails.
   const { eq } = await import("drizzle-orm");
   db.update(schema.securityPrograms).set({lastHuntedAt:now,huntCount:1,huntMissStreak:1})

@@ -41,8 +41,9 @@ try {
     const action=(name:string,path:string,query="",answer="")=>({action:name,path,query,answer});
     let next;
     if(turn===1)next=action("read_file","source-1/"+source);
+    else if(turn===2 && stateful)next=action("final","","",JSON.stringify({findings:[]}));
     else if(turn===2)next=action("read_file","source-1/"+caller);
-    else if(turn===3 && stateful)next={...action("verify_source","source-1/"+source,selector,"solidity_sequence"),sequence};
+    else if(turn===3 && stateful) {assert.match(request.messages.at(-1).content,/No supported probe/);next={...action("verify_source","source-1/"+source,selector,"solidity_sequence"),sequence};}
     else if(turn===3)next=action("verify_source","source-1/"+source,"missing","html_reflection");
     else if(turn===4 && !stateful) {
       const previous=JSON.parse(request.messages.at(-1).content.split("\n")[0].slice("TOOL_RESULT ".length));
@@ -55,7 +56,7 @@ try {
         caseId,severity:"medium",confidence:0.7,title:stateful?"Owned fixture assertion discrepancy":"Owned fixture reflection",
         ratingReason:"Owned fixture preserves input; this test checks report plumbing only.",
         impact:stateful?"Owned fixture returns 7 while the supplied test expects 8; no vulnerability claimed.":"Owned fixture returns raw markup to its caller.",
-        callerFile:"source-1/"+caller,callerLine:1,
+        callerFile:"source-1/"+(stateful?source:caller),callerLine:1,...(stateful?{reachability:"direct_transaction"}:{}),
         falsification:"No production exploitability is claimed; only owned fixture behavior was measured."
       }]}));
     }
@@ -89,6 +90,7 @@ try {
     assert.equal((await replaySourceCase(record,fixture)).behavior_observed,true);
     if(stateful) {
       assert.deepEqual(record.spec.sequence,sequence);
+      assert.match(result.findings[0].reportBody,/Reachability: direct_transaction/);
       assert.ok(result.findings[0].reportBody.includes(JSON.stringify(sequence,null,2)));
     }
   }

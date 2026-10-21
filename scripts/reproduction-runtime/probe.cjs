@@ -22,6 +22,7 @@ async function javascript() {
   if (typeof fn !== 'function') throw new Error('Exported function required');
   return [await fn(control), await fn(attack)];
 }
+const missingImports = new Set();
 function solidityImport(name) {
   const candidates = [name, 'node_modules/' + name, 'lib/' + name];
   // Read only declarative remappings; never load Hardhat/Foundry executable config.
@@ -38,6 +39,7 @@ function solidityImport(name) {
   for (const candidate of candidates) {
     try { return {contents: fs.readFileSync(sourceFile(candidate), 'utf8')}; } catch {}
   }
+  missingImports.add(name);
   return {error: 'Unresolved repository/package/remapping import: ' + name};
 }
 async function solidity() {
@@ -52,7 +54,11 @@ async function solidity() {
     settings: {evmVersion: 'shanghai', outputSelection: {'*': {'*': ['abi', 'evm.bytecode.object']}}}
   }), {import: solidityImport}));
   const errors = (compiled.errors || []).filter(e => e.severity === 'error');
-  if (errors.length) throw new Error(errors.map(e => e.formattedMessage).join('\n').slice(0, 2000));
+  if (errors.length) {
+    const error = new Error(errors.map(e => e.formattedMessage).join('\n').slice(0, 2000));
+    error.missingImports = [...missingImports];
+    throw error;
+  }
   const parts = spec.function.split('.');
   const functionName = parts.pop();
   const contractName = parts.pop();
@@ -96,4 +102,4 @@ async function solidity() {
   if (normal.length > 16000 || observed.length > 16000) throw new Error('Probe output too large');
   output(JSON.stringify({control_input: control, control_output: normal,
     attack_input: attack, attack_output: observed}));
-})().catch(error => { process.stderr.write(String(error).slice(0, 2000)); process.exitCode = 1; });
+})().catch(error => { process.stderr.write('\nTOMEY_ERROR ' + JSON.stringify({detail:String(error).slice(0,2000),missingImports:error.missingImports || []})); process.exitCode = 1; });

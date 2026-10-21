@@ -4,7 +4,7 @@ import { assertAuthorizedProgram } from "./scope-authorization";
 import { authorizedSourceUrls } from "./source-repository";
 
 /** Version of coverage semantics; older completion records are not exhaustive. */
-export const LOCAL_REPRODUCTION_CAPABILITY_VERSION = 4;
+export const LOCAL_REPRODUCTION_CAPABILITY_VERSION = 5;
 
 /** Shared pre-assessment and pre-dispatch filters. Assessment itself is separate. */
 export function programCandidateBlocker(program: SecurityProgram, config: Config, localModel: boolean, now = Date.now()): string | null {
@@ -35,6 +35,10 @@ export function programCandidateBlocker(program: SecurityProgram, config: Config
   let scopes: unknown;
   try {
     const tracking = JSON.parse(program.scopeSummary || "{}");
+    const capability=tracking.capabilityBlock;
+    if(localModel && capability?.version===LOCAL_REPRODUCTION_CAPABILITY_VERSION &&
+       capability.scopes===JSON.stringify(tracking.scopes || []) && Date.parse(capability.refreshAfter)>now)
+      return "unsupported_source_capability";
     // A handful of unsupported functions cannot establish whole-program incompatibility.
     // Failed and unsupported passes both retry through bounded huntFailure backoff.
     const failure = tracking.huntFailure;

@@ -27,12 +27,12 @@ export function pageOffset(value:unknown):number {
   return Number(offset);
 }
 /** Offsets count UTF-16 characters, matching JS string slices and evidence spans. */
-export async function readSourcePage(full:string, offset=0) {
+export async function readSourcePage(full:string, offset=0, pageSize=12000) {
   const info = await stat(full);
   if (!info.isFile() || info.size > 2_000_000) throw new Error("Not a readable source file under 2MB");
   const text = await readFile(full,"utf8");
   if (offset > text.length) throw new Error("Read offset exceeds file length");
-  const end = Math.min(offset+12000,text.length);
+  const end = Math.min(offset+pageSize,text.length);
   return {start:offset,end,totalCharacters:text.length,nextOffset:end<text.length?end:null,text:text.slice(offset,end)};
 }
 /** Sorted, scoped traversal. Each page states whether more files or matches remain. */
