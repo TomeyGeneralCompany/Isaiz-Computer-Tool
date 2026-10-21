@@ -52,6 +52,21 @@ class DependencyTests(unittest.TestCase):
                     deps.prepare_dependencies(root)
                 download.assert_not_called()
 
+    def test_solidity_imports_skip_unrelated_dev_packages(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); data=archive("package/Contract.sol",b"pragma solidity ^0.8.0;")
+            (root/"package.json").write_text(json.dumps({"devDependencies":{"unrelated":"1"},"dependencies":{"owned":"1"}}))
+            item={"resolved":"https://registry.npmjs.org/owned/-/owned-1.tgz",
+                  "integrity":"sha512-"+base64.b64encode(hashlib.sha512(data).digest()).decode()}
+            (root/"package-lock.json").write_text(json.dumps({"lockfileVersion":3,"packages":{
+                "node_modules/owned":item,"node_modules/unrelated":{"resolved":"https://invalid.test/archive"}}}))
+            with patch.object(deps,"download",return_value=data) as download:
+                deps.prepare_dependencies(root,["owned/Contract.sol"])
+                self.assertEqual(download.call_count,1)
+                self.assertTrue((root/"node_modules/owned/Contract.sol").is_file())
+                self.assertFalse((root/"node_modules/unrelated").exists())
+                self.assertFalse((root/"node_modules/.tomey-lock.sha256").exists())
+
     def test_integrity_and_reuse(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)

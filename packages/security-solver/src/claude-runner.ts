@@ -1197,6 +1197,8 @@ export interface ParsedFinding {
 }
 
 export interface SecuritySolveResult {
+  capabilityBlock?: string;
+  capabilityChecks?: Array<{repository:string;blocked:boolean;reason:string|null;checkedAt:number}>;
   coverage?: "completed" | "partial" | "unsupported" | "failed";
   coverageDetail?: string;
   success: boolean;

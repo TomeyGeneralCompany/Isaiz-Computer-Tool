@@ -1,5 +1,6 @@
 """Materialize integrity-checked npm lockfile packages without executing installers."""
 from __future__ import annotations
+from concurrent.futures import ThreadPoolExecutor
 import base64
 import hashlib
 import io
@@ -70,7 +71,7 @@ def unpack(data: bytes, destination: Path, budget: list[int]) -> None:
             else:
                 raise DependencyError("Unsupported dependency archive entry")
 
-def prepare_dependencies(repository: Path) -> None:
+def prepare_dependencies(repository: Path, required_imports: list[str] | None = None) -> None:
     """Support npm lockfile v2/v3 plus local workspaces; no lifecycle scripts."""
     repository = repository.resolve()
     manifest = inside(repository, "package.json")
@@ -90,7 +91,7 @@ def prepare_dependencies(repository: Path) -> None:
     raw = lock_path.read_bytes()
     digest = hashlib.sha256(raw).hexdigest()
     marker = inside(repository, "node_modules/.tomey-lock.sha256")
-    if marker.is_file() and marker.read_text() == digest:
+    if required_imports is None and marker.is_file() and marker.read_text() == digest:
         return
     lock = json.loads(raw)
     if lock.get("lockfileVersion") not in (2, 3) or not isinstance(lock.get("packages"), dict):
@@ -98,9 +99,33 @@ def prepare_dependencies(repository: Path) -> None:
     entries = [(name, item) for name, item in lock["packages"].items() if name]
     if len(entries) > 4096:
         raise DependencyError("Target lockfile exceeds 4096 package entries")
+    if required_imports is not None:
+        selected = set()
+        for request in required_imports:
+            candidates = [name for name, _ in entries if name.startswith("node_modules/")
+                          and (request == name[13:] or request.startswith(name[13:] + "/"))]
+            if not candidates:
+                raise DependencyError("No locked npm package supplies import: " + request)
+            selected.add(max(candidates, key=len))
+        entries = [(name, item) for name, item in entries if name in selected]
+    # Parent packages must be materialized before nested dependencies.
+    entries.sort(key=lambda entry: (entry[0].count("/"), entry[0]))
     started = time.monotonic()
     budget = [0]
-    for name, item in entries:
+    def fetch(entry):
+        name, item = entry
+        if "node_modules" not in PurePosixPath(name).parts or item.get("link"):
+            return None
+        return download(item.get("resolved", ""))
+    # At most four bounded archives are held at once. Never run lifecycle scripts.
+    def batches():
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            for offset in range(0, len(entries), 4):
+                if time.monotonic() - started > 85:
+                    raise DependencyError("Dependency preparation exceeded time budget")
+                batch = entries[offset:offset+4]
+                yield from zip(batch, pool.map(fetch, batch))
+    for (name, item), data in batches():
         if "node_modules" not in PurePosixPath(name).parts:
             continue  # Workspace source entries are already in the checkout.
         if (not name.startswith("node_modules/") or "\\" in name
@@ -121,7 +146,6 @@ def prepare_dependencies(repository: Path) -> None:
             raise DependencyError("Dependency has no SHA-256/SHA-512 integrity")
         if time.monotonic() - started > 85:
             raise DependencyError("Dependency preparation exceeded time budget")
-        data = download(item.get("resolved", ""))
         if not any(base64.b64encode(hashlib.new(algorithm, data).digest()).decode() == expected
                    for algorithm, expected in checks):
             raise DependencyError("Dependency integrity mismatch")
@@ -134,5 +158,6 @@ def prepare_dependencies(repository: Path) -> None:
                 import shutil
                 shutil.rmtree(destination)
             os.replace(staging, destination)
-    marker.parent.mkdir(parents=True, exist_ok=True)
-    marker.write_text(digest)
+    if required_imports is None:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(digest)

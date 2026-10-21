@@ -162,6 +162,15 @@ contract Store {
         self.assertTrue(all(step['passed'] for step in first['observations']['steps']))
         self.assertEqual(self.run_sequence(sequence)['observations'],first['observations'])
 
+    def test_self_contained_solidity_ignores_unrelated_js_dependencies(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo=Path(directory)
+            (repo/"Store.sol").write_text(self.SOURCE)
+            (repo/"package.json").write_text('{"devDependencies":{"unrelated":"1"}}')
+            result=driver.run_probe(repo,{"file":"Store.sol","function":"Store.set",
+                "kind":"solidity_sequence","nonce":"a"*32,"sequence":self.sequence()})
+            self.assertEqual(result['status'],'behavior_not_observed',result)
+
     def test_assertion_mismatch_is_recorded(self):
         sequence=self.sequence();sequence['steps'][2]['expect']='8'
         result=self.run_sequence(sequence)

@@ -51,7 +51,7 @@ def limits(node=False):
     resource.setrlimit(resource.RLIMIT_CORE,(0,0))
 
 
-def run_probe(repository: Path, specification: dict) -> dict:
+def run_probe(repository: Path, specification: dict, _dependency_round: int = 0) -> dict:
     repository=repository.resolve(strict=True)
     if not repository.is_dir(): raise ValueError('Repository directory required')
     file=specification.get('file','')
@@ -79,7 +79,7 @@ def run_probe(repository: Path, specification: dict) -> dict:
         return {'status':'blocked_no_runtime','behavior_observed':False,'detail':'Run npm install --prefix scripts/reproduction-runtime'}
     sandbox=shutil.which('bwrap')
     if not sandbox: return {'status':'blocked_no_sandbox','behavior_observed':False}
-    if language != 'python':
+    if language == 'javascript':
         try: prepare_dependencies(repository)
         except (DependencyError, OSError, ValueError) as error:
             return {'status':'unsupported_dependencies','behavior_observed':False,'detail':str(error)[:1000]}
@@ -123,6 +123,17 @@ def run_probe(repository: Path, specification: dict) -> dict:
             finally:
                 try: os.killpg(process.pid,signal.SIGKILL)
                 except ProcessLookupError: pass
+        if code and language == 'solidity' and _dependency_round < 8:
+            # Compiler import callbacks identify actual missing imports. A Solidity
+            # file with no external imports never needs the project's JS toolchain.
+            diagnostic = (work/'stderr').read_text(errors='replace')
+            try: missing = json.loads(diagnostic.rsplit('TOMEY_ERROR ', 1)[1]).get('missingImports', [])
+            except (IndexError, ValueError): missing = []
+            if missing and isinstance(missing, list) and len(missing) <= 128 and all(isinstance(x,str) and len(x)<=4096 for x in missing):
+                try: prepare_dependencies(repository, missing)
+                except (DependencyError, OSError, ValueError) as error:
+                    return {'status':'unsupported_dependencies','behavior_observed':False,'detail':str(error)[:1000]}
+                return run_probe(repository, specification, _dependency_round + 1)
         if code:
             return {'status':'probe_failed','behavior_observed':False,'exit_code':code,
                     'detail':(work/'stderr').read_text(errors='replace')[-1200:]}

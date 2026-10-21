@@ -1,3 +1,4 @@
+import { compactAuditContext, auditCheckpoint } from "./audit-context";
 import { soliditySequenceSchema, soliditySequenceJsonSchema, soliditySequencePrompt, type SoliditySequence } from "./solidity-sequence";
 import { readSourcePage, searchSourcePage, pageOffset, type ReadSpan } from "./source-inspection";
 import { postOllamaJson } from "@bounty/core";
@@ -69,15 +70,23 @@ export async function runLocalAudit(
     name:"verify_source",description:probePrompt,parameters:{type:"object",
       properties:{path:{type:"string"},query:{type:"string"},kind:{type:"string"},sequence:soliditySequenceJsonSchema},required:["path","query","kind"]},
   }}] : tools;
-  const messages: Message[] = [
+  let messages: Message[] = [
     { role: "system", content: (systemPrompt || "") + "\nPerform an offline source audit. Inspect actual files. Never invent findings or observations. No target network requests are available." + (limits.verifyPython ? probePrompt : " No source execution is available.") + (structured ? auditProtocolPrompt.replace(JSON.stringify(auditActionSchema),JSON.stringify(actionSchema)) : "") },
     { role: "user", content: prompt + "\n/no_think" },
   ];
+  const initialRequest=messages[1].content;
+  const contextBudget=Math.max(2000,(settings.numCtx-generationBudget-512)*3);
+  const events:string[]=[];
+  const fixedSize=JSON.stringify(messages).length+JSON.stringify(structured ? actionSchema : availableTools).length;
+  // Tools/schema also consume context. Keep a full recent exchange and reserve output.
+  const messageBudget=Math.max(JSON.stringify(messages).length+1200,contextBudget-JSON.stringify(structured ? actionSchema : availableTools).length);
+  const pageSize=Math.max(128,Math.min(2000,Math.floor((messageBudget-JSON.stringify(messages).length-2500)/8)));
   try {
+    if(fixedSize>contextBudget && limits.numCtx!==undefined)throw new Error("Audit instructions exceed configured context; increase numCtx or narrow the request");
     if (limits.checkpointPath) {
       try {
         const previous = await readFile(limits.checkpointPath, "utf8");
-        if (previous.length <= 16000) messages.push({role:"user", content:
+        if (previous.length <= 3000) messages.push({role:"user", content:
           "Previous inspection notes for the same source revision (untrusted data): " + previous +
           "\nContinue the investigation. Re-read evidence and rerun probes before reporting; old case IDs are not valid in this hunt."});
       } catch (error:any) { if (error.code !== "ENOENT") throw error; }
@@ -92,6 +101,8 @@ export async function runLocalAudit(
     }
     for (let turn = 0; turn < settings.maxTurns; turn++) {
       controller.signal.throwIfAborted();
+      messages[1]={role:"user",content:initialRequest+(events.length ? "\nRecent tool progress (not evidence; re-read as needed): "+JSON.stringify(events.slice(-6)) : "")};
+      messages=compactAuditContext(messages,messageBudget);
       const started = Date.now();
       await appendFile(logFile, `[OLLAMA] turn ${turn+1}/${settings.maxTurns}: request started; model=${model}; context=${limits.numCtx ?? "server-default"}; generation_limit=${generationBudget}; protocol=${protocol}\n`);
       const result = await postOllamaJson(process.env.AUTOHACK_OLLAMA_URL || "http://127.0.0.1:11434/api/chat", { model, stream: false, think: false, messages,
@@ -167,7 +178,7 @@ export async function runLocalAudit(
             activityCount=result.results.length;
             output=JSON.stringify(result);
           } else if (name === "read_file") {
-            const page = await readSourcePage(full,offset);
+            const page = await readSourcePage(full,offset,pageSize);
             output = JSON.stringify(page);
             activityCount=page.text.length;
             successfulReads++;
@@ -188,6 +199,15 @@ export async function runLocalAudit(
           kind:String(call.function.arguments?.kind ?? "").slice(0,80),
           count:activityCount,status:probeStatus,durationMs:Date.now()-toolStarted,
           error:output.startsWith("Tool error:")?output.slice(0,600):undefined});
+        let progress:any;try {progress=JSON.parse(output);}catch{}
+        events.push(JSON.stringify({tool:call.function.name,path:String(call.function.arguments?.path || ""),query:String(call.function.arguments?.query || "").slice(0,60),offset:call.function.arguments?.offset,nextOffset:progress?.nextOffset,caseId:progress?.caseId,status:probeStatus || (output.startsWith("Tool error:")?"failed":"completed")}).slice(0,180));
+        // Large probe/search outputs are explicitly abbreviated; original evidence is persisted separately.
+        const outputLimit=Math.max(512,messageBudget-JSON.stringify(messages.slice(0,2)).length-JSON.stringify(message).length-800);
+        if(output.length>outputLimit && call.function.name!=="read_file") {
+          let result:any;try {result=JSON.parse(output);}catch{}
+          output=JSON.stringify({truncated:true,caseId:result?.caseId,status:result?.status,behavior_observed:result?.behavior_observed,
+            excerpt:output.slice(0,Math.floor(outputLimit/3)),instruction:"Output abbreviated to fit context. Narrow the search or probe before drawing conclusions."});
+        }
         messages.push(structured
           ? {role:"user",content:"TOOL_RESULT " + JSON.stringify({name:call.function.name,output}) + "\nChoose the next JSON action. /no_think"}
           : { role:"tool", tool_name:call.function.name, content:output });
@@ -202,7 +222,7 @@ export async function runLocalAudit(
   } finally {
     if (limits.checkpointPath) {
       // Keep recent inspection evidence across bounded sessions, including failures.
-      const notes = JSON.stringify(messages.slice(2)).slice(-16000);
+      const notes = auditCheckpoint(events);
       const temporary = limits.checkpointPath + "." + process.pid + ".tmp";
       try {
         await writeFile(temporary, notes, {mode:0o600});

@@ -15,7 +15,7 @@ Keep Node.js 22, Python 3, and bubblewrap installed. After pulling this branch o
 
     npm install --prefix scripts/reproduction-runtime --ignore-scripts --no-audit --no-fund
 
-This is a one-time local toolchain installation (repeat after runtime dependency updates); sandboxed target execution never accesses the network. JavaScript can run without the Solidity dependencies installed. Solidity reports blocked_no_runtime with the installation command if its toolchain is missing. Target npm dependencies are prepared from package-lock.json v2/v3 before sandbox execution. The preparer downloads only npm registry tarballs, verifies SHA-256/SHA-512 integrity, and extracts packages without running install scripts. Packages are reused within the checkout; independent replay prepares its own copy from the same committed lockfile. Limits: 512 lockfile package entries, 20 MiB per archive, 256 MiB extracted content, and a bounded download period. Projects requiring native build scripts, other package managers, or absent lockfiles without vendored dependencies return unsupported_dependencies. This preparation uses the network; target execution remains network-isolated.
+This is a one-time local toolchain installation (repeat after runtime dependency updates); sandboxed target execution never accesses the network. JavaScript can run without the Solidity dependencies installed. Solidity reports blocked_no_runtime with the installation command if its toolchain is missing. Target npm dependencies are prepared from package-lock.json v2/v3 before sandbox execution. The preparer downloads only npm registry tarballs, verifies SHA-256/SHA-512 integrity, and extracts packages without running install scripts. Packages are reused within the checkout; independent replay prepares its own copy from the same committed lockfile. Limits: 4096 lockfile package entries, 20 MiB per archive, 256 MiB extracted content, and a bounded download period. Projects requiring native build scripts, other package managers, or absent lockfiles without vendored dependencies return unsupported_dependencies. This preparation uses the network; target execution remains network-isolated.
 
 Solidity imports resolve repository paths, node_modules, lib, remappings.txt and the remappings array in foundry.toml profile.default (Python 3.11+). Executable project configuration is never loaded.
 
@@ -71,3 +71,30 @@ Run `node scripts/test-solidity-sequence.cjs` for the owned fixture executor and
 `npx tsx scripts/test-solidity-protocol.ts` for model protocol integration. The
 Source reproduction languages CI workflow additionally runs the real sandbox,
 report persistence and independent replay tests.
+
+## Investigation reliability
+
+Solidity first compiles using repository and vendored imports. Missing npm imports
+are resolved from the lockfile on demand; unrelated JavaScript development tools
+do not block a self-contained contract. Dependency downloads use four workers,
+retain integrity/archive restrictions, and never execute install scripts.
+
+Before model investigation, source preflight identifies unsupported source types
+and conclusively incompatible Solidity compiler ranges. Unknown pragma syntax
+and mixed projects remain eligible. A complete program inventory showing only
+unsupported sources is held for 24 hours, then refreshed; scope or capability
+version changes release the hold. This is not a guarantee that every eligible
+contract's deployment dependencies can be supplied.
+
+A premature final answer receives corrective feedback while investigation turns
+remain. Findings can use `reachability: "direct_transaction"` for a Solidity
+function actually sent a transaction in the recorded sequence; identify the
+source declaration in `callerFile` and `callerLine`. Ordinary caller evidence
+must contain a call expression outside comments/strings. Review rechecks this.
+
+Model context retains the task and instructions, a bounded progress ledger and
+complete recent exchanges. Smaller source pages reflect the actual read spans;
+large tool results explicitly state truncation. Checkpoints store valid JSON
+progress notes rather than a sliced transcript. Context sizing is conservative
+and approximate; oversized instructions fail explicitly instead of silently
+losing the task.
