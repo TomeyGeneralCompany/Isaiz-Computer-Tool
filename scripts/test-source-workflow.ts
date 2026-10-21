@@ -25,7 +25,7 @@ try {
   execFileSync("git",["-C",fixture,"-c","user.name=Fixture","-c","user.email=fixture@example.test","commit","-qm","Owned fixture"]);
   const realGit=execFileSync("which",["git"],{encoding:"utf8"}).trim();
   const bin=join(root,"bin");await mkdir(bin);
-  await writeFile(join(bin,"git"),'#!/usr/bin/python3\nimport os,sys,shutil\nargs=sys.argv[1:]\nif "clone" in args:\n    shutil.copytree('+JSON.stringify(fixture)+',args[-1])\nelse:\n    os.execv('+JSON.stringify(realGit)+',['+JSON.stringify(realGit)+']+args)\n');
+  await writeFile(join(bin,"git"),'#!/usr/bin/python3\nimport os,sys,shutil,subprocess\nargs=sys.argv[1:]\nif "clone" in args:\n    shutil.copytree('+JSON.stringify(fixture)+',args[-1])\nelif \"fetch\" in args:\n    subprocess.run(['+JSON.stringify(realGit)+',\"cat-file\",\"-e\",args[-1]+\"^{commit}\"],check=True)\nelse:\n    os.execv('+JSON.stringify(realGit)+',['+JSON.stringify(realGit)+']+args)\n');
   await chmod(join(bin,"git"),0o700);process.env.PATH=bin+":"+originalPath;
   let turn=0, caseId="", source="", caller="", selector="", stateful=false,reviewMode=false,reviewIndex=0,reviewOffset=0;
   const reviewFiles=["source/Store.sol","evidence/report.txt","evidence/replay.json","evidence/policy.txt"];
