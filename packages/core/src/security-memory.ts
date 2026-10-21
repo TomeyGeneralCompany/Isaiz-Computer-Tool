@@ -13,6 +13,8 @@ interface SecurityHuntOutcome {
   findingsDuplicate: number;
   findingsRejected: number;
   strategyUsed: "code_review" | "web_testing" | "api_testing" | "mixed";
+  /** Optional for compatibility with older history records. */
+  error?: string;
   timestamp: string;
 }
 

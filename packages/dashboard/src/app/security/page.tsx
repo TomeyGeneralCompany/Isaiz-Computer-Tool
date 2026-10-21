@@ -133,6 +133,25 @@ function elapsed(startedAt: number): string {
   return `${m}m ${s}s`;
 }
 
+
+function LiveActivity() {
+  const query=trpc.securityLiveActivity.useQuery(undefined,{refetchInterval:5000});
+  const data=query.data;
+  return <section className="mt-4 rounded-xl border p-5" style={{background:"var(--bg-card)",borderColor:"var(--border)"}}>
+    <h3 className="text-xs font-semibold uppercase tracking-wider" style={{color:"var(--text-dim)"}}>Live activity</h3>
+    {!data ? <p className="mt-3 text-sm">{query.isError?"Activity is temporarily unavailable.":"Loading activity…"}</p> :
+      <div className="mt-3 text-sm" aria-live="polite">
+        <p className="font-semibold">{data.review.active ? "Independently reviewing report evidence" : data.activity.task}</p>
+        <p className="mt-1">{data.solver.programName || data.review.currentFindingTitle || (data.solver.active?"Source hunt":"Waiting for the next source hunt")}</p>
+        {data.activity.language && <p className="mt-1">{data.activity.language}</p>}
+        {data.activity.detail && data.solver.active && <p className="mt-2 break-words text-xs" style={{color:"var(--text-dim)"}}>{data.activity.detail}</p>}
+        {data.activity.lastProgressAt && <p className="mt-2 text-xs" style={{color:"var(--text-dim)"}}>Last recorded progress: {timeAgo(data.activity.lastProgressAt)}</p>}
+        {data.solver.active && !data.activity.lastProgressAt && <p className="mt-2 text-xs" style={{color:"var(--text-dim)"}}>Waiting for the first recorded activity update.</p>}
+        <p className="mt-2 text-xs" style={{color:"var(--text-dim)"}}>Refreshes every 5 seconds. Local model work may take time between updates.</p>
+      </div>}
+  </section>;
+}
+
 function RecentHunts() {
   const { data: history } = trpc.securityHuntHistory.useQuery(undefined, {
     refetchInterval: 5000,
@@ -152,7 +171,7 @@ function RecentHunts() {
         {history.slice(0, 10).map((h: any, i: number) => (
           <div
             key={`${h.programId}-${h.timestamp}`}
-            className="flex items-center justify-between py-2 text-xs"
+            className="flex flex-wrap items-center justify-between gap-2 py-2 text-xs"
             style={{ borderBottom: i < Math.min(history.length, 10) - 1 ? "1px solid var(--border)" : "none" }}
           >
             <div className="flex items-center gap-2">
@@ -167,6 +186,10 @@ function RecentHunts() {
                 }}
               />
               <span className="font-medium">{h.programName}</span>
+              {h.failure && <div className="max-w-xl">
+                <p className="font-medium" style={{color:"var(--red, #ef4444)"}}>{h.failure.stage}</p>
+                <p className="mt-1 whitespace-pre-wrap break-words" style={{color:"var(--text-dim)"}}>{h.failure.reason}</p>
+              </div>}
             </div>
             <div className="flex items-center gap-3">
               {h.findingsReported > 0 && (
@@ -832,6 +855,7 @@ export default function SecurityPage() {
             <ModelConfigPanel />
           </div>
 
+          <LiveActivity />
           {/* Pipeline Status — unified card */}
           {(() => {
             const activeProgramId = solverStatus?.programId;
