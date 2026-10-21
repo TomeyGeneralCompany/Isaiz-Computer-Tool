@@ -39,3 +39,24 @@ class SetupVerification(unittest.TestCase):
             self.assertIn('--provider', (base / 'acceptance-args.txt').read_text())
             self.assertFalse((base / 'launched').exists())
             self.assertEqual(stat.S_IMODE((base / '.env').stat().st_mode), 0o600)
+
+    def test_runtime_installer_provisions_missing_bubblewrap_and_checks_namespaces(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base=Path(directory); (base/'scripts').mkdir(); bin=base/'bin';bin.mkdir()
+            shutil.copy(ROOT/'scripts/install-reproduction-runtime.sh',base/'scripts')
+            (bin/'dirname').symlink_to('/usr/bin/dirname')
+            for name,body in {
+                'id':'echo 1000', 'node':'exit 0', 'npm':'echo "$*" >> "'+str(base/'npm-log')+'"',
+                'sudo':'echo "$*" >> "'+str(base/'apt-log')+'"\nif [ "$2" = install ]; then printf "#!/bin/sh\\nexit 0\\n" > "'+str(bin/'bwrap')+'"; /bin/chmod +x "'+str(bin/'bwrap')+'"; fi',
+                'apt-get':'exit 0',
+            }.items():
+                (bin/name).write_text('#!/bin/sh\n'+body+'\n');(bin/name).chmod(0o700)
+            env={**os.environ,'PATH':str(bin)}
+            result=subprocess.run(['/bin/bash',str(base/'scripts/install-reproduction-runtime.sh')],env=env,capture_output=True,text=True)
+            self.assertEqual(result.returncode,0,result.stderr)
+            self.assertIn('apt-get install -y bubblewrap',(base/'apt-log').read_text())
+            self.assertIn('--ignore-scripts',(base/'npm-log').read_text())
+            (bin/'bwrap').write_text('#!/bin/sh\nexit 1\n')
+            result=subprocess.run(['/bin/bash',str(base/'scripts/install-reproduction-runtime.sh')],env=env,capture_output=True,text=True)
+            self.assertNotEqual(result.returncode,0)
+            self.assertIn('host denies the required namespaces',result.stderr)
