@@ -41,7 +41,9 @@ jobs:
       - name: Exercise direct Ollama agent with mock server
         run: npx tsx scripts/test-mock-agent.ts
       - name: Verify hunt capability, reachability and context management
-        run: npx tsx scripts/test-hunt-reliability.ts
+        run: |
+          npx tsx scripts/test-hunt-reliability.ts
+          npx tsx scripts/test-audit-context-loop.ts
       - name: Verify paginated source inspection and evidence spans
         run: npx tsx scripts/test-source-inspection.ts
       - name: Verify state mutex crash recovery and concurrent claims

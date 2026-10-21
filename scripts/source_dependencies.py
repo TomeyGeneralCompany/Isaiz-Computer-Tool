@@ -76,9 +76,10 @@ def prepare_dependencies(repository: Path, required_imports: list[str] | None = 
     repository = repository.resolve()
     manifest = inside(repository, "package.json")
     if not manifest.is_file():
+        if required_imports: raise DependencyError("Missing imports require a package manifest and lockfile")
         return
     package = json.loads(manifest.read_text())
-    if not any(package.get(key) for key in ("dependencies", "devDependencies", "optionalDependencies", "workspaces")):
+    if required_imports is None and not any(package.get(key) for key in ("dependencies", "devDependencies", "optionalDependencies", "workspaces")):
         return
     lock_path = inside(repository, "package-lock.json")
     if not lock_path.is_file():
