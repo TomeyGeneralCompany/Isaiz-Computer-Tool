@@ -98,3 +98,24 @@ large tool results explicitly state truncation. Checkpoints store valid JSON
 progress notes rather than a sliced transcript. Context sizing is conservative
 and approximate; oversized instructions fail explicitly instead of silently
 losing the task.
+
+## Host setup and large reviews
+
+`bash setup-and-run.sh --verify-only` now installs the separate Solidity runtime,
+installs missing bubblewrap on apt-based Linux hosts (using sudo when needed), and
+checks namespace creation before acceptance testing. Other distributions must
+provide bubblewrap through their package manager. Namespace policy failures stop
+setup with a diagnostic; setup does not silently change global host policy.
+
+Independent review reads the exact report, replay and policy from paginated
+workspace evidence files, and verifies all pages were read before accepting a
+verdict. Those documents are not duplicated into the initial model prompt. Native
+models returning multiple tool calls receive feedback to retry one call at a time.
+Unreadable or symlinked source files are recorded as incomplete coverage instead
+of aborting the inventory of other sources.
+
+Source acquisition initializes pinned Git submodule dependencies using validated
+HTTPS repository URLs (including relative repository URLs), at most four levels
+and 32 submodules. Each manifest and path is checked before checkout; custom Git
+update commands are not executed. Submodule dependencies do not independently
+become eligible bounty targets.
