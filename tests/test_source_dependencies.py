@@ -31,6 +31,27 @@ class DependencyTests(unittest.TestCase):
             with self.assertRaises(deps.DependencyError):
                 deps.unpack(archive("package/../../escape"),Path(directory),[0])
 
+    def test_large_lockfile_and_bound(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            data=archive()
+            (root/"package.json").write_text(json.dumps({"dependencies":{"owned":"1.0.0"}}))
+            item={"resolved":"https://registry.npmjs.org/owned/-/owned-1.0.0.tgz",
+                  "integrity":"sha512-"+base64.b64encode(hashlib.sha512(data).digest()).decode()}
+            entries={f"node_modules/pkg{i}":item for i in range(686)}
+            lock=root/"package-lock.json"
+            lock.write_text(json.dumps({"lockfileVersion":3,"packages":entries}))
+            with patch.object(deps,"download",return_value=data) as download:
+                deps.prepare_dependencies(root)
+                self.assertEqual(download.call_count,686)
+            (root/"node_modules/.tomey-lock.sha256").unlink()
+            entries.update({f"node_modules/pkg{i}":item for i in range(4097)})
+            lock.write_text(json.dumps({"lockfileVersion":3,"packages":entries}))
+            with patch.object(deps,"download") as download:
+                with self.assertRaisesRegex(deps.DependencyError,"4096 package entries"):
+                    deps.prepare_dependencies(root)
+                download.assert_not_called()
+
     def test_integrity_and_reuse(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)

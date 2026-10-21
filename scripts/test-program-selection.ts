@@ -52,3 +52,8 @@ try {
   }
 } finally { globalThis.fetch = saved; }
 console.log("Dispatch exclusion accounting, zero/missing assessment distinction and incomplete Signal responses: PASSED");
+
+const { LOCAL_REPRODUCTION_CAPABILITY_VERSION } = await import("../packages/core/src/program-eligibility");
+const held = {...base,scopeSummary:JSON.stringify({...JSON.parse(summary()),huntCoverage:{status:"unsupported",capabilityVersion:LOCAL_REPRODUCTION_CAPABILITY_VERSION}})};
+assert.equal(programSelectionDecision(held,config,true).reason,"unsupported_reproduction");
+assert.equal(programSelectionDecision({...held,scopeSummary:JSON.stringify({...JSON.parse(summary()),huntCoverage:{status:"unsupported",capabilityVersion:LOCAL_REPRODUCTION_CAPABILITY_VERSION-1}})},config,true).reason,"eligible");

@@ -3,6 +3,9 @@ import type { SecurityProgram } from "./db/schema";
 import { assertAuthorizedProgram } from "./scope-authorization";
 import { authorizedSourceUrls } from "./source-repository";
 
+/** Bump when the supported reproduction surface changes to retry held programs. */
+export const LOCAL_REPRODUCTION_CAPABILITY_VERSION = 3;
+
 /** Shared pre-assessment and pre-dispatch filters. Assessment itself is separate. */
 export function programCandidateBlocker(program: SecurityProgram, config: Config, localModel: boolean, now = Date.now()): string | null {
   if (program.status !== "active") return "inactive";
@@ -31,7 +34,10 @@ export function programCandidateBlocker(program: SecurityProgram, config: Config
   }
   let scopes: unknown;
   try {
-    const failure = JSON.parse(program.scopeSummary || "{}").huntFailure;
+    const tracking = JSON.parse(program.scopeSummary || "{}");
+    if (localModel && tracking.huntCoverage?.status === "unsupported" &&
+        tracking.huntCoverage?.capabilityVersion === LOCAL_REPRODUCTION_CAPABILITY_VERSION) return "unsupported_reproduction";
+    const failure = tracking.huntFailure;
     if (failure && Number.isFinite(Date.parse(failure.retryAfter)) && Date.parse(failure.retryAfter) > now) return "failed_hunt_backoff";
   } catch {}
   try {const parsed = JSON.parse(program.scopeSummary || "{}"); scopes = Array.isArray(parsed) ? parsed : parsed.scopes;} catch {return "invalid_scope";}
