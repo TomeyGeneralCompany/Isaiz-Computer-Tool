@@ -1,3 +1,4 @@
+import { LOCAL_REPRODUCTION_CAPABILITY_VERSION } from "../../core/src/program-eligibility";
 import { programSelectionDecision, summarizeProgramSelection } from "./program-selection";
 export { scoreProgram, summarizeProgramSelection } from "./program-selection";
 import type { StaticLeadFocus } from "./local-program-flow";
@@ -269,7 +270,7 @@ export async function huntProgram(
         : findingsCreated > 0 ? 0 : prevMissStreak + 1;
 
       const tracking = JSON.parse(recordHuntAttempt(currentProgram?.scopeSummary ?? program.scopeSummary,huntSucceeded));
-      tracking.huntCoverage = {status:coverage,detail:coverageDetail,recordedAt:new Date().toISOString()};
+      tracking.huntCoverage = {capabilityVersion:LOCAL_REPRODUCTION_CAPABILITY_VERSION,status:coverage,detail:coverageDetail,recordedAt:new Date().toISOString()};
       db.update(schema.securityPrograms)
         .set({
           // Preserve the last completed hunt on acquisition/model failures.

@@ -96,8 +96,8 @@ def prepare_dependencies(repository: Path) -> None:
     if lock.get("lockfileVersion") not in (2, 3) or not isinstance(lock.get("packages"), dict):
         raise DependencyError("Target requires npm lockfile v2/v3")
     entries = [(name, item) for name, item in lock["packages"].items() if name]
-    if len(entries) > 512:
-        raise DependencyError("Target lockfile exceeds 512 package entries")
+    if len(entries) > 4096:
+        raise DependencyError("Target lockfile exceeds 4096 package entries")
     started = time.monotonic()
     budget = [0]
     for name, item in entries:

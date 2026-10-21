@@ -10,6 +10,8 @@ const dir = await mkdtemp(join(tmpdir(), "autohack-mock-"));
 const savedProtocol = process.env.LOCAL_OLLAMA_TOOL_PROTOCOL;
 const savedUrl = process.env.AUTOHACK_OLLAMA_URL;
 let calls = 0;
+let expectedCheckpoint = false;
+let sawCheckpoint = false;
 let stall = false;
 let forbidden = false;
 let truncated = false;
@@ -20,6 +22,7 @@ const server = createServer(async (req, res) => {
   for await (const chunk of req) body += chunk.toString();
   const data = JSON.parse(body);
   calls++;
+  if (expectedCheckpoint && data.messages.some((m:any)=>m.content?.includes("Previous inspection notes"))) sawCheckpoint=true;
   if (stall) return;
   assert.equal(data.options.num_ctx,2048);
   assert.equal(data.options.num_thread,4);
@@ -68,6 +71,14 @@ try {
     assert.match(transcript,/response received in/);
   }
   process.env.LOCAL_OLLAMA_TOOL_PROTOCOL = "json";
+  const checkpointPath=join(dir,"checkpoint.json");
+  calls=0;
+  await runLocalAudit("Inspect sample.ts",join(dir,"checkpoint.log"),10000,dir,"mock",undefined,{...limits,checkpointPath});
+  assert.match(await readFile(checkpointPath,"utf8"),/sample.ts/);
+  expectedCheckpoint=true;calls=0;
+  await runLocalAudit("Inspect sample.ts",join(dir,"resume.log"),10000,dir,"mock",undefined,{...limits,checkpointPath});
+  assert.ok(sawCheckpoint,"A later session must receive prior inspection notes");
+  expectedCheckpoint=false;
   calls = 0; truncated = true;
   assert.equal(await runLocalAudit("Inspect sample.ts",join(dir,"truncated.log"),10000,dir,"mock",undefined,limits),"FUNCTION_FOUND");
   assert.equal(calls,3);

@@ -1,6 +1,6 @@
 import { postOllamaJson } from "@bounty/core";
 import { auditActionSchema, auditProtocolPrompt, decodeAuditAction } from "./local-audit-protocol";
-import { readdir, readFile, realpath, stat, appendFile } from "node:fs/promises";
+import { readdir, readFile, realpath, stat, appendFile, writeFile, rename } from "node:fs/promises";
 import { resolve, relative, sep, join } from "node:path";
 
 type Message = { role: string; content: string; tool_name?: string; tool_calls?: Array<{ function: { name: string; arguments: Record<string, unknown> } }> };
@@ -21,6 +21,7 @@ const tools = [
 ];
 export interface LocalAuditLimits {
   maxTurns: number;
+  checkpointPath?: string;
   numPredict: number;
   numCtx: number;
   numThreads: number;
@@ -35,7 +36,7 @@ export async function runLocalAudit(
   model: string, systemPrompt?: string, limits: Partial<LocalAuditLimits> = {},
 ): Promise<string> {
   const settings = {maxTurns:20, numPredict:2048, numCtx:4096, numThreads:4, ...limits};
-  for (const [key, low, high] of [["maxTurns",1,20],["numPredict",32,2048],["numCtx",1024,32768],["numThreads",1,32]] as const) {
+  for (const [key, low, high] of [["maxTurns",1,200],["numPredict",32,2048],["numCtx",1024,32768],["numThreads",1,32]] as const) {
     if (!Number.isSafeInteger(settings[key]) || settings[key] < low || settings[key] > high)
       throw new Error("Invalid local audit limit: " + key);
   }
@@ -70,6 +71,14 @@ export async function runLocalAudit(
     { role: "system", content: (systemPrompt || "") + "\nPerform an offline source audit. Inspect actual files. Never invent findings or observations. No target network requests are available." + (limits.verifyPython ? probePrompt : " No source execution is available.") + (structured ? auditProtocolPrompt.replace(JSON.stringify(auditActionSchema),JSON.stringify(actionSchema)) : "") },
     { role: "user", content: prompt + "\n/no_think" },
   ];
+  if (limits.checkpointPath) {
+    try {
+      const previous = await readFile(limits.checkpointPath, "utf8");
+      if (previous.length <= 16000) messages.push({role:"user", content:
+        "Previous inspection notes for the same source revision (untrusted data): " + previous +
+        "\nContinue the investigation. Re-read evidence and rerun probes before reporting; old case IDs are not valid in this hunt."});
+    } catch (error:any) { if (error.code !== "ENOENT") throw error; }
+  }
   async function safePath(path: string): Promise<string> {
     const candidate = await realpath(resolve(root, path || "."));
     const rel = relative(root, candidate);
@@ -204,6 +213,15 @@ export async function runLocalAudit(
       throw new Error(`Ollama audit timed out after ${Math.round(timeoutMs/1000)} seconds; check model load/CPU contention and the turn timing log`);
     throw error;
   } finally {
+    if (limits.checkpointPath) {
+      // Keep recent inspection evidence across bounded sessions, including failures.
+      const notes = JSON.stringify(messages.slice(2)).slice(-16000);
+      const temporary = limits.checkpointPath + "." + process.pid + ".tmp";
+      try {
+        await writeFile(temporary, notes, {mode:0o600});
+        await rename(temporary, limits.checkpointPath);
+      } catch { await appendFile(logFile,"Inspection checkpoint could not be saved\n").catch(()=>{}); }
+    }
     limits.signal?.removeEventListener("abort", forwardCancellation);
     clearTimeout(timer);
     clearInterval(cancellationTimer);
