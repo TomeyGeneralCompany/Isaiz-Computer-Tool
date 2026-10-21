@@ -1045,7 +1045,10 @@ export const appRouter = router({
   securityHuntHistory: publicProcedure.query(async () => {
     const history = await getSecurityHuntHistory();
     const db=getDb();
+    const seenPrograms=new Set<string>();
     return history.slice(0,20).map(entry=>{
+      const isLatest=!seenPrograms.has(entry.programId);
+      seenPrograms.add(entry.programId);
       let failure:ReturnType<typeof describeHuntFailure>|null=null;
       if(String(entry.strategyUsed)==="failed"){
         if(entry.error)failure=describeHuntFailure(entry.error);
@@ -1055,7 +1058,7 @@ export const appRouter = router({
           const coverage=JSON.parse(program?.scopeSummary || "{}").huntCoverage;
           // This summary belongs only to the most recent matching attempt.
           // Do not attach a newer error to an older history row.
-          if(!failure && coverage && Math.abs(Date.parse(coverage.recordedAt)-Date.parse(entry.timestamp))<60000)
+          if(!failure && isLatest && coverage && Math.abs(Date.parse(coverage.recordedAt)-Date.parse(entry.timestamp))<60000)
             failure=describeHuntFailure(coverage.detail);
         }catch{}
         failure ??= describeHuntFailure(null);
