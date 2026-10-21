@@ -1,9 +1,10 @@
+import { withStateMutex } from "./state-mutex";
 /**
  * Crash-consistent, fail-closed daily dispatch quota.
  * Claim BEFORE starting a hunt. Failed/crashed starts still consume one slot.
- * UTC days prevent DST ambiguity. An existing lock is not silently ignored.
+ * UTC days prevent DST ambiguity. SQLite serialization recovers on process exit.
  */
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 export function dailyQuotaFile(): string {
@@ -25,9 +26,7 @@ export function claimDailyHuntSlot(maxDaily: number, path = dailyQuotaFile(), no
     throw new Error("Invalid SECURITY_MAX_DAILY_HUNTS");
   if (maxDaily === 0) return false;
   mkdirSync(dirname(path), { recursive: true });
-  const lock = path + ".lock";
-  const fd = openSync(lock, "wx", 0o600);
-  try {
+  return withStateMutex(path, () => {
     const day = now.toISOString().slice(0, 10);
     const existing = readDailyQuota(path);
     const dispatched = existing?.day === day ? existing.dispatched : 0;
@@ -40,8 +39,5 @@ export function claimDailyHuntSlot(maxDaily: number, path = dailyQuotaFile(), no
       try { unlinkSync(temp); } catch {}
     }
     return true;
-  } finally {
-    closeSync(fd);
-    unlinkSync(lock);
-  }
+  });
 }

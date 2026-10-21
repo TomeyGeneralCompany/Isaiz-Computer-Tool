@@ -44,10 +44,21 @@ try {
     scopeSummary:JSON.stringify({scopes:[{assetType:"SOURCE_CODE",eligibleForBounty:true,
       assetIdentifier:"https://github.com/fixture/owned"}]})}).run();
   const program = db.select().from(schema.securityPrograms).get()!;
+  // A live cross-process lock must reject auto dispatch before consuming quota.
+  const {readDailyQuota,claimDailyHuntSlot,setRuntimeOverride} = await import("../packages/core/src/index");
+  writeFileSync(join(root,"data","security-hunt.lock"),JSON.stringify({pid:process.pid,token:"other-owner"}));
+  await assert.rejects(huntProgram(program,"auto"),/already busy/);
+  assert.equal(readDailyQuota(),null);
+  const {unlinkSync}=await import("node:fs");unlinkSync(join(root,"data","security-hunt.lock"));
+  setRuntimeOverride("SECURITY_MAX_DAILY_HUNTS",1);
+  claimDailyHuntSlot(1);
+  await assert.rejects(huntProgram(program,"auto"),/Daily dispatch limit/);
+  assert.equal(db.select().from(schema.securityPrograms).get()!.scopeSummary,program.scopeSummary,"Quota refusal must not change hunt history");
   const outcome = await huntProgram(program).then(() => null, error => error);
   const after = db.select().from(schema.securityPrograms).get()!;
   assert.equal(after.lastHuntedAt, null, "Failed acquisition must not mark a program previously hunted");
   assert.equal(after.huntCount, 0);
+  assert.equal(JSON.parse(after.scopeSummary!).inspectionPass,1,"Even a failed pass advances repository selection");
   assert.equal(after.huntMissStreak, 0);
   assert.match(String(outcome), /No authorized source repository (?:was )?acquired/);
   assert.equal(modelCalls, 0, "A model cannot audit source that was never acquired");
@@ -66,7 +77,7 @@ root.mkdir(parents=True)
   const incomplete = db.select().from(schema.securityPrograms).get()!;
   assert.equal(incomplete.lastHuntedAt, null);
   assert.equal(incomplete.huntCount, 0);
-  assert.equal(JSON.parse(incomplete.scopeSummary!).huntCoverage.status, "unsupported");
+  assert.equal(JSON.parse(incomplete.scopeSummary!).huntCoverage.status, "failed");
   // Preserve an existing completed-hunt history when a later acquisition fails.
   const { eq } = await import("drizzle-orm");
   db.update(schema.securityPrograms).set({lastHuntedAt:now,huntCount:1,huntMissStreak:1})

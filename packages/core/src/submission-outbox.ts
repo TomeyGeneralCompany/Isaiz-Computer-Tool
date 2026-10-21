@@ -1,10 +1,11 @@
+import { withStateMutex } from "./state-mutex";
 /**
  * Persistent submission outbox: at-most-once dispatch attempts per finding.
  * "uncertain" means a network timeout might have created a report; never
  * automatically retry until the provider confirms the result.
  */
 import { createHash } from "node:crypto";
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 export type SubmissionState = "started" | "confirmed" | "uncertain";
@@ -44,9 +45,7 @@ export function readSubmissionOutbox(path = submissionOutboxFile()): Store {
 
 function mutate<T>(path: string, action: (entries: Store) => T): T {
   mkdirSync(dirname(path), { recursive: true });
-  const lock = path + ".lock";
-  const fd = openSync(lock, "wx", 0o600);
-  try {
+  return withStateMutex(path, () => {
     const entries = load(path);
     const result = action(entries);
     const temp = path + "." + process.pid + ".tmp";
@@ -57,10 +56,7 @@ function mutate<T>(path: string, action: (entries: Store) => T): T {
       try { unlinkSync(temp); } catch {}
     }
     return result;
-  } finally {
-    closeSync(fd);
-    unlinkSync(lock);
-  }
+  });
 }
 
 export function claimSubmission(

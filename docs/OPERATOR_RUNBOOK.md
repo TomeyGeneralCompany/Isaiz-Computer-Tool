@@ -283,7 +283,7 @@ fake Git and model responses. No real bounty assets or submissions are used.
 
 A local hunt now records coverage independently from findings. Missing or failed
 reproduction infrastructure is a failed attempt; a model answer without any
-completed supported probe is unsupported coverage. Neither advances completed
+completed supported probe is incomplete coverage (failed or unsupported). Neither advances completed
 hunt history. Completed negative probes may produce a valid empty finding list.
 Coverage details and retry state remain in the program scope-summary metadata.
 This is bounded inspection coverage, not a claim that an entire repository is
@@ -432,10 +432,54 @@ consumes trial reports. Existing explicit per-call assessment filters are preser
 ### Imported hunt timestamps do not establish local coverage
 
 With `SKIP_PREVIOUSLY_HUNTED` enabled, local source selection skips a previous hunt
-only when `scopeSummary.huntCoverage.status` is `completed`. An older installation's
+only when `scopeSummary.huntCoverage.status` is `completed` at the current capability
+version. Bounded local passes are `partial`. An older installation's
 timestamp without a completed coverage record is eligible for another local inspection
 after the base cooldown/backoff. An unverified legacy miss streak does not multiply
 that cooldown into days of delay. No timestamps, hunt counts, findings or research history
 are erased. Nonlocal selection retains its existing prior-hunt behavior. Unsupported
 and failed inspections still use the existing bounded retry backoff; this change does
 not label them successful or create reproduction support for additional languages.
+
+
+## Reliability repairs: bounded inspection and recovery
+
+Local source audits now record `huntCoverage.status: partial` after a successful
+bounded pass. A supported probe is evidence about that function, not completion
+of a whole program. Partial passes retain the normal cooldown but do not trigger
+`SKIP_PREVIOUSLY_HUNTED` or an escalating no-finding penalty. Legacy completion
+records from earlier capability versions are revisitable. `inspectionPass`
+advances even after failures and rotates the two-repository acquisition batch,
+so repositories beyond the first two are eventually selected. Existing inspection
+checkpoints still carry context between passes on the same revision.
+
+Zero completed probes is `failed` if a probe failed or no probe was attempted;
+it is `unsupported` only if there were unsupported probes and no failed probes.
+Neither result permanently excludes an entire program. Both use bounded failure
+backoff. Imported supported-language leads also retry incomplete investigations.
+
+Read and listing tools expose `nextOffset`; source reads use character offsets,
+listings use entry offsets, and searches use file offsets within the selected path.
+Search results explicitly describe incomplete coverage and excluded directories.
+Search now includes `.mjs` and `.cjs` and traverses deep directories. The hunter
+and independent reviewer must read the entire claimed caller line, rather than
+merely opening the beginning of that file.
+
+Quota claims occur under the shared hunt lock. Busy and quota-denied attempts do
+not consume a new slot or modify hunt history. Quota and outbox JSON writes are
+serialized by separate SQLite mutex databases; the OS releases transaction locks
+if a writer crashes. Existing pending/uncertain submissions remain pending/uncertain
+and are never automatically resent as a consequence of lock recovery.
+
+**Upgrading from ownerless lock files:** stop the old orchestrator and dashboard
+before upgrading. If a prior crash left `data/hunt-daily-quota.json.lock` or
+`data/submission-outbox.json.lock`, remove only those stale lock files after all
+old writers have stopped. The new implementation reports the exact legacy lock
+path rather than guessing whether an old writer is alive. Keep the JSON stores
+and the new `*.mutex.sqlite` files. New-version crashes require no lock-file cleanup.
+
+HackerOne discovery retries missing scopes, refreshes populated scopes daily,
+reactivates returning archived programs, and preserves paused programs and current
+assessment/hunt metadata. Report polling continues for accepted and rewarded
+reports, records late or additional awards without requiring a status transition,
+and leaves the separately verified cash ledger unchanged.

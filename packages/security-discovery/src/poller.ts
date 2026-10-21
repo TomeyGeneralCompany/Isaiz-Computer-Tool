@@ -34,11 +34,26 @@ export async function pollHackerOne(): Promise<number> {
       .get();
 
     if (existing) {
-      // Update if name or reward data changed
+      // Refresh provider metadata and recover entries with missing/stale scopes.
       const updates: Record<string, any> = {};
       if (existing.name !== prog.name) updates.name = prog.name;
       if (prog.rewardMinCents != null && existing.rewardMinCents !== prog.rewardMinCents) updates.rewardMinCents = prog.rewardMinCents;
       if (prog.rewardMaxCents != null && existing.rewardMaxCents !== prog.rewardMaxCents) updates.rewardMaxCents = prog.rewardMaxCents;
+      if (existing.status === "archived") updates.status = "active";
+      let summary: Record<string, any> = {};
+      try { const value = JSON.parse(existing.scopeSummary || "{}"); summary = Array.isArray(value) ? {scopes:value} : value || {}; } catch {}
+      if (!Array.isArray(summary.scopes) || !summary.scopes.length ||
+          !summary.scopeRefreshedAt || Date.now() - Date.parse(summary.scopeRefreshedAt) >= 86400000 ||
+          !Number.isFinite(Date.parse(summary.scopeRefreshedAt))) {
+        try {
+          const scopes = await fetchProgramScopes(prog.handle);
+          // A hunt/assessment may have updated tracking while the request was in flight.
+          const current = db.select().from(schema.securityPrograms).where(eq(schema.securityPrograms.id,id)).get();
+          let latest = summary;
+          try { const value = JSON.parse(current?.scopeSummary || "{}"); latest = Array.isArray(value) ? {scopes:value} : value || {}; } catch {}
+          updates.scopeSummary = JSON.stringify({...latest, scopes, scopeRefreshedAt:new Date().toISOString()});
+        } catch (err) { log.warn({err,handle:prog.handle}, "Scope refresh failed; will retry on next discovery poll"); }
+      }
       if (Object.keys(updates).length > 0) {
         db.update(schema.securityPrograms)
           .set({ ...updates, updatedAt: new Date() })
@@ -334,11 +349,11 @@ export async function pollSubmissionStatuses(): Promise<number> {
 
   const db = getDb();
 
-  // Get all findings in submitted or triaged status (still awaiting final resolution)
+  // Resolved reports can receive later awards; keep polling them too.
   const pendingFindings = db
     .select()
     .from(schema.securityFindings)
-    .where(inArray(schema.securityFindings.status, ["submitted", "triaged"]))
+    .where(inArray(schema.securityFindings.status, ["submitted", "triaged", "accepted", "rewarded"]))
     .all();
 
   if (pendingFindings.length === 0) return 0;
@@ -351,13 +366,11 @@ export async function pollSubmissionStatuses(): Promise<number> {
     if (!finding.reportId) continue;
 
     const reportStatus = await fetchReportStatus(finding.reportId);
+    // Pace all requests, including unchanged accepted/rewarded reports.
+    await new Promise((r) => setTimeout(r, 1000));
     if (!reportStatus) continue;
 
-    const newStatus = mapH1StateToFindingStatus(reportStatus.state);
-    if (!newStatus) continue; // no meaningful change
-
-    // Only update if status actually changed
-    if (newStatus === finding.status) continue;
+    const newStatus = mapH1StateToFindingStatus(reportStatus.state) ?? finding.status;
 
     const updateData: Record<string, any> = {
       status: newStatus,
@@ -367,10 +380,14 @@ export async function pollSubmissionStatuses(): Promise<number> {
     // Record bounty amount if rewarded
     if (reportStatus.bountyAmountCents != null && reportStatus.bountyAmountCents > 0) {
       updateData.rewardedCents = reportStatus.bountyAmountCents;
-      if (newStatus !== "accepted") {
-        updateData.status = "rewarded";
-      }
+      // Preserve an open report's lifecycle so its later resolution is still observed.
+      if (newStatus === "accepted" || finding.status === "rewarded") updateData.status = "rewarded";
     }
+
+    // Do not lose a previously recorded award when a response omits bounty data.
+    if ((finding.rewardedCents ?? 0) > 0 && newStatus === "accepted") updateData.status = "rewarded";
+    if (updateData.status === finding.status &&
+        (updateData.rewardedCents === undefined || updateData.rewardedCents === finding.rewardedCents)) continue;
 
     db.update(schema.securityFindings)
       .set(updateData)
@@ -390,7 +407,7 @@ export async function pollSubmissionStatuses(): Promise<number> {
 
     // Record outcome in learning memory (this is the critical missing feedback loop)
     const outcome = mapH1StateToOutcome(reportStatus.state);
-    if (outcome !== "pending") {
+    if (outcome !== "pending" && !["accepted", "rewarded"].includes(finding.status)) {
       await recordSecurityFindingOutcome({
         findingId: finding.id,
         programId: finding.programId ?? "",
@@ -403,9 +420,6 @@ export async function pollSubmissionStatuses(): Promise<number> {
     }
 
     updated++;
-
-    // Rate limit: 1 request per second
-    await new Promise((r) => setTimeout(r, 1000));
   }
 
   log.info({ updated, total: pendingFindings.length }, "Submission status poll complete");

@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import cron from "node-cron";
-import { loadConfig, getConfig, createLogger, claimDailyHuntSlot } from "@bounty/core";
+import { loadConfig, getConfig, createLogger } from "@bounty/core";
 import { pollHackerOne, pollImmunefi, pollHuntr, pollAggregator, pollSubmissionStatuses, backfillSignalRequirements } from "@bounty/security-discovery";
 import { processSecurityProgramQueue } from "@bounty/security-analyzer";
 import {
@@ -175,19 +175,6 @@ function main() {
         if (!program) {
           log.info({ selection: getProgramSelectionSummary() }, "No eligible programs for auto-hunt — see selection exclusion counts; rechecking within 5 min");
           await waitWhileEnabled(5 * 60 * 1000,true);
-          continue;
-        }
-
-        // Persist dispatch count before launching; crashes also consume quota.
-        try {
-          if (!claimDailyHuntSlot(currentConfig.SECURITY_MAX_DAILY_HUNTS)) {
-            log.info("Daily dispatch limit reached; waiting for next UTC day");
-            await waitWhileEnabled(60 * 1000);
-            continue;
-          }
-        } catch (error) {
-          log.error({ error }, "Daily quota unavailable; refusing unsafe dispatch");
-          await waitWhileEnabled(60 * 1000);
           continue;
         }
 

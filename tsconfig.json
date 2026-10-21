@@ -14,7 +14,10 @@
     "scripts/test-hunt-failure.ts",
     "scripts/test-program-selection.ts",
     "scripts/diagnose-progress.ts",
-    "scripts/test-progress-diagnostic.ts"
+    "scripts/test-progress-diagnostic.ts",
+    "scripts/test-source-inspection.ts",
+    "scripts/test-state-mutex.ts",
+    "scripts/test-poller-recovery.ts"
   ],
   "exclude": [
     "packages/dashboard/**"

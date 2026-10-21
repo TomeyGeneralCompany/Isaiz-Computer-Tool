@@ -21,7 +21,7 @@ export async function processStaticLeadQueue(investigate?: (program:SecurityProg
       let notes:any={}; try {const raw=JSON.parse(finding.analysisNotes || "{}");if(raw && typeof raw === "object" && !Array.isArray(raw)) notes=raw;} catch {}
       const prior=notes.staticInvestigation;
       if (["completed","invalid"].includes(prior?.state) ||
-          prior?.state === "unsupported" && (prior?.reproductionVersion === 2 || !/\.(js|mjs|cjs|sol)$/.test(notes.lead?.file || ""))) continue;
+          prior?.state === "unsupported" && !/\.(py|js|mjs|cjs|sol)$/.test(notes.lead?.file || "")) continue;
       if (prior?.retryAfter && Date.parse(prior.retryAfter)>Date.now()) continue;
       const save=(state:string,detail:string,extra:Record<string,unknown>={}) => {
         // Re-read to preserve an operator dismissal that happened during inference.
@@ -57,7 +57,8 @@ export async function processStaticLeadQueue(investigate?: (program:SecurityProg
       } catch {save("blocked","Lead source is outside current program scope.",{retryAfter:new Date(Date.now()+300000).toISOString()});continue;}
       const {isSecuritySolving,huntProgram}=await import("./index");
       if (isSecuritySolving()) return false;
-      if (!claimDailyHuntSlot(config.SECURITY_MAX_DAILY_HUNTS)) return false;
+      // Production dispatch claims quota under the hunt lock; injected tests emulate it.
+      if (investigate && !claimDailyHuntSlot(config.SECURITY_MAX_DAILY_HUNTS)) return false;
       save("running","Investigating source at the recorded commit; no report is approved.");
       const focus:StaticLeadFocus={id:finding.id,repositoryUrl,commit:value.commit,file,line:value.lead.line,rule:value.lead.rule};
       try {

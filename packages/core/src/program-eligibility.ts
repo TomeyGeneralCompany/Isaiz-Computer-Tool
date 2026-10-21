@@ -3,8 +3,8 @@ import type { SecurityProgram } from "./db/schema";
 import { assertAuthorizedProgram } from "./scope-authorization";
 import { authorizedSourceUrls } from "./source-repository";
 
-/** Bump when the supported reproduction surface changes to retry held programs. */
-export const LOCAL_REPRODUCTION_CAPABILITY_VERSION = 3;
+/** Version of coverage semantics; older completion records are not exhaustive. */
+export const LOCAL_REPRODUCTION_CAPABILITY_VERSION = 4;
 
 /** Shared pre-assessment and pre-dispatch filters. Assessment itself is separate. */
 export function programCandidateBlocker(program: SecurityProgram, config: Config, localModel: boolean, now = Date.now()): string | null {
@@ -25,7 +25,7 @@ export function programCandidateBlocker(program: SecurityProgram, config: Config
   // "hunted". In the local engine, only recorded completed coverage establishes
   // completion. Keep legacy timestamps intact for history and cooldowns.
   let completedCoverage = false;
-  try { completedCoverage = JSON.parse(program.scopeSummary || "{}").huntCoverage?.status === "completed"; } catch {}
+  try { const coverage = JSON.parse(program.scopeSummary || "{}").huntCoverage; completedCoverage = coverage?.status === "completed" && coverage?.capabilityVersion === LOCAL_REPRODUCTION_CAPABILITY_VERSION; } catch {}
   if (program.lastHuntedAt && config.SKIP_PREVIOUSLY_HUNTED && (!localModel || completedCoverage)) return "previously_hunted";
   if (program.lastHuntedAt) {
     const verifiedMissStreak = localModel && !completedCoverage ? 0 : (program.huntMissStreak ?? 0);
@@ -35,8 +35,8 @@ export function programCandidateBlocker(program: SecurityProgram, config: Config
   let scopes: unknown;
   try {
     const tracking = JSON.parse(program.scopeSummary || "{}");
-    if (localModel && tracking.huntCoverage?.status === "unsupported" &&
-        tracking.huntCoverage?.capabilityVersion === LOCAL_REPRODUCTION_CAPABILITY_VERSION) return "unsupported_reproduction";
+    // A handful of unsupported functions cannot establish whole-program incompatibility.
+    // Failed and unsupported passes both retry through bounded huntFailure backoff.
     const failure = tracking.huntFailure;
     if (failure && Number.isFinite(Date.parse(failure.retryAfter)) && Date.parse(failure.retryAfter) > now) return "failed_hunt_backoff";
   } catch {}
