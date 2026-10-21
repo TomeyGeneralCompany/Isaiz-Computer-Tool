@@ -32,7 +32,7 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-      - run: npm ci --ignore-scripts
+      - run: npm ci
       - run: npx tsc --noEmit --project tsconfig.json
       - name: Verify read-only dashboard activity
         run: npx tsx scripts/test-dashboard-activity.ts
@@ -40,6 +40,10 @@ jobs:
         run: npx tsx scripts/test-ollama-http.ts
       - name: Exercise direct Ollama agent with mock server
         run: npx tsx scripts/test-mock-agent.ts
+      - name: Verify paginated source inspection and evidence spans
+        run: npx tsx scripts/test-source-inspection.ts
+      - name: Verify state mutex crash recovery and concurrent claims
+        run: npx tsx scripts/test-state-mutex.ts
       - name: Exercise production program assessment and truncated output recovery
         run: npx tsx scripts/test-mock-assessment.ts
       - name: Verify authorized source acquisition boundaries
@@ -89,6 +93,8 @@ jobs:
         run: npx tsx scripts/test-progress-diagnostic.ts
       - name: Verify failed source acquisition preserves hunt history
         run: npx tsx scripts/test-hunt-failure.ts
+      - name: Verify scope recovery and late bounty updates
+        run: npx tsx scripts/test-poller-recovery.ts
       - name: Verify static lead evidence routing with an owned database
         run: npx tsx scripts/test-static-lead-queue.ts
       - name: Test fresh database directory and false-success rejection

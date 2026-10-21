@@ -1,3 +1,4 @@
+import { LOCAL_REPRODUCTION_CAPABILITY_VERSION } from "../packages/core/src/program-eligibility";
 /** Pure fictional programs and intercepted provider responses; no network or database. */
 import assert from "node:assert/strict";
 import { loadConfig } from "../packages/core/src/config";
@@ -11,7 +12,7 @@ const base = { id: "fictional", provider: "immunefi", name: "Flooperfloop", stat
 const variants = [
   base,
   { ...base, provider: "hackerone", requiresSignal: true },
-  { ...base, lastHuntedAt: new Date(), scopeSummary: JSON.stringify({ ...JSON.parse(summary()), huntCoverage: { status: "completed" } }) },
+  { ...base, lastHuntedAt: new Date(), scopeSummary: JSON.stringify({ ...JSON.parse(summary()), huntCoverage: { status: "completed", capabilityVersion: LOCAL_REPRODUCTION_CAPABILITY_VERSION } }) },
   { ...base, scopeSummary: summary(null) },
   { ...base, scopeSummary: summary({ opportunityScore: 0 }) },
   { ...base, responseEfficiency: 0 },
@@ -53,7 +54,12 @@ try {
 } finally { globalThis.fetch = saved; }
 console.log("Dispatch exclusion accounting, zero/missing assessment distinction and incomplete Signal responses: PASSED");
 
-const { LOCAL_REPRODUCTION_CAPABILITY_VERSION } = await import("../packages/core/src/program-eligibility");
+
 const held = {...base,scopeSummary:JSON.stringify({...JSON.parse(summary()),huntCoverage:{status:"unsupported",capabilityVersion:LOCAL_REPRODUCTION_CAPABILITY_VERSION}})};
-assert.equal(programSelectionDecision(held,config,true).reason,"unsupported_reproduction");
+assert.equal(programSelectionDecision(held,config,true).reason,"eligible");
 assert.equal(programSelectionDecision({...held,scopeSummary:JSON.stringify({...JSON.parse(summary()),huntCoverage:{status:"unsupported",capabilityVersion:LOCAL_REPRODUCTION_CAPABILITY_VERSION-1}})},config,true).reason,"eligible");
+
+const partial = {...base,lastHuntedAt:new Date(Date.now()-48*3600000),scopeSummary:JSON.stringify({...JSON.parse(summary()),huntCoverage:{status:"partial",capabilityVersion:LOCAL_REPRODUCTION_CAPABILITY_VERSION}})};
+assert.equal(programSelectionDecision(partial,config,true).reason,"eligible","Partial passes cannot permanently exclude a program");
+const oldComplete={...partial,scopeSummary:JSON.stringify({...JSON.parse(summary()),huntCoverage:{status:"completed",capabilityVersion:3}})};
+assert.equal(programSelectionDecision(oldComplete,config,true).reason,"eligible","Legacy overclaimed coverage must be revisitable");

@@ -1197,7 +1197,7 @@ export interface ParsedFinding {
 }
 
 export interface SecuritySolveResult {
-  coverage?: "completed" | "unsupported" | "failed";
+  coverage?: "completed" | "partial" | "unsupported" | "failed";
   coverageDetail?: string;
   success: boolean;
   findings: ParsedFinding[];

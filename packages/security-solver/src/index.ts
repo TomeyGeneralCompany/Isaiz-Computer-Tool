@@ -8,7 +8,7 @@ import { readFileSync, writeFileSync, unlinkSync, mkdirSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { eq, desc, and, or, isNull, lt } from "drizzle-orm";
-import { getDb, schema, getConfig, createLogger, generateTraceId, classifyError, extractJsonWithKey, recordSecurityHuntOutcome, recordNearMiss, updateProgramNotes, getSecurityLearningContext, getSecurityProgramContext, type SecurityFinding, type SecurityProgram, recordHuntAttempt, assertAuthorizedProgram, targetInExplicitScope, assertAuthorizedTarget, submitOnce } from "@bounty/core";
+import { getDb, schema, getConfig, createLogger, generateTraceId, classifyError, extractJsonWithKey, recordSecurityHuntOutcome, recordNearMiss, updateProgramNotes, getSecurityLearningContext, getSecurityProgramContext, type SecurityFinding, type SecurityProgram, claimDailyHuntSlot, recordHuntAttempt, assertAuthorizedProgram, targetInExplicitScope, assertAuthorizedTarget, submitOnce } from "@bounty/core";
 import { fetchProgramPolicy, fetchProgramSignalRequirement, fetchAllDisclosedReports, prepareSubmission, submitReport, fetchProgramScopes } from "@bounty/security-discovery";
 import { runProgramHunt, runFindingSolver, killActiveSecurityProcess, detectHuntStrategy, prepareReviewWorkspace, spawnComprehensiveReview, deverbosifyReport, EXCLUDED_VULN_TYPES, type ReviewContext } from "./claude-runner";
 import { clearSecuritySolverStatus, writeAdversarialReviewStatus, clearAdversarialReviewStatus, readAdversarialReviewStatus, cancelAdversarialReview } from "./status";
@@ -89,10 +89,17 @@ export async function huntProgram(
     throw new Error("Security solver is already busy (another process holds the lock)");
   }
 
+  try {
+    if (trigger === "auto" && !claimDailyHuntSlot(getConfig().SECURITY_MAX_DAILY_HUNTS))
+      throw new Error("Daily dispatch limit reached");
+  } catch (error) {
+    releaseHuntLock();
+    throw error;
+  }
   solving = true;
   let findingsCreated = 0;
   let huntSucceeded = false;
-  let coverage: "completed" | "unsupported" | "failed" = "failed";
+  let coverage: "completed" | "partial" | "unsupported" | "failed" = "failed";
   let coverageDetail = "Hunt did not complete";
   let localJob: ReturnType<typeof beginLocalJob> | undefined;
 
@@ -265,11 +272,12 @@ export async function huntProgram(
       const prevHuntCount = currentProgram?.huntCount ?? 0;
       const prevMissStreak = currentProgram?.huntMissStreak ?? 0;
 
-      const newMissStreak = focus ? prevMissStreak : !huntSucceeded
+      const newMissStreak = focus || coverage === "partial" ? prevMissStreak : !huntSucceeded
         ? prevMissStreak  // don't penalize for broken/incomplete hunts
         : findingsCreated > 0 ? 0 : prevMissStreak + 1;
 
       const tracking = JSON.parse(recordHuntAttempt(currentProgram?.scopeSummary ?? program.scopeSummary,huntSucceeded));
+      if (process.env.LOCAL_OLLAMA_MODEL) tracking.inspectionPass = (Number.isSafeInteger(tracking.inspectionPass) ? tracking.inspectionPass : 0) + 1;
       tracking.huntCoverage = {capabilityVersion:LOCAL_REPRODUCTION_CAPABILITY_VERSION,status:coverage,detail:coverageDetail,recordedAt:new Date().toISOString()};
       db.update(schema.securityPrograms)
         .set({

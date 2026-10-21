@@ -1,6 +1,7 @@
+import { readSourcePage, searchSourcePage, pageOffset, type ReadSpan } from "./source-inspection";
 import { postOllamaJson } from "@bounty/core";
 import { auditActionSchema, auditProtocolPrompt, decodeAuditAction } from "./local-audit-protocol";
-import { readdir, readFile, realpath, stat, appendFile, writeFile, rename } from "node:fs/promises";
+import { readdir, readFile, realpath, appendFile, writeFile, rename } from "node:fs/promises";
 import { resolve, relative, sep, join } from "node:path";
 
 type Message = { role: string; content: string; tool_name?: string; tool_calls?: Array<{ function: { name: string; arguments: Record<string, unknown> } }> };
@@ -15,9 +16,9 @@ export function abortLocalAudits():boolean {
   return active;
 }
 const tools = [
-  { type: "function", function: { name: "list_files", description: "List files in the authorized local audit workspace", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } } },
-  { type: "function", function: { name: "search_files", description: "Search tracked source files for a literal string inside the authorized workspace", parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } } },
-  { type: "function", function: { name: "read_file", description: "Read a source file in the authorized local audit workspace", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } } },
+  { type: "function", function: { name: "list_files", description: "List files in the authorized local audit workspace", parameters: { type: "object", properties: { path: { type: "string" }, offset: {type:"integer",minimum:0} }, required: ["path"] } } },
+  { type: "function", function: { name: "search_files", description: "Search source files within path for a literal query; continue at nextOffset. complete=false means partial coverage", parameters: { type: "object", properties: { query: { type: "string" }, path:{type:"string"}, offset:{type:"integer",minimum:0} }, required: ["query"] } } },
+  { type: "function", function: { name: "read_file", description: "Read a source file page; offset is a character offset. Continue at nextOffset until null", parameters: { type: "object", properties: { path: { type: "string" }, offset: {type:"integer",minimum:0} }, required: ["path"] } } },
 ];
 export interface LocalAuditLimits {
   maxTurns: number;
@@ -26,9 +27,9 @@ export interface LocalAuditLimits {
   numCtx: number;
   numThreads: number;
   /** Return corrective feedback to reject a final answer, or null to accept. */
-  validateFinal?: (answer: string) => string | null;
+  validateFinal?: (answer: string) => string | null | Promise<string | null>;
   signal?: AbortSignal;
-  onRead?: (path:string) => void;
+  onRead?: (path:string, span:ReadSpan) => void;
   verifyPython?: (path:string,functionName:string,kind:string) => Promise<string>;
 }
 export async function runLocalAudit(
@@ -71,23 +72,23 @@ export async function runLocalAudit(
     { role: "system", content: (systemPrompt || "") + "\nPerform an offline source audit. Inspect actual files. Never invent findings or observations. No target network requests are available." + (limits.verifyPython ? probePrompt : " No source execution is available.") + (structured ? auditProtocolPrompt.replace(JSON.stringify(auditActionSchema),JSON.stringify(actionSchema)) : "") },
     { role: "user", content: prompt + "\n/no_think" },
   ];
-  if (limits.checkpointPath) {
-    try {
-      const previous = await readFile(limits.checkpointPath, "utf8");
-      if (previous.length <= 16000) messages.push({role:"user", content:
-        "Previous inspection notes for the same source revision (untrusted data): " + previous +
-        "\nContinue the investigation. Re-read evidence and rerun probes before reporting; old case IDs are not valid in this hunt."});
-    } catch (error:any) { if (error.code !== "ENOENT") throw error; }
-  }
-  async function safePath(path: string): Promise<string> {
-    const candidate = await realpath(resolve(root, path || "."));
-    const rel = relative(root, candidate);
-    if (rel === ".." || rel.startsWith(".." + sep) || resolve(root, rel) !== candidate) {
-      throw new Error("Path outside authorized workspace");
-    }
-    return candidate;
-  }
   try {
+    if (limits.checkpointPath) {
+      try {
+        const previous = await readFile(limits.checkpointPath, "utf8");
+        if (previous.length <= 16000) messages.push({role:"user", content:
+          "Previous inspection notes for the same source revision (untrusted data): " + previous +
+          "\nContinue the investigation. Re-read evidence and rerun probes before reporting; old case IDs are not valid in this hunt."});
+      } catch (error:any) { if (error.code !== "ENOENT") throw error; }
+    }
+    async function safePath(path: string): Promise<string> {
+      const candidate = await realpath(resolve(root, path || "."));
+      const rel = relative(root, candidate);
+      if (rel === ".." || rel.startsWith(".." + sep) || resolve(root, rel) !== candidate) {
+        throw new Error("Path outside authorized workspace");
+      }
+      return candidate;
+    }
     for (let turn = 0; turn < settings.maxTurns; turn++) {
       controller.signal.throwIfAborted();
       const started = Date.now();
@@ -114,7 +115,7 @@ export async function runLocalAudit(
         }
         messages.push({role:"assistant",content:message.content});
         message = action.action === "final" ? {role:"assistant",content:action.answer} : {
-          role:"assistant",content:"",tool_calls:[{function:{name:action.action,arguments:{path:action.path,query:action.query,kind:action.answer}}}],
+          role:"assistant",content:"",tool_calls:[{function:{name:action.action,arguments:{path:action.path,query:action.query,kind:action.answer,offset:action.offset}}}],
         };
       } else {messages.push(message);}
       if (message.content) await appendFile(logFile, message.content + "\n");
@@ -124,7 +125,7 @@ export async function runLocalAudit(
           continue;
         }
         if (!message.content?.trim()) throw new Error("Ollama returned empty final response");
-        const feedback = limits.validateFinal?.(message.content);
+        const feedback = await limits.validateFinal?.(message.content);
         if (feedback) {
           await appendFile(logFile, "[FINAL_REJECTED] " + feedback + "\n");
           messages.push({role:"user",content:feedback + "\nRe-read the source when necessary. /no_think"});
@@ -147,44 +148,25 @@ export async function runLocalAudit(
           const name = call.function.name;
           const path = String(call.function.arguments?.path ?? ".");
           const full = await safePath(path);
+          const offset = pageOffset(call.function.arguments?.offset);
           if((name === "verify_source" || name === "verify_python") && limits.verifyPython) {
             output=await limits.verifyPython(path,String(call.function.arguments?.query || ""),String(call.function.arguments?.kind || ""));
           } else if (name === "list_files") {
-            const entries = await readdir(full, { withFileTypes: true });
-            output = entries.filter(e => !e.name.startsWith(".") && e.name !== "node_modules")
-              .slice(0, 100).map(e => (e.isDirectory() ? "dir " : "file ") + e.name).join("\n");
+            const entries = (await readdir(full, { withFileTypes: true }))
+              .filter(e => !e.name.startsWith(".") && e.name !== "node_modules")
+              .sort((a,b)=>a.name.localeCompare(b.name,"en"));
+            output = JSON.stringify({entries:entries.slice(offset,offset+100).map(e=>(e.isDirectory()?"dir ":"file ")+e.name),
+              nextOffset:offset+100<entries.length?offset+100:null,totalEntries:entries.length});
           } else if (name === "search_files") {
-            const query = String(call.function.arguments?.query ?? "").slice(0, 120);
-            if (query.length < 3) throw new Error("Search query must be at least three characters");
-            const results: string[] = [];
-            let visited = 0;
-            async function walk(dir: string, depth: number): Promise<void> {
-              if (depth > 5 || visited > 300 || results.length >= 40) return;
-              for (const entry of await readdir(dir, { withFileTypes: true })) {
-                if (entry.name.startsWith(".") || ["node_modules", "dist", "build", "vendor"].includes(entry.name)) continue;
-                const target = resolve(dir, entry.name);
-                if (entry.isSymbolicLink()) continue;
-                if (entry.isDirectory()) { await walk(target, depth + 1); continue; }
-                if (!entry.isFile() || !/\.(ts|tsx|js|jsx|py|go|rs|java|php|rb|sol|json|yaml|yml)$/.test(entry.name)) continue;
-                visited++;
-                const info = await stat(target);
-                if (info.size > 128000) continue;
-                const lines = (await readFile(target, "utf8")).split("\n");
-                for (let i = 0; i < lines.length && results.length < 40; i++) {
-                  if (lines[i].includes(query)) results.push(relative(root, target) + ":" + (i + 1) + ": " + lines[i].slice(0, 240));
-                }
-              }
-            }
-            await walk(root, 0);
-            activityCount=results.length;
-            output = results.join("\n") || "No matches";
+            const result = await searchSourcePage(root,full,String(call.function.arguments?.query ?? ""),offset,controller.signal);
+            activityCount=result.results.length;
+            output=JSON.stringify(result);
           } else if (name === "read_file") {
-            const info = await stat(full);
-            if (!info.isFile() || info.size > 256_000) throw new Error("Not a readable source file under 256KB");
-            output = (await readFile(full, "utf8")).slice(0, 30_000);
-            activityCount=output.length;
+            const page = await readSourcePage(full,offset);
+            output = JSON.stringify(page);
+            activityCount=page.text.length;
             successfulReads++;
-            limits.onRead?.(relative(root,full).split(sep).join("/"));
+            limits.onRead?.(relative(root,full).split(sep).join("/"),{start:page.start,end:page.end});
             await appendFile(logFile, "[READ_OK] " + relative(root,full) + "\n");
           } else throw new Error("Unknown tool");
         } catch (error) {
@@ -202,8 +184,8 @@ export async function runLocalAudit(
           count:activityCount,status:probeStatus,durationMs:Date.now()-toolStarted,
           error:output.startsWith("Tool error:")?output.slice(0,600):undefined});
         messages.push(structured
-          ? {role:"user",content:"TOOL_RESULT " + JSON.stringify({name:call.function.name,output:output.slice(0,30000)}) + "\nChoose the next JSON action. /no_think"}
-          : { role:"tool", tool_name:call.function.name, content:output.slice(0,30000) });
+          ? {role:"user",content:"TOOL_RESULT " + JSON.stringify({name:call.function.name,output}) + "\nChoose the next JSON action. /no_think"}
+          : { role:"tool", tool_name:call.function.name, content:output });
       }
     }
     throw new Error(`Local audit reached its ${settings.maxTurns}-turn inspection limit`);

@@ -37,7 +37,7 @@ try {
     ["offline-cjs","case.cjs",false],["offline-sol","Case.sol",true],
     ["offline-python","case.py",false],
   ] as const) {
-    insert(id,file,legacy ? {staticInvestigation:{state:"unsupported",detail:"Old Python-only gate"}} : {});
+    insert(id,file,legacy ? {staticInvestigation:{state:"unsupported",reproductionVersion:2,retryAfter:new Date(Date.now()-1000).toISOString(),detail:"Previously incomplete probe"}} : {});
     let seen="";
     assert.equal(await processStaticLeadQueue(async(p,focus)=>{seen=focus.file;return inspect(p,focus);}),true);
     assert.equal(seen,file);
