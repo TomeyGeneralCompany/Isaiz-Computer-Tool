@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import {mkdtemp,mkdir,writeFile,readFile,rm,utimes} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
-import {readLocalActivity,describeHuntFailure} from "../packages/dashboard/src/server/activity";
+import {readLocalActivity,describeHuntFailure,parseWorkEvents} from "../packages/dashboard/src/server/activity";
 
 const root=await mkdtemp(join(tmpdir(),"tomey-activity-"));
 try {
@@ -31,5 +31,25 @@ try {
   assert.equal(describeHuntFailure("Ollama audit timed out").stage,"Model inspection");
   assert.match(describeHuntFailure(null).reason,/not retained/);
   assert.equal(describeHuntFailure("Bearer secret-value").reason.includes("secret-value"),false);
+  const event=(value:Record<string,unknown>)=>"[ACTIVITY] "+JSON.stringify({at:new Date().toISOString(),...value});
+  const trail=parseWorkEvents([
+    "[READ_OK] source-1/example.sol",
+    event({phase:"completed",tool:"read_file",path:"source-1/example.sol",durationMs:20}),
+    event({phase:"completed",tool:"search_files",query:"withdraw",count:4}),
+    event({phase:"completed",tool:"verify_source",path:"source-1/example.sol",query:"Contract.render",kind:"html_reflection",status:"behavior_not_observed",durationMs:1250}),
+    event({phase:"completed",tool:"verify_source",path:"source-1/example.sol",query:"missing",status:"probe_failed"}),
+    event({phase:"failed",tool:"read_file",path:"missing.sol",error:"Tool error: File missing"}),
+    "[ACTIVITY] broken json",
+    "Unstructured model commentary must not be displayed"
+  ].join("\n"));
+  assert.equal(trail.counts.filesRead,1,"Legacy and structured read markers must not double count");
+  assert.equal(trail.counts.searches,1);
+  assert.equal(trail.counts.tests,2);
+  assert.ok(trail.events.some(e=>e.detail.includes("4 matches")));
+  assert.ok(trail.events.some(e=>e.status==="Behavior not reproduced"));
+  assert.ok(trail.events.some(e=>e.status==="Test could not run successfully"));
+  assert.equal(trail.events[0].phase,"failed");
+  assert.equal(JSON.stringify(trail).includes("model commentary"),false);
+  assert.equal(parseWorkEvents(Array(100).fill(event({phase:"completed",tool:"read_file",path:"a.py"})).join("\n")).events.length,16);
   console.log("Read-only live progress, stale log exclusion, failure explanations and redaction PASSED");
 }finally{await rm(root,{recursive:true,force:true});}

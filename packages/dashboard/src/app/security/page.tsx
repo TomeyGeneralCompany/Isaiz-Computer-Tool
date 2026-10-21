@@ -147,6 +147,24 @@ function LiveActivity() {
         {data.activity.detail && data.solver.active && <p className="mt-2 break-words text-xs" style={{color:"var(--text-dim)"}}>{data.activity.detail}</p>}
         {data.activity.lastProgressAt && <p className="mt-2 text-xs" style={{color:"var(--text-dim)"}}>Last recorded progress: {timeAgo(data.activity.lastProgressAt)}</p>}
         {data.solver.active && !data.activity.lastProgressAt && <p className="mt-2 text-xs" style={{color:"var(--text-dim)"}}>Waiting for the first recorded activity update.</p>}
+        {data.activity.events.length>0 && <div className="mt-4 border-t pt-3" style={{borderColor:"var(--border)"}}>
+          <h4 className="text-xs font-semibold">Recent logged work</h4>
+          <p className="mt-1 text-xs" style={{color:"var(--text-dim)"}}>
+            {data.activity.counts.filesRead} file reads · {data.activity.counts.searches} searches · {data.activity.counts.tests} test attempts finished
+          </p>
+          <ol className="mt-3 max-h-80 space-y-3 overflow-y-auto">
+            {data.activity.events.map((event,index)=><li key={index} className="text-xs">
+              <div className="flex items-center justify-between gap-3">
+                <span className="font-medium">{event.title}</span>
+                <span style={{color:"var(--text-dim)"}}>{event.at?timeAgo(event.at):"Earlier in this hunt"}</span>
+              </div>
+              {event.detail && <p className="mt-1 break-words whitespace-pre-wrap" style={{color:"var(--text-dim)"}}>{event.detail}</p>}
+              {event.status && <p className="mt-1">{event.status}</p>}
+              {event.durationMs!=null && <p className="mt-1" style={{color:"var(--text-dim)"}}>Took {(event.durationMs/1000).toFixed(1)}s</p>}
+            </li>)}
+          </ol>
+        </div>}
+        {data.solver.active && data.activity.events.length===0 && <p className="mt-3 text-xs" style={{color:"var(--text-dim)"}}>No completed tool activity has been logged yet.</p>}
         <p className="mt-2 text-xs" style={{color:"var(--text-dim)"}}>Refreshes every 5 seconds. Local model work may take time between updates.</p>
       </div>}
   </section>;

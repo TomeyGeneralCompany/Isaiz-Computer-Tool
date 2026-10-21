@@ -4,6 +4,9 @@ import { readdir, readFile, realpath, stat, appendFile } from "node:fs/promises"
 import { resolve, relative, sep, join } from "node:path";
 
 type Message = { role: string; content: string; tool_name?: string; tool_calls?: Array<{ function: { name: string; arguments: Record<string, unknown> } }> };
+async function recordToolActivity(logFile:string,event:Record<string,unknown>):Promise<void> {
+  try {await appendFile(logFile+".activity.jsonl","[ACTIVITY] "+JSON.stringify({at:new Date().toISOString(),...event})+"\n");}catch{}
+}
 const activeControllers=new Set<AbortController>();
 export function activeLocalAuditCount():number {return activeControllers.size;}
 export function abortLocalAudits():boolean {
@@ -125,6 +128,12 @@ export async function runLocalAudit(
         controller.signal.throwIfAborted();
         await appendFile(logFile, "[TOOL] " + call.function.name + "\n");
         let output: string;
+        let activityCount:number|undefined;
+        const toolStarted=Date.now();
+        await recordToolActivity(logFile,{phase:"started",tool:call.function.name,
+          path:String(call.function.arguments?.path ?? ".").slice(0,500),
+          query:String(call.function.arguments?.query ?? "").slice(0,120),
+          kind:String(call.function.arguments?.kind ?? "").slice(0,80)});
         try {
           const name = call.function.name;
           const path = String(call.function.arguments?.path ?? ".");
@@ -158,11 +167,13 @@ export async function runLocalAudit(
               }
             }
             await walk(root, 0);
+            activityCount=results.length;
             output = results.join("\n") || "No matches";
           } else if (name === "read_file") {
             const info = await stat(full);
             if (!info.isFile() || info.size > 256_000) throw new Error("Not a readable source file under 256KB");
             output = (await readFile(full, "utf8")).slice(0, 30_000);
+            activityCount=output.length;
             successfulReads++;
             limits.onRead?.(relative(root,full).split(sep).join("/"));
             await appendFile(logFile, "[READ_OK] " + relative(root,full) + "\n");
@@ -171,6 +182,16 @@ export async function runLocalAudit(
           controller.signal.throwIfAborted();
           output = "Tool error: " + String(error);
         }
+        let probeStatus:string|undefined;
+        if(["verify_source","verify_python"].includes(call.function.name)){
+          try {probeStatus=String(JSON.parse(output).status || "unknown").slice(0,100);}catch{}
+        }
+        await recordToolActivity(logFile,{phase:output.startsWith("Tool error:")?"failed":"completed",
+          tool:call.function.name,path:String(call.function.arguments?.path ?? ".").slice(0,500),
+          query:String(call.function.arguments?.query ?? "").slice(0,120),
+          kind:String(call.function.arguments?.kind ?? "").slice(0,80),
+          count:activityCount,status:probeStatus,durationMs:Date.now()-toolStarted,
+          error:output.startsWith("Tool error:")?output.slice(0,600):undefined});
         messages.push(structured
           ? {role:"user",content:"TOOL_RESULT " + JSON.stringify({name:call.function.name,output:output.slice(0,30000)}) + "\nChoose the next JSON action. /no_think"}
           : { role:"tool", tool_name:call.function.name, content:output.slice(0,30000) });
