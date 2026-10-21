@@ -171,6 +171,28 @@ contract Store {
                 "kind":"solidity_sequence","nonce":"a"*32,"sequence":self.sequence()})
             self.assertEqual(result['status'],'behavior_not_observed',result)
 
+    def test_solidity_fetches_only_the_missing_import(self):
+        data=io.BytesIO()
+        library=b'pragma solidity ^0.8.20; library Owned {function initial(uint256 x) internal pure returns(uint256){return x;}}'
+        with tarfile.open(fileobj=data,mode='w:gz') as tar:
+            entry=tarfile.TarInfo('package/Owned.sol');entry.size=len(library)
+            tar.addfile(entry,io.BytesIO(library))
+        archive=data.getvalue()
+        with tempfile.TemporaryDirectory() as directory:
+            repo=Path(directory)
+            (repo/'Store.sol').write_text(self.SOURCE.replace('contract Store', 'import "owned/Owned.sol"; contract Store').replace('value=initial;', 'value=Owned.initial(initial);'))
+            (repo/'package.json').write_text('{"dependencies":{"owned":"1"},"devDependencies":{"unrelated":"1"}}')
+            (repo/'package-lock.json').write_text(json.dumps({'lockfileVersion':3,'packages':{
+                'node_modules/owned':{'resolved':'https://registry.npmjs.org/owned/-/owned-1.tgz',
+                    'integrity':'sha512-'+base64.b64encode(hashlib.sha512(archive).digest()).decode()},
+                'node_modules/unrelated':{'resolved':'https://invalid.test/archive'}}}))
+            with patch('source_dependencies.download',return_value=archive) as download:
+                result=driver.run_probe(repo,{'file':'Store.sol','function':'Store.set',
+                    'kind':'solidity_sequence','nonce':'a'*32,'sequence':self.sequence()})
+                self.assertEqual(result['status'],'behavior_not_observed',result)
+                self.assertEqual(download.call_count,1)
+                self.assertFalse((repo/'node_modules/unrelated').exists())
+
     def test_assertion_mismatch_is_recorded(self):
         sequence=self.sequence();sequence['steps'][2]['expect']='8'
         result=self.run_sequence(sequence)
