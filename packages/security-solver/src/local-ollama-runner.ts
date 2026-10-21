@@ -1,3 +1,4 @@
+import { soliditySequenceSchema, soliditySequenceJsonSchema, soliditySequencePrompt, type SoliditySequence } from "./solidity-sequence";
 import { readSourcePage, searchSourcePage, pageOffset, type ReadSpan } from "./source-inspection";
 import { postOllamaJson } from "@bounty/core";
 import { auditActionSchema, auditProtocolPrompt, decodeAuditAction } from "./local-audit-protocol";
@@ -30,7 +31,7 @@ export interface LocalAuditLimits {
   validateFinal?: (answer: string) => string | null | Promise<string | null>;
   signal?: AbortSignal;
   onRead?: (path:string, span:ReadSpan) => void;
-  verifyPython?: (path:string,functionName:string,kind:string) => Promise<string>;
+  verifyPython?: (path:string,functionName:string,kind:string,sequence?:SoliditySequence) => Promise<string>;
 }
 export async function runLocalAudit(
   prompt: string, logFile: string, timeoutMs: number, cwd: string,
@@ -61,12 +62,12 @@ export async function runLocalAudit(
     finally{checkingCancellation=false;}
   },250);
   const timer = setTimeout(() => controller.abort(), timeoutMs);
-  const actionSchema = limits.verifyPython ? {...auditActionSchema,properties:{...auditActionSchema.properties,
+  const actionSchema = limits.verifyPython ? {...auditActionSchema,properties:{...auditActionSchema.properties,sequence:soliditySequenceJsonSchema,
     action:{type:"string",enum:[...auditActionSchema.properties.action.enum,"verify_source","verify_python"]}}} : auditActionSchema;
-  const probePrompt = limits.verifyPython ? "\nThe verify_source action invokes a fixed, isolated source function probe. Set path to a .py, .js, .mjs, .cjs or .sol source file, query to its public/exported function name (Contract.function for Solidity), answer to html_reflection or path_construction. The function must take one string and return a string. JavaScript exports may be async. Solidity requires a deployable zero-argument constructor and a public/external view or pure function compatible with installed solc 0.8.30; runs on an in-memory local EVM. Use returned observations honestly; they do not prove full exploitability. No arbitrary commands are available." : "";
+  const probePrompt = limits.verifyPython ? "\nThe verify_source action invokes a fixed, isolated source function probe. Set path to a .py, .js, .mjs, .cjs or .sol source file, query to its public/exported function name (Contract.function for Solidity), answer to html_reflection or path_construction. The function must take one string and return a string. JavaScript exports may be async. Solidity requires a deployable zero-argument constructor and a public/external view or pure function compatible with installed solc 0.8.30; runs on an in-memory local EVM. Use returned observations honestly; they do not prove full exploitability. No arbitrary commands are available. " + soliditySequencePrompt : "";
   const availableTools = limits.verifyPython ? [...tools,{type:"function",function:{
     name:"verify_source",description:probePrompt,parameters:{type:"object",
-      properties:{path:{type:"string"},query:{type:"string"},kind:{type:"string"}},required:["path","query","kind"]},
+      properties:{path:{type:"string"},query:{type:"string"},kind:{type:"string"},sequence:soliditySequenceJsonSchema},required:["path","query","kind"]},
   }}] : tools;
   const messages: Message[] = [
     { role: "system", content: (systemPrompt || "") + "\nPerform an offline source audit. Inspect actual files. Never invent findings or observations. No target network requests are available." + (limits.verifyPython ? probePrompt : " No source execution is available.") + (structured ? auditProtocolPrompt.replace(JSON.stringify(auditActionSchema),JSON.stringify(actionSchema)) : "") },
@@ -115,7 +116,7 @@ export async function runLocalAudit(
         }
         messages.push({role:"assistant",content:message.content});
         message = action.action === "final" ? {role:"assistant",content:action.answer} : {
-          role:"assistant",content:"",tool_calls:[{function:{name:action.action,arguments:{path:action.path,query:action.query,kind:action.answer,offset:action.offset}}}],
+          role:"assistant",content:"",tool_calls:[{function:{name:action.action,arguments:{path:action.path,query:action.query,kind:action.answer,offset:action.offset,sequence:action.sequence}}}],
         };
       } else {messages.push(message);}
       if (message.content) await appendFile(logFile, message.content + "\n");
@@ -150,7 +151,11 @@ export async function runLocalAudit(
           const full = await safePath(path);
           const offset = pageOffset(call.function.arguments?.offset);
           if((name === "verify_source" || name === "verify_python") && limits.verifyPython) {
-            output=await limits.verifyPython(path,String(call.function.arguments?.query || ""),String(call.function.arguments?.kind || ""));
+            const kind=String(call.function.arguments?.kind || "");
+            const rawSequence=call.function.arguments?.sequence;
+            if(kind!=="solidity_sequence" && rawSequence!==undefined)throw new Error("Sequence requires solidity_sequence kind");
+            const sequence=kind==="solidity_sequence"?soliditySequenceSchema.parse(rawSequence):undefined;
+            output=await limits.verifyPython(path,String(call.function.arguments?.query || ""),kind,sequence);
           } else if (name === "list_files") {
             const entries = (await readdir(full, { withFileTypes: true }))
               .filter(e => !e.name.startsWith(".") && e.name !== "node_modules")

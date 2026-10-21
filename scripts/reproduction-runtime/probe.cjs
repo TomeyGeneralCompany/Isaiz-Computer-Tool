@@ -41,6 +41,8 @@ function solidityImport(name) {
   return {error: 'Unresolved repository/package/remapping import: ' + name};
 }
 async function solidity() {
+  const sequenceMode = spec.kind === 'solidity_sequence';
+  if (sequenceMode) require('./solidity-sequence.cjs').validateSequence(spec.sequence);
   const solc = require('solc');
   const ganache = require('ganache');
   const { BrowserProvider, ContractFactory } = require('ethers');
@@ -56,19 +58,22 @@ async function solidity() {
   const contractName = parts.pop();
   const candidates = Object.entries(compiled.contracts?.[spec.file] || {}).filter(([name, artifact]) =>
     (!contractName || name === contractName) && artifact.evm.bytecode.object &&
-    !artifact.abi.some(a => a.type === 'constructor' && a.inputs.length) &&
+    (sequenceMode || !artifact.abi.some(a => a.type === 'constructor' && a.inputs.length)) &&
     artifact.abi.some(a => a.type === 'function' && a.name === functionName &&
-      ['pure', 'view'].includes(a.stateMutability) &&
+      (sequenceMode || ['pure', 'view'].includes(a.stateMutability) &&
       a.inputs.length === 1 && a.inputs[0].type === 'string' &&
-      a.outputs.length === 1 && a.outputs[0].type === 'string'));
-  if (candidates.length !== 1) throw new Error('Select one deployable contract with a view/pure string -> string function using Contract.function');
+      a.outputs.length === 1 && a.outputs[0].type === 'string')));
+  if (candidates.length !== 1) throw new Error(sequenceMode ? 'Select one deployable contract and public/external function using Contract.function' : 'Select one deployable contract with a view/pure string -> string function using Contract.function');
+  if (sequenceMode && (!contractName || !spec.sequence.steps.some(step=>step.function.split('(')[0]===functionName))) throw new Error('Sequence must exercise the selected Contract.function');
   const artifact = candidates[0][1];
   const transport = ganache.provider({
-    logging: {quiet: true}, wallet: {deterministic: true, totalAccounts: 1},
-    chain: {hardfork: 'shanghai'}, miner: {blockGasLimit: 12000000}
+    logging: {quiet: true}, wallet: {deterministic: true, totalAccounts: sequenceMode ? 3 : 1},
+    chain: {hardfork: 'shanghai', ...(sequenceMode ? {chainId:1337,time:new Date('2020-01-01T00:00:00Z')} : {})},
+    miner: {blockGasLimit: 12000000, ...(sequenceMode ? {timestampIncrement:1} : {})}
   });
   await transport.request({method: 'eth_chainId', params: []});
   try {
+    if (sequenceMode) return await require('./solidity-sequence.cjs').runSequence(artifact, spec.sequence, transport);
     const provider = new BrowserProvider(transport);
     const signer = await provider.getSigner();
     const contract = await new ContractFactory(artifact.abi, artifact.evm.bytecode.object, signer)
@@ -80,6 +85,11 @@ async function solidity() {
   } finally { await transport.disconnect(); }
 }
 (async () => {
+  if (spec.kind === 'solidity_sequence') {
+    if (!spec.file.endsWith('.sol')) throw new Error('Solidity source required');
+    output(JSON.stringify(await solidity()));
+    return;
+  }
   const [normal, observed] = await (spec.file.endsWith('.sol') ? solidity() : javascript());
   if (typeof normal !== 'string' || typeof observed !== 'string')
     throw new Error('Probe requires string return values');

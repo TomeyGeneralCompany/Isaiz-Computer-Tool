@@ -62,10 +62,15 @@ def run_probe(repository: Path, specification: dict) -> dict:
     target=(repository/file).resolve(strict=True)
     if not target.is_relative_to(repository) or not target.is_file() or target.stat().st_size>256000: raise ValueError('Source outside repository or too large')
     if not isinstance(function,str) or not re.fullmatch(r'[A-Za-z][A-Za-z0-9_]{0,79}(?:\.[A-Za-z][A-Za-z0-9_]{0,79})?',function): raise ValueError('Public top-level function name required')
-    if kind not in ('html_reflection','path_construction'): raise ValueError('Unsupported probe kind')
+    if kind not in ('html_reflection','path_construction','solidity_sequence'): raise ValueError('Unsupported probe kind')
     if not isinstance(nonce,str) or not re.fullmatch(r'[a-f0-9]{32}',nonce): raise ValueError('Invalid probe nonce')
     language = 'python' if file.endswith('.py') else 'solidity' if file.endswith('.sol') else 'javascript'
     if language != 'solidity' and '.' in function: raise ValueError('Top-level function name required')
+    if kind == 'solidity_sequence':
+        if language != 'solidity' or '.' not in function: raise ValueError('Solidity Contract.function required')
+        sequence = specification.get('sequence')
+        if not isinstance(sequence,dict) or len(json.dumps(sequence)) > 16000: raise ValueError('Invalid Solidity sequence')
+    elif 'sequence' in specification: raise ValueError('Sequence requires solidity_sequence kind')
     runtime = Path(__file__).resolve().parent / 'reproduction-runtime'
     node = shutil.which('node') if language != 'python' else None
     if language != 'python' and not node:
@@ -123,6 +128,13 @@ def run_probe(repository: Path, specification: dict) -> dict:
                     'detail':(work/'stderr').read_text(errors='replace')[-1200:]}
         if hashlib.sha256(target.read_bytes()).hexdigest()!=source_hash: raise ValueError('Source changed during probe')
         data=json.loads((work/'stdout').read_text())
+        if kind == 'solidity_sequence':
+            if not isinstance(data.get('steps'),list) or not data['steps'] or any(type(step.get('passed')) is not bool for step in data['steps']):
+                raise ValueError('Invalid transaction observations')
+            mismatch = any(not step['passed'] for step in data['steps'])
+            return {'status':'behavior_observed' if mismatch else 'behavior_not_observed',
+                    'behavior_observed':mismatch,'source_sha256':source_hash,'kind':kind,'observations':data,
+                    'limitation':'A discrepancy from a supplied test expectation is not by itself a vulnerability. Constructor setup, expected results, real call-site reachability, policy and impact require independent review. All transactions used a fresh local EVM, not a live chain.'}
         normal,observed=data['control_output'],data['attack_output']
         if kind=='html_reflection':
             matches=data['control_input'] in normal and data['attack_input'] in observed

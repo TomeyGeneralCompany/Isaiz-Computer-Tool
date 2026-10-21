@@ -16,6 +16,8 @@ try {
   const fixture=join(root,"fixture");await mkdir(fixture);
   await writeFile(join(fixture,"render.cjs"),'exports.render = x => "<p>"+x+"</p>";');
   await writeFile(join(fixture,"Render.sol"),'pragma solidity ^0.8.20; contract Render { function render(string memory x) public pure returns(string memory) { return string.concat("<p>",x,"</p>"); }}');
+  await writeFile(join(fixture,"Store.sol"),'pragma solidity ^0.8.20; contract Store { uint256 public value; constructor(uint256 initial) {value=initial;} function set(uint256 x) external {value=x;} }');
+  await writeFile(join(fixture,"StoreCaller.sol"),'store.set(input);');
   await writeFile(join(fixture,"caller.js"),'renderer.render(input);');
   await writeFile(join(fixture,"Caller.sol"),'renderer.render(input);');
   execFileSync("git",["init","-q",fixture]);
@@ -25,7 +27,12 @@ try {
   const bin=join(root,"bin");await mkdir(bin);
   await writeFile(join(bin,"git"),'#!/usr/bin/python3\nimport os,sys,shutil\nargs=sys.argv[1:]\nif "clone" in args:\n    shutil.copytree('+JSON.stringify(fixture)+',args[-1])\nelse:\n    os.execv('+JSON.stringify(realGit)+',['+JSON.stringify(realGit)+']+args)\n');
   await chmod(join(bin,"git"),0o700);process.env.PATH=bin+":"+originalPath;
-  let turn=0, caseId="", source="", caller="", selector="";
+  let turn=0, caseId="", source="", caller="", selector="", stateful=false;
+  const sequence={constructorArgs:["5"],steps:[
+    {operation:"call",function:"value()",args:[],expect:"5"},
+    {operation:"send",function:"set(uint256)",args:["7"]},
+    {operation:"call",function:"value()",args:[],expect:"8"},
+  ]};
   server.on("request",async(req,res)=>{
     let raw="";for await(const chunk of req)raw+=chunk;
     const request=JSON.parse(raw);turn++;
@@ -35,8 +42,9 @@ try {
     let next;
     if(turn===1)next=action("read_file","source-1/"+source);
     else if(turn===2)next=action("read_file","source-1/"+caller);
+    else if(turn===3 && stateful)next={...action("verify_source","source-1/"+source,selector,"solidity_sequence"),sequence};
     else if(turn===3)next=action("verify_source","source-1/"+source,"missing","html_reflection");
-    else if(turn===4) {
+    else if(turn===4 && !stateful) {
       const previous=JSON.parse(request.messages.at(-1).content.split("\n")[0].slice("TOOL_RESULT ".length));
       assert.equal(JSON.parse(previous.output).status,"probe_failed");
       next=action("verify_source","source-1/"+source,selector,"html_reflection");
@@ -44,9 +52,9 @@ try {
       const previous=JSON.parse(request.messages.at(-1).content.split("\n")[0].slice("TOOL_RESULT ".length));
       caseId=JSON.parse(previous.output).caseId;assert.ok(caseId);
       next=action("final","","",JSON.stringify({findings:[{
-        caseId,severity:"medium",confidence:0.7,title:"Owned fixture reflection",
+        caseId,severity:"medium",confidence:0.7,title:stateful?"Owned fixture assertion discrepancy":"Owned fixture reflection",
         ratingReason:"Owned fixture preserves input; this test checks report plumbing only.",
-        impact:"Owned fixture returns raw markup to its caller.",
+        impact:stateful?"Owned fixture returns 7 while the supplied test expects 8; no vulnerability claimed.":"Owned fixture returns raw markup to its caller.",
         callerFile:"source-1/"+caller,callerLine:1,
         falsification:"No production exploitability is claimed; only owned fixture behavior was measured."
       }]}));
@@ -66,17 +74,23 @@ try {
   const program:any={id:"owned",provider:"immunefi",name:"Owned fixture",scopeSummary:JSON.stringify({scopes:[
     {assetType:"SOURCE_CODE",eligibleForBounty:true,assetIdentifier:"https://github.com/fixture/owned"}
   ]})};
-  for(const language of ["javascript","solidity"]) {
-    turn=0;caseId="";
+  for(const language of ["javascript","solidity","stateful_solidity"]) {
+    turn=0;caseId="";stateful=language==="stateful_solidity";
     source=language==="javascript"?"render.cjs":"Render.sol";
     caller=language==="javascript"?"caller.js":"Caller.sol";
     selector=language==="javascript"?"render":"Render.render";
+    if(stateful) {source="Store.sol";caller="StoreCaller.sol";selector="Store.set";}
     const result=await runLocalProgramHunt(program);
     assert.equal(result.success,true,JSON.stringify(result));
     assert.equal(result.findings.length,1);
-    assert.ok(result.coverageDetail?.includes("1 failed probes"));
+    if(!stateful)assert.ok(result.coverageDetail?.includes("1 failed probes"));
+    else assert.equal(result.findings[0].vulnerabilityType,"State assertion discrepancy");
     const record=await readSourceCase(caseId,program);
     assert.equal((await replaySourceCase(record,fixture)).behavior_observed,true);
+    if(stateful) {
+      assert.deepEqual(record.spec.sequence,sequence);
+      assert.ok(result.findings[0].reportBody.includes(JSON.stringify(sequence,null,2)));
+    }
   }
   console.log("JavaScript/Solidity model action -> failed probe recovery -> sandbox -> caller -> report -> persisted evidence -> replay PASSED");
 } finally {
