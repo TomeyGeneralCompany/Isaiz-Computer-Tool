@@ -1,3 +1,4 @@
+import { readLocalActivity, describeHuntFailure } from "./activity";
 import { z } from "zod";
 import { eq, asc, desc, sql, inArray } from "drizzle-orm";
 import { readFile, writeFile, stat } from "node:fs/promises";
@@ -938,6 +939,13 @@ export const appRouter = router({
     return { started: true, reason: null, findingId: best.id, findingTitle: best.title };
   }),
 
+  securityLiveActivity: publicProcedure.query(async () => {
+    const solver=await readSecuritySolverStatus();
+    const review=await readAdversarialReviewStatus();
+    const activity=await readLocalActivity(getDataDir(),solver);
+    return {solver,review,activity};
+  }),
+
   securitySolverStatus: publicProcedure.query(async () => {
     return readSecuritySolverStatus();
   }),
@@ -1036,7 +1044,24 @@ export const appRouter = router({
 
   securityHuntHistory: publicProcedure.query(async () => {
     const history = await getSecurityHuntHistory();
-    return history.slice(0, 20);
+    const db=getDb();
+    return history.slice(0,20).map(entry=>{
+      let failure:ReturnType<typeof describeHuntFailure>|null=null;
+      if(String(entry.strategyUsed)==="failed"){
+        if(entry.error)failure=describeHuntFailure(entry.error);
+        const program=db.select({scopeSummary:schema.securityPrograms.scopeSummary}).from(schema.securityPrograms)
+          .where(eq(schema.securityPrograms.id,entry.programId)).get();
+        try {
+          const coverage=JSON.parse(program?.scopeSummary || "{}").huntCoverage;
+          // This summary belongs only to the most recent matching attempt.
+          // Do not attach a newer error to an older history row.
+          if(!failure && coverage && Math.abs(Date.parse(coverage.recordedAt)-Date.parse(entry.timestamp))<60000)
+            failure=describeHuntFailure(coverage.detail);
+        }catch{}
+        failure ??= describeHuntFailure(null);
+      }
+      return {...entry,failure};
+    });
   }),
 
   securityHuntLogs: publicProcedure

@@ -249,6 +249,7 @@ export async function huntProgram(
       findingsDuplicate: 0,
       findingsRejected: 0,
       strategyUsed: "failed" as any,
+      error: coverageDetail,
       timestamp: new Date().toISOString(),
     }).catch(() => {});
     throw err;
