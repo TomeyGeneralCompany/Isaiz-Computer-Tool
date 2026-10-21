@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {mkdtemp,writeFile,rm} from 'node:fs/promises';
+import {mkdtemp,writeFile,rm,symlink} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {execFileSync} from 'node:child_process';
@@ -33,6 +33,10 @@ try {
  await writeFile(join(root,'New.sol'),'pragma solidity ^0.8.0; contract New {}');
  execFileSync('git',['-C',root,'add','.']);
  assert.equal((await inspectSourceCapability(root)).blocked,false,'One incompatible file must not block a mixed project');
+ await symlink('absent.sol',join(root,'Broken.sol'));
+ execFileSync('git',['-C',root,'add','.']);
+ const withLink=await inspectSourceCapability(root);
+ assert.equal(withLink.blocked,false);assert.ok(withLink.unsupported.some(x=>x.includes('symlink')));
  process.env.GITHUB_TOKEN='fixture';
  const config={...loadConfig(),IMMUNEFI_ENABLED:true,SECURITY_MIN_REWARD_CENTS:0};
  const scopes=[{assetType:'SOURCE_CODE',eligibleForBounty:true,assetIdentifier:'https://github.com/fixture/owned'}];

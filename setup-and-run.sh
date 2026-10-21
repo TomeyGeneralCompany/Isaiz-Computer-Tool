@@ -21,6 +21,8 @@ for LOCK in data/supervisor.lock data/orchestrator.lock; do
 done
 echo "Installing locked Node dependencies for the selected runtime..."
 npm ci
+echo "Installing and checking source reproduction prerequisites..."
+bash "$ROOT/scripts/install-reproduction-runtime.sh"
 if [[ ! -f .env ]]; then
   echo "No .env in this checkout. Checking for the existing local installation..." >&2
   ORIGINAL="$HOME/isaiz-bugbounty/autohack/.env"

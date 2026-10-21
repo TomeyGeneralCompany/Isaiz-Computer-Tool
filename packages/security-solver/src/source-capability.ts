@@ -1,6 +1,6 @@
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
-import {readFile,realpath,stat} from 'node:fs/promises';
+import {readFile,realpath,stat,lstat} from 'node:fs/promises';
 import {resolve,relative,sep} from 'node:path';
 import {sourceCodeOnly} from './source-function-reference';
 const execute=promisify(execFile);
@@ -35,7 +35,15 @@ export async function inspectSourceCapability(directory:string,signal?:AbortSign
     signal?.throwIfAborted();
     if(!/\.(sol|py|js|mjs|cjs)$/.test(file) || /(?:^|\/)(?:node_modules)\//.test(file) || /(?:hardhat|webpack|eslint|prettier)\.config\.[cm]?js$/.test(file))continue;
     if(++candidates>10000) {unknown=true;break;}
-    const full=await realpath(resolve(root,file));const rel=relative(root,full);
+    let full:string;
+    try {
+      if((await lstat(resolve(root,file))).isSymbolicLink()) {unknown=true;unsupported.push(file+': symlink not inspected');continue;}
+      full=await realpath(resolve(root,file));
+    } catch(error:any) {
+      if(!['ENOENT','EACCES','ELOOP'].includes(error.code))throw error;
+      unknown=true;unsupported.push(file+': unreadable source; coverage incomplete');continue;
+    }
+    const rel=relative(root,full);
     if(rel==='..'||rel.startsWith('..'+sep)|| (await stat(full)).size>256000) {unknown=true;continue;}
     if(!file.endsWith('.sol')) {compatible++;continue;}
     const code=sourceCodeOnly(await readFile(full,'utf8'));

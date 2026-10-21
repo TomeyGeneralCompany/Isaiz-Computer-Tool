@@ -25,9 +25,10 @@ try {
   execFileSync("git",["-C",fixture,"-c","user.name=Fixture","-c","user.email=fixture@example.test","commit","-qm","Owned fixture"]);
   const realGit=execFileSync("which",["git"],{encoding:"utf8"}).trim();
   const bin=join(root,"bin");await mkdir(bin);
-  await writeFile(join(bin,"git"),'#!/usr/bin/python3\nimport os,sys,shutil\nargs=sys.argv[1:]\nif "clone" in args:\n    shutil.copytree('+JSON.stringify(fixture)+',args[-1])\nelse:\n    os.execv('+JSON.stringify(realGit)+',['+JSON.stringify(realGit)+']+args)\n');
+  await writeFile(join(bin,"git"),'#!/usr/bin/python3\nimport os,sys,shutil,subprocess\nargs=sys.argv[1:]\nif "clone" in args:\n    shutil.copytree('+JSON.stringify(fixture)+',args[-1])\nelif \"fetch\" in args:\n    subprocess.run(['+JSON.stringify(realGit)+',\"cat-file\",\"-e\",args[-1]+\"^{commit}\"],check=True)\nelse:\n    os.execv('+JSON.stringify(realGit)+',['+JSON.stringify(realGit)+']+args)\n');
   await chmod(join(bin,"git"),0o700);process.env.PATH=bin+":"+originalPath;
-  let turn=0, caseId="", source="", caller="", selector="", stateful=false;
+  let turn=0, caseId="", source="", caller="", selector="", stateful=false,reviewMode=false,reviewIndex=0,reviewOffset=0;
+  const reviewFiles=["source/Store.sol","evidence/report.txt","evidence/replay.json","evidence/policy.txt"];
   const sequence={constructorArgs:["5"],steps:[
     {operation:"call",function:"value()",args:[],expect:"5"},
     {operation:"send",function:"set(uint256)",args:["7"]},
@@ -36,6 +37,20 @@ try {
   server.on("request",async(req,res)=>{
     let raw="";for await(const chunk of req)raw+=chunk;
     const request=JSON.parse(raw);turn++;
+    if(reviewMode) {
+      assert.ok(request.messages[1].content.length<7000,"Review prompt must not embed large policy/report");
+      const last=request.messages.at(-1).content;
+      if(last.startsWith("TOOL_RESULT ")) {
+        const page=JSON.parse(JSON.parse(last.split("\n")[0].slice(12)).output);
+        if(page.nextOffset===null) {reviewIndex++;reviewOffset=0;}else reviewOffset=page.nextOffset;
+      }
+      const action=reviewIndex<reviewFiles.length
+        ? {action:"read_file",path:reviewFiles[reviewIndex],offset:reviewOffset,query:"",answer:""}
+        : {action:"final",path:"",query:"",answer:JSON.stringify({verdict:"reject",recommendation:"dont_submit",severity:"informational",confidence:0.9,
+          ratingReason:"This synthetic fixture deliberately uses an incorrect expected value; it is not a vulnerability.",bet100:false,
+          rubric:{exploitability:0,impactSeverity:0,evidenceQuality:3,novelty:0,scopeAlignment:3},issues:[],reasoning:"The supplied expectation is deliberately wrong; only report plumbing is under test."})};
+      res.end(JSON.stringify({message:{role:"assistant",content:JSON.stringify(action)}}));return;
+    }
     assert.ok(request.format.properties.action.enum.includes("verify_source"));
     assert.ok(request.messages.some((m:any)=>m.content.includes("exported JavaScript")));
     const action=(name:string,path:string,query="",answer="")=>({action:name,path,query,answer});
@@ -66,7 +81,7 @@ try {
   await new Promise<void>(r=>server.listen(0,"127.0.0.1",r));
   const address=server.address();assert.ok(address&&typeof address!=="string");
   process.env.AUTOHACK_OLLAMA_URL="http://127.0.0.1:"+address.port+"/api/chat";
-  const {runLocalProgramHunt}=await import("../packages/security-solver/src/local-program-flow");
+  const {runLocalProgramHunt,independentReview}=await import("../packages/security-solver/src/local-program-flow");
   const {readSourceCase,replaySourceCase}=await import("../packages/security-solver/src/source-reproduction");
   const {referencesProbedFunction}=await import("../packages/security-solver/src/source-function-reference");
   assert.equal(referencesProbedFunction("renderer.render(input)","Render.render"),true);
@@ -91,6 +106,11 @@ try {
     if(stateful) {
       assert.deepEqual(record.spec.sequence,sequence);
       assert.match(result.findings[0].reportBody,/Reachability: direct_transaction/);
+      reviewMode=true;reviewIndex=0;reviewOffset=0;
+      const reviewProgram={...program,scopeSummary:JSON.stringify({...JSON.parse(program.scopeSummary),policy:"Long policy text. ".repeat(1600)})};
+      const reviewed=await independentReview({...result.findings[0],id:"owned-review"} as any,reviewProgram,caseId,new AbortController().signal);
+      assert.equal(reviewed.review.verdict,"reject");assert.equal(reviewIndex,reviewFiles.length);
+      reviewMode=false;
       assert.ok(result.findings[0].reportBody.includes(JSON.stringify(sequence,null,2)));
     }
   }

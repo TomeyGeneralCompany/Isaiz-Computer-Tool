@@ -71,7 +71,7 @@ export async function runLocalAudit(
       properties:{path:{type:"string"},query:{type:"string"},kind:{type:"string"},sequence:soliditySequenceJsonSchema},required:["path","query","kind"]},
   }}] : tools;
   let messages: Message[] = [
-    { role: "system", content: (systemPrompt || "") + "\nPerform an offline source audit. Inspect actual files. Never invent findings or observations. No target network requests are available." + (limits.verifyPython ? probePrompt : " No source execution is available.") + (structured ? auditProtocolPrompt.replace(JSON.stringify(auditActionSchema),JSON.stringify(actionSchema)) : "") },
+    { role: "system", content: (systemPrompt || "") + "\nPerform an offline source audit. Request exactly one tool call per response. Inspect actual files. Never invent findings or observations. No target network requests are available." + (limits.verifyPython ? probePrompt : " No source execution is available.") + (structured ? auditProtocolPrompt.replace(JSON.stringify(auditActionSchema),JSON.stringify(actionSchema)) : "") },
     { role: "user", content: prompt + "\n/no_think" },
   ];
   const initialRequest=messages[1].content;
@@ -114,6 +114,10 @@ export async function runLocalAudit(
       await appendFile(logFile, `[OLLAMA] turn ${turn+1}: response received in ${Date.now()-started}ms; prompt_tokens=${result.prompt_eval_count ?? "unknown"}; generated_tokens=${result.eval_count ?? "unknown"}\n`);
       let message = result.message;
       if (!message) throw new Error("Ollama returned no assistant message");
+      if(!structured && (message.tool_calls?.length || 0)>1) {
+        messages.push({role:"user",content:"Request exactly one tool call per response so its evidence fits the context. The previous batch was not executed. Retry the first call alone."});
+        continue;
+      }
       if (structured) {
         let action;
         try {action = decodeAuditAction(message.content,!!limits.verifyPython);}

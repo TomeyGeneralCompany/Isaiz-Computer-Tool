@@ -5,6 +5,15 @@ export interface ReadSpan { start: number; end: number }
 export class SourceReads {
   private spans = new Map<string, ReadSpan[]>();
   add(path:string, span:ReadSpan) { this.spans.set(path, [...(this.spans.get(path) || []), span]); }
+  covers(path:string,start:number,end:number):boolean {
+    let covered=start;
+    for(const span of [...(this.spans.get(path)||[])].sort((a,b)=>a.start-b.start)) {
+      if(span.start>covered)break;
+      covered=Math.max(covered,span.end);
+      if(covered>=end)return true;
+    }
+    return end===start;
+  }
   has(path:string) { return this.spans.has(path); }
   sawLine(path:string, text:string, line:number):boolean {
     if (!Number.isSafeInteger(line) || line < 1) return false;
