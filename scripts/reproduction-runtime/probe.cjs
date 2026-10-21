@@ -51,7 +51,7 @@ async function solidity() {
   const compiled = JSON.parse(solc.compile(JSON.stringify({
     language: 'Solidity',
     sources: {[spec.file]: {content: fs.readFileSync(sourceFile(spec.file), 'utf8')}},
-    settings: {evmVersion: 'shanghai', outputSelection: {'*': {'*': ['abi', 'evm.bytecode.object']}}}
+    settings: {...spec.compilerSettings, evmVersion: 'shanghai', outputSelection: {'*': {'*': ['abi', 'evm.bytecode.object']}}}
   }), {import: solidityImport}));
   const errors = (compiled.errors || []).filter(e => e.severity === 'error');
   if (errors.length) {

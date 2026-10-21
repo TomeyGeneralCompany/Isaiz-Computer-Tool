@@ -51,6 +51,24 @@ def limits(node=False):
     resource.setrlimit(resource.RLIMIT_CORE,(0,0))
 
 
+def foundry_settings(profile: dict) -> dict:
+    """Translate only supported declarative compiler options, with strict types."""
+    if not isinstance(profile, dict):
+        raise ValueError('Invalid Foundry default profile')
+    settings = {}
+    for key in ('optimizer', 'via_ir'):
+        if key in profile and type(profile[key]) is not bool:
+            raise ValueError('Foundry ' + key + ' must be a boolean')
+    runs = profile.get('optimizer_runs', 200)
+    if type(runs) is not int or not 0 <= runs <= 4294967295:
+        raise ValueError('Invalid Foundry optimizer_runs')
+    if 'optimizer' in profile or 'optimizer_runs' in profile:
+        settings['optimizer'] = {'enabled': profile.get('optimizer', False), 'runs': runs}
+    if 'via_ir' in profile:
+        settings['viaIR'] = profile['via_ir']
+    return settings
+
+
 def run_probe(repository: Path, specification: dict, _dependency_round: int = 0) -> dict:
     repository=repository.resolve(strict=True)
     if not repository.is_dir(): raise ValueError('Repository directory required')
@@ -83,17 +101,22 @@ def run_probe(repository: Path, specification: dict, _dependency_round: int = 0)
         try: prepare_dependencies(repository)
         except (DependencyError, OSError, ValueError) as error:
             return {'status':'unsupported_dependencies','behavior_observed':False,'detail':str(error)[:1000]}
+    # Compiler configuration comes from the checked-out project, never tool input.
+    specification = {**specification, 'compilerSettings': {}}
     if language == 'solidity' and (repository/'foundry.toml').is_file():
         try:
             import tomllib
             config_file = (repository/'foundry.toml').resolve()
             if not config_file.is_relative_to(repository): raise ValueError('Foundry config outside repository')
             if config_file.stat().st_size > 256000: raise ValueError('Foundry config too large')
-            profile = tomllib.loads(config_file.read_text()).get('profile',{}).get('default',{})
+            profiles = tomllib.loads(config_file.read_text()).get('profile', {})
+            if not isinstance(profiles, dict): raise ValueError('Invalid Foundry profiles')
+            profile = profiles.get('default', {})
+            settings = foundry_settings(profile)
             remappings = profile.get('remappings',[])
             if not isinstance(remappings,list) or any(not isinstance(x,str) for x in remappings):
                 raise ValueError('Invalid Foundry remappings')
-            specification = {**specification,'remappings':remappings}
+            specification = {**specification,'remappings':remappings,'compilerSettings':settings}
         except (ImportError, OSError, ValueError) as error:
             return {'status':'unsupported_dependencies','behavior_observed':False,'detail':str(error)[:1000]}
     source_hash=hashlib.sha256(target.read_bytes()).hexdigest()
