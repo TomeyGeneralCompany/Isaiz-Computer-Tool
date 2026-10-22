@@ -14,6 +14,8 @@ export function compactAuditContext(messages:AuditMessage[],budget:number,progre
   const notes:AuditMessage[]=progress.length ? [{role:"user",content:
     "Recent tool progress (not evidence; re-read as needed): "+JSON.stringify(progress)}] : [];
   while(groups.length>1 && JSON.stringify([...pinned,...notes,...groups.flat()]).length>budget)groups.shift();
+  // Progress summaries are optional; never evict actual latest evidence for them.
+  if(JSON.stringify([...pinned,...notes,...groups.flat()]).length>budget)notes.length=0;
   const result=[...pinned,...notes,...groups.flat()];
   if(JSON.stringify(result).length>budget)throw new Error("Latest audit exchange exceeds the context budget; narrow the probe output");
   return result;
