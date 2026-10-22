@@ -12,13 +12,14 @@ import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import cron from "node-cron";
-import { loadConfig, getConfig, createLogger, dailyHuntQuotaStatus } from "@bounty/core";
+import { loadConfig, getConfig, createLogger, dailyHuntQuotaStatus, withPipeline, sequentialPipelineEnabled, runSequentialPass, writePipelineStatus } from "@bounty/core";
 import { pollHackerOne, pollImmunefi, pollHuntr, pollAggregator, pollSubmissionStatuses, backfillSignalRequirements } from "@bounty/security-discovery";
 import { processSecurityProgramQueue } from "@bounty/security-analyzer";
 import {
   huntProgram,
   processStaticLeadQueue,
   pickBestProgram,
+  rankEligiblePrograms,
   getProgramSelectionSummary,
   readSecuritySolverStatus,
   clearSecuritySolverStatus as clearSecurityStatus,
@@ -80,9 +81,12 @@ function main() {
   // Hunt-lock recovery is serialized by the solver whenever a job acquires it.
 
   // Security analysis runs after HackerOne discovery to assess programs
+  let initialDiscoveryFinished = false;
+  let sequentialRunning = false;
   let securityAnalysisRunning = false;
   let assessmentRevision = 0;
   function runSecurityAnalysisQueue() {
+    if (sequentialPipelineEnabled()) return;
     if (securityAnalysisRunning) return;
     securityAnalysisRunning = true;
     processSecurityProgramQueue({onProgramAssessed:() => {assessmentRevision++;}})
@@ -157,7 +161,56 @@ function main() {
   // Security auto-hunt: triggers immediately after previous hunt's evaluation pipeline completes
   let autoHuntScheduled = false;
 
+  async function runSequentialCycle() {
+    if (sequentialRunning || !initialDiscoveryFinished || shuttingDown) return;
+    sequentialRunning=true;
+    try {
+      await withPipeline(async()=>{
+        const enabled=()=>!shuttingDown && getConfig().SECURITY_AUTO_HUNT_ENABLED;
+        if (!enabled()) return;
+        let endDetail="Pass finished or paused; checking again within one minute";
+        try {
+          await runSequentialPass({
+            enabled,
+            analyze:async()=>{
+              log.info("Sequential pipeline: assessing the catalog before hunting");
+              writePipelineStatus({phase:"analyzing",total:0,completed:0});
+              await processSecurityProgramQueue({snapshot:true,shouldContinue:enabled,
+                onProgress:(total,completed,currentName)=>writePipelineStatus({phase:"analyzing",total,completed,currentName})});
+            },
+            recover:async()=>{
+              writePipelineStatus({phase:"reviewing",detail:"Recovering pending reports before new hunts"});
+              await processAdversarialQueue();
+            },
+            programs:()=>rankEligiblePrograms().map(row=>row.program),
+            eligible:program=>rankEligiblePrograms().some(row=>row.program.id===program.id),
+            available:()=>{
+              const quota=dailyHuntQuotaStatus(getConfig().SECURITY_MAX_DAILY_HUNTS);
+              if (!quota.available) {
+                endDetail=`Daily dispatch limit: ${quota.dispatched}/${quota.limit}; resets ${quota.resetsAt}`;
+                log.info({quota},"Sequential pipeline paused by daily dispatch limit; no hunt started");
+              }
+              return quota.available;
+            },
+            hunt:async program=>{
+              writePipelineStatus({phase:"hunting",currentName:program.name});
+              log.info({programId:program.id,name:program.name},"Sequential pipeline: investigating program");
+              await huntProgram(program,"auto");
+            },
+            review:async program=>{
+              writePipelineStatus({phase:"reviewing",currentName:program.name});
+              await processAdversarialQueue(program.id);
+              log.info({programId:program.id},"Sequential pipeline: program investigation/review finished; advancing queue");
+            },
+            failed:(error,program)=>log.error({error,programId:program.id},"Sequential program stage failed; recording outcome and continuing"),
+          });
+        } finally {writePipelineStatus({phase:"waiting",detail:endDetail});}
+      });
+    } finally {sequentialRunning=false;}
+  }
+
   async function runAutoHuntLoop() {
+    if (sequentialPipelineEnabled()) return runSequentialCycle();
     if (autoHuntScheduled) return;
     autoHuntScheduled = true;
     try {
@@ -220,6 +273,7 @@ function main() {
   // This also recovers confirmations from the durable submission outbox.
   let reviewRecoveryRunning = false;
   function recoverPendingReviews() {
+    if (sequentialPipelineEnabled()) return;
     if (shuttingDown || reviewRecoveryRunning) return;
     const settings = getConfig();
     if (!settings.SECURITY_AUTO_HUNT_ENABLED && !settings.SECURITY_AUTO_SUBMIT) return;
@@ -290,6 +344,12 @@ function main() {
         .catch((err) => log.error({ err }, "Initial aggregator poll failed")),
     );
   }
+
+  void Promise.allSettled(initialPolls).then(()=>{
+    initialDiscoveryFinished=true;
+    if (sequentialPipelineEnabled() && getConfig().SECURITY_AUTO_HUNT_ENABLED)
+      return runSequentialCycle();
+  }).catch(error=>log.error({error},"Sequential pipeline interrupted"));
 
   log.info(
     { dashboard: `http://localhost:${config.DASHBOARD_PORT}` },

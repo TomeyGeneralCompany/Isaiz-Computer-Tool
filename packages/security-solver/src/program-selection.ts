@@ -96,3 +96,21 @@ export function summarizeProgramSelection(programs: SecurityProgram[], config = 
   }
   return { total: programs.length, eligible: counts.eligible || 0, firstBlockingReasonCounts: counts, providers };
 }
+
+/** Metadata estimate, not a promise of vulnerability difficulty or payout. */
+export function estimateProgramDifficulty(program:SecurityProgram):number {
+  try {
+    const data=JSON.parse(program.scopeSummary || "{}");
+    const a=data.assessment || {};const r=a.rubric || {};
+    const value=(x:unknown,fallback:number)=>typeof x === "number" && Number.isFinite(x) ? Math.max(0,Math.min(3,x)) : fallback;
+    const sources=(Array.isArray(data.scopes)?data.scopes:[]).filter((s:any)=>s.assetType === "SOURCE_CODE" || /github\.com|gitlab\.com/.test(s.assetIdentifier || "")).length;
+    // Stack fit and source access matter more than monetary reward. Unknown
+    // metadata is assigned a middle value rather than treated as easy.
+    return Math.min(100,Math.round(20 + (3-value(r.techStackMatch,1.5))*15 +
+      (3-value(r.sourceCodeQuality,1.5))*7 + value(r.scopeBreadth,1.5)*5 + Math.min(15,Math.max(0,sources-1)*3)));
+  } catch {return 75;}
+}
+export function compareProgramDifficulty(a:SecurityProgram,b:SecurityProgram):number {
+  return estimateProgramDifficulty(a)-estimateProgramDifficulty(b) ||
+    (a.rewardMaxCents ?? Number.MAX_SAFE_INTEGER)-(b.rewardMaxCents ?? Number.MAX_SAFE_INTEGER) || a.id.localeCompare(b.id);
+}

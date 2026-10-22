@@ -68,6 +68,8 @@ jobs:
         run: npx tsx scripts/test-earnings.ts
       - name: Verify scope allowlist and denied targets
         run: npx tsx scripts/test-scope.ts
+      - name: Verify sequential pipeline and difficulty order
+        run: npx tsx scripts/test-sequential-pipeline.ts
       - name: Verify durable daily dispatch quota
         run: npx tsx scripts/test-daily-quota.ts
       - name: Verify submission outbox restart and duplicate safety

@@ -19,7 +19,8 @@
     "scripts/test-solidity-source-index.ts",
     "scripts/test-state-mutex.ts",
     "scripts/test-poller-recovery.ts",
-    "scripts/test-analysis-scheduling.ts"
+    "scripts/test-analysis-scheduling.ts",
+    "scripts/test-sequential-pipeline.ts"
   ],
   "exclude": [
     "packages/dashboard/**"

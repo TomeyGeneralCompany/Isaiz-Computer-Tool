@@ -1009,7 +1009,7 @@ export default function SecurityPage() {
                   const solverStage = securityStatus.solverStage ?? "hunting";
                   const currentIdx = isAnalyzing ? 0
                     : isSolving ? stages.indexOf(solverStage as any)
-                    : isReviewing ? 4
+                    : isReviewing ? 2
                     : -1;
                   const stageColor = isReviewing ? "#fbbf24" : isAnalyzing ? "var(--accent)" : "var(--accent)";
                   return (
@@ -1261,6 +1261,14 @@ export default function SecurityPage() {
                     >
                       {autoHuntEnabled?.enabled ? "Stop Auto Hunt" : "Start Auto Hunt"}
                     </button>
+                    {autoHuntEnabled?.pipeline && (
+                      <p className="mt-2 text-xs" style={{color:"var(--text-dim)"}}>
+                        Sequential pipeline: {autoHuntEnabled.pipeline.phase}
+                        {autoHuntEnabled.pipeline.currentName ? ` — ${autoHuntEnabled.pipeline.currentName}` : ""}
+                        {autoHuntEnabled.pipeline.detail ? ` — ${autoHuntEnabled.pipeline.detail}` : ""}
+                      </p>
+                    )}
+
                   </div>
                   <p className="mt-2 text-[10px]" style={{ color: "var(--text-dim)" }}>
                     Filters configured on Bounties tab
@@ -1302,7 +1310,7 @@ export default function SecurityPage() {
                           </div>
                           <div className="flex items-center gap-3">
                             <span className="font-mono" style={{ color: "var(--text-dim)" }}>
-                              {p.score.toFixed(0)}
+                              <span title="Estimated difficulty from scope and stack fit; lower is easier">{p.difficulty}/100 difficulty</span>
                             </span>
                             <span className="font-mono" style={{ color: "var(--green)" }}>
                               {p.rewardMaxCents ? `$${(p.rewardMaxCents / 100).toLocaleString()}` : "--"}

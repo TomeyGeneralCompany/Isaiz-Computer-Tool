@@ -17,9 +17,9 @@ while True:
 print('LOCKED',flush=True)
 sys.stdin.read()
 `;
-export async function acquireOllamaGate(signal:AbortSignal):Promise<()=>Promise<void>> {
+export async function acquireFileGate(signal:AbortSignal, filename:string):Promise<()=>Promise<void>> {
   signal.throwIfAborted();
-  const path=resolve(process.env.PROJECT_ROOT || process.env.AUTOHACK_ROOT || process.cwd(),"data","ollama-inference.lock");
+  const path=resolve(process.env.PROJECT_ROOT || process.env.AUTOHACK_ROOT || process.cwd(),"data",filename);
   await mkdir(dirname(path),{recursive:true});
   signal.throwIfAborted();
   return new Promise((resolveGate,reject)=>{
@@ -53,3 +53,5 @@ export async function acquireOllamaGate(signal:AbortSignal):Promise<()=>Promise<
     if(signal.aborted)abort();
   });
 }
+
+export function acquireOllamaGate(signal:AbortSignal) { return acquireFileGate(signal,"ollama-inference.lock"); }

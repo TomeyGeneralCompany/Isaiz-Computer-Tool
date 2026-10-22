@@ -1,3 +1,5 @@
+import { compareProgramDifficulty, estimateProgramDifficulty } from "./program-selection";
+import { withPipeline, sequentialPipelineEnabled } from "@bounty/core";
 import { LOCAL_REPRODUCTION_CAPABILITY_VERSION } from "../../core/src/program-eligibility";
 import { programSelectionDecision, summarizeProgramSelection } from "./program-selection";
 export { scoreProgram, summarizeProgramSelection } from "./program-selection";
@@ -72,7 +74,7 @@ export type { SecuritySolverStatus, AdversarialReviewStatus } from "./status";
  * find vulnerabilities, and create findings with reports.
  * This is the main "launch" action from the programs table.
  */
-export async function huntProgram(
+async function huntProgramImpl(
   program: SecurityProgram,
   trigger?: "auto" | "manual",
   focus?: StaticLeadFocus,
@@ -485,6 +487,7 @@ export function pickBestFinding(): SecurityFinding | null {
 export interface RankedProgram {
   program: SecurityProgram;
   score: number;
+  difficulty: number;
 }
 
 /**
@@ -509,10 +512,10 @@ export function rankEligiblePrograms(): RankedProgram[] {
   for (const p of programs) {
     const decision = programSelectionDecision(p, config, !!process.env.LOCAL_OLLAMA_MODEL);
     if (decision.score === null) continue;
-    ranked.push({ program: p, score: decision.score });
+    ranked.push({ program: p, score: decision.score, difficulty:estimateProgramDifficulty(p) });
   }
 
-  ranked.sort((a, b) => b.score - a.score);
+  ranked.sort((a, b) => sequentialPipelineEnabled() ? compareProgramDifficulty(a.program,b.program) : b.score - a.score);
   return ranked;
 }
 
@@ -643,7 +646,7 @@ function buildBatchContext(currentFindingId: string, allFindings: SecurityFindin
  * Uses a single tool-enabled Claude session per finding that verifies all claims.
  * Transitions findings to "reviewing" (passed) or "bot_rejected" (rejected).
  */
-export async function processAdversarialQueue(programId?: string): Promise<void> {
+async function processAdversarialQueueImpl(programId?: string): Promise<void> {
   if(process.env.LOCAL_OLLAMA_MODEL) {
     if(solving || !acquireHuntLock())return;
     solving=true;
@@ -987,3 +990,7 @@ export async function processAdversarialQueue(programId?: string): Promise<void>
 }
 
 export { processStaticLeadQueue } from "./static-leads";
+
+export function huntProgram(...args:Parameters<typeof huntProgramImpl>):ReturnType<typeof huntProgramImpl> { return withPipeline(()=>huntProgramImpl(...args)); }
+
+export function processAdversarialQueue(...args:Parameters<typeof processAdversarialQueueImpl>):ReturnType<typeof processAdversarialQueueImpl> { return withPipeline(()=>processAdversarialQueueImpl(...args)); }

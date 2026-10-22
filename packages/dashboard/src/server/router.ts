@@ -1,3 +1,4 @@
+import { withPipeline, readPipelineStatus, sequentialPipelineEnabled } from "@bounty/core";
 import { readLocalActivity, describeHuntFailure } from "./activity";
 import { z } from "zod";
 import { eq, asc, desc, sql, inArray } from "drizzle-orm";
@@ -561,7 +562,7 @@ export const appRouter = router({
 
     const CONCURRENCY = process.env.OLLAMA_DISCOVERY_DIRECT === "true" ? 1 : 5;
 
-    (async () => {
+    void withPipeline(async () => {
       try {
         for (let i = 0; i < unassessed.length; i += CONCURRENCY) {
           if (securityAnalyzeState.cancelled) break;
@@ -601,7 +602,7 @@ export const appRouter = router({
           "Security program analysis completed",
         );
       }
-    })();
+    }).catch(err => log.error({err}, "Queued dashboard workflow failed"));
 
     return { started: true, reason: null, total: unassessed.length };
   }),
@@ -630,7 +631,7 @@ export const appRouter = router({
 
     const CONCURRENCY = process.env.OLLAMA_DISCOVERY_DIRECT === "true" ? 1 : 5;
 
-    (async () => {
+    void withPipeline(async () => {
       try {
         for (let i = 0; i < discovered.length; i += CONCURRENCY) {
           if (securityAnalyzeState.cancelled) break;
@@ -670,16 +671,23 @@ export const appRouter = router({
           "Security finding analysis completed",
         );
       }
-    })();
+    }).catch(err => log.error({err}, "Queued dashboard workflow failed"));
 
     return { started: true, reason: null, total: discovered.length };
   }),
 
   securityAnalyzeStatus: publicProcedure.query(() => {
+    const pipeline=sequentialPipelineEnabled() ? readPipelineStatus() : null;
+    if (!securityAnalyzeState.running && pipeline?.phase === "analyzing") return {
+      ...securityAnalyzeState,running:true,mode:"programs" as const,total:pipeline.total || 0,
+      completed:pipeline.completed || 0,currentName:pipeline.currentName || null,
+    };
     return { ...securityAnalyzeState };
   }),
 
   securityStopAnalyze: publicProcedure.mutation(() => {
+    if (sequentialPipelineEnabled() && readPipelineStatus()?.phase === "analyzing")
+      setRuntimeOverride("SECURITY_AUTO_HUNT_ENABLED",false);
     securityAnalyzeState.cancelled = true;
 
     if (securityAnalyzeState.currentId && securityAnalyzeState.mode === "findings") {
@@ -761,7 +769,7 @@ export const appRouter = router({
         return { started: false, reason: "solver busy" as const };
       }
 
-      (async () => {
+      void withPipeline(async () => {
         try {
           const result = await huntProgram(program, "manual");
           if (result.findingsCreated > 0) {
@@ -774,7 +782,7 @@ export const appRouter = router({
             await forceStopSecuritySolver();
           } catch {}
         }
-      })();
+      }).catch(err => log.error({err}, "Queued dashboard workflow failed"));
 
       return { started: true, reason: null };
     }),
@@ -785,7 +793,7 @@ export const appRouter = router({
       return { started: false, reason: "no assessed programs" as const };
     }
 
-    (async () => {
+    void withPipeline(async () => {
       try {
         const result = await huntProgram(best, "auto");
         if (result.findingsCreated > 0) {
@@ -798,7 +806,7 @@ export const appRouter = router({
           await forceStopSecuritySolver();
         } catch {}
       }
-    })();
+    }).catch(err => log.error({err}, "Queued dashboard workflow failed"));
 
     return { started: true, reason: null, programId: best.id, programName: best.name };
   }),
@@ -820,6 +828,7 @@ export const appRouter = router({
       id: r.program.id,
       name: r.program.name,
       score: Math.round(r.score * 100) / 100,
+      difficulty:r.difficulty,
       rewardMaxCents: r.program.rewardMaxCents,
       lastHuntedAt: r.program.lastHuntedAt?.toISOString() ?? null,
       huntCount: r.program.huntCount ?? 0,
@@ -836,7 +845,7 @@ export const appRouter = router({
 
   securityAutoHuntEnabled: publicProcedure.query(() => {
     const config = getConfig();
-    return { enabled: config.SECURITY_AUTO_HUNT_ENABLED };
+    return { enabled: config.SECURITY_AUTO_HUNT_ENABLED, pipeline:sequentialPipelineEnabled() ? readPipelineStatus() : null };
   }),
 
   securitySetSkipSignal: publicProcedure
@@ -894,7 +903,7 @@ export const appRouter = router({
         return { started: false, reason: `invalid status: ${finding.status}` as const };
       }
 
-      (async () => {
+      void withPipeline(async () => {
         try {
           await solveSecurityFinding(finding, "manual");
         } catch (err) {
@@ -903,7 +912,7 @@ export const appRouter = router({
             await forceStopSecuritySolver();
           } catch {}
         }
-      })();
+      }).catch(err => log.error({err}, "Queued dashboard workflow failed"));
 
       return { started: true, reason: null };
     }),
@@ -914,7 +923,7 @@ export const appRouter = router({
       return { started: false, reason: "no validated findings" as const };
     }
 
-    (async () => {
+    void withPipeline(async () => {
       try {
         await solveSecurityFinding(best, "auto");
       } catch (err) {
@@ -923,7 +932,7 @@ export const appRouter = router({
           await forceStopSecuritySolver();
         } catch {}
       }
-    })();
+    }).catch(err => log.error({err}, "Queued dashboard workflow failed"));
 
     return { started: true, reason: null, findingId: best.id, findingTitle: best.title };
   }),
@@ -945,6 +954,7 @@ export const appRouter = router({
   }),
 
   securityKillAll: publicProcedure.mutation(async () => {
+    if (sequentialPipelineEnabled()) setRuntimeOverride("SECURITY_AUTO_HUNT_ENABLED",false);
     const solverResult = await forceStopSecuritySolver();
 
     securityAnalyzeState.cancelled = true;
@@ -1126,25 +1136,25 @@ export const appRouter = router({
       } catch {}
     }
 
-    (async () => {
+    void withPipeline(async () => {
       try {
         await processAdversarialQueue();
       } catch (err) {
         log.error({ err }, "Reassess findings adversarial review error");
       }
-    })();
+    }).catch(err => log.error({err}, "Queued dashboard workflow failed"));
 
     return { started: true, reason: null, reset };
   }),
 
   securityRunAdversarialReview: publicProcedure.mutation(() => {
-    (async () => {
+    void withPipeline(async () => {
       try {
         await processAdversarialQueue();
       } catch (err) {
         log.error({ err }, "Manual adversarial review error");
       }
-    })();
+    }).catch(err => log.error({err}, "Queued dashboard workflow failed"));
     return { started: true };
   }),
 });
