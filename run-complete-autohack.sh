@@ -14,6 +14,12 @@ if ! command -v python3 >/dev/null 2>&1; then
   echo "python3 is required" >&2
   exit 127
 fi
+# Sequential mode owns discovery, analysis, reproduction and review in Node.
+# Do not start the independent scan/research worker farm alongside it.
+if [[ "${AUTOHACK_SEQUENTIAL_PIPELINE:-true}" != "false" ]]; then
+  echo "Sequential pipeline enabled; independent offline workers are parked."
+  exec bash "$ROOT/run-local-autohack.sh"
+fi
 mkdir -p data/worker-logs
 python3 -u scripts/run-offline-workers.py >data/worker-logs/supervisor.log 2>&1 &
 WORKER_PID=$!

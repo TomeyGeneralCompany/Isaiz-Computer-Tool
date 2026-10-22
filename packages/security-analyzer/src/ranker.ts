@@ -1,3 +1,4 @@
+import { withPipeline } from "@bounty/core";
 import { eq, sql, desc } from "drizzle-orm";
 import {
   getDb,
@@ -18,7 +19,7 @@ const log = createLogger("security-ranker");
  * Analyze a security program — assess its scope for vulnerability opportunity.
  * Updates the program's assessment data in the database.
  */
-export async function analyzeProgram(program: SecurityProgram): Promise<void> {
+async function analyzeProgramImpl(program: SecurityProgram): Promise<void> {
   const db = getDb();
 
   log.info({ name: program.name, id: program.id }, "Analyzing program");
@@ -75,7 +76,7 @@ export async function analyzeProgram(program: SecurityProgram): Promise<void> {
 /**
  * Analyze and rank a security finding — assess difficulty, confidence, severity.
  */
-export async function analyzeAndRankFinding(finding: SecurityFinding): Promise<void> {
+async function analyzeAndRankFindingImpl(finding: SecurityFinding): Promise<void> {
   if (finding.id.startsWith("offline-")) return; // The evidence queue owns static leads.
   const db = getDb();
   const traceId = generateTraceId();
@@ -164,32 +165,42 @@ export async function analyzeAndRankFinding(finding: SecurityFinding): Promise<v
  * Process the analysis queue for security programs.
  * Analyzes all unassessed active programs.
  */
-export async function processSecurityProgramQueue(opts?: {
+async function processSecurityProgramQueueImpl(opts?: {
   skipSignalRequired?: boolean;
   onProgramAssessed?: (programId: string) => void;
+  snapshot?: boolean;
+  shouldContinue?: ()=>boolean;
+  onProgress?: (total:number,completed:number,name:string)=>void;
 }): Promise<number> {
   const db = getDb();
   let analyzed = 0;
   const attempted = new Set<string>();
   const local = process.env.OLLAMA_DISCOVERY_DIRECT === "true";
+  let catalog:Set<string>|undefined;
+  let completed=0;
   // Refresh the catalog between small batches, so initial HackerOne discovery
   // is not stranded behind a snapshot of hundreds of older entries.
   while (true) {
+    if (opts?.shouldContinue && !opts.shouldContinue()) break;
     const config = getConfig();
     const eligible = db.select().from(schema.securityPrograms)
       .where(eq(schema.securityPrograms.status,"active"))
       .orderBy(desc(schema.securityPrograms.rewardMaxCents)).all().filter(program => {
-        if (attempted.has(program.id) || programCandidateBlocker(program,config,!!process.env.LOCAL_OLLAMA_MODEL)) return false;
+        if ((catalog && !catalog.has(program.id)) || attempted.has(program.id) || programCandidateBlocker(program,config,!!process.env.LOCAL_OLLAMA_MODEL)) return false;
         // An explicit per-call filter is still honored. The default automatic
         // local queue may inspect source even when submission needs Signal.
         if (opts?.skipSignalRequired && program.requiresSignal) return false;
         try {return JSON.parse(program.scopeSummary || "{}").assessment?.opportunityScore == null;} catch {return true;}
       }).sort((a,b) => Number(b.provider === "hackerone") - Number(a.provider === "hackerone"));
+    if (opts?.snapshot && !catalog) catalog=new Set(eligible.map(p=>p.id));
     const batch = eligible.slice(0,local ? 1 : 5);
     if (!batch.length) break;
     batch.forEach(program => attempted.add(program.id));
+    opts?.onProgress?.(catalog?.size ?? eligible.length+completed,completed,batch.map(p=>p.name).join(", "));
     const results = await Promise.allSettled(batch.map(program => analyzeProgram(program)));
     for (let i = 0; i < results.length; i++) {
+      completed++;
+      opts?.onProgress?.(catalog?.size ?? eligible.length+completed-results.length,completed,batch[i].name);
       if (results[i].status === "fulfilled") {
         analyzed++;
         opts?.onProgramAssessed?.(batch[i].id);
@@ -234,3 +245,9 @@ export async function processSecurityFindingQueue(): Promise<number> {
 
   return analyzed;
 }
+
+export function analyzeProgram(...args:Parameters<typeof analyzeProgramImpl>):ReturnType<typeof analyzeProgramImpl> { return withPipeline(()=>analyzeProgramImpl(...args)); }
+
+export function analyzeAndRankFinding(...args:Parameters<typeof analyzeAndRankFindingImpl>):ReturnType<typeof analyzeAndRankFindingImpl> { return withPipeline(()=>analyzeAndRankFindingImpl(...args)); }
+
+export function processSecurityProgramQueue(...args:Parameters<typeof processSecurityProgramQueueImpl>):ReturnType<typeof processSecurityProgramQueueImpl> { return withPipeline(()=>processSecurityProgramQueueImpl(...args)); }

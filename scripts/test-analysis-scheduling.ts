@@ -52,5 +52,12 @@ try {
   }
   await until(()=>!state.running);
   assert.equal(state.completed,4);assert.deepEqual(state.errors,[]);
+  const {writePipelineStatus}=await import("../packages/core/src/pipeline");
+  const {getConfig}=await import("../packages/core/src/config");
+  writePipelineStatus({phase:"analyzing",total:7,completed:3,currentName:"Background fixture"});
+  const background=await caller.securityAnalyzeStatus();
+  assert.equal(background.running,true);assert.equal(background.completed,3);
+  await caller.securityStopAnalyze();
+  assert.equal(getConfig().SECURITY_AUTO_HUNT_ENABLED,false,"Stop Analysis must pause automatic analysis too");
   console.log("Dashboard local serialization, slow-job guard, stop/restart and completion PASSED");
 } finally {server.closeAllConnections();server.close();rmSync(root,{recursive:true,force:true});}

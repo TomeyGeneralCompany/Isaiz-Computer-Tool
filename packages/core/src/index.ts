@@ -19,3 +19,5 @@ export { authorizedSourceUrls } from "./source-repository";
 export { programCandidateBlocker, recordHuntAttempt } from "./program-eligibility";
 
 export { postOllamaJson } from "./ollama-http";
+
+export { withPipeline, sequentialPipelineEnabled, runSequentialPass, writePipelineStatus, readPipelineStatus } from "./pipeline";
