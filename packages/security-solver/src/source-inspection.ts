@@ -1,6 +1,22 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import { relative, resolve, sep } from "node:path";
 
+const discoveryDirectories = new Set(["node_modules","dist","build","vendor","__pycache__"]);
+const discoveryLockfiles = new Set(["package-lock.json","npm-shrinkwrap.json","yarn.lock","pnpm-lock.yaml","Cargo.lock","composer.lock","Pipfile.lock","poetry.lock","uv.lock","bun.lock","bun.lockb"]);
+export const sourceDiscoveryNote = "Automatic discovery excludes hidden paths, symlinks, dependency/build/cache directories, lockfiles and minified JS/CSS. Explicit scoped paths remain accessible when relevant.";
+/** Filter discovery noise, not authorization or explicit evidence access. */
+export function discoverSourceEntry(entry:{name:string;isDirectory():boolean;isSymbolicLink():boolean}):boolean {
+  if(entry.isSymbolicLink() || entry.name.startsWith("."))return false;
+  return entry.isDirectory() ? !discoveryDirectories.has(entry.name) :
+    !discoveryLockfiles.has(entry.name) && !/\.min\.(js|css)$/i.test(entry.name);
+}
+export async function listSourcePage(full:string,offset=0) {
+  const entries=(await readdir(full,{withFileTypes:true})).filter(discoverSourceEntry)
+    .sort((a,b)=>a.name.localeCompare(b.name,"en"));
+  return {entries:entries.slice(offset,offset+100).map(e=>(e.isDirectory()?"dir ":"file ")+e.name),
+    nextOffset:offset+100<entries.length?offset+100:null,totalEntries:entries.length,note:sourceDiscoveryNote};
+}
+
 export interface ReadSpan { start: number; end: number }
 export class SourceReads {
   private spans = new Map<string, ReadSpan[]>();
@@ -59,7 +75,7 @@ export async function searchSourcePage(root:string, full:string, query:string, o
     const entries=(await readdir(dir,{withFileTypes:true})).sort((a,b)=>a.name.localeCompare(b.name,"en"));
     for(const entry of entries) {
       signal?.throwIfAborted();
-      if(entry.isSymbolicLink() || entry.name.startsWith(".") || ["node_modules","dist","build","vendor"].includes(entry.name))continue;
+      if(!discoverSourceEntry(entry))continue;
       const path=resolve(dir,entry.name);
       if(entry.isDirectory())yield* files(path);
       else if(entry.isFile() && /\.(ts|tsx|js|jsx|mjs|cjs|py|go|rs|java|php|rb|sol|json|yaml|yml)$/.test(entry.name))yield path;
@@ -79,5 +95,5 @@ export async function searchSourcePage(root:string, full:string, query:string, o
   }
   return {results,scannedFiles:scanned,skippedLargeFiles,nextOffset,matchesTruncatedInFile,
     complete:nextOffset===null && matchesTruncatedInFile===null && skippedLargeFiles===0,
-    note:"Search excludes hidden paths, symlinks, node_modules, dist, build and vendor. Use read_file for remaining matches in a truncated file; nextOffset continues with subsequent files."};
+    note:sourceDiscoveryNote+" Use read_file for remaining matches in a truncated file; nextOffset continues with subsequent files."};
 }

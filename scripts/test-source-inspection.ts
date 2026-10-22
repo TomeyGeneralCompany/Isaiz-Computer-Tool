@@ -3,12 +3,28 @@ import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:http";
-import { readSourcePage, searchSourcePage, SourceReads } from "../packages/security-solver/src/source-inspection";
+import { readSourcePage, searchSourcePage, listSourcePage, SourceReads } from "../packages/security-solver/src/source-inspection";
 import { selectSourceBatch, incompleteProbeCoverage } from "../packages/security-solver/src/inspection-coverage";
 import { runLocalAudit, activeLocalAuditCount } from "../packages/security-solver/src/local-ollama-runner";
 const root=await mkdtemp(join(tmpdir(),"inspection-regression-"));
 const server=createServer();
 try {
+  const filtered=join(root,"filtered");await mkdir(filtered);
+  for(const name of ["node_modules","vendor","dist","build",".git","__pycache__"]) {
+    await mkdir(join(filtered,name));await writeFile(join(filtered,name,"source.js"),"// FILTER_NEEDLE");
+  }
+  for(const name of ["package-lock.json","npm-shrinkwrap.json","pnpm-lock.yaml","Cargo.lock","bundle.min.js"])
+    await writeFile(join(filtered,name),"FILTER_NEEDLE");
+  await writeFile(join(filtered,"main.js"),"// FILTER_NEEDLE");
+  await writeFile(join(filtered,"package.json"),'{"name":"FILTER_NEEDLE"}');
+  const listing=await listSourcePage(filtered);
+  assert.deepEqual(listing.entries,["file main.js","file package.json"]);
+  assert.match(listing.note,/Explicit scoped paths/);
+  const filteredSearch=await searchSourcePage(root,filtered,"FILTER_NEEDLE");
+  assert.equal(filteredSearch.scannedFiles,2);assert.equal(filteredSearch.results.length,2);
+  // Dependency code and lockfiles remain available for a deliberate inspection.
+  assert.equal((await readSourcePage(join(filtered,"package-lock.json"))).text,"FILTER_NEEDLE");
+  assert.equal((await searchSourcePage(root,join(filtered,"vendor"),"FILTER_NEEDLE")).results.length,1);
   const text="padding\n".repeat(5000)+"renderer.render(input);\n";
   await writeFile(join(root,"large.js"),text);
   const reads=new SourceReads();
