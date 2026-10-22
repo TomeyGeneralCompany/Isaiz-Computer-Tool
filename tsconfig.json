@@ -16,6 +16,7 @@
     "scripts/diagnose-progress.ts",
     "scripts/test-progress-diagnostic.ts",
     "scripts/test-source-inspection.ts",
+    "scripts/test-solidity-source-index.ts",
     "scripts/test-state-mutex.ts",
     "scripts/test-poller-recovery.ts"
   ],

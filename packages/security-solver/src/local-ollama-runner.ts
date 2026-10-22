@@ -1,3 +1,4 @@
+import { SoliditySourceIndex } from "./solidity-source-index";
 import { compactAuditContext, auditCheckpoint } from "./audit-context";
 import { soliditySequenceSchema, soliditySequenceJsonSchema, soliditySequencePrompt, type SoliditySequence } from "./solidity-sequence";
 import { readSourcePage, searchSourcePage, listSourcePage, pageOffset, type ReadSpan } from "./source-inspection";
@@ -18,6 +19,8 @@ export function abortLocalAudits():boolean {
   return active;
 }
 const tools = [
+  {type:"function",function:{name:"outline_solidity",description:"List Solidity declarations and exact IDs, without marking source inspected. Use before reading a Solidity function. On parse failure use read_file.",parameters:{type:"object",properties:{path:{type:"string"},offset:{type:"integer",minimum:0}},required:["path"]}}},
+  {type:"function",function:{name:"read_solidity",description:"Read a Solidity function by outline ID in query, with bounded state/modifier/base context. Follow nextOffset; inspect unresolved context separately. On failure use read_file.",parameters:{type:"object",properties:{path:{type:"string"},query:{type:"string"},offset:{type:"integer",minimum:0}},required:["path","query"]}}},
   { type: "function", function: { name: "list_files", description: "List files in the authorized local audit workspace", parameters: { type: "object", properties: { path: { type: "string" }, offset: {type:"integer",minimum:0} }, required: ["path"] } } },
   { type: "function", function: { name: "search_files", description: "Search source files within path for a literal query; continue at nextOffset. complete=false means partial coverage", parameters: { type: "object", properties: { query: { type: "string" }, path:{type:"string"}, offset:{type:"integer",minimum:0} }, required: ["query"] } } },
   { type: "function", function: { name: "read_file", description: "Read a source file page; offset is a character offset. Continue at nextOffset until null", parameters: { type: "object", properties: { path: { type: "string" }, offset: {type:"integer",minimum:0} }, required: ["path"] } } },
@@ -50,6 +53,7 @@ export async function runLocalAudit(
   let generationBudget = settings.numPredict;
   const root = await realpath(cwd);
   const controller = new AbortController();
+  const solidityIndex = new SoliditySourceIndex(root,controller.signal);
   const forwardCancellation = () => controller.abort(limits.signal?.reason);
   limits.signal?.throwIfAborted();
   limits.signal?.addEventListener("abort", forwardCancellation, {once:true});
@@ -174,7 +178,7 @@ export async function runLocalAudit(
           const full = await safePath(path);
           const offset = pageOffset(call.function.arguments?.offset);
           const actionKey = JSON.stringify([name,relative(root,full),offset,String(call.function.arguments?.query ?? "")]);
-          const inspection = ["read_file","list_files","search_files"].includes(name);
+          const inspection = ["read_file","list_files","search_files","outline_solidity","read_solidity"].includes(name);
           const previous = recentActions.get(actionKey);
           if(inspection && previous && turn-previous.turn<=8) {
             stalledActions++;
@@ -201,6 +205,20 @@ export async function runLocalAudit(
             const result = await searchSourcePage(root,full,String(call.function.arguments?.query ?? ""),offset,controller.signal);
             activityCount=result.results.length;
             output=JSON.stringify(result);
+          } else if (name === "outline_solidity" || name === "read_solidity") {
+            const budget=Math.min(8000,Math.max(512,messageBudget-JSON.stringify(messages.slice(0,2)).length-JSON.stringify(message).length-800));
+            if(name === "outline_solidity")output=JSON.stringify(await solidityIndex.outline(full,offset,budget));
+            else {
+              const result=await solidityIndex.context(full,String(call.function.arguments?.query || ""),offset,budget);
+              output=JSON.stringify(result);
+              if(output.length>budget)throw new Error("Indexed context exceeds message budget; use read_file");
+              for(const excerpt of result.excerpts) {
+                successfulReads++;
+                limits.onRead?.(excerpt.path,{start:excerpt.start,end:excerpt.end});
+                await appendFile(logFile, "[READ_OK] " + excerpt.path + ` offset=${excerpt.start} end=${excerpt.end} indexed=true\n`);
+              }
+              activityCount=result.excerpts.reduce((n,e)=>n+e.text.length,0);
+            }
           } else if (name === "read_file") {
             const page = await readSourcePage(full,offset,pageSize);
             output = JSON.stringify(page);
@@ -235,7 +253,7 @@ export async function runLocalAudit(
         events.push(JSON.stringify({tool:call.function.name,path:String(call.function.arguments?.path || ""),query:String(call.function.arguments?.query || "").slice(0,60),offset:call.function.arguments?.offset,nextOffset:progress?.nextOffset,caseId:progress?.caseId,status:probeStatus || (output.startsWith("Tool error:")?"failed":"completed")}).slice(0,180));
         // Large probe/search outputs are explicitly abbreviated; original evidence is persisted separately.
         const outputLimit=Math.max(512,messageBudget-JSON.stringify(messages.slice(0,2)).length-JSON.stringify(message).length-800);
-        if(output.length>outputLimit && call.function.name!=="read_file") {
+        if(output.length>outputLimit && !["read_file","read_solidity","outline_solidity"].includes(call.function.name)) {
           let result:any;try {result=JSON.parse(output);}catch{}
           output=JSON.stringify({truncated:true,caseId:result?.caseId,status:result?.status,behavior_observed:result?.behavior_observed,
             excerpt:output.slice(0,Math.floor(outputLimit/3)),instruction:"Output abbreviated to fit context. Narrow the search or probe before drawing conclusions."});
