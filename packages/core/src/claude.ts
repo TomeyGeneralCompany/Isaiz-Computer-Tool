@@ -1,4 +1,5 @@
-import { postOllamaJson } from "./ollama-http";
+import { acquireOllamaGate } from "./ollama-gate";
+import { sendOllamaJson } from "./ollama-http";
 import { spawn } from "node:child_process";
 import { getConfig } from "./config";
 import { extractJsonWithKey } from "./json-utils";
@@ -56,13 +57,16 @@ export async function runClaude(
 }
 
 // The shared inference gate serializes requests across processes.
-// Start the deadline before acquiring it, so queue time is bounded too.
+// Queue waiting and model execution have separate bounded deadlines.
 async function runLocalOllama(
   prompt: string,
   opts?: RunClaudeOpts,
   schema?: Record<string, unknown>,
 ): Promise<string> {
     const timeoutMs = opts?.timeoutMs ?? Number(process.env.OLLAMA_ASSESSMENT_TIMEOUT_MS || 600000);
+    const queueTimeoutMs = Number(process.env.OLLAMA_ASSESSMENT_QUEUE_TIMEOUT_MS || 3600000);
+    if (!Number.isSafeInteger(queueTimeoutMs) || queueTimeoutMs < 1 || queueTimeoutMs > 7200000)
+      throw new Error("Invalid Ollama assessment queue timeout");
     const limit = Number(process.env.OLLAMA_PROMPT_CHARS || 5800);
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 1800000 ||
         !Number.isSafeInteger(limit) || limit < 3000 || limit > 24000) {
@@ -82,12 +86,22 @@ async function runLocalOllama(
       ? prompt.slice(0, 2400) + "\n[Additional program text omitted]\n" + prompt.slice(-(limit - 2500))
       : prompt;
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let timer = setTimeout(() => controller.abort(), queueTimeoutMs);
+    let release: (() => Promise<void>) | undefined;
+    const queuedAt = Date.now();
+    let executionStarted = false;
     try {
-      // A single retry shares the deadline. Never repair or accept partial JSON.
+      log.info({model, queueTimeoutMs}, "Ollama assessment waiting for inference");
+      release = await acquireOllamaGate(controller.signal);
+      controller.signal.throwIfAborted();
+      clearTimeout(timer);
+      executionStarted = true;
+      timer = setTimeout(() => controller.abort(), timeoutMs);
+      log.info({model, queueMs:Date.now()-queuedAt, timeoutMs}, "Ollama assessment acquired inference");
+      // A single retry shares the execution deadline and retains the gate. Never repair or accept partial JSON.
       for (let attempt = 0, tokens = requestedTokens; attempt < 2; attempt++, tokens = Math.min(tokens * 2, 8192)) {
         log.info({model, attempt:attempt + 1, generationLimit:tokens, timeoutMs}, "Ollama assessment started");
-        const result = await postOllamaJson(endpoint, {
+        const result = await sendOllamaJson(endpoint, {
             model, stream:false, think:false,
             ...(schema ? {format:schema} : {}),
             keep_alive:"10m",
@@ -127,9 +141,11 @@ async function runLocalOllama(
       }
       throw new Error("Ollama assessment did not complete");
     } catch (error) {
-      if (controller.signal.aborted) throw new Error(`Ollama assessment exceeded ${timeoutMs}ms`);
+      if (controller.signal.aborted) throw new Error(executionStarted
+        ? `Ollama assessment execution exceeded ${timeoutMs}ms`
+        : `Ollama assessment queue wait exceeded ${queueTimeoutMs}ms`);
       throw error;
-    } finally {clearTimeout(timer);}
+    } finally {clearTimeout(timer); await release?.();}
 }
 
 function runClaudeCLI(

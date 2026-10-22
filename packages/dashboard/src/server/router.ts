@@ -526,12 +526,7 @@ export const appRouter = router({
     .input(z.object({ skipSignalRequired: z.boolean().optional() }).optional())
     .mutation(({ input }) => {
     if (securityAnalyzeState.running) {
-      const lastActive = securityAnalyzeState.lastActivityAt ?? securityAnalyzeState.startedAt ?? 0;
-      const idleMs = Date.now() - lastActive;
-      if (idleMs < 3 * 60 * 1000) {
-        return { started: false, reason: "already running" as const, total: 0 };
-      }
-      log.warn({ idleMs, completed: securityAnalyzeState.completed, total: securityAnalyzeState.total }, "Security analysis state appears stale, resetting");
+      return { started: false, reason: "already running" as const, total: 0 };
     }
 
     const skipSignal = input?.skipSignalRequired ?? false;
@@ -564,7 +559,7 @@ export const appRouter = router({
     securityAnalyzeState.total = unassessed.length;
     securityAnalyzeState.startedAt = Date.now();
 
-    const CONCURRENCY = 5;
+    const CONCURRENCY = process.env.OLLAMA_DISCOVERY_DIRECT === "true" ? 1 : 5;
 
     (async () => {
       try {
@@ -613,12 +608,7 @@ export const appRouter = router({
 
   securityAnalyzeFindings: publicProcedure.mutation(() => {
     if (securityAnalyzeState.running) {
-      const lastActive = securityAnalyzeState.lastActivityAt ?? securityAnalyzeState.startedAt ?? 0;
-      const idleMs = Date.now() - lastActive;
-      if (idleMs < 3 * 60 * 1000) {
-        return { started: false, reason: "already running" as const, total: 0 };
-      }
-      log.warn({ idleMs, completed: securityAnalyzeState.completed, total: securityAnalyzeState.total }, "Security findings analysis state appears stale, resetting");
+      return { started: false, reason: "already running" as const, total: 0 };
     }
 
     const db = getDb();
@@ -638,7 +628,7 @@ export const appRouter = router({
     securityAnalyzeState.total = discovered.length;
     securityAnalyzeState.startedAt = Date.now();
 
-    const CONCURRENCY = 5;
+    const CONCURRENCY = process.env.OLLAMA_DISCOVERY_DIRECT === "true" ? 1 : 5;
 
     (async () => {
       try {
@@ -691,7 +681,6 @@ export const appRouter = router({
 
   securityStopAnalyze: publicProcedure.mutation(() => {
     securityAnalyzeState.cancelled = true;
-    securityAnalyzeState.running = false;
 
     if (securityAnalyzeState.currentId && securityAnalyzeState.mode === "findings") {
       const db = getDb();
@@ -959,7 +948,6 @@ export const appRouter = router({
     const solverResult = await forceStopSecuritySolver();
 
     securityAnalyzeState.cancelled = true;
-    securityAnalyzeState.running = false;
     if (securityAnalyzeState.currentId && securityAnalyzeState.mode === "findings") {
       const db = getDb();
       db.update(schema.securityFindings)

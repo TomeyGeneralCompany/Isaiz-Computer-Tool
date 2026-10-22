@@ -18,7 +18,8 @@
     "scripts/test-source-inspection.ts",
     "scripts/test-solidity-source-index.ts",
     "scripts/test-state-mutex.ts",
-    "scripts/test-poller-recovery.ts"
+    "scripts/test-poller-recovery.ts",
+    "scripts/test-analysis-scheduling.ts"
   ],
   "exclude": [
     "packages/dashboard/**"

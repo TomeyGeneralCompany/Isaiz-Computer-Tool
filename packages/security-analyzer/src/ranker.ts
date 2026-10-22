@@ -216,7 +216,7 @@ export async function processSecurityFindingQueue(): Promise<number> {
     .all();
 
   // Process in concurrent batches of 5
-  const CONCURRENCY = 5;
+  const CONCURRENCY = process.env.OLLAMA_DISCOVERY_DIRECT === "true" ? 1 : 5;
   for (let i = 0; i < pending.length; i += CONCURRENCY) {
     const batch = pending.slice(i, i + CONCURRENCY).filter(finding => !finding.id.startsWith("offline-"));
     const results = await Promise.allSettled(
