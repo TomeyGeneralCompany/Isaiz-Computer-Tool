@@ -4,6 +4,7 @@ LLM output is untrusted. Running tests is permitted ONLY inside a locked-down lo
 container with a preinstalled image, no network, no host secrets, and bounded resources.
 A generated test passing is NOT by itself proof of a vulnerability.
 """
+import fcntl
 import datetime, hashlib, json, os, pathlib, re, shutil, signal, subprocess, tempfile, time, urllib.request
 ROOT=pathlib.Path(os.environ.get('AUTOHACK_ROOT',str(pathlib.Path(__file__).resolve().parents[2])))
 STAGE=ROOT/'.autohack-next-stage'; INV=STAGE/'investigator'; BASE=STAGE/'research-engine'
@@ -51,7 +52,20 @@ def git_commit(p):
 def ollama(prompt,model):
     payload=json.dumps({'model':model,'stream':False,'format':'json','options':{'temperature':0,'num_predict':1100},'prompt':prompt}).encode()
     req=urllib.request.Request('http://127.0.0.1:11434/api/generate',payload,{'Content-Type':'application/json'})
-    with urllib.request.urlopen(req,timeout=100) as r: raw=json.load(r)
+    # Shared with TypeScript assessment/hunt/review requests, across processes.
+    lock_path=ROOT/'data/ollama-inference.lock'
+    lock_path.parent.mkdir(parents=True,exist_ok=True)
+    with lock_path.open('a') as lock:
+        deadline=time.monotonic()+600
+        while True:
+            if STOP: raise RuntimeError('Research worker stopping while queued for inference')
+            try:
+                fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic()>=deadline: raise TimeoutError('Ollama inference queue timed out')
+                time.sleep(0.1)
+        with urllib.request.urlopen(req,timeout=100) as r: raw=json.load(r)
     return json.loads(raw.get('response','{}'))
 def docker_engine():
     for exe in ('podman','docker'):
