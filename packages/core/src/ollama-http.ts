@@ -1,3 +1,4 @@
+import { acquireOllamaGate } from "./ollama-gate";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 
@@ -5,7 +6,7 @@ import { request as httpsRequest } from "node:https";
  * Use the caller's AbortSignal for the entire request, including body reading,
  * rather than fetch/Undici's separate fixed headers deadline. Never redirect.
  */
-export function postOllamaJson<T = unknown>(url:URL | string, payload:unknown, signal:AbortSignal, label="Ollama"):Promise<T> {
+async function sendOllamaJson<T = unknown>(url:URL | string, payload:unknown, signal:AbortSignal, label="Ollama"):Promise<T> {
   const endpoint=new URL(url);
   if (!["http:","https:"].includes(endpoint.protocol) || endpoint.username || endpoint.password)
     return Promise.reject(new Error("Invalid Ollama HTTP endpoint"));
@@ -37,4 +38,19 @@ export function postOllamaJson<T = unknown>(url:URL | string, payload:unknown, s
     req.on("error",reject);
     req.end(body);
   });
+}
+
+/** Serialize inference across application processes and the Python research worker.
+ * Queue waiting shares the caller deadline; cancellation never sends a queued request.
+ */
+export async function postOllamaJson<T = unknown>(url:URL|string,payload:unknown,signal:AbortSignal,label="Ollama"):Promise<T> {
+  const queued=Date.now();
+  const release=await acquireOllamaGate(signal);
+  const queueMs=Date.now()-queued;
+  try {
+    signal.throwIfAborted();
+    const result=await sendOllamaJson<T>(url,payload,signal,label);
+    if(result && typeof result === "object" && ("message" in result || "response" in result))Object.assign(result,{client_queue_ms:queueMs});
+    return result;
+  } finally {await release();}
 }

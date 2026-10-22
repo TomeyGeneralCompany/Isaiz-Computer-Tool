@@ -483,3 +483,9 @@ reactivates returning archived programs, and preserves paused programs and curre
 assessment/hunt metadata. Report polling continues for accepted and rewarded
 reports, records late or additional awards without requiring a status transition,
 and leaves the separately verified cash ledger unchanged.
+
+### Local model stalls and request scheduling
+
+Application assessment, audit/review, and Python research inference requests share `data/ollama-inference.lock`. The OS releases this lock on process exit; do not delete it while workers run. Queue waiting counts against the caller deadline. This serializes requests from this installation, not unrelated Ollama clients or installations. It does not force model unloading or change system-wide Ollama settings.
+
+Hunt logs under `data/logs/local-hunt-*.log` now include `[ACTION]` paths/offsets, `[READ_OK]` page boundaries, and `[TIMING]` queue/load/prompt/generation times (server durations may be unavailable). Repeated recent inspection actions receive corrective feedback with the next unread offset. Three consecutive repeated actions without successful new tool work stop the hunt with `AUDIT_STALLED`, preserving its inspection checkpoint and failed outcome rather than consuming the full timeout. Different page offsets remain valid; old evidence can be reread after intervening investigation.

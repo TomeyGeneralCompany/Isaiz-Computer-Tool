@@ -77,6 +77,8 @@ export async function runLocalAudit(
   const initialRequest=messages[1].content;
   const contextBudget=Math.max(2000,(settings.numCtx-generationBudget-512)*3);
   const events:string[]=[];
+  const recentActions = new Map<string, {turn:number; nextOffset?:number|null}>();
+  let stalledActions = 0;
   const fixedSize=JSON.stringify(messages).length+JSON.stringify(structured ? actionSchema : availableTools).length;
   // Tools/schema also consume context. Keep a full recent exchange and reserve output.
   const messageBudget=Math.max(JSON.stringify(messages).length+1200,contextBudget-JSON.stringify(structured ? actionSchema : availableTools).length);
@@ -110,8 +112,12 @@ export async function runLocalAudit(
           keep_alive:"10m",
           options: { num_predict:generationBudget,
             ...(limits.numCtx === undefined ? {} : {num_ctx:settings.numCtx}),
-            ...(limits.numThreads === undefined ? {} : {num_thread:settings.numThreads}), temperature:0 } }, controller.signal) as { message?: Message; eval_count?: number; prompt_eval_count?: number; done_reason?: string };
+            ...(limits.numThreads === undefined ? {} : {num_thread:settings.numThreads}), temperature:0 } }, controller.signal) as { message?: Message; eval_count?: number; prompt_eval_count?: number; done_reason?: string; load_duration?:number; prompt_eval_duration?:number; eval_duration?:number; total_duration?:number; client_queue_ms?:number };
       await appendFile(logFile, `[OLLAMA] turn ${turn+1}: response received in ${Date.now()-started}ms; prompt_tokens=${result.prompt_eval_count ?? "unknown"}; generated_tokens=${result.eval_count ?? "unknown"}\n`);
+      await appendFile(logFile, "[TIMING] " + JSON.stringify({at:new Date().toISOString(),turn:turn+1,
+        queueMs:result.client_queue_ms,loadMs:result.load_duration == null ? null : result.load_duration/1e6,
+        promptMs:result.prompt_eval_duration == null ? null : result.prompt_eval_duration/1e6,generationMs:result.eval_duration == null ? null : result.eval_duration/1e6,
+        serverTotalMs:result.total_duration == null ? null : result.total_duration/1e6}) + "\n");
       let message = result.message;
       if (!message) throw new Error("Ollama returned no assistant message");
       if(!structured && (message.tool_calls?.length || 0)>1) {
@@ -143,6 +149,9 @@ export async function runLocalAudit(
         if (!message.content?.trim()) throw new Error("Ollama returned empty final response");
         const feedback = await limits.validateFinal?.(message.content);
         if (feedback) {
+          // Validation may require rereading evidence; this is an intentional
+          // investigation transition, not an unchanged inspection loop.
+          recentActions.clear();stalledActions=0;
           await appendFile(logFile, "[FINAL_REJECTED] " + feedback + "\n");
           messages.push({role:"user",content:feedback + "\nRe-read the source when necessary. /no_think"});
           continue;
@@ -159,12 +168,28 @@ export async function runLocalAudit(
         await recordToolActivity(logFile,{phase:"started",tool:call.function.name,
           path:String(call.function.arguments?.path ?? ".").slice(0,500),
           query:String(call.function.arguments?.query ?? "").slice(0,120),
-          kind:String(call.function.arguments?.kind ?? "").slice(0,80)});
+          offset:call.function.arguments?.offset ?? 0,kind:String(call.function.arguments?.kind ?? "").slice(0,80)});
         try {
           const name = call.function.name;
           const path = String(call.function.arguments?.path ?? ".");
           const full = await safePath(path);
           const offset = pageOffset(call.function.arguments?.offset);
+          const actionKey = JSON.stringify([name,relative(root,full),offset,String(call.function.arguments?.query ?? "")]);
+          const inspection = ["read_file","list_files","search_files"].includes(name);
+          const previous = recentActions.get(actionKey);
+          if(inspection && previous && turn-previous.turn<=8) {
+            stalledActions++;
+            const instruction = previous.nextOffset != null
+              ? `Continue at offset ${previous.nextOffset}, or choose a different file/search.`
+              : "This action is complete. Choose a different file/search or proceed to a supported test or evidence-based final answer.";
+            await appendFile(logFile, "[NO_PROGRESS] " + JSON.stringify({action:name,path,offset,attempt:stalledActions}) + "\n");
+            if(stalledActions>=3) {
+              await recordToolActivity(logFile,{phase:"failed",tool:name,path,offset,error:"Repeated inspection actions without new evidence after corrective feedback"});
+              throw new Error("AUDIT_STALLED: repeated inspection actions without new evidence after corrective feedback");
+            }
+            throw new Error("Repeated inspection action was not executed. " + instruction);
+          }
+          await appendFile(logFile, "[ACTION] " + JSON.stringify({tool:name,path,offset,query:String(call.function.arguments?.query ?? "").slice(0,120)}) + "\n");
           if((name === "verify_source" || name === "verify_python") && limits.verifyPython) {
             const kind=String(call.function.arguments?.kind || "");
             const rawSequence=call.function.arguments?.sequence;
@@ -187,10 +212,18 @@ export async function runLocalAudit(
             activityCount=page.text.length;
             successfulReads++;
             limits.onRead?.(relative(root,full).split(sep).join("/"),{start:page.start,end:page.end});
-            await appendFile(logFile, "[READ_OK] " + relative(root,full) + "\n");
+            await appendFile(logFile, "[READ_OK] " + relative(root,full) + ` offset=${page.start} end=${page.end} nextOffset=${page.nextOffset}\n`);
           } else throw new Error("Unknown tool");
+          stalledActions=0;
+          if(inspection) {
+            let nextOffset:number|null|undefined;
+            try {nextOffset=JSON.parse(output).nextOffset;}catch{}
+            recentActions.set(actionKey,{turn,nextOffset});
+            for(const [key,value] of recentActions)if(turn-value.turn>8)recentActions.delete(key);
+          }
         } catch (error) {
           controller.signal.throwIfAborted();
+          if(error instanceof Error && error.message.startsWith("AUDIT_STALLED:"))throw error;
           output = "Tool error: " + String(error);
         }
         let probeStatus:string|undefined;
@@ -200,7 +233,7 @@ export async function runLocalAudit(
         await recordToolActivity(logFile,{phase:output.startsWith("Tool error:")?"failed":"completed",
           tool:call.function.name,path:String(call.function.arguments?.path ?? ".").slice(0,500),
           query:String(call.function.arguments?.query ?? "").slice(0,120),
-          kind:String(call.function.arguments?.kind ?? "").slice(0,80),
+          offset:call.function.arguments?.offset ?? 0,kind:String(call.function.arguments?.kind ?? "").slice(0,80),
           count:activityCount,status:probeStatus,durationMs:Date.now()-toolStarted,
           error:output.startsWith("Tool error:")?output.slice(0,600):undefined});
         let progress:any;try {progress=JSON.parse(output);}catch{}
