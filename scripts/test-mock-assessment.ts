@@ -97,6 +97,11 @@ try {
   assert.equal(await runClaude("Reply READY",{maxTokens:8192}),"READY");
   assert.equal(requests.at(-1).options.num_predict,8192);
   mode = "stall";
+  const blocked = assert.rejects(runClaude("Hold the gate",{timeoutMs:1000}),/exceeded 1000ms/);
+  const queuedAt = Date.now();
+  await assert.rejects(runClaude("Short queue deadline",{timeoutMs:150}),/exceeded 150ms/);
+  assert.ok(Date.now()-queuedAt<700,"Queue wait must count against the caller deadline");
+  await blocked;
   const opts = {toolName:"fixture",fallbackKey:"rubric",inputSchema:{type:"object",required:["rubric"]},timeoutMs:50};
   await assert.rejects(runClaudeStructured("fixture",opts),/exceeded 50ms/);
   // Exercise the production assessor, not only a direct adapter call: the old

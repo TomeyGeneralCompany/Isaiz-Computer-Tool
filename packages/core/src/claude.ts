@@ -55,18 +55,13 @@ export async function runClaude(
   return runClaudeCLI(prompt, opts);
 }
 
-// CPU-friendly discovery assessments: one local inference request at a time.
-let ollamaQueue: Promise<void> = Promise.resolve();
+// The shared inference gate serializes requests across processes.
+// Start the deadline before acquiring it, so queue time is bounded too.
 async function runLocalOllama(
   prompt: string,
   opts?: RunClaudeOpts,
   schema?: Record<string, unknown>,
 ): Promise<string> {
-  const prior = ollamaQueue;
-  let unlock!: () => void;
-  ollamaQueue = new Promise<void>(resolve => { unlock = resolve; });
-  await prior;
-  try {
     const timeoutMs = opts?.timeoutMs ?? Number(process.env.OLLAMA_ASSESSMENT_TIMEOUT_MS || 600000);
     const limit = Number(process.env.OLLAMA_PROMPT_CHARS || 5800);
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 1800000 ||
@@ -135,7 +130,6 @@ async function runLocalOllama(
       if (controller.signal.aborted) throw new Error(`Ollama assessment exceeded ${timeoutMs}ms`);
       throw error;
     } finally {clearTimeout(timer);}
-  } finally {unlock();}
 }
 
 function runClaudeCLI(

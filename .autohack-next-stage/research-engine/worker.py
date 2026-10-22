@@ -50,7 +50,7 @@ def git_commit(p):
         return r.stdout.strip() if r.returncode==0 else None
     except (OSError,subprocess.TimeoutExpired): return None
 def ollama(prompt,model):
-    payload=json.dumps({'model':model,'stream':False,'format':'json','options':{'temperature':0,'num_predict':1100},'prompt':prompt}).encode()
+    payload=json.dumps({'model':model,'stream':False,'think':False,'keep_alive':'10m','format':'json','options':{'temperature':0,'num_predict':1100,'num_ctx':8192,'num_thread':4},'prompt':prompt}).encode()
     req=urllib.request.Request('http://127.0.0.1:11434/api/generate',payload,{'Content-Type':'application/json'})
     # Shared with TypeScript assessment/hunt/review requests, across processes.
     lock_path=ROOT/'data/ollama-inference.lock'
@@ -65,8 +65,16 @@ def ollama(prompt,model):
             except BlockingIOError:
                 if time.monotonic()>=deadline: raise TimeoutError('Ollama inference queue timed out')
                 time.sleep(0.1)
-        with urllib.request.urlopen(req,timeout=100) as r: raw=json.load(r)
-    return json.loads(raw.get('response','{}'))
+        with urllib.request.urlopen(req,timeout=600) as r:
+            body=r.read(1024*1024+1)
+            if len(body)>1024*1024: raise ValueError('Ollama response exceeds output limit')
+            raw=json.loads(body)
+    if not isinstance(raw,dict) or raw.get('error') or raw.get('done') is not True:
+        raise ValueError('Ollama research response incomplete or failed')
+    if raw.get('done_reason')=='length': raise ValueError('Ollama research output token budget exhausted')
+    result=json.loads(raw.get('response',''))
+    if not isinstance(result,dict): raise ValueError('Ollama research response must be an object')
+    return result
 def docker_engine():
     for exe in ('podman','docker'):
         if shutil.which(exe):

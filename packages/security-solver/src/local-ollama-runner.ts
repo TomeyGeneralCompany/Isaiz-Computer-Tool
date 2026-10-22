@@ -74,7 +74,6 @@ export async function runLocalAudit(
     { role: "system", content: (systemPrompt || "") + "\nPerform an offline source audit. Request exactly one tool call per response. Inspect actual files. Never invent findings or observations. No target network requests are available." + (limits.verifyPython ? probePrompt : " No source execution is available.") + (structured ? auditProtocolPrompt.replace(JSON.stringify(auditActionSchema),JSON.stringify(actionSchema)) : "") },
     { role: "user", content: prompt + "\n/no_think" },
   ];
-  const initialRequest=messages[1].content;
   const contextBudget=Math.max(2000,(settings.numCtx-generationBudget-512)*3);
   const events:string[]=[];
   const recentActions = new Map<string, {turn:number; nextOffset?:number|null}>();
@@ -103,8 +102,8 @@ export async function runLocalAudit(
     }
     for (let turn = 0; turn < settings.maxTurns; turn++) {
       controller.signal.throwIfAborted();
-      messages[1]={role:"user",content:initialRequest+(events.length ? "\nRecent tool progress (not evidence; re-read as needed): "+JSON.stringify(events.slice(-6)) : "")};
-      messages=compactAuditContext(messages,messageBudget);
+      // Keep the prefix stable between compactions so the server can reuse it.
+      messages=compactAuditContext(messages,messageBudget,events.slice(-6));
       const started = Date.now();
       await appendFile(logFile, `[OLLAMA] turn ${turn+1}/${settings.maxTurns}: request started; model=${model}; context=${limits.numCtx ?? "server-default"}; generation_limit=${generationBudget}; protocol=${protocol}\n`);
       const result = await postOllamaJson(process.env.AUTOHACK_OLLAMA_URL || "http://127.0.0.1:11434/api/chat", { model, stream: false, think: false, messages,
