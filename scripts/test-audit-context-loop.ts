@@ -6,12 +6,15 @@ import {join} from 'node:path';
 import {runLocalAudit} from '../packages/security-solver/src/local-ollama-runner';
 const root=await mkdtemp(join(tmpdir(),'audit-context-loop-'));
 let turn=0,offset=0;
+let pinned:unknown;
 const spans:Array<{start:number;end:number}>=[];
 const server=createServer(async(req,res)=>{
  let raw='';for await(const chunk of req)raw+=chunk;
  const request=JSON.parse(raw);turn++;
  assert.ok(request.messages[0].content.includes('offline source audit'));
  assert.ok(request.messages[1].content.includes('KEEP_THIS_TASK'));
+ if(turn===1)pinned=request.messages.slice(0,2);
+ else assert.deepEqual(request.messages.slice(0,2),pinned,'Opening prompt must stay byte-for-byte stable');
  assert.ok(JSON.stringify(request.messages).length<6000,'History must remain bounded');
  if(turn>1) {
    const last=request.messages.at(-1);

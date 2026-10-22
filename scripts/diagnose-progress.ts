@@ -55,7 +55,7 @@ try {
       minRewardCents: config.SECURITY_MIN_REWARD_CENTS, cooldownHours: config.SECURITY_HUNT_COOLDOWN_HOURS,
       maxDailyHunts: config.SECURITY_MAX_DAILY_HUNTS,
     }, dailyQuota,
-    localReproductionSupport: "Python string-in/string-out html_reflection and path_construction only; JavaScript/Solidity/Go reproduction unsupported",
+    localReproductionSupport: "Python/JavaScript/Solidity string probes; bounded Solidity constructor/transaction sequences on a local EVM using solc 0.8.30. Other compiler versions, general multi-contract scenarios and Go reproduction are unsupported.",
     ...snapshot,
   }, null, 2));
 } finally { sqlite.close(); }
