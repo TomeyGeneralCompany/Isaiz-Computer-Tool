@@ -11,7 +11,7 @@ export { EXCLUDE_PATTERNS, stageFilteredChanges } from "./git-utils";
 export { extractJsonWithKey } from "./json-utils";
 export { readVerifiedPayouts, recordVerifiedPayout, earningsProgress, ledgerFile, type VerifiedPayout } from "./earnings-ledger";
 export { targetInExplicitScope, assertAuthorizedTarget, assertAuthorizedProgram } from "./scope-authorization";
-export { claimDailyHuntSlot, readDailyQuota, dailyQuotaFile } from "./daily-hunt-limit";
+export { claimDailyHuntSlot, readDailyQuota, dailyQuotaFile, dailyHuntQuotaStatus } from "./daily-hunt-limit";
 export { readSubmissionOutbox, claimSubmission, finishSubmission, markSubmissionUncertain, submitOnce, submissionOutboxFile } from "./submission-outbox";
 export { ScopedHttpInspector, isPublicIpv4, type HttpObservation } from "./authorized-http";
 

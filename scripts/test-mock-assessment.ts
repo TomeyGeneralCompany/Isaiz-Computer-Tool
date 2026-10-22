@@ -96,12 +96,23 @@ try {
   assert.equal(requests.at(-1).format,undefined);
   assert.equal(await runClaude("Reply READY",{maxTokens:8192}),"READY");
   assert.equal(requests.at(-1).options.num_predict,8192);
+  // Waiting longer than the execution budget must not consume that budget.
+  const { acquireOllamaGate } = await import("../packages/core/src/ollama-gate");
+  let release = await acquireOllamaGate(new AbortController().signal);
+  mode = "plain";
+  const waiting = runClaude("Wait then reply READY",{timeoutMs:500});
+  await new Promise(resolve => setTimeout(resolve,700));
+  await release();
+  assert.equal(await waiting,"READY");
+  // A separate bounded queue timeout cancels without sending HTTP.
+  release = await acquireOllamaGate(new AbortController().signal);
+  const beforeQueueTimeout = calls;
+  process.env.OLLAMA_ASSESSMENT_QUEUE_TIMEOUT_MS = "100";
+  await assert.rejects(runClaude("Never sent",{timeoutMs:500}),/queue wait exceeded 100ms/);
+  assert.equal(calls,beforeQueueTimeout);
+  await release();
+  delete process.env.OLLAMA_ASSESSMENT_QUEUE_TIMEOUT_MS;
   mode = "stall";
-  const blocked = assert.rejects(runClaude("Hold the gate",{timeoutMs:1000}),/exceeded 1000ms/);
-  const queuedAt = Date.now();
-  await assert.rejects(runClaude("Short queue deadline",{timeoutMs:150}),/exceeded 150ms/);
-  assert.ok(Date.now()-queuedAt<700,"Queue wait must count against the caller deadline");
-  await blocked;
   const opts = {toolName:"fixture",fallbackKey:"rubric",inputSchema:{type:"object",required:["rubric"]},timeoutMs:50};
   await assert.rejects(runClaudeStructured("fixture",opts),/exceeded 50ms/);
   // Exercise the production assessor, not only a direct adapter call: the old

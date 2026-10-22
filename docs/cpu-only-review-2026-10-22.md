@@ -23,7 +23,7 @@ PR #16 already adds cross-process inference serialization, repeated-page detecti
 This follow-up:
 
 - Preserves the opening audit messages between turns. Previously the changing progress summary rewrote the second message every time, limiting the reusable prompt prefix. Progress notes now refresh only when history is compacted. This permits cache reuse; the speedup depends on Ollama and other requests.
-- Removes a redundant assessment queue outside its deadline. Waiting for the shared inference lock now consumes the caller's timeout, instead of silently adding other assessments' runtimes.
+- Assessment scheduling correction: the dashboard and background finding queue dispatch one local assessment at a time. Waiting for the shared inference lock has its own bounded deadline (`OLLAMA_ASSESSMENT_QUEUE_TIMEOUT_MS`, default 3,600,000 ms, maximum 7,200,000 ms). The execution deadline (`OLLAMA_ASSESSMENT_TIMEOUT_MS`, default 600,000 ms) starts only after acquisition and includes any truncation retry. Logs distinguish waiting, acquisition and execution timeout. This replaces the shared queue/execution deadline that caused queued dashboard assessments to expire together.
 - Aligns the Python research request with the CPU policy: four inference threads, 8,192 context tokens, thinking disabled, and a bounded 1,100-token answer. Its socket timeout is now 600 seconds instead of 100, which was shorter than the observed model turns. Queue waiting remains bounded separately at 600 seconds.
 - Rejects incomplete, truncated, oversized, or non-object research responses. These cannot become successful research output.
 - Corrects the progress diagnostic's outdated claim that all JavaScript/Solidity reproduction is unsupported.
@@ -44,3 +44,10 @@ Measure a short, repeatable owned fixture before another overnight run:
 4. Check temperature and sustained clock speed on the laptop before increasing workload. High CPU use during inference is expected; thermal throttling, active swapping, and lack of useful progress are the problems to measure.
 
 No host performance percentage or bounty-completion guarantee is claimed. Local transaction support remains bounded: solc 0.8.30 and one deployed contract with constructor arguments, transactions and assertions. General multi-contract scenarios and other compiler versions still need separate work.
+
+
+## Analysis scheduling regression check
+
+`node --import tsx scripts/test-analysis-scheduling.ts` exercises the real dashboard router against a temporary database and local mock Ollama server. It verifies one program at a time, prevents duplicate batches during slow inference, drains an in-flight assessment before allowing restart, and finishes the remaining queue. `scripts/test-mock-assessment.ts` separately verifies waiting longer than the execution allowance, bounded queue cancellation without HTTP, execution timeout and recovery.
+
+Daily quota counts dispatched attempts, including failed starts; it is not a completed-hunt count. Auto-hunt now checks the quota before either static-lead or program dispatch, logs the count, limit and UTC reset time, and rechecks at most every five minutes (or at midnight sooner). The atomic claim still protects concurrent dispatch. No existing quota file or configured limit is reset. Historical quota files contain only day/count, so they cannot identify which attempts consumed slots.

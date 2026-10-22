@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import cron from "node-cron";
-import { loadConfig, getConfig, createLogger } from "@bounty/core";
+import { loadConfig, getConfig, createLogger, dailyHuntQuotaStatus } from "@bounty/core";
 import { pollHackerOne, pollImmunefi, pollHuntr, pollAggregator, pollSubmissionStatuses, backfillSignalRequirements } from "@bounty/security-discovery";
 import { processSecurityProgramQueue } from "@bounty/security-analyzer";
 import {
@@ -165,6 +165,13 @@ function main() {
         const currentConfig = getConfig();
         if (!currentConfig.SECURITY_AUTO_HUNT_ENABLED) break;
 
+        const quota = dailyHuntQuotaStatus(currentConfig.SECURITY_MAX_DAILY_HUNTS);
+        if (!quota.available) {
+          log.info({quota}, "Auto-hunt paused by daily dispatch limit; no hunt started");
+          await waitWhileEnabled(Math.min(300000, Math.max(1000, Date.parse(quota.resetsAt)-Date.now())));
+          continue;
+        }
+
         if (await processStaticLeadQueue()) {
           await processAdversarialQueue();
           await waitWhileEnabled(5000);
@@ -178,7 +185,7 @@ function main() {
           continue;
         }
 
-        log.info({ name: program.name, programId: program.id }, "Auto-launching security hunt");
+        log.info({ name: program.name, programId: program.id }, "Requesting security hunt dispatch");
         try {
           await huntProgram(program, "auto");
         } catch (err: any) {

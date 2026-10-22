@@ -101,6 +101,8 @@ jobs:
         run: npm run db:push
       - name: Verify progress diagnostic is read-only
         run: npx tsx scripts/test-progress-diagnostic.ts
+      - name: Verify local dashboard analysis scheduling
+        run: npx tsx scripts/test-analysis-scheduling.ts
       - name: Verify failed source acquisition preserves hunt history
         run: npx tsx scripts/test-hunt-failure.ts
       - name: Verify scope recovery and late bounty updates

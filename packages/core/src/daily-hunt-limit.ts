@@ -41,3 +41,13 @@ export function claimDailyHuntSlot(maxDaily: number, path = dailyQuotaFile(), no
     return true;
   });
 }
+
+/** Read-only scheduling hint; the atomic claim remains authoritative. */
+export function dailyHuntQuotaStatus(maxDaily: number, path = dailyQuotaFile(), now = new Date()) {
+  if (!Number.isSafeInteger(maxDaily) || maxDaily < 0) throw new Error("Invalid SECURITY_MAX_DAILY_HUNTS");
+  const day = now.toISOString().slice(0,10);
+  const state = readDailyQuota(path);
+  const dispatched = state?.day === day ? state.dispatched : 0;
+  return {day, dispatched, limit:maxDaily, available:dispatched < maxDaily,
+    resetsAt:new Date(Date.parse(day+"T00:00:00Z")+86400000).toISOString()};
+}

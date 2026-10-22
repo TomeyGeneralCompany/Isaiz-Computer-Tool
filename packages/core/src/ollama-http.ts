@@ -5,8 +5,9 @@ import { request as httpsRequest } from "node:https";
 /** Ollama's non-streaming replies can legitimately wait minutes for headers.
  * Use the caller's AbortSignal for the entire request, including body reading,
  * rather than fetch/Undici's separate fixed headers deadline. Never redirect.
+ * Internal transport: callers must hold acquireOllamaGate, or use postOllamaJson.
  */
-async function sendOllamaJson<T = unknown>(url:URL | string, payload:unknown, signal:AbortSignal, label="Ollama"):Promise<T> {
+export async function sendOllamaJson<T = unknown>(url:URL | string, payload:unknown, signal:AbortSignal, label="Ollama"):Promise<T> {
   const endpoint=new URL(url);
   if (!["http:","https:"].includes(endpoint.protocol) || endpoint.username || endpoint.password)
     return Promise.reject(new Error("Invalid Ollama HTTP endpoint"));
