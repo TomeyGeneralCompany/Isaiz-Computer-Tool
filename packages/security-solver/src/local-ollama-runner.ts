@@ -1,9 +1,9 @@
 import { compactAuditContext, auditCheckpoint } from "./audit-context";
 import { soliditySequenceSchema, soliditySequenceJsonSchema, soliditySequencePrompt, type SoliditySequence } from "./solidity-sequence";
-import { readSourcePage, searchSourcePage, pageOffset, type ReadSpan } from "./source-inspection";
+import { readSourcePage, searchSourcePage, listSourcePage, pageOffset, type ReadSpan } from "./source-inspection";
 import { postOllamaJson } from "@bounty/core";
 import { auditActionSchema, auditProtocolPrompt, decodeAuditAction } from "./local-audit-protocol";
-import { readdir, readFile, realpath, appendFile, writeFile, rename } from "node:fs/promises";
+import { readFile, realpath, appendFile, writeFile, rename } from "node:fs/promises";
 import { resolve, relative, sep, join } from "node:path";
 
 type Message = { role: string; content: string; tool_name?: string; tool_calls?: Array<{ function: { name: string; arguments: Record<string, unknown> } }> };
@@ -196,11 +196,7 @@ export async function runLocalAudit(
             const sequence=kind==="solidity_sequence"?soliditySequenceSchema.parse(rawSequence):undefined;
             output=await limits.verifyPython(path,String(call.function.arguments?.query || ""),kind,sequence);
           } else if (name === "list_files") {
-            const entries = (await readdir(full, { withFileTypes: true }))
-              .filter(e => !e.name.startsWith(".") && e.name !== "node_modules")
-              .sort((a,b)=>a.name.localeCompare(b.name,"en"));
-            output = JSON.stringify({entries:entries.slice(offset,offset+100).map(e=>(e.isDirectory()?"dir ":"file ")+e.name),
-              nextOffset:offset+100<entries.length?offset+100:null,totalEntries:entries.length});
+            output = JSON.stringify(await listSourcePage(full,offset));
           } else if (name === "search_files") {
             const result = await searchSourcePage(root,full,String(call.function.arguments?.query ?? ""),offset,controller.signal);
             activityCount=result.results.length;
