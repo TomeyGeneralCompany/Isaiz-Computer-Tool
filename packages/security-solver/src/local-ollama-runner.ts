@@ -80,7 +80,7 @@ export async function runLocalAudit(
   ];
   const contextBudget=Math.max(2000,(settings.numCtx-generationBudget-512)*3);
   const events:string[]=[];
-  const recentActions = new Map<string, {turn:number; nextOffset?:number|null}>();
+  const recentActions = new Map<string, {turn:number; nextOffset?:number|null; response?:Message}>();
   let stalledActions = 0;
   const fixedSize=JSON.stringify(messages).length+JSON.stringify(structured ? actionSchema : availableTools).length;
   // Tools/schema also consume context. Keep a full recent exchange and reserve output.
@@ -167,6 +167,7 @@ export async function runLocalAudit(
         await appendFile(logFile, "[TOOL] " + call.function.name + "\n");
         let output: string;
         let activityCount:number|undefined;
+        let completedActionKey:string|undefined;
         const toolStarted=Date.now();
         await recordToolActivity(logFile,{phase:"started",tool:call.function.name,
           path:String(call.function.arguments?.path ?? ".").slice(0,500),
@@ -176,10 +177,28 @@ export async function runLocalAudit(
           const name = call.function.name;
           const path = String(call.function.arguments?.path ?? ".");
           const full = await safePath(path);
-          const offset = pageOffset(call.function.arguments?.offset);
-          const actionKey = JSON.stringify([name,relative(root,full),offset,String(call.function.arguments?.query ?? "")]);
+          let offset = pageOffset(call.function.arguments?.offset);
+          const keyAt=(at:number)=>JSON.stringify([name,relative(root,full),at,String(call.function.arguments?.query ?? "")]);
+          let actionKey = keyAt(offset);
           const inspection = ["read_file","list_files","search_files","outline_solidity","read_solidity"].includes(name);
-          const previous = recentActions.get(actionKey);
+          let previous = recentActions.get(actionKey);
+          // An evicted tool result cannot be used as evidence by the model.
+          // Honor a reread after compaction instead of penalizing our own prompt.
+          if (previous?.response && !messages.includes(previous.response) &&
+              (call.function.arguments?.offset !== undefined || previous.nextOffset == null)) {
+            await appendFile(logFile,"[CONTEXT_REREAD] "+JSON.stringify({tool:name,path,offset})+"\n");
+            previous=undefined;
+          }
+          // Recover a repeated page request using the tool's actual cursor.
+          // Stay on the same action/path/query and record the effective span.
+          if (inspection && previous?.nextOffset != null) {
+            const requestedOffset=offset;
+            while(previous?.nextOffset != null && previous.nextOffset>offset) {
+              offset=previous.nextOffset;actionKey=keyAt(offset);previous=recentActions.get(actionKey);
+            }
+            call.function.arguments.offset=offset;
+            await appendFile(logFile,"[PAGE_ADVANCE] "+JSON.stringify({tool:name,path,requestedOffset,offset})+"\n");
+          }
           if(inspection && previous && turn-previous.turn<=8) {
             stalledActions++;
             const instruction = previous.nextOffset != null
@@ -188,7 +207,7 @@ export async function runLocalAudit(
             await appendFile(logFile, "[NO_PROGRESS] " + JSON.stringify({action:name,path,offset,attempt:stalledActions}) + "\n");
             if(stalledActions>=3) {
               await recordToolActivity(logFile,{phase:"failed",tool:name,path,offset,error:"Repeated inspection actions without new evidence after corrective feedback"});
-              throw new Error("AUDIT_STALLED: repeated inspection actions without new evidence after corrective feedback");
+              throw new Error(`AUDIT_STALLED: repeated ${name} ${relative(root,full)} at offset ${offset}; the completed result is still in context; choose a different source or probe`);
             }
             throw new Error("Repeated inspection action was not executed. " + instruction);
           }
@@ -232,7 +251,8 @@ export async function runLocalAudit(
             let nextOffset:number|null|undefined;
             try {nextOffset=JSON.parse(output).nextOffset;}catch{}
             recentActions.set(actionKey,{turn,nextOffset});
-            for(const [key,value] of recentActions)if(turn-value.turn>8)recentActions.delete(key);
+            completedActionKey=actionKey;
+            // Bounded by maxTurns; keep cursor chains after history compaction.
           }
         } catch (error) {
           controller.signal.throwIfAborted();
@@ -258,9 +278,11 @@ export async function runLocalAudit(
           output=JSON.stringify({truncated:true,caseId:result?.caseId,status:result?.status,behavior_observed:result?.behavior_observed,
             excerpt:output.slice(0,Math.floor(outputLimit/3)),instruction:"Output abbreviated to fit context. Narrow the search or probe before drawing conclusions."});
         }
-        messages.push(structured
+        const responseMessage:Message = structured
           ? {role:"user",content:"TOOL_RESULT " + JSON.stringify({name:call.function.name,output}) + "\nChoose the next JSON action. /no_think"}
-          : { role:"tool", tool_name:call.function.name, content:output });
+          : { role:"tool", tool_name:call.function.name, content:output };
+        messages.push(responseMessage);
+        if(completedActionKey)recentActions.get(completedActionKey)!.response=responseMessage;
       }
     }
     throw new Error(`Local audit reached its ${settings.maxTurns}-turn inspection limit`);

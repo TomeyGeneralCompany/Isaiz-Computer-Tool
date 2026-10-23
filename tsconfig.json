@@ -20,7 +20,8 @@
     "scripts/test-state-mutex.ts",
     "scripts/test-poller-recovery.ts",
     "scripts/test-analysis-scheduling.ts",
-    "scripts/test-sequential-pipeline.ts"
+    "scripts/test-sequential-pipeline.ts",
+    "scripts/test-audit-navigation-recovery.ts"
   ],
   "exclude": [
     "packages/dashboard/**"

@@ -48,6 +48,7 @@ jobs:
           npx tsx scripts/test-audit-context-loop.ts
           npx tsx scripts/test-native-batch.ts
           npx tsx scripts/test-audit-stalls.ts
+          npx tsx scripts/test-audit-navigation-recovery.ts
           npx tsx scripts/test-solidity-source-index.ts
           npx tsx scripts/test-submodule-acquisition.ts
       - name: Verify paginated source inspection and evidence spans

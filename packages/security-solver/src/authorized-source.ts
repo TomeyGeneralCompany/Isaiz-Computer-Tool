@@ -76,3 +76,18 @@ export async function cloneAuthorizedSource(url: string, destination: string, op
   await materialize(destination,url,0);
 
 }
+
+/** Safe failure category for persisted history; never publish raw Git stderr. */
+export function describeSourceAcquisitionFailure(error:unknown):string {
+  const failure=error as {code?:unknown;killed?:boolean;stderr?:unknown};
+  if(failure?.killed)return "Git operation timed out";
+  const detail=typeof failure?.stderr === "string" ? failure.stderr.slice(0,16384) : "";
+  if(/could not resolve host|name or service not known/i.test(detail))return "repository host could not be resolved (DNS)";
+  if(/repository .*not found|repository not found|authentication failed|could not read username/i.test(detail))return "repository missing or authentication required";
+  if(/redirect/i.test(detail))return "repository redirected; canonical URL must be confirmed against program scope";
+  if(/failed to connect|connection timed out|connection reset|network is unreachable/i.test(detail))return "repository network connection failed";
+  if(/SSL certificate|certificate verification/i.test(detail))return "repository TLS certificate verification failed";
+  if(typeof failure?.code === "number")return `Git exited ${failure.code}`;
+  if(typeof failure?.code === "string" && /^[A-Z_]+$/.test(failure.code))return failure.code;
+  return "repository or submodule acquisition failed";
+}
