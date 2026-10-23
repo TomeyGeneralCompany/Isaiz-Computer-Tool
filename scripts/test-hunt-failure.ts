@@ -55,13 +55,15 @@ try {
   claimDailyHuntSlot(1);
   await assert.rejects(huntProgram(program,"auto"),/Daily dispatch limit/);
   assert.equal(db.select().from(schema.securityPrograms).get()!.scopeSummary,program.scopeSummary,"Quota refusal must not change hunt history");
-  const outcome = await huntProgram(program).then(() => null, error => error);
+  setRuntimeOverride("SECURITY_MAX_DAILY_HUNTS",8);
+  const outcome = await huntProgram(program,"auto").then(() => null, error => error);
   const after = db.select().from(schema.securityPrograms).get()!;
   assert.equal(after.lastHuntedAt, null, "Failed acquisition must not mark a program previously hunted");
   assert.equal(after.huntCount, 0);
   assert.equal(JSON.parse(after.scopeSummary!).inspectionPass,1,"Even a failed pass advances repository selection");
   assert.equal(after.huntMissStreak, 0);
   assert.match(String(outcome), /No authorized source repository (?:was )?acquired/);
+  assert.equal(readDailyQuota()!.dispatched,1,"Acquisition failures must not consume inspection quota");
   assert.equal(modelCalls, 0, "A model cannot audit source that was never acquired");
   // Successful acquisition with incomplete model output is also a failed hunt.
   writeFileSync(git, `#!/usr/bin/env python3
@@ -84,10 +86,15 @@ else:
   assert.equal(incomplete.lastHuntedAt, null);
   assert.equal(incomplete.huntCount, 0);
   assert.equal(JSON.parse(incomplete.scopeSummary!).huntCoverage.status, "failed");
+  answer=JSON.stringify({findings:[],outcome:"no_testable_candidate",reason:"Inspected sample source; it exposes a boolean and no supported function candidate."});
+  assert.deepEqual(await huntProgram(program,"auto"),{findingsCreated:0});
+  assert.equal(readDailyQuota()!.dispatched,2,"A model inspection consumes exactly one slot");
+  assert.equal(JSON.parse(db.select().from(schema.securityPrograms).get()!.scopeSummary!).huntCoverage.status,"partial");
   // A complete unsupported inventory is stored without consuming model turns.
   const previousCalls=modelCalls;
   writeFileSync(git,readFileSync(git,"utf8").replaceAll("sample.cjs","sample.ts"));
-  await assert.rejects(huntProgram(program), /Source capability preflight/);
+  await assert.rejects(huntProgram(program,"auto"), /Source capability preflight/);
+  assert.equal(readDailyQuota()!.dispatched,2,"Unsupported inventory must not consume inspection quota");
   assert.equal(modelCalls,previousCalls);
   const unsupported=JSON.parse(db.select().from(schema.securityPrograms).get()!.scopeSummary!);
   assert.equal(unsupported.huntCoverage.status,"unsupported");

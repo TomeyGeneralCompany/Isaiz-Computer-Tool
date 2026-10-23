@@ -58,7 +58,9 @@ jobs:
       - name: Exercise production program assessment and truncated output recovery
         run: npx tsx scripts/test-mock-assessment.ts
       - name: Verify authorized source acquisition boundaries
-        run: npx tsx scripts/test-authorized-source.ts
+        run: |
+          npx tsx scripts/test-authorized-source.ts
+          npx tsx scripts/test-preparation-recovery.ts
       - name: Explain dispatch exclusions and validate Signal response parsing
         run: npx tsx scripts/test-program-selection.ts
       - name: Verify supported discovery feeds without network requests
