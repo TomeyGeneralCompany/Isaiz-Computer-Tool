@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { join, resolve, relative, sep } from "node:path";
-import { lstat, realpath } from "node:fs/promises";
+import { lstat, realpath, rm } from "node:fs/promises";
 
 const execute = promisify(execFile);
 
@@ -14,7 +14,7 @@ export function submoduleSourceUrl(parent:string,value:string):string {
     throw new Error("Unsupported submodule repository URL");
   return url.replace(/\/$/,"");
 }
-export async function cloneAuthorizedSource(url: string, destination: string, options: { signal?: AbortSignal; commit?: string } = {}): Promise<void> {
+export async function cloneAuthorizedSource(url: string, destination: string, options: { signal?: AbortSignal; commit?: string; allowPartialDependencies?: boolean } = {}): Promise<{missingDependencies: string[]}> {
   if (!authorizedSourceUrls([{assetType:"SOURCE_CODE", eligibleForBounty:true,
     assetIdentifier:url}]).includes(url)) throw new Error("Invalid authorized source repository URL");
   if (options.commit && !/^[a-f0-9]{40}$/.test(options.commit)) throw new Error("Invalid recorded source commit");
@@ -30,7 +30,16 @@ export async function cloneAuthorizedSource(url: string, destination: string, op
     env: {...env, GIT_CONFIG_NOSYSTEM:"1", GIT_CONFIG_GLOBAL:"/dev/null",
       GIT_TERMINAL_PROMPT:"0", GIT_LFS_SKIP_SMUDGE:"1"},
   };
-  await execute("git", [...gitConfig, "clone", "--depth", "1", "--single-branch", "--", url, destination], execution);
+  // Only retry temporary transport failures, never authentication or scope errors.
+  for(let attempt=0;;attempt++) {
+    try {await execute("git", [...gitConfig, "clone", "--depth", "1", "--single-branch", "--", url, destination], execution);break;}
+    catch(error) {
+      options.signal?.throwIfAborted();
+      if(attempt>=1 || !transientAcquisitionFailure(error))throw error;
+      await rm(destination,{recursive:true,force:true});
+    }
+  }
+  const missingDependencies:string[]=[];
   if (options.commit) {
     options.signal?.throwIfAborted();
     await execute("git", [...gitConfig, "fetch", "--depth", "1", "--no-tags", "--", "origin", options.commit],
@@ -67,13 +76,22 @@ export async function cloneAuthorizedSource(url: string, destination: string, op
         catch(error:any){if(error.code!=="ENOENT")throw error;}
       }
       const url=submoduleSourceUrl(parentUrl,entry.url);
-      await execute("git",[...gitConfig,"-c",`submodule.${name}.url=${url}`,"submodule","update","--init","--checkout","--depth","1","--",entry.path],{...execution,cwd:directory});
+      try {
+        await execute("git",[...gitConfig,"-c",`submodule.${name}.url=${url}`,"submodule","update","--init","--checkout","--depth","1","--",entry.path],{...execution,cwd:directory});
+      } catch(error) {
+        options.signal?.throwIfAborted();
+        if(!options.allowPartialDependencies)throw error;
+        await rm(child,{recursive:true,force:true});
+        missingDependencies.push(relative(destination,child)+": "+describeSourceAcquisitionFailure(error));
+        continue;
+      }
       const actual=await realpath(child);
       if(actual!==child)throw new Error("Submodule checkout left repository path");
       await materialize(child,url,depth+1);
     }
   }
   await materialize(destination,url,0);
+  return {missingDependencies};
 
 }
 
@@ -90,4 +108,13 @@ export function describeSourceAcquisitionFailure(error:unknown):string {
   if(typeof failure?.code === "number")return `Git exited ${failure.code}`;
   if(typeof failure?.code === "string" && /^[A-Z_]+$/.test(failure.code))return failure.code;
   return "repository or submodule acquisition failed";
+}
+
+export function transientAcquisitionFailure(error:unknown):boolean {
+  return /timed out|DNS|network connection failed/.test(describeSourceAcquisitionFailure(error));
+}
+export function acquisitionRetryAfter(error:unknown,now=Date.now()):number|null {
+  const reason=describeSourceAcquisitionFailure(error);
+  // Configuration failures wait for scope changes or an explicit manual retry.
+  return /missing or authentication|redirected|TLS certificate/.test(reason) ? null : now+15*60_000;
 }

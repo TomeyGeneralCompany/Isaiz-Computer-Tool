@@ -10,7 +10,7 @@ import { readFileSync, writeFileSync, unlinkSync, mkdirSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { eq, desc, and, or, isNull, lt } from "drizzle-orm";
-import { getDb, schema, getConfig, createLogger, generateTraceId, classifyError, extractJsonWithKey, recordSecurityHuntOutcome, recordNearMiss, updateProgramNotes, getSecurityLearningContext, getSecurityProgramContext, type SecurityFinding, type SecurityProgram, claimDailyHuntSlot, recordHuntAttempt, authorizedSourceUrls, assertAuthorizedProgram, targetInExplicitScope, assertAuthorizedTarget, submitOnce } from "@bounty/core";
+import { getDb, schema, getConfig, createLogger, generateTraceId, classifyError, extractJsonWithKey, recordSecurityHuntOutcome, recordNearMiss, updateProgramNotes, getSecurityLearningContext, getSecurityProgramContext, type SecurityFinding, type SecurityProgram, claimDailyHuntSlot, dailyHuntQuotaStatus, recordHuntAttempt, authorizedSourceUrls, assertAuthorizedProgram, targetInExplicitScope, assertAuthorizedTarget, submitOnce } from "@bounty/core";
 import { fetchProgramPolicy, fetchProgramSignalRequirement, fetchAllDisclosedReports, prepareSubmission, submitReport, fetchProgramScopes } from "@bounty/security-discovery";
 import { runProgramHunt, runFindingSolver, killActiveSecurityProcess, detectHuntStrategy, prepareReviewWorkspace, spawnComprehensiveReview, deverbosifyReport, EXCLUDED_VULN_TYPES, type ReviewContext } from "./claude-runner";
 import { clearSecuritySolverStatus, writeAdversarialReviewStatus, clearAdversarialReviewStatus, readAdversarialReviewStatus, cancelAdversarialReview } from "./status";
@@ -92,7 +92,9 @@ async function huntProgramImpl(
   }
 
   try {
-    if (trigger === "auto" && !claimDailyHuntSlot(getConfig().SECURITY_MAX_DAILY_HUNTS))
+    if (trigger === "auto" && !(process.env.LOCAL_OLLAMA_MODEL
+      ? dailyHuntQuotaStatus(getConfig().SECURITY_MAX_DAILY_HUNTS).available
+      : claimDailyHuntSlot(getConfig().SECURITY_MAX_DAILY_HUNTS)))
       throw new Error("Daily dispatch limit reached");
   } catch (error) {
     releaseHuntLock();
@@ -104,6 +106,7 @@ async function huntProgramImpl(
   let coverage: "completed" | "partial" | "unsupported" | "failed" = "failed";
   let coverageDetail = "Hunt did not complete";
   let capabilityBlock:string | undefined;
+  let acquisitionChecks: import("./claude-runner").SecuritySolveResult["acquisitionChecks"];
   let capabilityChecks: Array<{repository:string;blocked:boolean;reason:string|null;checkedAt:number}> | undefined;
   let localJob: ReturnType<typeof beginLocalJob> | undefined;
 
@@ -125,7 +128,11 @@ async function huntProgramImpl(
     }
     log.info({ programId: program.id, name: program.name }, "Starting program hunt");
 
-    const result = await runProgramHunt(program, trigger, localJob?.signal, focus);
+    const result = await runProgramHunt(program, trigger, localJob?.signal, focus, () => {
+      if(trigger === "auto" && !claimDailyHuntSlot(getConfig().SECURITY_MAX_DAILY_HUNTS))
+        throw new Error("Daily dispatch limit reached");
+    });
+    acquisitionChecks=result.acquisitionChecks;
     localJob?.signal.throwIfAborted();
     coverage = result.coverage ?? (result.success ? "completed" : "failed");
     capabilityBlock = result.capabilityBlock;
@@ -226,7 +233,7 @@ async function huntProgramImpl(
     }
 
     if (result.findings.length === 0) {
-      log.info({ programId: program.id }, "Hunt completed but no vulnerabilities found");
+      log.info({ programId: program.id, coverage, detail:coverageDetail }, coverage === "partial" ? "Inspection pass ended with partial coverage" : "Hunt completed but no vulnerabilities found");
     }
 
     // Record outcome for learning context
@@ -285,6 +292,12 @@ async function huntProgramImpl(
       const tracking = JSON.parse(recordHuntAttempt(currentProgram?.scopeSummary ?? program.scopeSummary,huntSucceeded));
       if (process.env.LOCAL_OLLAMA_MODEL) tracking.inspectionPass = (Number.isSafeInteger(tracking.inspectionPass) ? tracking.inspectionPass : 0) + 1;
       const scopeKey=JSON.stringify(tracking.scopes || []);
+      if(acquisitionChecks) {
+        const old=tracking.sourceAcquisition;
+        const checks=old?.scopes===scopeKey ? old.checks : {};
+        for(const check of acquisitionChecks)checks[check.repository]=check;
+        tracking.sourceAcquisition={scopes:scopeKey,checks};
+      }
       if(capabilityChecks) {
         const old=tracking.sourceCapabilities;
         const checks=old?.version===LOCAL_REPRODUCTION_CAPABILITY_VERSION && old.scopes===scopeKey ? old.checks : {};

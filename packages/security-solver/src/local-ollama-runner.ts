@@ -1,3 +1,4 @@
+import { AuditNavigation } from "./audit-navigation";
 import { SoliditySourceIndex } from "./solidity-source-index";
 import { compactAuditContext, auditCheckpoint } from "./audit-context";
 import { soliditySequenceSchema, soliditySequenceJsonSchema, soliditySequencePrompt, type SoliditySequence } from "./solidity-sequence";
@@ -80,6 +81,7 @@ export async function runLocalAudit(
   ];
   const contextBudget=Math.max(2000,(settings.numCtx-generationBudget-512)*3);
   const events:string[]=[];
+  const navigation=new AuditNavigation();
   const recentActions = new Map<string, {turn:number; nextOffset?:number|null; response?:Message}>();
   let stalledActions = 0;
   const fixedSize=JSON.stringify(messages).length+JSON.stringify(structured ? actionSchema : availableTools).length;
@@ -209,7 +211,7 @@ export async function runLocalAudit(
               await recordToolActivity(logFile,{phase:"failed",tool:name,path,offset,error:"Repeated inspection actions without new evidence after corrective feedback"});
               throw new Error(`AUDIT_STALLED: repeated ${name} ${relative(root,full)} at offset ${offset}; the completed result is still in context; choose a different source or probe`);
             }
-            throw new Error("Repeated inspection action was not executed. " + instruction);
+            throw new Error("Repeated inspection action was not executed. " + instruction + " " + navigation.hint());
           }
           await appendFile(logFile, "[ACTION] " + JSON.stringify({tool:name,path,offset,query:String(call.function.arguments?.query ?? "").slice(0,120)}) + "\n");
           if((name === "verify_source" || name === "verify_python") && limits.verifyPython) {
@@ -246,6 +248,7 @@ export async function runLocalAudit(
             limits.onRead?.(relative(root,full).split(sep).join("/"),{start:page.start,end:page.end});
             await appendFile(logFile, "[READ_OK] " + relative(root,full) + ` offset=${page.start} end=${page.end} nextOffset=${page.nextOffset}\n`);
           } else throw new Error("Unknown tool");
+          try {navigation.observe(name,relative(root,full).split(sep).join("/") || ".",offset,String(call.function.arguments?.query || ""),JSON.parse(output));}catch{}
           stalledActions=0;
           if(inspection) {
             let nextOffset:number|null|undefined;
@@ -270,7 +273,7 @@ export async function runLocalAudit(
           count:activityCount,status:probeStatus,durationMs:Date.now()-toolStarted,
           error:output.startsWith("Tool error:")?output.slice(0,600):undefined});
         let progress:any;try {progress=JSON.parse(output);}catch{}
-        events.push(JSON.stringify({tool:call.function.name,path:String(call.function.arguments?.path || ""),query:String(call.function.arguments?.query || "").slice(0,60),offset:call.function.arguments?.offset,nextOffset:progress?.nextOffset,caseId:progress?.caseId,status:probeStatus || (output.startsWith("Tool error:")?"failed":"completed")}).slice(0,180));
+        events.push(JSON.stringify({tool:call.function.name,path:String(call.function.arguments?.path || ""),query:String(call.function.arguments?.query || "").slice(0,60),offset:call.function.arguments?.offset,end:progress?.end,nextOffset:progress?.nextOffset,caseId:progress?.caseId,status:probeStatus || (output.startsWith("Tool error:")?"failed":"completed")}).slice(0,180));
         // Large probe/search outputs are explicitly abbreviated; original evidence is persisted separately.
         const outputLimit=Math.max(512,messageBudget-JSON.stringify(messages.slice(0,2)).length-JSON.stringify(message).length-800);
         if(output.length>outputLimit && !["read_file","read_solidity","outline_solidity"].includes(call.function.name)) {
@@ -294,7 +297,11 @@ export async function runLocalAudit(
   } finally {
     if (limits.checkpointPath) {
       // Keep recent inspection evidence across bounded sessions, including failures.
-      const notes = auditCheckpoint(events);
+      const checkpoint=JSON.parse(auditCheckpoint(events));
+      checkpoint.navigation=navigation.snapshot();
+      if(JSON.stringify(checkpoint).length>3000)checkpoint.navigation={next:navigation.snapshot().next.slice(0,1)};
+      if(JSON.stringify(checkpoint).length>3000)delete checkpoint.navigation;
+      const notes = JSON.stringify(checkpoint);
       const temporary = limits.checkpointPath + "." + process.pid + ".tmp";
       try {
         await writeFile(temporary, notes, {mode:0o600});

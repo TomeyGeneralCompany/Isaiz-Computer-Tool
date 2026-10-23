@@ -35,10 +35,24 @@ export function programCandidateBlocker(program: SecurityProgram, config: Config
   let scopes: unknown;
   try {
     const tracking = JSON.parse(program.scopeSummary || "{}");
+    const acquisition=tracking.sourceAcquisition;
+    const urls=authorizedSourceUrls(tracking.scopes || []);
+    if(localModel && acquisition?.scopes===JSON.stringify(tracking.scopes || []) && urls.length && urls.every(url=>{
+      const check=acquisition.checks?.[url];
+      return check?.reason && (check.retryAfter===null || check.retryAfter>now);
+    }))return "source_acquisition_blocked";
     const capability=tracking.capabilityBlock;
     if(localModel && capability?.version===LOCAL_REPRODUCTION_CAPABILITY_VERSION &&
        capability.scopes===JSON.stringify(tracking.scopes || []) && Date.parse(capability.refreshAfter)>now)
       return "unsupported_source_capability";
+    const capabilities=tracking.sourceCapabilities;
+    if(localModel && urls.length && urls.every(url=>{
+      const check=acquisition?.scopes===JSON.stringify(tracking.scopes || []) ? acquisition.checks?.[url] : undefined;
+      const unsupported=capabilities?.version===LOCAL_REPRODUCTION_CAPABILITY_VERSION &&
+        capabilities.scopes===JSON.stringify(tracking.scopes || []) && capabilities.checks?.[url]?.blocked &&
+        now-capabilities.checks[url].checkedAt<24*3600000;
+      return unsupported || (check?.reason && (check.retryAfter===null || check.retryAfter>now));
+    }))return "no_preparable_source_repository";
     // A handful of unsupported functions cannot establish whole-program incompatibility.
     // Failed and unsupported passes both retry through bounded huntFailure backoff.
     const failure = tracking.huntFailure;

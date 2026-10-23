@@ -26,9 +26,9 @@ export function compilerCompatible(range:string):boolean | null {
   }
   return unknown?null:false;
 }
-export async function inspectSourceCapability(directory:string,signal?:AbortSignal) {
+export async function inspectSourceCapability(directory:string,signal?:AbortSignal,recurseSubmodules=true) {
   const root=await realpath(directory);
-  const {stdout}=await execute('git',['-c','core.hooksPath=/dev/null','ls-files','--recurse-submodules','-z'],{cwd:root,maxBuffer:2000000,timeout:10000,signal});
+  const {stdout}=await execute('git',['-c','core.hooksPath=/dev/null','ls-files',...(recurseSubmodules?['--recurse-submodules']:[]),'-z'],{cwd:root,maxBuffer:2000000,timeout:10000,signal});
   const files=stdout.split('\0').filter(Boolean);
   const unsupported:string[]=[];let candidates=0,compatible=0,unknown=false;
   for(const file of files) {

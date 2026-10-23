@@ -21,7 +21,8 @@
     "scripts/test-poller-recovery.ts",
     "scripts/test-analysis-scheduling.ts",
     "scripts/test-sequential-pipeline.ts",
-    "scripts/test-audit-navigation-recovery.ts"
+    "scripts/test-audit-navigation-recovery.ts",
+    "scripts/test-preparation-recovery.ts"
   ],
   "exclude": [
     "packages/dashboard/**"

@@ -1197,6 +1197,7 @@ export interface ParsedFinding {
 }
 
 export interface SecuritySolveResult {
+  acquisitionChecks?: Array<{repository:string;reason:string|null;retryAfter:number|null}>;
   capabilityBlock?: string;
   capabilityChecks?: Array<{repository:string;blocked:boolean;reason:string|null;checkedAt:number}>;
   coverage?: "completed" | "partial" | "unsupported" | "failed";
@@ -1931,10 +1932,11 @@ export async function runProgramHunt(
   trigger?: "auto" | "manual",
   signal?: AbortSignal,
   focus?: StaticLeadFocus,
+  beforeInspection?: () => void,
 ): Promise<SecuritySolveResult> {
   if(process.env.LOCAL_OLLAMA_MODEL) {
     const {runLocalProgramHunt}=await import("./local-program-flow");
-    return runLocalProgramHunt(program,signal,focus);
+    return runLocalProgramHunt(program,signal,focus,beforeInspection,trigger === "auto");
   }
   // Prepare workspace with CLAUDE.md and tools before spawning
   await prepareWorkspace(program);
