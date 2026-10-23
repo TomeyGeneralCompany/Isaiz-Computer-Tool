@@ -4,14 +4,14 @@ import { SourceReads } from "./source-inspection";
 import { execFileSync } from "node:child_process";
 import { beginLocalJob } from "./local-job";
 import { randomBytes, createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 import { eq, and, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { authorizedSourceUrls, assertAuthorizedTarget, getConfig, getDb, schema, createLogger,
   readSubmissionOutbox, submitOnce, type SecurityProgram, type SecurityFinding } from "@bounty/core";
 import { fetchProgramScopes, fetchProgramPolicy, fetchProgramSignalRequirement, prepareSubmission, submitReport } from "@bounty/security-discovery";
-import { cloneAuthorizedSource } from "./authorized-source";
+import { cloneAuthorizedSource, describeSourceAcquisitionFailure } from "./authorized-source";
 import { runLocalAudit } from "./local-ollama-runner";
 import { createProbeSession, readSourceCase, replaySourceCase, type SourceCase, type ProbeRepository } from "./source-reproduction";
 import { writeSecuritySolverStatus, clearSecuritySolverStatus, writeAdversarialReviewStatus, clearAdversarialReviewStatus } from "./status";
@@ -64,6 +64,7 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
     const logFile=join(directory,"local-hunt-"+randomBytes(8).toString("hex")+".log");await writeFile(logFile,"",{mode:0o600});
     await writeSecuritySolverStatus({active:true,programId:program.id,programName:program.name,stage:"hunting",startedAt:new Date().toISOString(),timeoutMinutes:getConfig().SECURITY_SOURCE_CODE_TIMEOUT_MINUTES,pid:process.pid});
     const repos:ProbeRepository[]=[];
+    const acquisitionFailures:string[]=[];
     const allowedUrls = authorizedSourceUrls(scopes(program));
     if (focus && !allowedUrls.includes(focus.repositoryUrl)) throw new Error("Lead repository is outside current program scope");
     const tracking=JSON.parse(program.scopeSummary || "{}");
@@ -75,9 +76,15 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
       const destination=join(root,"source-"+(i+1));
       signal.throwIfAborted();
       try {await cloneAuthorizedSource(url,destination,{signal,...(focus ? {commit:focus.commit} : {})});repos.push({directory:destination,url});}
-      catch(error){signal.throwIfAborted();log.warn({error,url},"Source acquisition failed");}
+      catch(error){
+        signal.throwIfAborted();
+        const reason=describeSourceAcquisitionFailure(error);
+        acquisitionFailures.push(`${url}: ${reason}`);
+        await appendFile(logFile,"[ACQUISITION_FAILED] "+JSON.stringify({repository:url,reason})+"\n");
+        log.warn({error,url},"Source acquisition failed");
+      }
     }
-    if(!repos.length)throw new Error("No authorized source repository was acquired; hunt cannot inspect target code");
+    if(!repos.length)throw new Error("No authorized source repository was acquired; " + (acquisitionFailures.join("; ") || "no source URLs remain after scope/capability filtering"));
     const capabilities=await Promise.all(repos.map(async repo=>({repository:repo.url,...await inspectSourceCapability(repo.directory,signal)})));
     capabilityChecks=capabilities.map(c=>({repository:c.repository,blocked:c.blocked,reason:c.reason,checkedAt:Date.now()}));
     if(capabilities.every(c=>c.blocked))return {success:false,coverage:"unsupported",findings:[],rawOutput:"",

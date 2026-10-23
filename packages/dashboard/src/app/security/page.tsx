@@ -1261,15 +1261,14 @@ export default function SecurityPage() {
                     >
                       {autoHuntEnabled?.enabled ? "Stop Auto Hunt" : "Start Auto Hunt"}
                     </button>
-                    {autoHuntEnabled?.pipeline && (
+                  </div>
+                  {autoHuntEnabled?.pipeline && (
                       <p className="mt-2 text-xs" style={{color:"var(--text-dim)"}}>
                         Sequential pipeline: {autoHuntEnabled.pipeline.phase}
                         {autoHuntEnabled.pipeline.currentName ? ` — ${autoHuntEnabled.pipeline.currentName}` : ""}
-                        {autoHuntEnabled.pipeline.detail ? ` — ${autoHuntEnabled.pipeline.detail}` : ""}
+                        {autoHuntEnabled.pipeline.detail ? ` — ${autoHuntEnabled.pipeline.detail.replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z/g, value => new Date(value).toLocaleString())}` : ""}
                       </p>
                     )}
-
-                  </div>
                   <p className="mt-2 text-[10px]" style={{ color: "var(--text-dim)" }}>
                     Filters configured on Bounties tab
                   </p>

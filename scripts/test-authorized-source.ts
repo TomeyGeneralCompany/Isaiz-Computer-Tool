@@ -49,3 +49,9 @@ with open(${JSON.stringify(join(dir, "git-call.json"))}, "w") as output:
   else process.env.GIT_CONFIG_COUNT = savedGit;
   await rm(dir, {recursive:true, force:true});
 }
+
+const {describeSourceAcquisitionFailure}=await import("../packages/security-solver/src/authorized-source");
+assert.equal(describeSourceAcquisitionFailure({code:128,stderr:"fatal: could not resolve host: secret.example"}),"repository host could not be resolved (DNS)");
+assert.equal(describeSourceAcquisitionFailure({code:128,stderr:"fatal: repository not found TOKEN_SECRET"}),"repository missing or authentication required");
+assert.equal(describeSourceAcquisitionFailure({killed:true}),"Git operation timed out");
+assert.ok(!describeSourceAcquisitionFailure({code:128,stderr:"SECRET_VALUE"}).includes("SECRET_VALUE"));
