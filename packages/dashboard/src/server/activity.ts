@@ -7,7 +7,8 @@ export function describeHuntFailure(detail:unknown) {
   const reason=typeof detail==="string" ? detail.slice(0,2000)
     .replace(/(Bearer\s+)[^\s]+/gi,"$1[redacted]")
     .replace(/(https?:\/\/)[^/\s@]+:[^/\s@]+@/gi,"$1[redacted]@") : "";
-  const stage=/reproduction|probe|solc|sandbox/i.test(reason)?"Source reproduction":
+  const stage=/context budget|configured context|context allowance/i.test(reason)?"Model context":
+    /reproduction|probe|solc|sandbox/i.test(reason)?"Source reproduction":
     /ollama|model|inference|JSON action|inspection limit/i.test(reason)?"Model inspection":
     /acquir|clone|git |repository was acquired/i.test(reason)?"Source download":"Hunt attempt";
   return {stage,reason:reason || "The original failure reason was not retained for this attempt."};
@@ -34,6 +35,12 @@ export function parseWorkEvents(text:string) {
         let detail=path;
         if(value.tool==="search_files")detail=JSON.stringify(query)+(value.phase==="completed"&&Number.isSafeInteger(value.count)?" · "+value.count+" matches":"");
         else if(value.tool.startsWith("verify_"))detail=[path,query,typeof value.kind==="string"?value.kind.slice(0,80):""].filter(Boolean).join(" · ");
+        if(value.tool==="read_file" && Number.isSafeInteger(value.offset)) {
+          detail+=" · offset "+value.offset;
+          if(Number.isSafeInteger(value.end))detail+="–"+value.end;
+          if(value.phase==="completed" && value.nextOffset===null)detail+=" · end of file";
+          else if(Number.isSafeInteger(value.nextOffset))detail+=" · next "+value.nextOffset;
+        }
         if(value.phase==="failed")detail+=" · "+describeHuntFailure(value.error).reason;
         events.push({at:typeof value.at==="string"&&Number.isFinite(Date.parse(value.at))?value.at:null,
           tool:value.tool,phase:value.phase,

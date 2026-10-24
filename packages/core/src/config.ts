@@ -38,7 +38,7 @@ const configSchema = z.object({
   // Security solver
   SECURITY_AUTO_HUNT_ENABLED: envBoolean.default(false),
   SECURITY_HUNT_TIMEOUT_MINUTES: z.coerce.number().default(60),
-  SECURITY_SOURCE_CODE_TIMEOUT_MINUTES: z.coerce.number().default(120),
+  SECURITY_SOURCE_CODE_TIMEOUT_MINUTES: z.coerce.number().default(180),
   LOCAL_HUNT_NUM_PREDICT: z.coerce.number().int().min(32).max(4096).default(2048),
   SECURITY_MIN_CONFIDENCE: z.coerce.number().default(0.65),
   SECURITY_MIN_RUBRIC_SCORE: z.coerce.number().default(8), // minimum adversarial review rubric total (out of 15) to pass

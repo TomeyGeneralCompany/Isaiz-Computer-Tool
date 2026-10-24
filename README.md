@@ -37,7 +37,7 @@ autohack only hunts targets with active, in-scope bug bounty programs, and never
 
 ### Local source inspection settings
 
-Local source inspection defaults to 120 minutes and 2,048 generated tokens per response.
+Local source inspection defaults to 180 minutes and 2,048 generated tokens per response.
 `LOCAL_HUNT_NUM_PREDICT` accepts 32–4,096; truncated JSON may retry up to 4,096
 when context permits. The context remains 8,192 tokens and generation stays sequential.
 These are local Ollama settings; they do not select a paid service. Existing environment

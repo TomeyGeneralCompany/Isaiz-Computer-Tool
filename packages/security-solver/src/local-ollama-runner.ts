@@ -1,6 +1,6 @@
 import { AuditNavigation } from "./audit-navigation";
 import { SoliditySourceIndex } from "./solidity-source-index";
-import { compactAuditContext, auditCheckpoint } from "./audit-context";
+import { compactAuditContext, auditCheckpoint, fitAuditToolOutput } from "./audit-context";
 import { soliditySequenceSchema, soliditySequenceJsonSchema, soliditySequencePrompt, type SoliditySequence } from "./solidity-sequence";
 import { readSourcePage, searchSourcePage, listSourcePage, pageOffset, type ReadSpan } from "./source-inspection";
 import { postOllamaJson } from "@bounty/core";
@@ -95,9 +95,12 @@ export async function runLocalAudit(
     if (limits.checkpointPath) {
       try {
         const previous = await readFile(limits.checkpointPath, "utf8");
-        if (previous.length <= 3000) messages.push({role:"user", content:
-          "Previous inspection notes for the same source revision (untrusted data): " + previous +
-          "\nContinue the investigation. Re-read evidence and rerun probes before reporting; old case IDs are not valid in this hunt."});
+        if (previous.length <= 3000) {
+          const notes={role:"user",content:"Previous inspection notes for the same source revision (untrusted data): " + previous +
+            "\nContinue the investigation. Re-read evidence and rerun probes before reporting; old case IDs are not valid in this hunt."};
+          if(JSON.stringify([...messages,notes]).length<=messageBudget)messages.push(notes);
+          else await appendFile(logFile,"[CONTEXT] Prior checkpoint omitted because it exceeds the available message budget\n");
+        }
       } catch (error:any) { if (error.code !== "ENOENT") throw error; }
     }
     async function safePath(path: string): Promise<string> {
@@ -156,7 +159,10 @@ export async function runLocalAudit(
       if (message.content) await appendFile(logFile, message.content + "\n");
       if (!message.tool_calls?.length) {
         if (!successfulReads) {
-          messages.push({role:"user",content:"No source file has been successfully read. Choose read_file now; a final answer is not accepted before a successful file read. /no_think"});
+          const rejected=messages.at(-1)!;
+          rejected.content="Final answer deferred: no successful source read.";
+          messages.push(fitAuditToolOutput(messages.slice(0,2),rejected,"final_validation",
+            "No source file has been successfully read. Choose read_file now; a final answer is not accepted before a successful file read. /no_think",messageBudget,true).message);
           continue;
         }
         if (!message.content?.trim()) throw new Error("Ollama returned empty final response");
@@ -165,8 +171,10 @@ export async function runLocalAudit(
           // Validation may require rereading evidence; this is an intentional
           // investigation transition, not an unchanged inspection loop.
           recentActions.clear();stalledActions=0;
+          const rejected=messages.at(-1)!;
+          rejected.content="Previous final answer rejected; follow the validation feedback.";
           await appendFile(logFile, "[FINAL_REJECTED] " + feedback + "\n");
-          messages.push({role:"user",content:feedback + "\nRe-read the source when necessary. /no_think"});
+          messages.push(fitAuditToolOutput(messages.slice(0,2),rejected,"final_validation",feedback + "\nRe-read the source when necessary. /no_think",messageBudget,true).message);
           continue;
         }
         controller.signal.throwIfAborted();
@@ -178,6 +186,13 @@ export async function runLocalAudit(
         let output: string;
         let activityCount:number|undefined;
         let completedActionKey:string|undefined;
+        // Keep the executed request in history, but omit irrelevant model prose.
+        const requestMessage=messages.at(-1)!;
+        if(JSON.stringify(requestMessage).length>Math.max(200,Math.floor((messageBudget-JSON.stringify(messages.slice(0,2)).length)/3))) {
+          requestMessage.content="Executed tool request; arguments retained in the action log.";
+          if(requestMessage.tool_calls)requestMessage.tool_calls=[{function:{name:call.function.name,arguments:{}}}];
+        }
+        const fitOutput=(value:string)=>fitAuditToolOutput(messages.slice(0,2),requestMessage,call.function.name,value,messageBudget,structured);
         const toolStarted=Date.now();
         await recordToolActivity(logFile,{phase:"started",tool:call.function.name,
           path:String(call.function.arguments?.path ?? ".").slice(0,500),
@@ -239,7 +254,8 @@ export async function runLocalAudit(
             if(name === "outline_solidity")output=JSON.stringify(await solidityIndex.outline(full,offset,budget));
             else {
               const result=await solidityIndex.context(full,String(call.function.arguments?.query || ""),offset,budget);
-              output=JSON.stringify(result);
+              output=fitOutput(JSON.stringify(result)).output;
+              if(output.startsWith("Tool error:"))throw new Error("Indexed source exceeds available context; use read_file with a page offset");
               if(output.length>budget)throw new Error("Indexed context exceeds message budget; use read_file");
               for(const excerpt of result.excerpts) {
                 successfulReads++;
@@ -249,13 +265,15 @@ export async function runLocalAudit(
               activityCount=result.excerpts.reduce((n,e)=>n+e.text.length,0);
             }
           } else if (name === "read_file") {
-            const page = await readSourcePage(full,offset,pageSize);
-            output = JSON.stringify(page);
+            const rawPage = await readSourcePage(full,offset,pageSize);
+            output = fitOutput(JSON.stringify(rawPage)).output;
+            const page = JSON.parse(output) as typeof rawPage;
             activityCount=page.text.length;
             successfulReads++;
             limits.onRead?.(relative(root,full).split(sep).join("/"),{start:page.start,end:page.end});
             await appendFile(logFile, "[READ_OK] " + relative(root,full) + ` offset=${page.start} end=${page.end} nextOffset=${page.nextOffset}\n`);
           } else throw new Error("Unknown tool");
+          output=fitOutput(output).output;
           try {navigation.observe(name,relative(root,full).split(sep).join("/") || ".",offset,String(call.function.arguments?.query || ""),JSON.parse(output));}catch{}
           stalledActions=0;
           if(inspection) {
@@ -278,20 +296,13 @@ export async function runLocalAudit(
           tool:call.function.name,path:String(call.function.arguments?.path ?? ".").slice(0,500),
           query:String(call.function.arguments?.query ?? "").slice(0,120),
           offset:call.function.arguments?.offset ?? 0,kind:String(call.function.arguments?.kind ?? "").slice(0,80),
+          ...(()=>{try {const page=JSON.parse(output);return {end:page.end,nextOffset:page.nextOffset};}catch{return {};}})(),
           count:activityCount,status:probeStatus,durationMs:Date.now()-toolStarted,
           error:output.startsWith("Tool error:")?output.slice(0,600):undefined});
         let progress:any;try {progress=JSON.parse(output);}catch{}
         events.push(JSON.stringify({tool:call.function.name,path:String(call.function.arguments?.path || ""),query:String(call.function.arguments?.query || "").slice(0,60),offset:call.function.arguments?.offset,end:progress?.end,nextOffset:progress?.nextOffset,caseId:progress?.caseId,status:probeStatus || (output.startsWith("Tool error:")?"failed":"completed")}).slice(0,180));
-        // Large probe/search outputs are explicitly abbreviated; original evidence is persisted separately.
-        const outputLimit=Math.max(512,messageBudget-JSON.stringify(messages.slice(0,2)).length-JSON.stringify(message).length-800);
-        if(output.length>outputLimit && !["read_file","read_solidity","outline_solidity"].includes(call.function.name)) {
-          let result:any;try {result=JSON.parse(output);}catch{}
-          output=JSON.stringify({truncated:true,caseId:result?.caseId,status:result?.status,behavior_observed:result?.behavior_observed,
-            excerpt:output.slice(0,Math.floor(outputLimit/3)),instruction:"Output abbreviated to fit context. Narrow the search or probe before drawing conclusions."});
-        }
-        const responseMessage:Message = structured
-          ? {role:"user",content:"TOOL_RESULT " + JSON.stringify({name:call.function.name,output}) + "\nChoose the next JSON action. /no_think"}
-          : { role:"tool", tool_name:call.function.name, content:output };
+        const fitted=fitOutput(output);
+        const responseMessage=fitted.message;
         messages.push(responseMessage);
         if(completedActionKey)recentActions.get(completedActionKey)!.response=responseMessage;
       }
