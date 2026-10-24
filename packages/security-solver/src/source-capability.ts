@@ -30,10 +30,10 @@ export async function inspectSourceCapability(directory:string,signal?:AbortSign
   const root=await realpath(directory);
   const {stdout}=await execute('git',['-c','core.hooksPath=/dev/null','ls-files',...(recurseSubmodules?['--recurse-submodules']:[]),'-z'],{cwd:root,maxBuffer:2000000,timeout:10000,signal});
   const files=stdout.split('\0').filter(Boolean);
-  const unsupported:string[]=[];let candidates=0,compatible=0,unknown=false;
+  const unsupported:string[]=[];const sourcePaths:string[]=[];let candidates=0,compatible=0,unknown=false;
   for(const file of files) {
     signal?.throwIfAborted();
-    if(!/\.(sol|py|js|mjs|cjs)$/.test(file) || /(?:^|\/)(?:node_modules)\//.test(file) || /(?:hardhat|webpack|eslint|prettier)\.config\.[cm]?js$/.test(file))continue;
+    if(!/\.(sol|py|js|mjs|cjs|java)$/.test(file) || /(?:^|\/)(?:node_modules)\//.test(file) || /(?:hardhat|webpack|eslint|prettier)\.config\.[cm]?js$/.test(file))continue;
     if(++candidates>10000) {unknown=true;break;}
     let full:string;
     try {
@@ -45,13 +45,13 @@ export async function inspectSourceCapability(directory:string,signal?:AbortSign
     }
     const rel=relative(root,full);
     if(rel==='..'||rel.startsWith('..'+sep)|| (await stat(full)).size>256000) {unknown=true;continue;}
-    if(!file.endsWith('.sol')) {compatible++;continue;}
+    if(!file.endsWith('.sol')) {compatible++;sourcePaths.push(file);continue;}
     const code=sourceCodeOnly(await readFile(full,'utf8'));
     const pragmas=[...code.matchAll(/\bpragma\s+solidity\s+([^;]+);/g)];
     if(pragmas.some(p=>compilerCompatible(p[1])===false))unsupported.push(file+': requires a different Solidity compiler');
-    else compatible++;
+    else {compatible++;sourcePaths.push(file);}
   }
   const blocked=!unknown && compatible===0;
-  return {blocked,reason:blocked?(candidates?'All candidate sources require an unsupported compiler':'No runnable Python, JavaScript or Solidity sources found'):null,
-    compatibleFiles:compatible,unsupported:unsupported.slice(0,30),limitation:'Preflight checks source types and recognized compiler ranges. Deployment dependencies and runtime behavior still require probes.'};
+  return {blocked,reason:blocked?(candidates?'All candidate sources require an unsupported compiler':'No runnable Python, JavaScript, Java or Solidity sources found'):null,
+    compatibleFiles:compatible,sourcePaths,unsupported:unsupported.slice(0,30),limitation:'Preflight checks source types and recognized compiler ranges. Deployment dependencies and runtime behavior still require probes.'};
 }

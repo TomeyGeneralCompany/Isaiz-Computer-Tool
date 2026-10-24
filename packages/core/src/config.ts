@@ -38,7 +38,8 @@ const configSchema = z.object({
   // Security solver
   SECURITY_AUTO_HUNT_ENABLED: envBoolean.default(false),
   SECURITY_HUNT_TIMEOUT_MINUTES: z.coerce.number().default(60),
-  SECURITY_SOURCE_CODE_TIMEOUT_MINUTES: z.coerce.number().default(60),
+  SECURITY_SOURCE_CODE_TIMEOUT_MINUTES: z.coerce.number().default(120),
+  LOCAL_HUNT_NUM_PREDICT: z.coerce.number().int().min(32).max(4096).default(2048),
   SECURITY_MIN_CONFIDENCE: z.coerce.number().default(0.65),
   SECURITY_MIN_RUBRIC_SCORE: z.coerce.number().default(8), // minimum adversarial review rubric total (out of 15) to pass
   SECURITY_HUNT_COOLDOWN_HOURS: z.coerce.number().default(2),
@@ -48,7 +49,7 @@ const configSchema = z.object({
   SECURITY_MAX_REVISE_ATTEMPTS: z.coerce.number().default(2), // deprecated — review is now binary approve/reject
   SECURITY_SUBMISSION_POLL_MINUTES: z.coerce.number().default(60),
   SECURITY_AUTO_SUBMIT: envBoolean.default(false), // auto-submit findings that pass review with "submit" recommendation
-  EXCLUDE_SECURITY_PROGRAMS: commaSplit.default(""), // comma-separated program handles to skip (e.g. "okg,spotify")
+  EXCLUDE_SECURITY_PROGRAMS: commaSplit.default([]), // comma-separated program handles to skip (e.g. "okg,spotify")
   SKIP_SIGNAL_REQUIRED: envBoolean.default(true), // hold Signal-required submissions; nonlocal hunts also skip these programs
   SKIP_PREVIOUSLY_HUNTED: envBoolean.default(true), // skip completed hunts; local completion requires recorded coverage
   SKIP_WEB_ONLY_PROGRAMS: envBoolean.default(true), // skip programs without source code in scope
@@ -85,6 +86,13 @@ const OVERRIDES_FILE = join(process.env.PROJECT_ROOT || process.cwd(), "data", "
 let _fileOverridesCache: { data: Partial<Config>; readAt: number } | null = null;
 const FILE_CACHE_TTL_MS = 2000;
 
+function parseOverrides(raw: Record<string, unknown>): Partial<Config> {
+  const validated = configSchema.partial().strict().parse(raw);
+  // Zod 4 applies nested defaults inside partial objects. Overrides must contain
+  // only explicitly provided keys, otherwise defaults overwrite environment values.
+  return Object.fromEntries(Object.keys(raw).map(key => [key, validated[key as keyof Config]]));
+}
+
 function readFileOverrides(): Partial<Config> {
   const now = Date.now();
   if (_fileOverridesCache && now - _fileOverridesCache.readAt < FILE_CACHE_TTL_MS) {
@@ -98,7 +106,7 @@ function readFileOverrides(): Partial<Config> {
     }
     // Reject unknown keys and invalid values rather than trusting a stale or
     // hand-edited JSON file to bypass configuration safety defaults.
-    const validated = configSchema.partial().strict().parse(parsed);
+    const validated = parseOverrides(parsed);
     _fileOverridesCache = { data: validated, readAt: now };
     return validated;
   } catch {
@@ -126,7 +134,7 @@ export function setRuntimeOverride<K extends keyof Config>(
   value: Config[K],
 ): void {
   // Validate before changing the live process state.
-  const validated = configSchema.partial().strict().parse({
+  const validated = parseOverrides({
     ...readFileOverrides(),
     [key]: value,
   });

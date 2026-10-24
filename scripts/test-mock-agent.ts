@@ -24,9 +24,9 @@ const server = createServer(async (req, res) => {
   calls++;
   if (expectedCheckpoint && data.messages.some((m:any)=>m.content?.includes("Previous inspection notes"))) sawCheckpoint=true;
   if (stall) return;
-  assert.equal(data.options.num_ctx,2048);
+  assert.equal(data.options.num_ctx,limits.numCtx);
   assert.equal(data.options.num_thread,4);
-  assert.equal(data.options.num_predict, truncated && calls > 1 ? 256 : 128);
+  assert.equal(data.options.num_predict, truncated && calls > 1 ? limits.numPredict * 2 : limits.numPredict);
   const structured = process.env.LOCAL_OLLAMA_TOOL_PROTOCOL !== "native";
   if (structured) {
     assert.equal(data.tools,undefined,"Structured protocol must bypass native tool rendering");
@@ -82,6 +82,10 @@ try {
   calls = 0; truncated = true;
   assert.equal(await runLocalAudit("Inspect sample.ts",join(dir,"truncated.log"),10000,dir,"mock",undefined,limits),"FUNCTION_FOUND");
   assert.equal(calls,3);
+  calls=0;limits.numPredict=2048;limits.numCtx=8192;
+  assert.equal(await runLocalAudit("Inspect sample.ts",join(dir,"large-truncated.log"),10000,dir,"mock",undefined,limits),"FUNCTION_FOUND");
+  assert.equal(calls,3,"Truncated 2048-token JSON retries with 4096 output tokens");
+  limits.numPredict=128;limits.numCtx=2048;
   truncated = false; repair = true; calls = 0;
   assert.equal(await runLocalAudit("Inspect sample.ts",join(dir,"repair.log"),10000,dir,"mock",undefined,
     {...limits,validateFinal:answer=>answer==="FUNCTION_FOUND" ? null : "The value is incorrect; read sample.ts again."}),"FUNCTION_FOUND");

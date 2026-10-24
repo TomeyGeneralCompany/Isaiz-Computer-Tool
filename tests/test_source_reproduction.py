@@ -46,6 +46,7 @@ class LanguageTests(unittest.TestCase):
     def probe(self, name, source, function="render", observed=True, kind="html_reflection", extra=None):
         with tempfile.TemporaryDirectory() as directory:
             repo = Path(directory)
+            (repo / name).parent.mkdir(parents=True, exist_ok=True)
             (repo / name).write_text(source)
             for file, content in (extra or {}).items():
                 (repo / file).parent.mkdir(parents=True, exist_ok=True)
@@ -58,6 +59,28 @@ class LanguageTests(unittest.TestCase):
 
     def test_python_unchanged(self):
         self.probe("render.py", "def render(x):\n    return '<p>'+x+'</p>'\n")
+
+    def test_java_static_string(self):
+        self.probe("Render.java", 'public class Render { public static String render(String x) { return "<p>"+x+"</p>"; }}', function="Render.render")
+
+    def test_java_package_and_source_dependency(self):
+        self.probe("src/main/java/example/Render.java",
+                   'package example; public class Render { public static String render(String x) { return Helper.wrap(x); }}',
+                   function="Render.render", extra={"src/main/java/example/Helper.java":
+                       'package example; public class Helper { public static String wrap(String x) { return x; }}'})
+
+    def test_java_negative_control(self):
+        self.probe("Render.java", 'public class Render { public static String render(String x) { return x.replace("<", "&lt;"); }}',
+                   function="Render.render", observed=False)
+
+    def test_java_missing_dependency_is_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            (repo/"Render.java").write_text('import absent.Dependency; public class Render { public static String render(String x) { return x; }}')
+            result = driver.run_probe(repo, {"file":"Render.java", "function":"Render.render",
+                "kind":"html_reflection", "nonce":"a"*32})
+            self.assertEqual(result["status"], "probe_failed", result)
+            self.assertFalse(result["behavior_observed"])
 
     def test_commonjs(self):
         self.probe("render.cjs", "exports.render = x => '<p>'+x+'</p>';")

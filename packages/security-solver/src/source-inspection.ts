@@ -1,4 +1,4 @@
-import { readdir, readFile, stat } from "node:fs/promises";
+import { readdir, readFile, stat, realpath } from "node:fs/promises";
 import { relative, resolve, sep } from "node:path";
 
 const discoveryDirectories = new Set(["node_modules","dist","build","vendor","__pycache__"]);
@@ -13,7 +13,29 @@ export function discoverSourceEntry(entry:{name:string;isDirectory():boolean;isS
 export async function listSourcePage(full:string,offset=0) {
   const entries=(await readdir(full,{withFileTypes:true})).filter(discoverSourceEntry)
     .sort((a,b)=>a.name.localeCompare(b.name,"en"));
-  return {entries:entries.slice(offset,offset+100).map(e=>(e.isDirectory()?"dir ":"file ")+e.name),
+  // Preserve the requested listing and cursor; add a bounded shortcut through
+  // single-child directories so deep package names do not cost model turns.
+  let shortcut:{action:string;path:string}|undefined;
+  if(offset===0) try {
+    const base=await realpath(full);
+    let current=base,children=entries;
+    for(let depth=0;depth<16 && children.length===1;depth++) {
+      const child=children[0];
+      const target=resolve(current,child.name);
+      const actual=await realpath(target);
+      const rel=relative(base,actual);
+      if(rel==='..'||rel.startsWith('..'+sep)||actual!==target)break;
+      if(child.isFile()) {
+        shortcut={action:'read_file',path:rel.split(sep).join('/')};break;
+      }
+      if(!child.isDirectory())break;
+      current=actual;
+      shortcut={action:'list_files',path:rel.split(sep).join('/')};
+      children=(await readdir(current,{withFileTypes:true})).filter(discoverSourceEntry);
+    }
+  }
+  catch { /* An unavailable shortcut must not discard a successful listing. */ }
+  return {shortcut,shortcutNote:shortcut ? "Shortcut path is relative to the requested directory. Read the file directly or list the deepest directory; intermediate directory listings are unnecessary." : undefined,entries:entries.slice(offset,offset+100).map(e=>(e.isDirectory()?"dir ":"file ")+e.name),
     nextOffset:offset+100<entries.length?offset+100:null,totalEntries:entries.length,note:sourceDiscoveryNote};
 }
 

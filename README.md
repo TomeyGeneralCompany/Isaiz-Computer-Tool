@@ -33,3 +33,22 @@ npm run dashboard       # dashboard only, on :3456
 ## Scope
 
 autohack only hunts targets with active, in-scope bug bounty programs, and never touches systems without authorization. The prompt scaffolding and per-program cheat sheet bound each session to that program's declared scope. Nothing is submitted without passing the approval gate unless auto-submit is explicitly turned on.
+
+
+### Local source inspection settings
+
+Local source inspection defaults to 120 minutes and 2,048 generated tokens per response.
+`LOCAL_HUNT_NUM_PREDICT` accepts 32–4,096; truncated JSON may retry up to 4,096
+when context permits. The context remains 8,192 tokens and generation stays sequential.
+These are local Ollama settings; they do not select a paid service. Existing environment
+or persisted timeout overrides remain in effect. The dashboard timeout now edits the
+source-inspection budget when a local model is active.
+
+Run `bash scripts/install-reproduction-runtime.sh` with Node 22 selected to install/check
+Python, Node, the Solidity compiler/local EVM, bubblewrap and a Java JDK. Java probes
+support public static `Class.method(String)` returning `String`, with JDK or repository
+source dependencies. They compile inside the offline sandbox with annotation processing
+disabled; Maven/Gradle builds and third-party Java dependencies are not supported.
+JavaScript supports exported functions (including async). Solidity uses the installed
+0.8.30 compiler and supports the existing string probes and declarative transaction tests.
+Source readers and searches work independently of whether a supported test can run.

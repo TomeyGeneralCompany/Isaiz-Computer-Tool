@@ -14,6 +14,8 @@ process.env.LOCAL_OLLAMA_TOOL_PROTOCOL="json";
 const server=createServer();
 try {
   const fixture=join(root,"fixture");await mkdir(fixture);
+  await writeFile(join(fixture,"Render.java"),'public class Render { public static String render(String x) { return "<p>"+x+"</p>"; }}');
+  await writeFile(join(fixture,"Caller.java"),'Render.render(input);');
   await writeFile(join(fixture,"render.cjs"),'exports.render = x => "<p>"+x+"</p>";');
   await writeFile(join(fixture,"Render.sol"),'pragma solidity ^0.8.20; contract Render { function render(string memory x) public pure returns(string memory) { return string.concat("<p>",x,"</p>"); }}');
   await writeFile(join(fixture,"Store.sol"),'pragma solidity ^0.8.20; contract Store { uint256 public value; constructor(uint256 initial) {value=initial;} function set(uint256 x) external {value=x;} }');
@@ -36,7 +38,25 @@ try {
   ]};
   server.on("request",async(req,res)=>{
     let raw="";for await(const chunk of req)raw+=chunk;
-    const request=JSON.parse(raw);turn++;
+    const request=JSON.parse(raw);
+    // Finish the current read before advancing the scripted investigation stage.
+    // Output-token reservations may change page size; evidence must stay complete.
+    if(!reviewMode && turn>0) {
+      const last=request.messages.at(-1).content;
+      if(last.startsWith("TOOL_RESULT ")) {
+        const result=JSON.parse(last.split("\n")[0].slice(12));
+        if(result.name==="read_file") {
+          const page=JSON.parse(result.output);
+          if(page.nextOffset!=null) {
+            const previous=JSON.parse(request.messages.at(-2).content);
+            res.end(JSON.stringify({message:{role:"assistant",content:JSON.stringify({
+              action:"read_file",path:previous.path,offset:page.nextOffset,query:"",answer:""})}}));
+            return;
+          }
+        }
+      }
+    }
+    turn++;
     if(reviewMode) {
       assert.ok(request.messages[1].content.length<7000,"Review prompt must not embed large policy/report");
       const last=request.messages.at(-1).content;
@@ -59,7 +79,7 @@ try {
     else if(turn===2 && stateful)next=action("final","","",JSON.stringify({findings:[]}));
     else if(turn===2)next=action("read_file","source-1/"+caller);
     else if(turn===3 && stateful) {assert.match(request.messages.at(-1).content,/No supported probe/);next={...action("verify_source","source-1/"+source,selector,"solidity_sequence"),sequence};}
-    else if(turn===3)next=action("verify_source","source-1/"+source,"missing","html_reflection");
+    else if(turn===3)next=action("verify_source","source-1/"+source,source.endsWith(".java")?"Render.missing":"missing","html_reflection");
     else if(turn===4 && !stateful) {
       const previous=JSON.parse(request.messages.at(-1).content.split("\n")[0].slice("TOOL_RESULT ".length));
       assert.equal(JSON.parse(previous.output).status,"probe_failed");
@@ -90,10 +110,10 @@ try {
   const program:any={id:"owned",provider:"immunefi",name:"Owned fixture",scopeSummary:JSON.stringify({scopes:[
     {assetType:"SOURCE_CODE",eligibleForBounty:true,assetIdentifier:"https://github.com/fixture/owned"}
   ]})};
-  for(const language of ["javascript","solidity","stateful_solidity"]) {
+  for(const language of ["javascript","java","solidity","stateful_solidity"]) {
     turn=0;caseId="";stateful=language==="stateful_solidity";
-    source=language==="javascript"?"render.cjs":"Render.sol";
-    caller=language==="javascript"?"caller.js":"Caller.sol";
+    source=language==="javascript"?"render.cjs":language==="java"?"Render.java":"Render.sol";
+    caller=language==="javascript"?"caller.js":language==="java"?"Caller.java":"Caller.sol";
     selector=language==="javascript"?"render":"Render.render";
     if(stateful) {source="Store.sol";caller="StoreCaller.sol";selector="Store.set";}
     const result=await runLocalProgramHunt(program);
@@ -114,7 +134,7 @@ try {
       assert.ok(result.findings[0].reportBody.includes(JSON.stringify(sequence,null,2)));
     }
   }
-  console.log("JavaScript/Solidity model action -> failed probe recovery -> sandbox -> caller -> report -> persisted evidence -> replay PASSED");
+  console.log("JavaScript/Java/Solidity model action -> failed probe recovery -> sandbox -> caller -> report -> persisted evidence -> replay PASSED");
 } finally {
   process.env.PATH=originalPath;
   await new Promise<void>(r=>server.close(()=>r()));

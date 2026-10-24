@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:http";
@@ -25,6 +25,17 @@ try {
   // Dependency code and lockfiles remain available for a deliberate inspection.
   assert.equal((await readSourcePage(join(filtered,"package-lock.json"))).text,"FILTER_NEEDLE");
   assert.equal((await searchSourcePage(root,join(filtered,"vendor"),"FILTER_NEEDLE")).results.length,1);
+  const javaRoot=join(root,'java-tree');
+  const javaDir=join(javaRoot,'src/main/java/org/tron/core/actuator');
+  await mkdir(javaDir,{recursive:true});
+  await writeFile(join(javaDir,'TransferActuator.java'),'class TransferActuator { /* JAVA_READ_MARKER */ }');
+  const javaListing=await listSourcePage(javaRoot);
+  assert.deepEqual(javaListing.entries,['dir src']);
+  assert.deepEqual(javaListing.shortcut,{action:'read_file',path:'src/main/java/org/tron/core/actuator/TransferActuator.java'});
+  assert.match((await readSourcePage(join(javaRoot,javaListing.shortcut!.path))).text,/JAVA_READ_MARKER/);
+  assert.equal((await searchSourcePage(root,javaRoot,'JAVA_READ_MARKER')).results.length,1);
+  await symlink(root,join(javaDir,'outside'));
+  assert.equal((await listSourcePage(javaRoot)).shortcut?.action,'read_file','Shortcut ignores symlinks');
   const text="padding\n".repeat(5000)+"renderer.render(input);\n";
   await writeFile(join(root,"large.js"),text);
   const reads=new SourceReads();
