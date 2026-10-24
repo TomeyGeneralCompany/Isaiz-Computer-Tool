@@ -48,6 +48,7 @@ jobs:
         run: |
           npx tsx scripts/test-hunt-reliability.ts
           npx tsx scripts/test-audit-context-loop.ts
+          npx tsx scripts/test-audit-output-budget.ts
           npx tsx scripts/test-native-batch.ts
           npx tsx scripts/test-audit-stalls.ts
           npx tsx scripts/test-audit-navigation-recovery.ts

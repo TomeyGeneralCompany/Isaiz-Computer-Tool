@@ -27,7 +27,7 @@ const server=createServer(async(req,res)=>{
  res.end(JSON.stringify({message:{role:'assistant',content:JSON.stringify(action)}}));
 });
 try {
- await writeFile(join(root,'large.sol'),'uint256 public value;\n'.repeat(5000));
+ await writeFile(join(root,'large.sol'),'uint256 public value;\n"\\\t'.repeat(5000));
  await new Promise<void>(r=>server.listen(0,'127.0.0.1',r));
  const address=server.address();assert.ok(address&&typeof address!=='string');
  process.env.AUTOHACK_OLLAMA_URL=`http://127.0.0.1:${address.port}/api/chat`;

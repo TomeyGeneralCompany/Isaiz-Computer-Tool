@@ -32,6 +32,11 @@ try {
   assert.match(describeHuntFailure(null).reason,/not retained/);
   assert.equal(describeHuntFailure("Bearer secret-value").reason.includes("secret-value"),false);
   const event=(value:Record<string,unknown>)=>"[ACTIVITY] "+JSON.stringify({at:new Date().toISOString(),...value});
+  assert.equal(describeHuntFailure("Latest audit exchange exceeds the context budget; narrow the probe output").stage,"Model context");
+  const paged=parseWorkEvents(event({phase:"completed",tool:"read_file",path:"source/file.js",offset:128,end:256,nextOffset:256}));
+  assert.match(paged.events[0].detail,/offset 128–256.*next 256/);
+  const eof=parseWorkEvents(event({phase:"completed",tool:"read_file",path:"source/file.js",offset:256,end:300,nextOffset:null}));
+  assert.match(eof.events[0].detail,/end of file/);
   const trail=parseWorkEvents([
     "[READ_OK] source-1/example.sol",
     event({phase:"completed",tool:"read_file",path:"source-1/example.sol",durationMs:20}),
