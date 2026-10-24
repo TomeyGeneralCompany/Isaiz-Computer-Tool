@@ -30,5 +30,9 @@ jobs:
         env:
           TOMEY_REPRODUCTION_INTEGRATION: '1'
         run: python3 -m unittest discover -s tests -p test_source_reproduction.py -v
+      - name: Exercise production-sized controller read and probe transitions
+        env:
+          GITHUB_TOKEN: offline-ci-fixture
+        run: npx tsx scripts/test-local-controller.ts --mock
       - name: Test real source audit, report creation and independent replay
         run: npx tsx scripts/test-source-workflow.ts

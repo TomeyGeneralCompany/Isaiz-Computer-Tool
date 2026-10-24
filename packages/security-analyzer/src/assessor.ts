@@ -150,7 +150,10 @@ export async function assessProgram(
       ? `up to $${(program.rewardMaxCents / 100).toFixed(0)}`
       : "unknown";
 
-  const prompt = `You are a security researcher evaluating a bug bounty program for AI-powered automated vulnerability discovery. The AI agent can: clone and review source code, make HTTP requests with curl, analyze DNS records, read documentation, run semgrep for static analysis, port scan with nmap, run nuclei vulnerability templates, discover directories with ffuf, and run nikto web scans. It CANNOT: render JavaScript (no browser/SPA interaction), create accounts on target services, or use Burp Suite/Metasploit.
+  const capabilities = process.env.OLLAMA_DISCOVERY_DIRECT === "true"
+    ? "The local agent inspects acquired, authorized source offline with paginated reads and literal searches. It can run bounded Python, exported JavaScript and public static Java string-function probes, and Solidity 0.8.30 string probes or declarative local-EVM transaction tests. Browser extensions requiring browser APIs, full Java build systems, external-chain state and arbitrary test suites are not supported by those probes. It has no live HTTP, DNS, port-scanning, semgrep, nuclei, ffuf or nikto tools. Rank for this actual toolset; source availability alone does not establish test compatibility."
+    : "The AI agent can: clone and review source code, make HTTP requests with curl, analyze DNS records, read documentation, run semgrep for static analysis, port scan with nmap, run nuclei vulnerability templates, discover directories with ffuf, and run nikto web scans. It CANNOT: render JavaScript (no browser/SPA interaction), create accounts on target services, or use Burp Suite/Metasploit.";
+  const prompt = `You are a security researcher evaluating a bug bounty program for AI-powered automated vulnerability discovery. ${capabilities}
 
 Program: ${program.name}
 Platform: ${program.provider}

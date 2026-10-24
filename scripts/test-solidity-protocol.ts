@@ -11,6 +11,10 @@ const server=createServer(async(req,res)=>{
   let raw='';for await(const chunk of req)raw+=chunk;
   const request=JSON.parse(raw);turn++;
   const structured=process.env.LOCAL_OLLAMA_TOOL_PROTOCOL==='json';
+  if(structured) {
+    assert.ok(request.format.properties.sequence.properties.steps,'Full sequence schema remains enforced');
+    assert.ok(!request.messages[0].content.includes('"anyOf"'),'Do not duplicate the full response schema in instructions');
+  }
   const name=turn===1?'read_file':'verify_source';
   const args=turn===1?{path:'Store.sol'}:{path:'Store.sol',query:'Store.set',kind:'solidity_sequence',sequence:turn===2?{...sequence,rpcUrl:'invalid'}:sequence};
   if(turn===3)assert.match(request.messages.at(-1).content,/Tool error/);

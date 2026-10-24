@@ -25,3 +25,8 @@ for(const structured of [true,false]) {
  assert.match(indexed.output,/Tool error:.*read_file/);
 }
 console.log('Serialized JSON/native messages fit; escaped source pagination is lossless; oversized probes retain evidence IDs PASSED');
+
+const {summarizeAuditLog}=await import('./audit-log-summary');
+const summary=summarizeAuditLog('[READ_OK] file.py offset=0 end=10\n[READ_OK] file.py offset=0 end=10\n[CONTEXT_REREAD] {}\n[TIMING] {"promptMs":123,"generationMs":456}\nSECRET_SOURCE_CONTENT');
+assert.equal(summary.repeatedReadMarkers,1);assert.equal(summary.contextRereads,1);
+assert.equal(summary.durations.promptMs,123);assert.ok(!JSON.stringify(summary).includes('SECRET_SOURCE'));

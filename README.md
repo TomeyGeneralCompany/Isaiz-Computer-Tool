@@ -52,3 +52,21 @@ disabled; Maven/Gradle builds and third-party Java dependencies are not supporte
 JavaScript supports exported functions (including async). Solidity uses the installed
 0.8.30 compiler and supports the existing string probes and declarative transaction tests.
 Source readers and searches work independently of whether a supported test can run.
+
+
+### Diagnose local controller behavior
+
+`node --import tsx scripts/test-local-controller.ts` uses the configured local Ollama
+model at the hunt's 8,192-token context and configured output allowance. It asks the
+model to read an owned Python fixture, select its isolated probe, and finish after
+observing the result. It saves timing, turn counts and a transcript under
+`data/controller-diagnostics/`. It does not query bounty programs or submit reports.
+Run it with the service stopped so the measurement is not competing with a hunt.
+The default deadline is ten minutes, configurable with `LOCAL_AGENT_TEST_TIMEOUT_MS`.
+A fixture pass tests basic tool sequencing, not autonomous performance on large repositories.
+
+Program assessments already persist in the local SQLite database, inside
+`security_programs.scope_summary.assessment`. Automatic analysis skips saved scores;
+startup does not intentionally clear them. The dashboard's explicit Reassess operation
+can clear assessments. If analysis repeats after a restart, compare the configured
+DB_PATH and persisted assessment counts before changing storage or adding cloud backups.

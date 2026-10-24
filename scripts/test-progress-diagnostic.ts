@@ -22,6 +22,9 @@ try {
   const beforeDb = readFileSync(env.DB_PATH);
   const report = JSON.parse(execFileSync(process.execPath, ["--import", "tsx", "scripts/diagnose-progress.ts"], { env, encoding: "utf8" }));
   assert.equal(report.selection.total, 3);
+  assert.equal(report.savedAssessments,2);
+  assert.equal(report.programsWithoutSavedAssessment,1);
+  assert.equal(report.databasePath,env.DB_PATH);
   assert.equal(report.selection.eligible, 2, "Legacy history and Signal submission settings must not empty local inspection queue");
   assert.equal(report.selection.firstBlockingReasonCounts.assessment_missing, 1);
   assert.equal(report.dailyQuota, "not_present");
