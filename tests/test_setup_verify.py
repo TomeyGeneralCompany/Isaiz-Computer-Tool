@@ -20,6 +20,9 @@ class SetupVerification(unittest.TestCase):
             shutil.copy(ROOT / 'scripts/install-reproduction-runtime.sh', base / 'scripts')
             (base / 'bwrap').write_text('#!/bin/sh\nexit 0\n')
             (base / 'bwrap').chmod(0o700)
+            for executable in ('java','javac'):
+                (base/executable).write_text('#!/bin/sh\nexit 0\n')
+                (base/executable).chmod(0o700)
             (base / '.env').write_text('FIXTURE_ONLY=true\n')
             (base / 'scripts/doctor.py').write_text('')
             (base / 'scripts/acceptance.py').write_text('import sys\nfrom pathlib import Path\nPath("acceptance-args.txt").write_text(" ".join(sys.argv[1:]))\n')
@@ -44,17 +47,21 @@ class SetupVerification(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             base=Path(directory); (base/'scripts').mkdir(); bin=base/'bin';bin.mkdir()
             shutil.copy(ROOT/'scripts/install-reproduction-runtime.sh',base/'scripts')
+            shutil.copy(ROOT/'scripts/node-runtime.sh',base/'scripts')
             (bin/'dirname').symlink_to('/usr/bin/dirname')
             for name,body in {
-                'id':'echo 1000', 'node':'exit 0', 'npm':'echo "$*" >> "'+str(base/'npm-log')+'"',
+                'id':'echo 1000', 'node':'echo 22', 'npm':'echo "$*" >> "'+str(base/'npm-log')+'"',
                 'sudo':'echo "$*" >> "'+str(base/'apt-log')+'"\nif [ "$2" = install ]; then printf "#!/bin/sh\\nexit 0\\n" > "'+str(bin/'bwrap')+'"; /bin/chmod +x "'+str(bin/'bwrap')+'"; fi',
                 'apt-get':'exit 0',
             }.items():
                 (bin/name).write_text('#!/bin/sh\n'+body+'\n');(bin/name).chmod(0o700)
-            env={**os.environ,'PATH':str(bin)}
+            # Fake package installation supplies all newly required executables.
+            installer=bin/'sudo'
+            installer.write_text(installer.read_text().replace('fi', 'for exe in python3 java javac; do /bin/cp "'+str(bin/'bwrap')+'" "'+str(bin)+'/$exe"; done; fi'))
+            env={**os.environ,'PATH':str(bin),'AUTOHACK_NODE_BIN':str(bin/'node')}
             result=subprocess.run(['/bin/bash',str(base/'scripts/install-reproduction-runtime.sh')],env=env,capture_output=True,text=True)
             self.assertEqual(result.returncode,0,result.stderr)
-            self.assertIn('apt-get install -y bubblewrap',(base/'apt-log').read_text())
+            self.assertIn('apt-get install -y bubblewrap python3 default-jdk-headless',(base/'apt-log').read_text())
             self.assertIn('--ignore-scripts',(base/'npm-log').read_text())
             (bin/'bwrap').write_text('#!/bin/sh\nexit 1\n')
             result=subprocess.run(['/bin/bash',str(base/'scripts/install-reproduction-runtime.sh')],env=env,capture_output=True,text=True)
