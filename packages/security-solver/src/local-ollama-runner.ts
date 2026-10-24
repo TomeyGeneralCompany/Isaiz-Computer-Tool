@@ -29,6 +29,7 @@ const tools = [
 export interface LocalAuditLimits {
   maxTurns: number;
   checkpointPath?: string;
+  initialSourcePaths?: string[];
   numPredict: number;
   numCtx: number;
   numThreads: number;
@@ -82,6 +83,7 @@ export async function runLocalAudit(
   const contextBudget=Math.max(2000,(settings.numCtx-generationBudget-512)*3);
   const events:string[]=[];
   const navigation=new AuditNavigation();
+  navigation.seed(limits.initialSourcePaths || []);
   const recentActions = new Map<string, {turn:number; nextOffset?:number|null; response?:Message}>();
   let stalledActions = 0;
   const fixedSize=JSON.stringify(messages).length+JSON.stringify(structured ? actionSchema : availableTools).length;

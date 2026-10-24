@@ -32,7 +32,9 @@ try {
  assert.equal((await inspectSourceCapability(root)).blocked,true);
  await writeFile(join(root,'New.sol'),'pragma solidity ^0.8.0; contract New {}');
  execFileSync('git',['-C',root,'add','.']);
- assert.equal((await inspectSourceCapability(root)).blocked,false,'One incompatible file must not block a mixed project');
+ const mixed=await inspectSourceCapability(root);
+ assert.equal(mixed.blocked,false,'One incompatible file must not block a mixed project');
+ assert.deepEqual(mixed.sourcePaths,['New.sol'],'Preflight exposes compatible source paths, excluding unsupported compiler files');
  await symlink('absent.sol',join(root,'Broken.sol'));
  execFileSync('git',['-C',root,'add','.']);
  const withLink=await inspectSourceCapability(root);

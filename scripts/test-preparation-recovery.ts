@@ -55,5 +55,16 @@ elif 'submodule' in args:
  nav.observe('list_files','nested',0,'',{entries:[],nextOffset:null});
  assert.match(nav.hint(),/"path":"a.sol","offset":200/);
  assert.equal(nav.snapshot().recent[1].end,200);
+ const javaNav=new AuditNavigation();
+ javaNav.observe('list_files','source-1',0,'',{entries:['dir chainbase']});
+ javaNav.observe('list_files','source-1/actuator',0,'',{entries:['file TransferActuator.java']});
+ assert.match(javaNav.hint(),/"action":"read_file","path":"source-1\/actuator\/TransferActuator.java"/);
+ const seeded=new AuditNavigation();
+ seeded.seed(['source-1/contracts/Owned.sol']);
+ seeded.observe('list_files','source-1',0,'',{entries:['dir actuator']});
+ assert.match(seeded.hint(),/"action":"read_file","path":"source-1\/contracts\/Owned.sol"/);
+ const shortcuts=new AuditNavigation();
+ shortcuts.observe('list_files','source-1',0,'',{entries:['dir src'],shortcut:{action:'read_file',path:'src/main/java/Owned.java'}});
+ assert.match(shortcuts.hint(),/"path":"source-1\/src\/main\/java\/Owned.java"/);
  console.log('Preparation retries, partial dependency acquisition, persistent blockers and concrete navigation PASSED');
 } finally {process.env.PATH=oldPath;await rm(root,{recursive:true,force:true});}
