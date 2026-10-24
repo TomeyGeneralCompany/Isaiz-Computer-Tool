@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded offline probes of Python, JavaScript and Solidity source functions in bubblewrap.
+"""Bounded offline probes of Python, JavaScript, Java and Solidity source functions in bubblewrap.
 
 A probe confirms only its named behavior, never complete exploitability.
 No model-generated commands or scripts are executed. Source code runs only
@@ -76,22 +76,25 @@ def run_probe(repository: Path, specification: dict, _dependency_round: int = 0)
     function=specification.get('function','')
     kind=specification.get('kind','')
     nonce=specification.get('nonce','')
-    if not isinstance(file,str) or len(file)>4096 or Path(file).suffix not in ('.py','.js','.mjs','.cjs','.sol'): raise ValueError('Python, JavaScript or Solidity source path required')
+    if not isinstance(file,str) or len(file)>4096 or Path(file).suffix not in ('.py','.js','.mjs','.cjs','.sol','.java'): raise ValueError('Python, JavaScript, Java or Solidity source path required')
     target=(repository/file).resolve(strict=True)
     if not target.is_relative_to(repository) or not target.is_file() or target.stat().st_size>256000: raise ValueError('Source outside repository or too large')
     if not isinstance(function,str) or not re.fullmatch(r'[A-Za-z][A-Za-z0-9_]{0,79}(?:\.[A-Za-z][A-Za-z0-9_]{0,79})?',function): raise ValueError('Public top-level function name required')
     if kind not in ('html_reflection','path_construction','solidity_sequence'): raise ValueError('Unsupported probe kind')
     if not isinstance(nonce,str) or not re.fullmatch(r'[a-f0-9]{32}',nonce): raise ValueError('Invalid probe nonce')
-    language = 'python' if file.endswith('.py') else 'solidity' if file.endswith('.sol') else 'javascript'
-    if language != 'solidity' and '.' in function: raise ValueError('Top-level function name required')
+    language = 'python' if file.endswith('.py') else 'solidity' if file.endswith('.sol') else 'java' if file.endswith('.java') else 'javascript'
+    if language not in ('solidity','java') and '.' in function: raise ValueError('Top-level function name required')
     if kind == 'solidity_sequence':
         if language != 'solidity' or '.' not in function: raise ValueError('Solidity Contract.function required')
         sequence = specification.get('sequence')
         if not isinstance(sequence,dict) or len(json.dumps(sequence)) > 16000: raise ValueError('Invalid Solidity sequence')
     elif 'sequence' in specification: raise ValueError('Sequence requires solidity_sequence kind')
     runtime = Path(__file__).resolve().parent / 'reproduction-runtime'
-    node = shutil.which('node') if language != 'python' else None
-    if language != 'python' and not node:
+    node = shutil.which('node') if language in ('javascript','solidity') else None
+    java_home = Path(shutil.which('javac')).resolve().parent.parent if shutil.which('javac') else None
+    if language == 'java' and (not java_home or not (java_home/'bin/java').is_file()):
+        return {'status':'blocked_no_runtime','behavior_observed':False,'detail':'Run scripts/install-reproduction-runtime.sh to install a JDK'}
+    if language in ('javascript','solidity') and not node:
         return {'status':'blocked_no_runtime','behavior_observed':False,'detail':'Node.js is required'}
     if language == 'solidity' and not all((runtime/'node_modules'/name).is_dir() for name in ('solc','ethers','ganache')):
         return {'status':'blocked_no_runtime','behavior_observed':False,'detail':'Run npm install --prefix scripts/reproduction-runtime'}
@@ -122,12 +125,12 @@ def run_probe(repository: Path, specification: dict, _dependency_round: int = 0)
     source_hash=hashlib.sha256(target.read_bytes()).hexdigest()
     with tempfile.TemporaryDirectory(prefix='autohack-reproduction-') as temporary:
         work=Path(temporary)
-        (work/'probe.py').write_text(PROBE)
+        (work/'probe.py').write_text((runtime/'java-probe.py').read_text() if language == 'java' else PROBE)
         (work/'spec.json').write_text(json.dumps(specification))
-        runtime_binds = [] if language == 'python' else [
+        runtime_binds = ['--ro-bind',str(java_home),'/jdk','--ro-bind',str(runtime),'/runtime'] if language == 'java' else [] if language == 'python' else [
             '--ro-bind',str(Path(node).resolve()),'/probe-node',
             '--ro-bind',str(runtime),'/runtime']
-        invocation = ['/usr/bin/python3','-I','/probe.py'] if language == 'python' else [
+        invocation = ['/usr/bin/python3','-I','/probe.py'] if language in ('python','java') else [
             '/probe-node','--disable-wasm-trap-handler','--max-old-space-size=256','/runtime/probe.cjs']
         command=[sandbox,'--unshare-all','--die-with-parent','--new-session','--cap-drop','ALL','--clearenv',
                  '--ro-bind','/usr','/usr','--ro-bind','/lib','/lib','--ro-bind-try','/lib64','/lib64',

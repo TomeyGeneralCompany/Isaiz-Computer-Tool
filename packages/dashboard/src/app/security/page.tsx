@@ -345,7 +345,8 @@ function ModelConfigPanel() {
 
   if (!config) return null;
 
-  const timeout = config.SECURITY_HUNT_TIMEOUT_MINUTES ?? 60;
+  const timeoutKey = config.LOCAL_MODEL_ACTIVE ? "SECURITY_SOURCE_CODE_TIMEOUT_MINUTES" : "SECURITY_HUNT_TIMEOUT_MINUTES";
+  const timeout = config[timeoutKey];
 
   const agents: { label: string; sub: string; modelKey: string; effortKey: string; model: string; effort: string }[] = [
     { label: "Scout", sub: "assessment", modelKey: "ANALYSIS_MODEL", effortKey: "ANALYSIS_EFFORT", model: config.ANALYSIS_MODEL ?? "sonnet", effort: config.ANALYSIS_EFFORT ?? "high" },
@@ -381,7 +382,7 @@ function ModelConfigPanel() {
               setTimeoutFocused(false);
               const n = parseInt(timeoutDraft, 10);
               if (!isNaN(n) && n >= 5 && n <= 240 && n !== timeout) {
-                setConfig.mutate({ key: "SECURITY_HUNT_TIMEOUT_MINUTES", value: n });
+                setConfig.mutate({ key: timeoutKey, value: n });
               }
             }}
             onKeyDown={(e) => {

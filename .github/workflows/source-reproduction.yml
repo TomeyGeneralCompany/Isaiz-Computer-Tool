@@ -15,7 +15,7 @@ jobs:
       - name: Install isolated reproduction dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y bubblewrap
+          sudo apt-get install -y bubblewrap default-jdk-headless
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           npm install --prefix scripts/reproduction-runtime --ignore-scripts --no-audit --no-fund
       - name: Install application dependencies for workflow integration
@@ -26,7 +26,7 @@ jobs:
         run: npx tsx scripts/test-solidity-protocol.ts
       - name: Test local Solidity transaction executor
         run: node scripts/test-solidity-sequence.cjs
-      - name: Run actual Python, JavaScript and Solidity sandbox probes
+      - name: Run actual Python, JavaScript, Java and Solidity sandbox probes
         env:
           TOMEY_REPRODUCTION_INTEGRATION: '1'
         run: python3 -m unittest discover -s tests -p test_source_reproduction.py -v

@@ -44,7 +44,7 @@ export async function runLocalAudit(
   model: string, systemPrompt?: string, limits: Partial<LocalAuditLimits> = {},
 ): Promise<string> {
   const settings = {maxTurns:20, numPredict:2048, numCtx:4096, numThreads:4, ...limits};
-  for (const [key, low, high] of [["maxTurns",1,200],["numPredict",32,2048],["numCtx",1024,32768],["numThreads",1,32]] as const) {
+  for (const [key, low, high] of [["maxTurns",1,200],["numPredict",32,4096],["numCtx",1024,32768],["numThreads",1,32]] as const) {
     if (!Number.isSafeInteger(settings[key]) || settings[key] < low || settings[key] > high)
       throw new Error("Invalid local audit limit: " + key);
   }
@@ -71,7 +71,7 @@ export async function runLocalAudit(
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   const actionSchema = limits.verifyPython ? {...auditActionSchema,properties:{...auditActionSchema.properties,sequence:soliditySequenceJsonSchema,
     action:{type:"string",enum:[...auditActionSchema.properties.action.enum,"verify_source","verify_python"]}}} : auditActionSchema;
-  const probePrompt = limits.verifyPython ? "\nThe verify_source action invokes a fixed, isolated source function probe. Set path to a .py, .js, .mjs, .cjs or .sol source file, query to its public/exported function name (Contract.function for Solidity), answer to html_reflection or path_construction. The function must take one string and return a string. JavaScript exports may be async. Solidity requires a deployable zero-argument constructor and a public/external view or pure function compatible with installed solc 0.8.30; runs on an in-memory local EVM. Use returned observations honestly; they do not prove full exploitability. No arbitrary commands are available. " + soliditySequencePrompt : "";
+  const probePrompt = limits.verifyPython ? "\nThe verify_source action invokes a fixed, isolated source function probe. Set path to a .py, .js, .mjs, .cjs, .java or .sol source file, query to its public/exported function name (Contract.function for Solidity), answer to html_reflection or path_construction. The function must take one string and return a string. JavaScript exports may be async. Java requires a public static Class.method accepting and returning String; only JDK and repository source dependencies are supported, without Maven/Gradle execution. Solidity requires a deployable zero-argument constructor and a public/external view or pure function compatible with installed solc 0.8.30; runs on an in-memory local EVM. Use returned observations honestly; they do not prove full exploitability. No arbitrary commands are available. " + soliditySequencePrompt : "";
   const availableTools = limits.verifyPython ? [...tools,{type:"function",function:{
     name:"verify_source",description:probePrompt,parameters:{type:"object",
       properties:{path:{type:"string"},query:{type:"string"},kind:{type:"string"},sequence:soliditySequenceJsonSchema},required:["path","query","kind"]},
@@ -80,7 +80,7 @@ export async function runLocalAudit(
     { role: "system", content: (systemPrompt || "") + "\nPerform an offline source audit. Request exactly one tool call per response. Inspect actual files. Never invent findings or observations. No target network requests are available." + (limits.verifyPython ? probePrompt : " No source execution is available.") + (structured ? auditProtocolPrompt.replace(JSON.stringify(auditActionSchema),JSON.stringify(actionSchema)) : "") },
     { role: "user", content: prompt + "\n/no_think" },
   ];
-  const contextBudget=Math.max(2000,(settings.numCtx-generationBudget-512)*3);
+  let contextBudget=Math.max(2000,(settings.numCtx-generationBudget-512)*3);
   const events:string[]=[];
   const navigation=new AuditNavigation();
   navigation.seed(limits.initialSourcePaths || []);
@@ -88,8 +88,8 @@ export async function runLocalAudit(
   let stalledActions = 0;
   const fixedSize=JSON.stringify(messages).length+JSON.stringify(structured ? actionSchema : availableTools).length;
   // Tools/schema also consume context. Keep a full recent exchange and reserve output.
-  const messageBudget=Math.max(JSON.stringify(messages).length+1200,contextBudget-JSON.stringify(structured ? actionSchema : availableTools).length);
-  const pageSize=Math.max(128,Math.min(2000,Math.floor((messageBudget-JSON.stringify(messages).length-2500)/8)));
+  let messageBudget=Math.max(JSON.stringify(messages).length+1200,contextBudget-JSON.stringify(structured ? actionSchema : availableTools).length);
+  let pageSize=Math.max(128,Math.min(2000,Math.floor((messageBudget-JSON.stringify(messages).length-2500)/8)));
   try {
     if(fixedSize>contextBudget && limits.numCtx!==undefined)throw new Error("Audit instructions exceed configured context; increase numCtx or narrow the request");
     if (limits.checkpointPath) {
@@ -135,8 +135,14 @@ export async function runLocalAudit(
         let action;
         try {action = decodeAuditAction(message.content,!!limits.verifyPython);}
         catch {
-          if (result.done_reason === "length" && generationBudget < 2048) {
-            generationBudget = Math.min(generationBudget*2,2048);
+          if (result.done_reason === "length" && generationBudget < 4096) {
+            const nextBudget = Math.min(generationBudget*2,4096);
+            const nextContext = Math.max(2000,(settings.numCtx-nextBudget-512)*3);
+            if (fixedSize > nextContext) throw new Error("Truncated action needs more context for a larger output budget; increase numCtx");
+            generationBudget = nextBudget;
+            contextBudget = nextContext;
+            messageBudget = Math.max(JSON.stringify(messages.slice(0,2)).length+1200,contextBudget-JSON.stringify(structured ? actionSchema : availableTools).length);
+            pageSize = Math.max(128,Math.min(2000,Math.floor((messageBudget-JSON.stringify(messages.slice(0,2)).length-2500)/8)));
             await appendFile(logFile, `[OLLAMA] truncated JSON action; retrying with generation_limit=${generationBudget}\n`);
             continue;
           }

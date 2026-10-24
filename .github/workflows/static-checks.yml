@@ -34,6 +34,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npx tsc --noEmit --project tsconfig.json
+      - name: Verify persisted runtime overrides and token limits
+        run: npx tsx scripts/test-runtime-config.ts
       - name: Verify read-only dashboard activity
         run: npx tsx scripts/test-dashboard-activity.ts
       - name: Verify local model HTTP deadlines

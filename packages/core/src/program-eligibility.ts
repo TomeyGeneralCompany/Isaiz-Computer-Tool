@@ -4,7 +4,7 @@ import { assertAuthorizedProgram } from "./scope-authorization";
 import { authorizedSourceUrls } from "./source-repository";
 
 /** Version of coverage semantics; older completion records are not exhaustive. */
-export const LOCAL_REPRODUCTION_CAPABILITY_VERSION = 6;
+export const LOCAL_REPRODUCTION_CAPABILITY_VERSION = 7;
 
 /** Shared pre-assessment and pre-dispatch filters. Assessment itself is separate. */
 export function programCandidateBlocker(program: SecurityProgram, config: Config, localModel: boolean, now = Date.now()): string | null {

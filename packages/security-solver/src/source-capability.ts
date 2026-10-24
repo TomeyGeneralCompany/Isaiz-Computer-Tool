@@ -33,7 +33,7 @@ export async function inspectSourceCapability(directory:string,signal?:AbortSign
   const unsupported:string[]=[];const sourcePaths:string[]=[];let candidates=0,compatible=0,unknown=false;
   for(const file of files) {
     signal?.throwIfAborted();
-    if(!/\.(sol|py|js|mjs|cjs)$/.test(file) || /(?:^|\/)(?:node_modules)\//.test(file) || /(?:hardhat|webpack|eslint|prettier)\.config\.[cm]?js$/.test(file))continue;
+    if(!/\.(sol|py|js|mjs|cjs|java)$/.test(file) || /(?:^|\/)(?:node_modules)\//.test(file) || /(?:hardhat|webpack|eslint|prettier)\.config\.[cm]?js$/.test(file))continue;
     if(++candidates>10000) {unknown=true;break;}
     let full:string;
     try {
@@ -52,6 +52,6 @@ export async function inspectSourceCapability(directory:string,signal?:AbortSign
     else {compatible++;sourcePaths.push(file);}
   }
   const blocked=!unknown && compatible===0;
-  return {blocked,reason:blocked?(candidates?'All candidate sources require an unsupported compiler':'No runnable Python, JavaScript or Solidity sources found'):null,
+  return {blocked,reason:blocked?(candidates?'All candidate sources require an unsupported compiler':'No runnable Python, JavaScript, Java or Solidity sources found'):null,
     compatibleFiles:compatible,sourcePaths,unsupported:unsupported.slice(0,30),limitation:'Preflight checks source types and recognized compiler ranges. Deployment dependencies and runtime behavior still require probes.'};
 }
