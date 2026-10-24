@@ -27,9 +27,18 @@ export function auditCheckpoint(events:string[]):string {
 /** Size the fully serialized exchange, including JSON escaping and tool wrappers. */
 export function fitAuditToolOutput(pinned:AuditMessage[], request:AuditMessage, tool:string,
   output:string, budget:number, structured:boolean):{output:string;message:AuditMessage} {
-  const wrap=(value:string):AuditMessage=>structured
-    ? {role:'user',content:'TOOL_RESULT '+JSON.stringify({name:tool,output:value})+'\nChoose the next JSON action. /no_think'}
-    : {role:'tool',tool_name:tool,content:value};
+  const wrap=(value:string):AuditMessage=> {
+    let guidance='Choose the next JSON action.';
+    if(tool==='read_file')try {
+      const page=JSON.parse(value);
+      if(typeof page.text==='string') guidance=page.nextOffset===null
+        ? 'End of this file. Choose a relevant caller/search, a supported probe, or the permitted incomplete-inspection outcome. Do not restart this file without a specific evidence need.'
+        : 'This file has more text. Continue at offset '+page.nextOffset+' if relevant; do not restart at offset 0.';
+    }catch{}
+    return structured
+      ? {role:'user',content:'TOOL_RESULT '+JSON.stringify({name:tool,output:value})+'\n'+guidance+' /no_think'}
+      : {role:'tool',tool_name:tool,content:value};
+  };
   const fits=(value:string)=>JSON.stringify([...pinned,request,wrap(value)]).length<=budget;
   if(fits(output))return {output,message:wrap(output)};
   let data:any;try {data=JSON.parse(output);}catch{}

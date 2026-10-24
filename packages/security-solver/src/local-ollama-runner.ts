@@ -77,7 +77,7 @@ export async function runLocalAudit(
       properties:{path:{type:"string"},query:{type:"string"},kind:{type:"string"},sequence:soliditySequenceJsonSchema},required:["path","query","kind"]},
   }}] : tools;
   let messages: Message[] = [
-    { role: "system", content: (systemPrompt || "") + "\nPerform an offline source audit. Request exactly one tool call per response. Inspect actual files. Never invent findings or observations. No target network requests are available." + (limits.verifyPython ? probePrompt : " No source execution is available.") + (structured ? auditProtocolPrompt.replace(JSON.stringify(auditActionSchema),JSON.stringify(actionSchema)) : "") },
+    { role: "system", content: (systemPrompt || "") + "\nPerform an offline source audit. Request exactly one tool call per response. Inspect actual files. Never invent findings or observations. No target network requests are available." + (limits.verifyPython ? probePrompt : " No source execution is available.") + (structured ? auditProtocolPrompt.replace(JSON.stringify(auditActionSchema),'Use action, path, query, answer; offset and sequence are optional. Example: {"action":"read_file","path":"file.py","query":"","answer":"","offset":0}. The response format enforces the full schema.') : "") },
     { role: "user", content: prompt + "\n/no_think" },
   ];
   let contextBudget=Math.max(2000,(settings.numCtx-generationBudget-512)*3);

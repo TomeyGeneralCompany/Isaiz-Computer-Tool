@@ -52,6 +52,8 @@ try {
   }
   await until(()=>!state.running);
   assert.equal(state.completed,4);assert.deepEqual(state.errors,[]);
+  assert.equal((await caller.securityAnalyzePrograms()).total,0,'Saved assessments must be skipped after queue restart');
+  assert.equal(calls,5,'Queue restart must not invoke the model again');
   const {writePipelineStatus}=await import("../packages/core/src/pipeline");
   const {getConfig}=await import("../packages/core/src/config");
   writePipelineStatus({phase:"analyzing",total:7,completed:3,currentName:"Background fixture"});
