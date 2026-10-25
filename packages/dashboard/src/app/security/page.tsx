@@ -192,7 +192,7 @@ function InvestigationRecord({programId,timestamp,auditRecord}:{programId:string
         <p><strong>Source coverage:</strong></p>
         <ul>{record.files?.map((f:any)=><li key={f.path}>{f.path}: {f.ranges.map((r:number[])=>r.join("–")).join(", ")} {f.complete===true?"(whole file delivered)":"(partial or unknown coverage)"}</li>)}</ul>
         <p><strong>Tests and errors:</strong></p>
-        {record.events.filter((e:any)=>e.phase!=="started"&&(e.tool?.startsWith("verify_")||e.phase==="failed")).map((e:any,i:number)=><p key={i}>{e.at}: {e.tool} {e.path} {e.query} — {e.status||e.error||e.phase}</p>)}
+        {record.events.filter((e:any)=>e.phase!=="started"&&(e.tool?.startsWith("verify_")||e.phase==="failed")).map((e:any,i:number)=><div key={i}><p>{e.at}: {e.tool} {e.path} {e.query} — {e.status||e.error||e.phase}</p>{e.result&&<pre className="whitespace-pre-wrap">{JSON.stringify(e.result,null,2)}</pre>}</div>)}
         <p><strong>Final answer:</strong></p><pre className="whitespace-pre-wrap">{record.finalAnswer||"No final answer was accepted."}</pre>
         {record.recordLimited&&<p>The displayed event collection is limited; retain the original local logs.</p>}
         <button className="underline" onClick={download}>Download full record (JSON)</button>

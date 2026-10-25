@@ -346,6 +346,14 @@ export async function runLocalAudit(
           offset:call.function.arguments?.offset ?? 0,kind:String(call.function.arguments?.kind ?? "").slice(0,80),
           ...(()=>{try {const page=JSON.parse(output);return {end:page.end,nextOffset:page.nextOffset};}catch{return {};}})(),
           count:activityCount,status:probeStatus,durationMs:Date.now()-toolStarted,
+          ...(()=>{
+            if(!["verify_source","verify_python"].includes(call.function.name))return {};
+            try {
+              const result=JSON.parse(output);
+              return {result:output.length<=16000?result:{truncated:true,status:result.status,caseId:result.caseId,
+                behavior_observed:result.behavior_observed,excerpt:output.slice(0,15000)}};
+            }catch{return {result:{error:output.slice(0,16000)}};}
+          })(),
           error:output.startsWith("Tool error:")?output.slice(0,600):undefined});
         if(fatalToolError)throw new Error(fatalToolError);
         let progress:any;try {progress=JSON.parse(output);}catch{}
