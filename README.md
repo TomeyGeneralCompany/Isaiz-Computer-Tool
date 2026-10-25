@@ -70,3 +70,33 @@ Program assessments already persist in the local SQLite database, inside
 startup does not intentionally clear them. The dashboard's explicit Reassess operation
 can clear assessments. If analysis repeats after a restart, compare the configured
 DB_PATH and persisted assessment counts before changing storage or adding cloud backups.
+
+### Progress-aware local investigations
+
+Local source investigations start with `LOCAL_HUNT_MAX_TURNS` (default 80) and
+`SECURITY_SOURCE_CODE_TIMEOUT_MINUTES` (default 180). With
+`LOCAL_HUNT_DYNAMIC_ALLOWANCE` enabled (default), approaching either limit can
+add 40 turns and 60 minutes together. An extension requires at least ten turns
+with newly delivered source ranges or distinct completed probes within the last
+20 turns, including progress within the last three turns. Repeated/overlapping
+reads, directory navigation, errors and model assertions do not earn credit.
+Credits are consumed by the extension. A run remains bounded at 640 turns and
+24 hours (or the original deadline if configured longer); individual model
+requests have a maximum 15-minute deadline. Set
+`LOCAL_HUNT_DYNAMIC_ALLOWANCE=false` to restore fixed allowances. Operator
+cancellation remains immediate, and the daily dispatch setting is unchanged.
+
+Each local audit writes `.log.summary.json` beside its existing log, including
+read ranges, completed distinct probes, final answer, stopping reason, elapsed
+turns and final allowance. `[ALLOWANCE_EXTENDED]` records why an extension was
+earned. `[MODEL_ACTION]` records the selected action, including empty finals;
+empty finals get two corrective retries and never become successful outcomes.
+The dashboard displays partial inspection separately from “no findings,” with
+the recorded coverage explanation. This includes matching recent older records
+when their persisted coverage timestamp identifies the same attempt.
+
+Source hints prioritize application code over configuration, vendor fixtures,
+and deployment/test scripts without excluding those files. Solidity hints use
+the existing outline/function-context tools before paginating whole files.
+Context size, output budget, thread count, source evidence requirements and
+probe/report validation remain unchanged.

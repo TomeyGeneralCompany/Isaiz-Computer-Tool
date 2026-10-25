@@ -1,3 +1,4 @@
+import { AuditAllowance } from "./audit-allowance";
 import { AuditNavigation } from "./audit-navigation";
 import { SoliditySourceIndex } from "./solidity-source-index";
 import { compactAuditContext, auditCheckpoint, fitAuditToolOutput } from "./audit-context";
@@ -28,6 +29,8 @@ const tools = [
 ];
 export interface LocalAuditLimits {
   maxTurns: number;
+  dynamicAllowance?: boolean;
+  onAllowance?: (deadline:number) => Promise<void>;
   checkpointPath?: string;
   initialSourcePaths?: string[];
   numPredict: number;
@@ -68,7 +71,18 @@ export async function runLocalAudit(
     try {const request=JSON.parse(await readFile(cancellationPath,"utf8"));if(request.requestedAt>=auditStartedAt)controller.abort("operator_cancelled");}catch{}
     finally{checkingCancellation=false;}
   },250);
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const allowance=new AuditAllowance(settings.maxTurns,auditStartedAt,timeoutMs,limits.dynamicAllowance);
+  let timer = setTimeout(() => controller.abort(), timeoutMs);
+  let usedTurns=0, finalAnswer:string|undefined, stoppingReason="Inspection interrupted";
+  let emptyFinals=0;
+  const renew=async(turn:number)=>{
+    const extension=allowance.extend(turn,Date.now());
+    if(extension) {
+      clearTimeout(timer);timer=setTimeout(()=>controller.abort(),Math.max(1,allowance.deadline-Date.now()));
+      await appendFile(logFile,"[ALLOWANCE_EXTENDED] "+JSON.stringify(extension)+"\n");
+      await limits.onAllowance?.(allowance.deadline);
+    }
+  };
   const actionSchema = limits.verifyPython ? {...auditActionSchema,properties:{...auditActionSchema.properties,sequence:soliditySequenceJsonSchema,
     action:{type:"string",enum:[...auditActionSchema.properties.action.enum,"verify_source","verify_python"]}}} : auditActionSchema;
   const probePrompt = limits.verifyPython ? "\nThe verify_source action invokes a fixed, isolated source function probe. Set path to a .py, .js, .mjs, .cjs, .java or .sol source file, query to its public/exported function name (Contract.function for Solidity), answer to html_reflection or path_construction. The function must take one string and return a string. JavaScript exports may be async. Java requires a public static Class.method accepting and returning String; only JDK and repository source dependencies are supported, without Maven/Gradle execution. Solidity requires a deployable zero-argument constructor and a public/external view or pure function compatible with installed solc 0.8.30; runs on an in-memory local EVM. Use returned observations honestly; they do not prove full exploitability. No arbitrary commands are available. " + soliditySequencePrompt : "";
@@ -111,18 +125,23 @@ export async function runLocalAudit(
       }
       return candidate;
     }
-    for (let turn = 0; turn < settings.maxTurns; turn++) {
+    for (let turn = 0; turn < allowance.turns; turn++) {
+      usedTurns=turn+1;
       controller.signal.throwIfAborted();
       // Keep the prefix stable between compactions so the server can reuse it.
       messages=compactAuditContext(messages,messageBudget,events.slice(-6));
       const started = Date.now();
-      await appendFile(logFile, `[OLLAMA] turn ${turn+1}/${settings.maxTurns}: request started; model=${model}; context=${limits.numCtx ?? "server-default"}; generation_limit=${generationBudget}; protocol=${protocol}\n`);
+      await appendFile(logFile, `[OLLAMA] turn ${turn+1}/${allowance.turns}: request started; model=${model}; context=${limits.numCtx ?? "server-default"}; generation_limit=${generationBudget}; protocol=${protocol}\n`);
+      const requestDeadline=AbortSignal.timeout(Math.min(timeoutMs,15*60000));
       const result = await postOllamaJson(process.env.AUTOHACK_OLLAMA_URL || "http://127.0.0.1:11434/api/chat", { model, stream: false, think: false, messages,
           ...(structured ? {format:actionSchema} : {tools:availableTools}),
           keep_alive:"10m",
           options: { num_predict:generationBudget,
             ...(limits.numCtx === undefined ? {} : {num_ctx:settings.numCtx}),
-            ...(limits.numThreads === undefined ? {} : {num_thread:settings.numThreads}), temperature:0 } }, controller.signal) as { message?: Message; eval_count?: number; prompt_eval_count?: number; done_reason?: string; load_duration?:number; prompt_eval_duration?:number; eval_duration?:number; total_duration?:number; client_queue_ms?:number };
+            ...(limits.numThreads === undefined ? {} : {num_thread:settings.numThreads}), temperature:0 } }, AbortSignal.any([controller.signal,requestDeadline])).catch(error=>{
+        if(requestDeadline.aborted && !controller.signal.aborted)throw new Error("Local model request timed out; no response within the per-request deadline");
+        throw error;
+      }) as { message?: Message; eval_count?: number; prompt_eval_count?: number; done_reason?: string; load_duration?:number; prompt_eval_duration?:number; eval_duration?:number; total_duration?:number; client_queue_ms?:number };
       await appendFile(logFile, `[OLLAMA] turn ${turn+1}: response received in ${Date.now()-started}ms; prompt_tokens=${result.prompt_eval_count ?? "unknown"}; generated_tokens=${result.eval_count ?? "unknown"}\n`);
       await appendFile(logFile, "[TIMING] " + JSON.stringify({at:new Date().toISOString(),turn:turn+1,
         queueMs:result.client_queue_ms,loadMs:result.load_duration == null ? null : result.load_duration/1e6,
@@ -151,6 +170,7 @@ export async function runLocalAudit(
           }
           throw new Error("Ollama did not return a valid read-only JSON action; no tool was executed");
         }
+        await appendFile(logFile,"[MODEL_ACTION] "+JSON.stringify(action)+"\n");
         messages.push({role:"assistant",content:message.content});
         message = action.action === "final" ? {role:"assistant",content:action.answer} : {
           role:"assistant",content:"",tool_calls:[{function:{name:action.action,arguments:{path:action.path,query:action.query,kind:action.answer,offset:action.offset,sequence:action.sequence}}}],
@@ -165,7 +185,15 @@ export async function runLocalAudit(
             "No source file has been successfully read. Choose read_file now; a final answer is not accepted before a successful file read. /no_think",messageBudget,true).message);
           continue;
         }
-        if (!message.content?.trim()) throw new Error("Ollama returned empty final response");
+        if (!message.content?.trim()) {
+          if(++emptyFinals>2)throw new Error("Ollama returned empty final response after two corrective retries");
+          const rejected=messages.at(-1)!;
+          rejected.content="Empty final answer rejected.";
+          messages.push(fitAuditToolOutput(messages.slice(0,2),rejected,"final_validation",
+            'The final action must put the requested result in the answer STRING. Encode JSON inside that string when the task asks for JSON. Do not leave answer empty. Follow the task outcome rules; do not invent tests or findings.',messageBudget,true).message);
+          await appendFile(logFile,"[EMPTY_FINAL_RETRY] "+emptyFinals+"\n");
+          continue;
+        }
         const feedback = await limits.validateFinal?.(message.content);
         if (feedback) {
           // Validation may require rereading evidence; this is an intentional
@@ -178,6 +206,7 @@ export async function runLocalAudit(
           continue;
         }
         controller.signal.throwIfAborted();
+        finalAnswer=message.content;stoppingReason="Validated final answer";
         return message.content;
       }
       for (const call of message.tool_calls.slice(0, 8)) {
@@ -243,6 +272,11 @@ export async function runLocalAudit(
             if(kind!=="solidity_sequence" && rawSequence!==undefined)throw new Error("Sequence requires solidity_sequence kind");
             const sequence=kind==="solidity_sequence"?soliditySequenceSchema.parse(rawSequence):undefined;
             output=await limits.verifyPython(path,String(call.function.arguments?.query || ""),kind,sequence);
+            try {
+              const result=JSON.parse(output);
+              if(["behavior_observed","behavior_not_observed"].includes(result.status))
+                allowance.probe(JSON.stringify([relative(root,full),call.function.arguments?.query,kind,sequence]),turn+1);
+            }catch{}
           } else if (name === "list_files") {
             output = JSON.stringify(await listSourcePage(full,offset));
           } else if (name === "search_files") {
@@ -258,6 +292,7 @@ export async function runLocalAudit(
               if(output.startsWith("Tool error:"))throw new Error("Indexed source exceeds available context; use read_file with a page offset");
               if(output.length>budget)throw new Error("Indexed context exceeds message budget; use read_file");
               for(const excerpt of result.excerpts) {
+                allowance.read(excerpt.path,excerpt.start,excerpt.end,turn+1);
                 successfulReads++;
                 limits.onRead?.(excerpt.path,{start:excerpt.start,end:excerpt.end});
                 await appendFile(logFile, "[READ_OK] " + excerpt.path + ` offset=${excerpt.start} end=${excerpt.end} indexed=true\n`);
@@ -268,6 +303,7 @@ export async function runLocalAudit(
             const rawPage = await readSourcePage(full,offset,pageSize);
             output = fitOutput(JSON.stringify(rawPage)).output;
             const page = JSON.parse(output) as typeof rawPage;
+            allowance.read(relative(root,full),page.start,page.end,turn+1);
             activityCount=page.text.length;
             successfulReads++;
             limits.onRead?.(relative(root,full).split(sep).join("/"),{start:page.start,end:page.end});
@@ -305,15 +341,21 @@ export async function runLocalAudit(
         const responseMessage=fitted.message;
         messages.push(responseMessage);
         if(completedActionKey)recentActions.get(completedActionKey)!.response=responseMessage;
+        await renew(turn+1);
       }
     }
-    throw new Error(`Local audit reached its ${settings.maxTurns}-turn inspection limit`);
+    throw new Error(`Local audit reached its ${allowance.turns}-turn inspection limit`);
   } catch (error) {
+    stoppingReason=error instanceof Error ? error.message : String(error);
     if(controller.signal.reason === "operator_cancelled")throw new Error("Local audit cancelled by operator");
     if (controller.signal.aborted)
-      throw new Error(`Ollama audit timed out after ${Math.round(timeoutMs/1000)} seconds; check model load/CPU contention and the turn timing log`);
+      throw new Error(`Ollama audit timed out after ${Math.round((allowance.deadline-auditStartedAt)/1000)} seconds; check model load/CPU contention and the turn timing log`);
     throw error;
   } finally {
+    if(controller.signal.aborted)stoppingReason=controller.signal.reason === "operator_cancelled" ? "Cancelled by operator" : "Audit deadline reached";
+    await writeFile(logFile+".summary.json",JSON.stringify({startedAt:new Date(auditStartedAt).toISOString(),
+      endedAt:new Date().toISOString(),model,turns:usedTurns,successfulReads,stoppingReason,finalAnswer,
+      ...allowance.snapshot()},null,2),{mode:0o600}).catch(()=>{});
     if (limits.checkpointPath) {
       // Keep recent inspection evidence across bounded sessions, including failures.
       const checkpoint=JSON.parse(auditCheckpoint(events));

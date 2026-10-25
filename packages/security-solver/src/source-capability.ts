@@ -4,6 +4,15 @@ import {readFile,realpath,stat,lstat} from 'node:fs/promises';
 import {resolve,relative,sep} from 'node:path';
 import {sourceCodeOnly} from './source-function-reference';
 const execute=promisify(execFile);
+/** Rank application source ahead of tooling; retain every path for coverage. */
+export function sourcePriority(path:string):number {
+  let score=0;
+  if(/(?:^|\/)(?:contracts|src|actuator|app|lib)\//.test(path))score+=20;
+  if(/(?:^|\/)(?:test|tests|fixtures|mocks|vendors?|scripts?|deploy|node_modules|\.github)\//i.test(path))score-=60;
+  if(/(?:^|\/)(?:libs|interfaces)\//i.test(path))score-=10;
+  if(/(?:^|\/)[^/]*(?:config|mock|test)[^/]*\.[^.]+$/i.test(path)||/(?:^|\/)\./.test(path))score-=40;
+  return score;
+}
 const compiler=[0,8,30];
 const compare=(a:number[],b:number[])=>a[0]-b[0] || a[1]-b[1] || a[2]-b[2];
 /** Unknown syntax stays eligible; exclude only ranges we can conclusively evaluate. */
@@ -51,6 +60,7 @@ export async function inspectSourceCapability(directory:string,signal?:AbortSign
     if(pragmas.some(p=>compilerCompatible(p[1])===false))unsupported.push(file+': requires a different Solidity compiler');
     else {compatible++;sourcePaths.push(file);}
   }
+  sourcePaths.sort((a,b)=>sourcePriority(b)-sourcePriority(a)||a.localeCompare(b,"en"));
   const blocked=!unknown && compatible===0;
   return {blocked,reason:blocked?(candidates?'All candidate sources require an unsupported compiler':'No runnable Python, JavaScript, Java or Solidity sources found'):null,
     compatibleFiles:compatible,sourcePaths,unsupported:unsupported.slice(0,30),limitation:'Preflight checks source types and recognized compiler ranges. Deployment dependencies and runtime behavior still require probes.'};

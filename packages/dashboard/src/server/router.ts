@@ -1063,7 +1063,18 @@ export const appRouter = router({
         }catch{}
         failure ??= describeHuntFailure(null);
       }
-      return {...entry,failure};
+      let coverage=entry.coverage,coverageDetail=entry.coverageDetail;
+      if(!coverage && isLatest) {
+        const program=db.select({scopeSummary:schema.securityPrograms.scopeSummary}).from(schema.securityPrograms)
+          .where(eq(schema.securityPrograms.id,entry.programId)).get();
+        try {
+          const saved=JSON.parse(program?.scopeSummary || "{}").huntCoverage;
+          if(saved && Math.abs(Date.parse(saved.recordedAt)-Date.parse(entry.timestamp))<60000) {
+            coverage=saved.status;coverageDetail=saved.detail;
+          }
+        }catch{}
+      }
+      return {...entry,failure,coverage,coverageDetail};
     });
   }),
 
