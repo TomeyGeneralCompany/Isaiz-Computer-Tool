@@ -10,7 +10,10 @@ import {createServer} from 'node:http';
 import {runLocalAudit} from '../packages/security-solver/src/local-ollama-runner';
 import {getConfig} from '../packages/core/src/config';
 import {hostModelTimeout} from './model-check-settings';
+import {validateReasoningEvidence} from './reasoning-evidence';
 const execute=promisify(execFile), mock=process.argv.includes('--mock');
+const premature=process.argv.includes('--premature-final');
+if(premature&&!mock)throw new Error('--premature-final is a mock-harness check only');
 const deliberatelyWrong=process.argv.includes('--wrong-answer');
 if(deliberatelyWrong&&!mock)throw new Error('--wrong-answer is a mock-harness check only');
 const root=await mkdtemp(join(tmpdir(),'reasoning-fixture-'));
@@ -29,9 +32,12 @@ try {
  if(mock) {
   server.on('request',async(req,res)=>{
    for await(const _ of req){};
-   const i=mockTurn++;
+   const turn=mockTurn++;
+   // First omit tests, then contradict measured results, then recover.
+   const early= premature && (turn===1 || turn===5);
+   const i=premature ? turn-(turn>1?1:0)-(turn>5?1:0) : turn;
    const f=fixtures[Math.floor(i/2)];
-   const action=i<4?(i%2===0?{action:'read_file',path:f.path,query:'',answer:''}:
+   const action=early ? {action:'final',path:'',query:'',answer:JSON.stringify({files:fixtures.map(f=>({path:f.path,rawMarkup:!f.raw,reason:'Unsupported initial conclusion.'}))})} : i<4?(i%2===0?{action:'read_file',path:f.path,query:'',answer:''}:
     {action:'verify_source',path:f.path,query:f.fn,answer:'html_reflection',hypothesis:'Untrusted markup may pass through formatting unchanged; escaping would disprove this.'}):
     {action:'final',path:'',query:'',answer:JSON.stringify({files:fixtures.map(f=>({path:f.path,rawMarkup:deliberatelyWrong?!f.raw:f.raw,reason:'Measured owned fixture behavior.'}))})};
    res.end(JSON.stringify({message:{role:'assistant',content:JSON.stringify(action)}}));
@@ -52,9 +58,13 @@ try {
     catch(error:any){if(typeof error.stdout!=='string'||!error.stdout.trim())throw error;stdout=error.stdout;}
     const result=JSON.parse(stdout);probes.push({path,fn,kind,status:result.status,observed:result.behavior_observed,detail:result});return stdout;
    },
-   validateFinal:text=>{try {const value=JSON.parse(text);return Array.isArray(value.files)?null:'Return the requested files array.';}catch{return 'Return JSON with a files array inside the final answer string.';}}
+   validateFinal:text=>validateReasoningEvidence(text,fixtures.map(f=>f.path),probes)
   });
  final=JSON.parse(answer);
+ if(premature) {
+  const log=await readFile(join(evidence,'audit.log'),'utf8');
+  if(!log.includes('no completed markup observation')||!log.includes('contradicts the recorded observation'))throw new Error('Expected corrective feedback was not exercised');
+ }
  for(const f of fixtures) {
   const answers=final.files.filter((x:any)=>x.path===f.path);
   if(answers.length!==1||answers[0].rawMarkup!==f.raw||typeof answers[0].reason!=='string'||!answers[0].reason.trim())throw new Error('Incorrect or missing fixture classification');
@@ -64,7 +74,7 @@ try {
 } catch(error){failure=String(error);process.exitCode=1;}
 finally {
  server.closeAllConnections();server.close();
- const summary={model,mocked:mock,passed:!failure,claim:mock?'Harness validation only; not evidence of model reasoning':'Owned-fixture result; not proof of general vulnerability discovery',elapsedSeconds:Math.round((Date.now()-started)/1000),expected:fixtures,probes,final,failure,evidence};
+ const summary={model,mocked:mock,passed:!failure,claim:mock?'Harness validation only; not evidence of model reasoning':'Owned-fixture result; not proof of general vulnerability discovery',elapsedSeconds:Math.round((Date.now()-started)/1000),expected:fixtures,probes,final,failure,evidence,validation:'Final answers require completed markup probes and consistency with observations; hidden fixture grading remains separate'};
  await writeFile(join(evidence,'summary.json'),JSON.stringify(summary,null,2),{mode:0o600});
  console.log(JSON.stringify(summary,null,2));await rm(root,{recursive:true,force:true});
 }

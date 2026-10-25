@@ -134,7 +134,13 @@ remain outside the model prompt and corrective feedback. It writes evidence to
 `data/reasoning-diagnostics/`. A failed/blocked probe does not pass. `--mock`
 validates the harness with actual isolated Python execution but scripted model
 actions; it is **not** a model reasoning result. CI also checks that deliberately
-wrong classifications fail.
+wrong classifications fail. Before accepting a final answer, the controller now
+requires a completed markup probe for each module and checks that classifications
+match the recorded observations. Missing tests and contradictory conclusions receive
+corrective feedback while turns remain. The independent evaluator still rejects
+testing an irrelevant function; its answer key is never supplied to the model.
+`--mock --premature-final` exercises recovery from omitted tests and a conclusion
+that contradicts observations.
 
 Normal assessment persistence is exercised by a fresh child process. Assessment
 writes merge current database metadata, and explicit Reassess removes only the
