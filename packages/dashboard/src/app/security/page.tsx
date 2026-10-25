@@ -170,6 +170,37 @@ function LiveActivity() {
   </section>;
 }
 
+function InvestigationRecord({programId,timestamp,auditRecord}:{programId:string;timestamp:string;auditRecord?:string}) {
+  const [open,setOpen]=useState(false);
+  const {data,isLoading}=trpc.securityInvestigationRecords.useQuery({programId},{enabled:open});
+  const matches=data?.filter((r:any)=>auditRecord?r.id===auditRecord:Math.abs(Date.parse(r.endedAt)-Date.parse(timestamp))<60000);
+  const record=matches?.length===1?matches[0]:undefined;
+  const download=()=>{
+    if(!record)return;
+    const url=URL.createObjectURL(new Blob([JSON.stringify(record,null,2)],{type:"application/json"}));
+    const anchor=document.createElement("a");anchor.href=url;anchor.download=record.id+".json";anchor.click();
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
+  };
+  return <div className="w-full">
+    <button className="underline" onClick={()=>setOpen(!open)}>{open?"Hide investigation record":"View investigation record"}</button>
+    {open && <div className="mt-3 space-y-3 break-words">
+      {isLoading?<p>Loading record…</p>:!record?<p>No detailed record is available for this older run. Its coverage explanation above remains the available outcome.</p>:<>
+        <p><strong>Stopped:</strong> {record.stoppingReason}. {record.turns} turns; {record.successfulReads} reads; {record.completedDistinctProbes} distinct completed tests.</p>
+        <p>{record.limitation}</p>
+        <p><strong>Model hypotheses (unverified):</strong></p>
+        {record.hypotheses?.length?record.hypotheses.map((h:any,i:number)=><p key={i}>Turn {h.turn}: {h.path} — {h.statement}</p>):<p>No explicit hypothesis was recorded.</p>}
+        <p><strong>Source coverage:</strong></p>
+        <ul>{record.files?.map((f:any)=><li key={f.path}>{f.path}: {f.ranges.map((r:number[])=>r.join("–")).join(", ")} {f.complete===true?"(whole file delivered)":"(partial or unknown coverage)"}</li>)}</ul>
+        <p><strong>Tests and errors:</strong></p>
+        {record.events.filter((e:any)=>e.phase!=="started"&&(e.tool?.startsWith("verify_")||e.phase==="failed")).map((e:any,i:number)=><div key={i}><p>{e.at}: {e.tool} {e.path} {e.query} — {e.status||e.error||e.phase}</p>{e.result&&<pre className="whitespace-pre-wrap">{JSON.stringify(e.result,null,2)}</pre>}</div>)}
+        <p><strong>Final answer:</strong></p><pre className="whitespace-pre-wrap">{record.finalAnswer||"No final answer was accepted."}</pre>
+        {record.recordLimited&&<p>The displayed event collection is limited; retain the original local logs.</p>}
+        <button className="underline" onClick={download}>Download full record (JSON)</button>
+      </>}
+    </div>}
+  </div>;
+}
+
 function RecentHunts() {
   const { data: history } = trpc.securityHuntHistory.useQuery(undefined, {
     refetchInterval: 5000,
@@ -228,6 +259,7 @@ function RecentHunts() {
                 {timeAgo(h.timestamp)}
               </span>
             </div>
+            <InvestigationRecord programId={h.programId} timestamp={h.timestamp} auditRecord={h.auditRecord} />
           </div>
         ))}
       </div>

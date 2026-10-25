@@ -1197,6 +1197,7 @@ export interface ParsedFinding {
 }
 
 export interface SecuritySolveResult {
+  auditRecord?: string;
   acquisitionChecks?: Array<{repository:string;reason:string|null;retryAfter:number|null}>;
   capabilityBlock?: string;
   capabilityChecks?: Array<{repository:string;blocked:boolean;reason:string|null;checkedAt:number}>;

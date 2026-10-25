@@ -75,6 +75,8 @@ export async function runLocalAudit(
   let timer = setTimeout(() => controller.abort(), timeoutMs);
   let usedTurns=0, finalAnswer:string|undefined, stoppingReason="Inspection interrupted";
   let emptyFinals=0;
+  const sourceTotals=new Map<string,number>();
+  const hypotheses:Array<{turn:number;path:string;statement:string}>=[];
   const renew=async(turn:number)=>{
     const extension=allowance.extend(turn,Date.now());
     if(extension) {
@@ -100,10 +102,11 @@ export async function runLocalAudit(
   navigation.seed(limits.initialSourcePaths || []);
   const recentActions = new Map<string, {turn:number; nextOffset?:number|null; response?:Message}>();
   let stalledActions = 0;
+  const missingRequests=new Map<string,number>();
   const fixedSize=JSON.stringify(messages).length+JSON.stringify(structured ? actionSchema : availableTools).length;
   // Tools/schema also consume context. Keep a full recent exchange and reserve output.
   let messageBudget=Math.max(JSON.stringify(messages).length+1200,contextBudget-JSON.stringify(structured ? actionSchema : availableTools).length);
-  let pageSize=Math.max(128,Math.min(2000,Math.floor((messageBudget-JSON.stringify(messages).length-2500)/8)));
+  let pageSize=Math.max(128,Math.min(2000,messageBudget-JSON.stringify(messages).length-800));
   try {
     if(fixedSize>contextBudget && limits.numCtx!==undefined)throw new Error("Audit instructions exceed configured context; increase numCtx or narrow the request");
     if (limits.checkpointPath) {
@@ -129,7 +132,7 @@ export async function runLocalAudit(
       usedTurns=turn+1;
       controller.signal.throwIfAborted();
       // Keep the prefix stable between compactions so the server can reuse it.
-      messages=compactAuditContext(messages,messageBudget,events.slice(-6));
+      messages=compactAuditContext(messages,messageBudget,[...hypotheses.slice(-2).map(h=>"Unverified hypothesis: "+JSON.stringify(h)),...events.slice(-4)]);
       const started = Date.now();
       await appendFile(logFile, `[OLLAMA] turn ${turn+1}/${allowance.turns}: request started; model=${model}; context=${limits.numCtx ?? "server-default"}; generation_limit=${generationBudget}; protocol=${protocol}\n`);
       const requestDeadline=AbortSignal.timeout(Math.min(timeoutMs,15*60000));
@@ -164,12 +167,13 @@ export async function runLocalAudit(
             generationBudget = nextBudget;
             contextBudget = nextContext;
             messageBudget = Math.max(JSON.stringify(messages.slice(0,2)).length+1200,contextBudget-JSON.stringify(structured ? actionSchema : availableTools).length);
-            pageSize = Math.max(128,Math.min(2000,Math.floor((messageBudget-JSON.stringify(messages.slice(0,2)).length-2500)/8)));
+            pageSize = Math.max(128,Math.min(2000,messageBudget-JSON.stringify(messages.slice(0,2)).length-800));
             await appendFile(logFile, `[OLLAMA] truncated JSON action; retrying with generation_limit=${generationBudget}\n`);
             continue;
           }
           throw new Error("Ollama did not return a valid read-only JSON action; no tool was executed");
         }
+        if(action.hypothesis)hypotheses.push({turn:turn+1,path:action.path,statement:action.hypothesis});
         await appendFile(logFile,"[MODEL_ACTION] "+JSON.stringify(action)+"\n");
         messages.push({role:"assistant",content:message.content});
         message = action.action === "final" ? {role:"assistant",content:action.answer} : {
@@ -213,6 +217,7 @@ export async function runLocalAudit(
         controller.signal.throwIfAborted();
         await appendFile(logFile, "[TOOL] " + call.function.name + "\n");
         let output: string;
+        let fatalToolError:string|undefined;
         let activityCount:number|undefined;
         let completedActionKey:string|undefined;
         // Keep the executed request in history, but omit irrelevant model prose.
@@ -303,6 +308,7 @@ export async function runLocalAudit(
             const rawPage = await readSourcePage(full,offset,pageSize);
             output = fitOutput(JSON.stringify(rawPage)).output;
             const page = JSON.parse(output) as typeof rawPage;
+            sourceTotals.set(relative(root,full),page.totalCharacters);
             allowance.read(relative(root,full),page.start,page.end,turn+1);
             activityCount=page.text.length;
             successfulReads++;
@@ -323,6 +329,12 @@ export async function runLocalAudit(
           controller.signal.throwIfAborted();
           if(error instanceof Error && error.message.startsWith("AUDIT_STALLED:"))throw error;
           output = "Tool error: " + String(error);
+          if((error as any)?.code === "ENOENT") {
+            const key=JSON.stringify([call.function.name,resolve(root,String(call.function.arguments?.path || "."))]);
+            const count=(missingRequests.get(key)||0)+1;missingRequests.set(key,count);
+            output+=" This path does not exist. Do not repeat it. Use list_files on a known directory or select an existing source hint. "+navigation.hint();
+            if(count>=3)fatalToolError="AUDIT_STALLED: repeated missing source path after corrective feedback; inspection incomplete";
+          }
         }
         let probeStatus:string|undefined;
         if(["verify_source","verify_python"].includes(call.function.name)){
@@ -334,7 +346,16 @@ export async function runLocalAudit(
           offset:call.function.arguments?.offset ?? 0,kind:String(call.function.arguments?.kind ?? "").slice(0,80),
           ...(()=>{try {const page=JSON.parse(output);return {end:page.end,nextOffset:page.nextOffset};}catch{return {};}})(),
           count:activityCount,status:probeStatus,durationMs:Date.now()-toolStarted,
+          ...(()=>{
+            if(!["verify_source","verify_python"].includes(call.function.name))return {};
+            try {
+              const result=JSON.parse(output);
+              return {result:output.length<=16000?result:{truncated:true,status:result.status,caseId:result.caseId,
+                behavior_observed:result.behavior_observed,excerpt:output.slice(0,15000)}};
+            }catch{return {result:{error:output.slice(0,16000)}};}
+          })(),
           error:output.startsWith("Tool error:")?output.slice(0,600):undefined});
+        if(fatalToolError)throw new Error(fatalToolError);
         let progress:any;try {progress=JSON.parse(output);}catch{}
         events.push(JSON.stringify({tool:call.function.name,path:String(call.function.arguments?.path || ""),query:String(call.function.arguments?.query || "").slice(0,60),offset:call.function.arguments?.offset,end:progress?.end,nextOffset:progress?.nextOffset,caseId:progress?.caseId,status:probeStatus || (output.startsWith("Tool error:")?"failed":"completed")}).slice(0,180));
         const fitted=fitOutput(output);
@@ -354,8 +375,9 @@ export async function runLocalAudit(
   } finally {
     if(controller.signal.aborted)stoppingReason=controller.signal.reason === "operator_cancelled" ? "Cancelled by operator" : "Audit deadline reached";
     await writeFile(logFile+".summary.json",JSON.stringify({startedAt:new Date(auditStartedAt).toISOString(),
-      endedAt:new Date().toISOString(),model,turns:usedTurns,successfulReads,stoppingReason,finalAnswer,
-      ...allowance.snapshot()},null,2),{mode:0o600}).catch(()=>{});
+      endedAt:new Date().toISOString(),model,turns:usedTurns,successfulReads,stoppingReason,finalAnswer,hypotheses,
+      ...allowance.snapshot(),files:allowance.snapshot().files.map(file=>({...file,totalCharacters:sourceTotals.get(file.path),
+        complete:sourceTotals.has(file.path)&&file.ranges.length===1&&file.ranges[0][0]===0&&file.ranges[0][1]===sourceTotals.get(file.path)}))},null,2),{mode:0o600}).catch(()=>{});
     if (limits.checkpointPath) {
       // Keep recent inspection evidence across bounded sessions, including failures.
       const checkpoint=JSON.parse(auditCheckpoint(events));

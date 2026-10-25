@@ -46,6 +46,8 @@ jobs:
         run: npx tsx scripts/test-mock-agent.ts
       - name: Verify hunt capability, reachability and context management
         run: |
+          npx tsx scripts/test-missing-source-loop.ts
+          npx tsx scripts/test-investigation-records.ts
           npx tsx scripts/test-audit-allowance.ts
           npx tsx scripts/test-progress-controller.ts
           npx tsx scripts/test-hunt-reliability.ts

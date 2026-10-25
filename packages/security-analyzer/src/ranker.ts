@@ -30,7 +30,8 @@ async function analyzeProgramImpl(program: SecurityProgram): Promise<void> {
     // Store assessment in scopeSummary alongside existing scope data, policy, and disclosed reports
     let existing: any = {};
     try {
-      const parsed = JSON.parse(program.scopeSummary || "{}");
+      const current=db.select().from(schema.securityPrograms).where(eq(schema.securityPrograms.id,program.id)).get();
+      const parsed = JSON.parse(current?.scopeSummary || program.scopeSummary || "{}");
       // Handle both old array format and new object format
       if (Array.isArray(parsed)) {
         existing = { scopes: parsed };

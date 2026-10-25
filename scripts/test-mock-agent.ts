@@ -92,7 +92,7 @@ try {
   assert.equal(calls,4);
   assert.match(await readFile(join(dir,"repair.log"),"utf8"),/FINAL_REJECTED/);
   repair = false; forbidden = true; calls = 0;
-  await assert.rejects(runLocalAudit("Inspect sample.ts",join(dir,"denied.log"),10000,dir,"mock",undefined,limits),/inspection limit/);
+  await assert.rejects(runLocalAudit("Inspect sample.ts",join(dir,"denied.log"),10000,dir,"mock",undefined,limits),/inspection limit|repeated missing source path/);
   assert.ok(!(await readFile(join(dir,"denied.log"),"utf8")).includes("[READ_OK]"));
   assert.throws(()=>decodeAuditAction(JSON.stringify({action:"exec",path:"",query:"",answer:""})),/Invalid read-only/);
   assert.throws(()=>decodeAuditAction("I intend to call read_file"));

@@ -61,6 +61,10 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
   signal ??= ownJob!.signal;
   let coverage: "failed" | "unsupported" = "failed";
   let cleanupRoot: string | undefined;
+  let investigationLog:string|undefined;
+  let auditRecord:string|undefined;
+  const investigationStartedAt=new Date().toISOString();
+  let preparationFailure="Source preparation did not reach model inspection";
   const acquisitionChecks:NonNullable<SecuritySolveResult["acquisitionChecks"]>=[];
   let capabilityChecks:SecuritySolveResult["capabilityChecks"];
   try {
@@ -69,6 +73,8 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
     cleanupRoot = root;
     const directory=join(process.env.PROJECT_ROOT || process.cwd(),"data","logs");await mkdir(directory,{recursive:true});
     const logFile=join(directory,"local-hunt-"+randomBytes(8).toString("hex")+".log");await writeFile(logFile,"",{mode:0o600});
+    investigationLog=logFile;
+    auditRecord=relative(directory,logFile);
     const statusStartedAt=new Date().toISOString();
     await appendFile(logFile,"[AUDIT_PROGRAM] "+JSON.stringify({id:program.id,name:program.name})+"\n");
     await writeSecuritySolverStatus({active:true,programId:program.id,programName:program.name,stage:"hunting",startedAt:statusStartedAt,timeoutMinutes:getConfig().SECURITY_SOURCE_CODE_TIMEOUT_MINUTES,pid:process.pid});
@@ -109,7 +115,8 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
     if(!repos.length)throw new Error("No authorized source repository was acquired; " + (acquisitionFailures.join("; ") || "no source URLs remain after scope/capability filtering"));
     const capabilities=await Promise.all(repos.map(async repo=>({repository:repo.url,...await inspectSourceCapability(repo.directory,signal,!missingDependencies.has(repo.url))})));
     capabilityChecks=capabilities.map(c=>({repository:c.repository,blocked:c.blocked,reason:c.reason,checkedAt:Date.now()}));
-    if(capabilities.every(c=>c.blocked))return {success:false,coverage:"unsupported",acquisitionChecks,findings:[],rawOutput:"",
+    if(capabilities.every(c=>c.blocked))preparationFailure="Source capability preflight: "+capabilities.map(c=>c.reason).join("; ");
+    if(capabilities.every(c=>c.blocked))return {auditRecord,success:false,coverage:"unsupported",acquisitionChecks,findings:[],rawOutput:"",
       error:"Source capability preflight: "+capabilities.map(c=>c.reason).join("; "),capabilityChecks,
       capabilityBlock:!focus && repos.length===allowedUrls.length ? capabilities.map(c=>c.reason).join("; ") : undefined};
     for(let i=repos.length-1;i>=0;i--)if(capabilities[i].blocked)repos.splice(i,1);
@@ -140,6 +147,7 @@ Find real source issues. For Java (.java) public static Class.method functions u
 For each reported candidate, successfully use verify_source, read the source and a real calling file, and inspect mitigations. For a directly invoked Solidity entry point, set reachability="direct_transaction", callerFile to the tested source, and callerLine to its function declaration; the recorded sequence must send a transaction to that function. Otherwise use reachability="caller" and an actual call expression, not a declaration or comment. A function behavior alone does not establish exploitability. An empty findings array is valid. If inspection finds no testable candidate, return {"findings":[],"outcome":"no_testable_candidate","reason":"Explain what you inspected and why no supported test applies"}. This records incomplete coverage and ends this pass without forcing an unrelated probe.
 Return a final answer containing ONLY JSON in this shape:
 {"findings":[{"caseId":"actual returned case ID","severity":"medium","confidence":0.7,"ratingReason":"Explain the evidence and limits supporting both ratings; do not copy example ratings.","title":"specific title","impact":"supported impact and reachability","callerFile":"workspace-relative file you read","callerLine":1,"falsification":"actual mitigation/disproof checks, including limitations"}]}
+Investigate one concrete behavior at a time: locate the relevant function and caller, state the hypothesis with a disproof condition, and run a supported probe as soon as you have its prerequisites. Search for missing context instead of reading every file in order. Never run an unrelated test merely to satisfy a quota.
 Choose severity and confidence from the actual reachability, observed behavior, impact and remaining uncertainty. Never raise a rating just to meet a threshold.
 An empty findings array can end this bounded pass after a supported probe, or with outcome="no_testable_candidate" and a reason. The latter records incomplete inspection, not a claim that the program has no vulnerabilities.
 Do not claim production testing, JavaScript execution, file access or other effects not demonstrated. You initially have ${maxTurns} read/probe turns. The controller may extend turns and time when newly inspected source or completed tests demonstrate progress. Choose relevant functions and callers rather than exhaustively reading unrelated files.`;
@@ -182,7 +190,7 @@ Do not claim production testing, JavaScript execution, file access or other effe
         },
       });
     signal.throwIfAborted();
-    if(parsed?.outcome === "no_testable_candidate")return {success:true,coverage:"partial",acquisitionChecks,capabilityChecks,
+    if(parsed?.outcome === "no_testable_candidate")return {auditRecord,success:true,coverage:"partial",acquisitionChecks,capabilityChecks,
       coverageDetail:"Inspection incomplete: "+parsed.reason,findings:[],rawOutput:answer};
     if (session.blockedReason) throw new Error("Reproduction unavailable: " + session.blockedReason);
     if (!session.completedProbes) {
@@ -204,9 +212,20 @@ Do not claim production testing, JavaScript execution, file access or other effe
       findings.push({title:candidate.title,severity:candidate.severity,vulnerabilityType:record.spec.kind==="html_reflection"?"CWE-116":record.spec.kind==="path_construction"?"CWE-22":"State assertion discrepancy",targetAsset,confidence:candidate.confidence,
         reproductionCaseId:candidate.caseId,reproductionFingerprint:createHash("sha256").update(JSON.stringify({programId:program.id,repositoryUrl:record.repositoryUrl,commit:record.commit,file:record.spec.file,function:record.spec.function,kind:record.spec.kind,...(record.spec.sequence ? {sequence:record.spec.sequence} : {})})).digest("hex"),reportBody:report(candidate,record,candidate.caseId,callerRelative)});
     }
-    return {success:true,coverage:"partial",acquisitionChecks,capabilityChecks,coverageDetail:`${session.completedProbes} supported probes completed; ${session.unsupportedProbes} unsupported probes; ${session.failedProbes} failed probes`,findings,rawOutput:answer};
-  }catch(error:any){return {success:false,coverage,acquisitionChecks,capabilityChecks,findings:[],rawOutput:"",error:signal.aborted ? "Local hunt cancelled by operator" : error.message || "Local hunt failed"};}
-  finally {ownJob?.dispose();await clearSecuritySolverStatus().catch(()=>{});if(cleanupRoot)await rm(cleanupRoot,{recursive:true,force:true});}
+    return {auditRecord,success:true,coverage:"partial",acquisitionChecks,capabilityChecks,coverageDetail:`${session.completedProbes} supported probes completed; ${session.unsupportedProbes} unsupported probes; ${session.failedProbes} failed probes`,findings,rawOutput:answer};
+  }catch(error:any){preparationFailure=error.message || String(error);return {auditRecord,success:false,coverage,acquisitionChecks,capabilityChecks,findings:[],rawOutput:"",error:signal.aborted ? "Local hunt cancelled by operator" : error.message || "Local hunt failed"};}
+  finally {
+    if(investigationLog) {
+      try {
+        let summary:any;
+        try {summary=JSON.parse(await readFile(investigationLog+".summary.json","utf8"));}
+        catch {summary={startedAt:investigationStartedAt,endedAt:new Date().toISOString(),turns:0,successfulReads:0,
+          completedDistinctProbes:0,files:[],hypotheses:[],stoppingReason:preparationFailure};}
+        await writeFile(investigationLog+".summary.json",JSON.stringify({...summary,programId:program.id,programName:program.name,
+          acquisitionChecks,capabilityChecks},null,2),{mode:0o600});
+      }catch {log.warn("Could not save investigation preparation record");}
+    }
+    ownJob?.dispose();await clearSecuritySolverStatus().catch(()=>{});if(cleanupRoot)await rm(cleanupRoot,{recursive:true,force:true});}
 }
 
 export async function independentReview(finding:SecurityFinding,program:SecurityProgram,id:string,signal:AbortSignal) {
