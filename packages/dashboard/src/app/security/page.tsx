@@ -204,6 +204,9 @@ function RecentHunts() {
                 }}
               />
               <span className="font-medium">{h.programName}</span>
+              {!h.failure && h.coverageDetail && <div className="max-w-xl">
+                <p className="whitespace-pre-wrap break-words" style={{color:"var(--text-dim)"}}>{h.coverageDetail}</p>
+              </div>}
               {h.failure && <div className="max-w-xl">
                 <p className="font-medium" style={{color:"var(--red, #ef4444)"}}>{h.failure.stage}</p>
                 <p className="mt-1 whitespace-pre-wrap break-words" style={{color:"var(--text-dim)"}}>{h.failure.reason}</p>
@@ -219,7 +222,7 @@ function RecentHunts() {
                 <span style={{ color: "var(--red, #ef4444)" }}>failed</span>
               )}
               {h.findingsReported === 0 && h.strategyUsed !== "failed" && (
-                <span style={{ color: "var(--text-dim)" }}>no findings</span>
+                <span style={{ color: "var(--text-dim)" }}>{h.coverage === "partial" ? "partial inspection" : "no findings"}</span>
               )}
               <span className="tabular-nums" style={{ color: "var(--text-dim)" }}>
                 {timeAgo(h.timestamp)}

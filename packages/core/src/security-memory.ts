@@ -15,6 +15,8 @@ interface SecurityHuntOutcome {
   strategyUsed: "code_review" | "web_testing" | "api_testing" | "mixed";
   /** Optional for compatibility with older history records. */
   error?: string;
+  coverage?: string;
+  coverageDetail?: string;
   timestamp: string;
 }
 

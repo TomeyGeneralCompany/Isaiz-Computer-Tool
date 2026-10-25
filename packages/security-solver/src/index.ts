@@ -242,6 +242,7 @@ async function huntProgramImpl(
       programId: program.id,
       programName: program.name,
       findingsReported: findingsCreated,
+      coverage, coverageDetail,
       findingsAccepted: 0,
       findingsDuplicate: 0,
       findingsRejected: 0,
@@ -271,6 +272,7 @@ async function huntProgramImpl(
       findingsRejected: 0,
       strategyUsed: "failed" as any,
       error: coverageDetail,
+      coverage, coverageDetail,
       timestamp: new Date().toISOString(),
     }).catch(() => {});
     throw err;
