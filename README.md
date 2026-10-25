@@ -100,3 +100,44 @@ and deployment/test scripts without excluding those files. Solidity hints use
 the existing outline/function-context tools before paginating whole files.
 Context size, output budget, thread count, source evidence requirements and
 probe/report validation remain unchanged.
+
+### Investigation records and independent model checks
+
+Recent Hunts now offers **View investigation record** and a JSON download for
+new runs. The record includes exact source ranges (whole-file delivery is
+labelled only when established), explicitly stated hypotheses, tests and errors,
+allowance extensions, final answer, source-preparation limitations and the
+stopping reason. New history entries link by run ID; ambiguous older records are
+not silently attached to another attempt. Hypotheses remain unverified model
+claims, are retained in bounded compaction notes when space permits, and never
+count as extension credit or reproduced evidence.
+
+The read candidate now uses available message space (up to 2,000 characters)
+before the existing exact serialized-output fitter shortens it as needed. The
+8,192-token context, output reservation and four-thread configuration are
+unchanged. Repeated missing-file requests receive corrective navigation feedback
+and end as incomplete after three failures for the same path.
+
+For a blind check of the configured laptop model, run from the application folder
+with the application idle (to avoid competing inference):
+
+```bash
+source scripts/node-runtime.sh
+LOCAL_AGENT_TEST_TIMEOUT_MS=1800000 node --import tsx scripts/test-local-reasoning.ts
+```
+
+This creates only owned local fixtures. Filenames and function names are
+randomized; the model is not told which function or test to choose, or which
+module is flawed. The evaluator requires correct classifications of both a raw
+HTML case and an escaping case plus relevant completed probes. Expected answers
+remain outside the model prompt and corrective feedback. It writes evidence to
+`data/reasoning-diagnostics/`. A failed/blocked probe does not pass. `--mock`
+validates the harness with actual isolated Python execution but scripted model
+actions; it is **not** a model reasoning result. CI also checks that deliberately
+wrong classifications fail.
+
+Normal assessment persistence is exercised by a fresh child process. Assessment
+writes merge current database metadata, and explicit Reassess removes only the
+assessment field from program metadata and logs that operation. The retained
+October 24–25 evidence does not establish the cause of the earlier assessment
+count drop; see `docs/diagnostics/2026-10-25-overnight.md` for the supported findings.

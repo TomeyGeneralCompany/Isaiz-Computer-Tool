@@ -34,5 +34,14 @@ jobs:
         env:
           GITHUB_TOKEN: offline-ci-fixture
         run: npx tsx scripts/test-local-controller.ts --mock
+      - name: Validate blind reasoning harness with real isolated probes
+        env:
+          GITHUB_TOKEN: offline-ci-fixture
+        run: |
+          npx tsx scripts/test-local-reasoning.ts --mock
+          if npx tsx scripts/test-local-reasoning.ts --mock --wrong-answer; then
+            echo "Incorrect classifications must fail the reasoning evaluator"
+            exit 1
+          fi
       - name: Test real source audit, report creation and independent replay
         run: npx tsx scripts/test-source-workflow.ts

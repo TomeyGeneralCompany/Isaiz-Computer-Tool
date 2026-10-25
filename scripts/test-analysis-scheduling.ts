@@ -42,7 +42,12 @@ try {
   assert.equal((await caller.securityAnalyzePrograms()).reason,"already running","Slow inference is not stale");
   await caller.securityStopAnalyze();
   assert.equal((await caller.securityAnalyzePrograms()).reason,"already running","Stop must drain before restart");
+  const {eq}=await import("drizzle-orm");
+  const before=db.select().from(schema.securityPrograms).where(eq(schema.securityPrograms.id,"fixture-0")).get()!;
+  db.update(schema.securityPrograms).set({scopeSummary:JSON.stringify({...JSON.parse(before.scopeSummary!),policy:"preserve concurrent policy",huntCoverage:{status:"partial",detail:"preserve concurrent coverage"}})}).where(eq(schema.securityPrograms.id,"fixture-0")).run();
   respond!();await until(()=>!state.running);
+  const saved=db.select().from(schema.securityPrograms).where(eq(schema.securityPrograms.id,"fixture-0")).get()!;
+  assert.equal(JSON.parse(saved.scopeSummary!).policy,"preserve concurrent policy");
   assert.equal(calls,1,"Cancellation must not start the remaining programs");
   assert.equal((await caller.securityAnalyzePrograms()).total,4);
   for(let i=2;i<=5;i++) {
@@ -54,6 +59,9 @@ try {
   assert.equal(state.completed,4);assert.deepEqual(state.errors,[]);
   assert.equal((await caller.securityAnalyzePrograms()).total,0,'Saved assessments must be skipped after queue restart');
   assert.equal(calls,5,'Queue restart must not invoke the model again');
+  const child=execFileSync(process.execPath,["--import","tsx","--input-type=module","-e",
+    "const {appRouter}=await import('./packages/dashboard/src/server/router.ts'); console.log('RESTART_RESULT='+JSON.stringify(await appRouter.createCaller({}).securityAnalyzePrograms()));"],{encoding:"utf8",timeout:15000});
+  assert.match(child,/RESTART_RESULT=.*"total":0/,'Fresh process must load persisted assessments without model calls');
   const {writePipelineStatus}=await import("../packages/core/src/pipeline");
   const {getConfig}=await import("../packages/core/src/config");
   writePipelineStatus({phase:"analyzing",total:7,completed:3,currentName:"Background fixture"});
@@ -61,5 +69,10 @@ try {
   assert.equal(background.running,true);assert.equal(background.completed,3);
   await caller.securityStopAnalyze();
   assert.equal(getConfig().SECURITY_AUTO_HUNT_ENABLED,false,"Stop Analysis must pause automatic analysis too");
+  await caller.securityReassessPrograms();
+  const reassessed=JSON.parse(db.select().from(schema.securityPrograms).where(eq(schema.securityPrograms.id,"fixture-0")).get()!.scopeSummary!);
+  assert.equal(reassessed.assessment,undefined);
+  assert.equal(reassessed.policy,"preserve concurrent policy");
+  assert.equal(reassessed.huntCoverage.detail,"preserve concurrent coverage");
   console.log("Dashboard local serialization, slow-job guard, stop/restart and completion PASSED");
 } finally {server.closeAllConnections();server.close();rmSync(root,{recursive:true,force:true});}

@@ -1,3 +1,4 @@
+import { readInvestigationRecords } from "./investigation-records";
 import { withPipeline, readPipelineStatus, sequentialPipelineEnabled } from "@bounty/core";
 import { readLocalActivity, describeHuntFailure } from "./activity";
 import { z } from "zod";
@@ -724,10 +725,10 @@ export const appRouter = router({
       try {
         const parsed = JSON.parse(program.scopeSummary || "{}");
         if (parsed.assessment) {
-          const scopes = parsed.scopes ?? parsed;
+          const {assessment: removedAssessment, ...retained} = parsed;
           db.update(schema.securityPrograms)
             .set({
-              scopeSummary: JSON.stringify(Array.isArray(scopes) ? scopes : []),
+              scopeSummary: JSON.stringify(retained),
               updatedAt: new Date(),
             })
             .where(eq(schema.securityPrograms.id, program.id))
@@ -743,6 +744,7 @@ export const appRouter = router({
       .returning({ id: schema.securityFindings.id })
       .all();
 
+    log.info({reason:"explicit_reassess",programsCleared:cleared,findingsReset:resetFindings.length},"Assessments cleared by explicit dashboard request");
     return { success: true, reason: null, programsCleared: cleared, findingsReset: resetFindings.length };
   }),
 
@@ -1041,6 +1043,9 @@ export const appRouter = router({
         return { events: [], totalLines: 0 };
       }
     }),
+
+  securityInvestigationRecords: publicProcedure.input(z.object({programId:z.string().min(1).max(300)}))
+    .query(({input})=>readInvestigationRecords(join(getDataDir(),"logs"),input.programId)),
 
   securityHuntHistory: publicProcedure.query(async () => {
     const history = await getSecurityHuntHistory();

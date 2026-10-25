@@ -105,6 +105,7 @@ async function huntProgramImpl(
   let huntSucceeded = false;
   let coverage: "completed" | "partial" | "unsupported" | "failed" = "failed";
   let coverageDetail = "Hunt did not complete";
+  let auditRecord:string|undefined;
   let capabilityBlock:string | undefined;
   let acquisitionChecks: import("./claude-runner").SecuritySolveResult["acquisitionChecks"];
   let capabilityChecks: Array<{repository:string;blocked:boolean;reason:string|null;checkedAt:number}> | undefined;
@@ -132,6 +133,7 @@ async function huntProgramImpl(
       if(trigger === "auto" && !claimDailyHuntSlot(getConfig().SECURITY_MAX_DAILY_HUNTS))
         throw new Error("Daily dispatch limit reached");
     });
+    auditRecord=result.auditRecord;
     acquisitionChecks=result.acquisitionChecks;
     localJob?.signal.throwIfAborted();
     coverage = result.coverage ?? (result.success ? "completed" : "failed");
@@ -242,7 +244,7 @@ async function huntProgramImpl(
       programId: program.id,
       programName: program.name,
       findingsReported: findingsCreated,
-      coverage, coverageDetail,
+      coverage, coverageDetail, auditRecord,
       findingsAccepted: 0,
       findingsDuplicate: 0,
       findingsRejected: 0,
@@ -272,7 +274,7 @@ async function huntProgramImpl(
       findingsRejected: 0,
       strategyUsed: "failed" as any,
       error: coverageDetail,
-      coverage, coverageDetail,
+      coverage, coverageDetail, auditRecord,
       timestamp: new Date().toISOString(),
     }).catch(() => {});
     throw err;
