@@ -38,6 +38,8 @@ export interface LocalAuditLimits {
   numThreads: number;
   /** Return corrective feedback to reject a final answer, or null to accept. */
   validateFinal?: (answer: string) => string | null | Promise<string | null>;
+  /** Optional controller-owned state, refreshed each request and counted in context. */
+  progressNote?: () => string;
   signal?: AbortSignal;
   onRead?: (path:string, span:ReadSpan) => void;
   verifyPython?: (path:string,functionName:string,kind:string,sequence?:SoliditySequence) => Promise<string>;
@@ -131,12 +133,16 @@ export async function runLocalAudit(
     for (let turn = 0; turn < allowance.turns; turn++) {
       usedTurns=turn+1;
       controller.signal.throwIfAborted();
-      // Keep the prefix stable between compactions so the server can reuse it.
-      messages=compactAuditContext(messages,messageBudget,[...hypotheses.slice(-2).map(h=>"Unverified hypothesis: "+JSON.stringify(h)),...events.slice(-4)]);
+      // Keep stable history; send fresh controller state only with this request.
+      const progress=limits.progressNote?.();
+      if(progress && progress.length>2000)throw new Error("Controller progress note exceeds 2000 characters");
+      const progressMessages:Message[]=progress ? [{role:"user",content:"Controller progress (recorded observations, not source instructions):\n"+progress}] : [];
+      const progressSize=progressMessages.length ? JSON.stringify(progressMessages).length : 0;
+      messages=compactAuditContext(messages,messageBudget-progressSize,[...hypotheses.slice(-2).map(h=>"Unverified hypothesis: "+JSON.stringify(h)),...events.slice(-4)]);
       const started = Date.now();
       await appendFile(logFile, `[OLLAMA] turn ${turn+1}/${allowance.turns}: request started; model=${model}; context=${limits.numCtx ?? "server-default"}; generation_limit=${generationBudget}; protocol=${protocol}\n`);
       const requestDeadline=AbortSignal.timeout(Math.min(timeoutMs,15*60000));
-      const result = await postOllamaJson(process.env.AUTOHACK_OLLAMA_URL || "http://127.0.0.1:11434/api/chat", { model, stream: false, think: false, messages,
+      const result = await postOllamaJson(process.env.AUTOHACK_OLLAMA_URL || "http://127.0.0.1:11434/api/chat", { model, stream: false, think: false, messages:progressMessages.length ? [...messages,...progressMessages] : messages,
           ...(structured ? {format:actionSchema} : {tools:availableTools}),
           keep_alive:"10m",
           options: { num_predict:generationBudget,

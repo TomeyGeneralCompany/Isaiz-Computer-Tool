@@ -147,3 +147,12 @@ writes merge current database metadata, and explicit Reassess removes only the
 assessment field from program metadata and logs that operation. The retained
 October 24–25 evidence does not establish the cause of the earlier assessment
 count drop; see `docs/diagnostics/2026-10-25-overnight.md` for the supported findings.
+
+The reasoning diagnostic uses plain classification lines (`filename.py | true or
+false | reason`) to avoid nested JSON escaping. An optional controller progress
+note lists observed results and pending tests on every request, within the existing
+context budget. In this diagnostic only, identical completed probes on unchanged
+source reuse their recorded result and direct the model to pending work; failures
+remain retryable. CI checks that a duplicate request performs no extra sandbox
+execution and that the next request sees the updated pending list. Production
+investigations do not opt into this diagnostic state or result reuse.
