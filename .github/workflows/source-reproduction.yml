@@ -38,7 +38,9 @@ jobs:
         env:
           GITHUB_TOKEN: offline-ci-fixture
         run: |
+          npx tsx scripts/test-reasoning-evidence.ts
           npx tsx scripts/test-local-reasoning.ts --mock
+          npx tsx scripts/test-local-reasoning.ts --mock --premature-final
           if npx tsx scripts/test-local-reasoning.ts --mock --wrong-answer; then
             echo "Incorrect classifications must fail the reasoning evaluator"
             exit 1
