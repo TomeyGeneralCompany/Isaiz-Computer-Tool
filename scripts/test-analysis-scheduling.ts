@@ -59,8 +59,7 @@ try {
   assert.equal(state.completed,4);assert.deepEqual(state.errors,[]);
   assert.equal((await caller.securityAnalyzePrograms()).total,0,'Saved assessments must be skipped after queue restart');
   assert.equal(calls,5,'Queue restart must not invoke the model again');
-  const child=execFileSync(process.execPath,["--import","tsx","--input-type=module","-e",
-    "const {appRouter}=await import('./packages/dashboard/src/server/router.ts'); console.log('RESTART_RESULT='+JSON.stringify(await appRouter.createCaller({}).securityAnalyzePrograms()));"],{encoding:"utf8",timeout:15000});
+  const child=execFileSync(process.execPath,["--import","tsx","scripts/assessment-restart-check.ts"],{encoding:"utf8",timeout:15000});
   assert.match(child,/RESTART_RESULT=.*"total":0/,'Fresh process must load persisted assessments without model calls');
   const {writePipelineStatus}=await import("../packages/core/src/pipeline");
   const {getConfig}=await import("../packages/core/src/config");
