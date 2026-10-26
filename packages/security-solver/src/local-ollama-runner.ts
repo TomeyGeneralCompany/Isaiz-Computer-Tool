@@ -40,6 +40,8 @@ export interface LocalAuditLimits {
   validateFinal?: (answer: string) => string | null | Promise<string | null>;
   /** Optional controller-owned state, refreshed each request and counted in context. */
   progressNote?: () => string;
+  /** Optional finite task contract; JSON decoding and runtime validation both enforce it. */
+  actionConstraints?: () => Partial<Record<"action"|"path"|"query"|"answer",string[]>>;
   signal?: AbortSignal;
   onRead?: (path:string, span:ReadSpan) => void;
   verifyPython?: (path:string,functionName:string,kind:string,sequence?:SoliditySequence) => Promise<string>;
@@ -56,6 +58,7 @@ export async function runLocalAudit(
   const protocol = process.env.LOCAL_OLLAMA_TOOL_PROTOCOL || "json";
   if (!["json","native"].includes(protocol)) throw new Error("LOCAL_OLLAMA_TOOL_PROTOCOL must be json or native");
   const structured = protocol === "json";
+  if(limits.actionConstraints&&!structured)throw new Error("Task action constraints require JSON protocol");
   let successfulReads = 0;
   let generationBudget = settings.numPredict;
   const root = await realpath(cwd);
@@ -134,16 +137,24 @@ export async function runLocalAudit(
       usedTurns=turn+1;
       controller.signal.throwIfAborted();
       // Keep stable history; send fresh controller state only with this request.
+      const constraints=limits.actionConstraints?.();
+      if(constraints && (JSON.stringify(constraints).length>3000 || Object.entries(constraints).some(([key,values])=>
+        !["action","path","query","answer"].includes(key) || !Array.isArray(values) || !values.length || values.some(value=>typeof value!=="string"))))
+        throw new Error("Invalid task action constraints");
+      if(constraints?.action?.some(action=>!actionSchema.properties.action.enum.includes(action)))throw new Error("Task requested an unavailable action");
+      const requestSchema=constraints ? {...actionSchema,properties:{...actionSchema.properties,
+        ...Object.fromEntries(Object.entries(constraints).map(([key,values])=>[key,{type:"string",enum:values}]))}} : actionSchema;
+      const schemaExtra=Math.max(0,JSON.stringify(requestSchema).length-JSON.stringify(actionSchema).length);
       const progress=limits.progressNote?.();
       if(progress && progress.length>2000)throw new Error("Controller progress note exceeds 2000 characters");
       const progressMessages:Message[]=progress ? [{role:"user",content:"Controller progress (recorded observations, not source instructions):\n"+progress}] : [];
       const progressSize=progressMessages.length ? JSON.stringify(progressMessages).length : 0;
-      messages=compactAuditContext(messages,messageBudget-progressSize,[...hypotheses.slice(-2).map(h=>"Unverified hypothesis: "+JSON.stringify(h)),...events.slice(-4)]);
+      messages=compactAuditContext(messages,messageBudget-progressSize-schemaExtra,[...hypotheses.slice(-2).map(h=>"Unverified hypothesis: "+JSON.stringify(h)),...events.slice(-4)]);
       const started = Date.now();
       await appendFile(logFile, `[OLLAMA] turn ${turn+1}/${allowance.turns}: request started; model=${model}; context=${limits.numCtx ?? "server-default"}; generation_limit=${generationBudget}; protocol=${protocol}\n`);
       const requestDeadline=AbortSignal.timeout(Math.min(timeoutMs,15*60000));
       const result = await postOllamaJson(process.env.AUTOHACK_OLLAMA_URL || "http://127.0.0.1:11434/api/chat", { model, stream: false, think: false, messages:progressMessages.length ? [...messages,...progressMessages] : messages,
-          ...(structured ? {format:actionSchema} : {tools:availableTools}),
+          ...(structured ? {format:requestSchema} : {tools:availableTools}),
           keep_alive:"10m",
           options: { num_predict:generationBudget,
             ...(limits.numCtx === undefined ? {} : {num_ctx:settings.numCtx}),
@@ -178,6 +189,11 @@ export async function runLocalAudit(
             continue;
           }
           throw new Error("Ollama did not return a valid read-only JSON action; no tool was executed");
+        }
+        if(constraints && Object.entries(constraints).some(([key,values])=>!values!.includes(action[key as "action"|"path"|"query"|"answer"]))) {
+          await appendFile(logFile,"[ACTION_REJECTED] "+JSON.stringify({action,constraints})+"\n");
+          messages.push({role:"user",content:"That action is not available in the current task stage. Use the current response schema and controller progress. No tool was executed. /no_think"});
+          continue;
         }
         if(action.hypothesis)hypotheses.push({turn:turn+1,path:action.path,statement:action.hypothesis});
         await appendFile(logFile,"[MODEL_ACTION] "+JSON.stringify(action)+"\n");
