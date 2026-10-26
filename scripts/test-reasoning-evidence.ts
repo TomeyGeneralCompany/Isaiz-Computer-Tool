@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {validateReasoningEvidence as validate,parseReasoningAnswer,reasoningProgress,matchesFormattingRequirement,type ReasoningProbe} from './reasoning-evidence';
+import {validateReasoningEvidence as validate,parseReasoningAnswer,reasoningProgress,matchesFormattingRequirement,reasoningActionConstraints,type ReasoningProbe} from './reasoning-evidence';
 const paths=['a.py','b.py'];
 const answer=(raw=false)=>paths.map(path=>`${path} | selected | ${raw?'markup_survives':'markup_escaped'}`).join('\n');
 const probe=(path:string):ReasoningProbe=>({path,fn:'selected',kind:'html_reflection',status:'behavior_not_observed',observed:false,relevant:true});
@@ -29,3 +29,14 @@ assert.equal(matchesFormattingRequirement({control_input:'ordinary',control_outp
 assert.equal(matchesFormattingRequirement({control_input:'ordinary',control_output:'<p>different</p>'}),false);
 assert.equal(matchesFormattingRequirement(undefined),false);
 console.log('Evidence, task relevance, function identity and classification validation passed');
+
+const funcs=new Map(paths.map(path=>[path,['utility','selected']]));
+assert.deepEqual(reasoningActionConstraints(paths,new Set(),funcs,[]).action,['read_file']);
+assert.deepEqual(reasoningActionConstraints(paths,new Set(['a.py']),funcs,[]).action,['verify_source']);
+assert.deepEqual(reasoningActionConstraints(paths,new Set(['a.py']),funcs,[unrelated]).query,['selected']);
+assert.deepEqual(reasoningActionConstraints(paths,new Set(['a.py']),funcs,[probe('a.py')]).path,['b.py']);
+const finalChoices=reasoningActionConstraints(paths,new Set(paths),funcs,paths.map(probe));
+assert.deepEqual(finalChoices.action,['final']);
+assert.equal(finalChoices.answer.length,4);
+assert.ok(finalChoices.answer.includes(answer(true))&&finalChoices.answer.includes(answer(false)));
+assert.throws(()=>reasoningActionConstraints(paths,new Set(['a.py']),new Map([['a.py',['utility']]]),[unrelated]),/Inspection incomplete/);

@@ -43,3 +43,24 @@ export function validateReasoningEvidence(text:string,paths:string[],probes:Reas
   }
   return null;
 }
+
+/** Finite fixture workflow, using discovered source names and observed results only. */
+export function reasoningActionConstraints(paths:string[],reads:Set<string>,functions:Map<string,string[]>,probes:ReasoningProbe[]) {
+  for(const path of paths) {
+    if(completedMarkup(probes,path).length)continue;
+    if(!reads.has(path))return {action:['read_file'],path:[path],query:[''],answer:['']};
+    const candidates=(functions.get(path)||[]).filter(fn=>!probes.some(p=>p.path===path&&p.fn===fn&&
+      (['behavior_observed','behavior_not_observed'].includes(p.status)||probes.filter(p=>p.path===path&&p.fn===fn).length>=2)));
+    if(!candidates.length)throw new Error('Inspection incomplete: no untested supported formatting candidate remains in '+path);
+    return {action:['verify_source'],path:[path],query:candidates,answer:['html_reflection']};
+  }
+  // Include every possible label combination. No answer-key or observed boolean
+  // chooses the model's classification; the evidence validator checks it afterward.
+  let answers=[''];
+  for(const path of paths) {
+    const fn=completedMarkup(probes,path).at(-1)!.fn;
+    answers=answers.flatMap(prefix=>['markup_survives','markup_escaped'].map(label=>
+      (prefix?prefix+'\n':'')+`${path} | ${fn} | ${label}`));
+  }
+  return {action:['final'],path:[''],query:[''],answer:answers};
+}

@@ -118,7 +118,7 @@ before the existing exact serialized-output fitter shortens it as needed. The
 unchanged. Repeated missing-file requests receive corrective navigation feedback
 and end as incomplete after three failures for the same path.
 
-For a blind check of the configured laptop model, run from the application folder
+For a controller-guided check of the configured laptop model, run from the application folder
 with the application idle (to avoid competing inference):
 
 ```bash
@@ -127,8 +127,9 @@ LOCAL_AGENT_TEST_TIMEOUT_MS=1800000 node --import tsx scripts/test-local-reasoni
 ```
 
 This creates only owned local fixtures. Filenames and function names are
-randomized; the model is not told which function or test to choose, or which
-module is flawed. The evaluator requires correct classifications of both a raw
+randomized; the model chooses among functions discovered in the source and
+classifies the measured results. The controller enforces source reading followed
+by the task-specific markup test. It does not supply the hidden classification. The evaluator requires correct classifications of both a raw
 HTML case and an escaping case plus relevant completed probes. Expected answers
 remain outside the model prompt and corrective feedback. It writes evidence to
 `data/reasoning-diagnostics/`. A failed/blocked probe does not pass. `--mock`
@@ -169,3 +170,15 @@ requiring an unchanged output string. Upper/lowercase tag and attribute spelling
 and quote changes are recognized; escaped text, comments, raw-text contexts,
 unrelated markers, and constant control outputs do not establish reflection.
 This remains a local markup observation, not proof of script execution or impact.
+
+The diagnostic now defaults to a finite controller-guided workflow. Its response
+schema allows only the current read, untested source function probe, or final
+classification. Runtime validation also rejects out-of-stage actions if a model
+ignores the schema. Completed reads and already-tested unrelated functions cannot
+be selected again. The final stage offers all classification combinations, not
+only the expected answer. Evidence validation and independent grading still reject
+wrong classifications. This measures assisted execution and classification, not
+independent investigation planning; `--unguided` retains the planning comparison.
+Production callers retain their existing behavior unless they explicitly provide
+an action contract. CI replays repeated reads, an irrelevant utility, a duplicate
+probe, malformed finals, and a contradictory conclusion in one recovery run.
