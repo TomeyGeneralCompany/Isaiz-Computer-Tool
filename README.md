@@ -135,10 +135,12 @@ remain outside the model prompt and corrective feedback. It writes evidence to
 validates the harness with actual isolated Python execution but scripted model
 actions; it is **not** a model reasoning result. CI also checks that deliberately
 wrong classifications fail. Before accepting a final answer, the controller now
-requires a completed markup probe for each module and checks that classifications
+requires a completed, relevant formatting-function probe for each module and checks that classifications
 match the recorded observations. Missing tests and contradictory conclusions receive
-corrective feedback while turns remain. The independent evaluator still rejects
-testing an irrelevant function; its answer key is never supplied to the model.
+corrective feedback while turns remain. Relevance is checked against the public paragraph-formatting requirement using
+the measured ordinary-input output. Utility observations remain recorded but do
+not clear pending work. The hidden function/classification answer key is still
+used only by the independent evaluator.
 `--mock --premature-final` exercises recovery from omitted tests and a conclusion
 that contradicts observations.
 
@@ -148,11 +150,22 @@ assessment field from program metadata and logs that operation. The retained
 October 24–25 evidence does not establish the cause of the earlier assessment
 count drop; see `docs/diagnostics/2026-10-25-overnight.md` for the supported findings.
 
-The reasoning diagnostic uses plain classification lines (`filename.py | true or
-false | reason`) to avoid nested JSON escaping. An optional controller progress
+The reasoning diagnostic uses plain classification lines (`filename.py | tested_function |
+markup_survives` or `markup_escaped`) to avoid nested JSON escaping. An optional controller progress
 note lists observed results and pending tests on every request, within the existing
 context budget. In this diagnostic only, identical completed probes on unchanged
 source reuse their recorded result and direct the model to pending work; failures
 remain retryable. CI checks that a duplicate request performs no extra sandbox
 execution and that the next request sees the updated pending list. Production
 investigations do not opt into this diagnostic state or result reuse.
+
+Classification lines identify the tested function and one explicit conclusion;
+the saved reason is derived from that observation, rather than accepting a second,
+contradictory prose verdict. This diagnostic measures function selection, testing,
+and classification; it does not assess unrestricted explanatory prose.
+
+HTML reflection detection parses the nonce-bearing HTML element instead of
+requiring an unchanged output string. Upper/lowercase tag and attribute spelling
+and quote changes are recognized; escaped text, comments, raw-text contexts,
+unrelated markers, and constant control outputs do not establish reflection.
+This remains a local markup observation, not proof of script execution or impact.

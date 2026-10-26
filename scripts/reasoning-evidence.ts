@@ -1,46 +1,45 @@
-/** Validate observations, never the hidden fixture answer key. */
+/** Validate measured behavior and public task requirements, never the hidden answer key. */
 export interface ReasoningProbe {
-  path: string;
-  fn: string;
-  kind: string;
-  status: string;
-  observed: boolean;
+  path:string; fn:string; kind:string; status:string; observed:boolean;
+  relevant:boolean;
 }
-export function completedMarkup(probes: ReasoningProbe[], path: string): ReasoningProbe[] {
-  return probes.filter(p => p.path === path && p.kind === 'html_reflection' &&
-    ((p.status === 'behavior_observed' && p.observed === true) ||
-     (p.status === 'behavior_not_observed' && p.observed === false)));
+export function matchesFormattingRequirement(observations:any):boolean {
+  // README's public contract: preserve ordinary text inside one paragraph.
+  // No expected function name or unsafe/safe classification is consulted.
+  return typeof observations?.control_input==='string' &&
+    observations.control_output===`<p>${observations.control_input}</p>`;
 }
-/** Flat lines avoid requiring escaped JSON nested inside an action's answer. */
-export function parseReasoningAnswer(text: string): {files: any[]} {
-  if(text.trim().startsWith('{') || text.trim()==='null')return JSON.parse(text);
+export function completedMarkup(probes:ReasoningProbe[],path:string):ReasoningProbe[] {
+  return probes.filter(p=>p.path===path && p.kind==='html_reflection' && p.relevant &&
+    ((p.status==='behavior_observed' && p.observed===true) ||
+     (p.status==='behavior_not_observed' && p.observed===false)));
+}
+export function parseReasoningAnswer(text:string):{files:Array<{path:string;function:string;rawMarkup:boolean;reason:string}>} {
   return {files:text.trim().split('\n').map(line=>{
-    const match=line.trim().match(/^([^|]+)\s*\|\s*(true|false)\s*\|\s*(.+)$/);
+    const match=line.trim().match(/^([^|]+)\s*\|\s*([A-Za-z_][A-Za-z0-9_]*)\s*\|\s*(markup_survives|markup_escaped)$/);
     if(!match)throw new Error('Invalid classification line');
-    return {path:match[1].trim(),rawMarkup:match[2]==='true',reason:match[3].trim()};
+    const rawMarkup=match[3]==='markup_survives';
+    return {path:match[1].trim(),function:match[2],rawMarkup,
+      reason:rawMarkup?'The recorded probe preserved the supplied markup as an HTML element.':'The recorded probe did not preserve the supplied markup as an HTML element.'};
   })};
 }
-export function reasoningProgress(paths:string[], reads:Set<string>, probes:ReasoningProbe[]):string {
+export function reasoningProgress(paths:string[],reads:Set<string>,probes:ReasoningProbe[]):string {
   const pending=paths.filter(path=>!completedMarkup(probes,path).length);
-  return JSON.stringify({modules:paths.map(path=>({path,read:reads.has(path),observations:completedMarkup(probes,path).map(p=>({function:p.fn,rawMarkupObserved:p.observed}))})),
-    pendingTests:pending,next:pending.length?'Inspect and test an untested module. Choose its formatting function from source; do not repeat completed tests.':'Both modules have observations. Return one line per module: path | true or false | evidence-based reason. Correct an irrelevant test by choosing a different function.'});
+  return JSON.stringify({modules:paths.map(path=>({path,read:reads.has(path),
+    observations:completedMarkup(probes,path).map(p=>({function:p.fn,rawMarkupObserved:p.observed})),
+    unrelatedFunctions:[...new Set(probes.filter(p=>p.path===path&&!p.relevant).map(p=>p.fn))]})),
+    pendingTests:pending,next:pending.length?'Inspect and test the paragraph-formatting function of a pending module. Utility tests do not cover that function. Select the function from source.':'Return one line per module: filename.py | tested_function | markup_survives OR markup_escaped. Use the observed result of that function.'});
 }
-export function validateReasoningEvidence(text: string, paths: string[], probes: ReasoningProbe[]): string | null {
-  // Prioritize all missing evidence before answer formatting or contradictions.
+export function validateReasoningEvidence(text:string,paths:string[],probes:ReasoningProbe[]):string|null {
   const pending=paths.filter(path=>!completedMarkup(probes,path).length);
-  if(pending.length)return `Final answer deferred: no completed markup observation exists for ${pending.join(', ')}. Choose relevant formatting functions from source and use verify_source. Failed, blocked, or unrelated tests do not establish the result. Do not repeat tests already completed for other modules.`;
-  let value: any;
-  try { value = parseReasoningAnswer(text); } catch { return 'Return one line per Python module in answer: filename.py | true or false | evidence-based reason. No nested JSON is needed.'; }
-  if (!value || !Array.isArray(value.files)) return 'Return the requested files array or one classification line per module.';
-  if (value.files.length !== paths.length || paths.some(path => value.files.filter((f: any) => f?.path === path).length !== 1))
-    return 'Return exactly one classification for each Python module in the workspace, without duplicates or extra files.';
-  for (const path of paths) {
-    const answer = value.files.find((f: any) => f.path === path);
-    if (typeof answer.rawMarkup !== 'boolean' || typeof answer.reason !== 'string' || !answer.reason.trim())
-      return 'Each classification needs a rawMarkup boolean and an evidence-based reason.';
-    const latest = completedMarkup(probes,path).at(-1)!;
-    if (answer.rawMarkup !== latest.observed)
-      return `Final answer deferred: the classification for ${path} contradicts the recorded observation for ${latest.fn}. Reconcile your conclusion with the returned test result and source. If you tested the wrong function, select and test the relevant one. Do not treat the fixed HTML wrapper as evidence that untrusted input survives unescaped.`;
+  if(pending.length)return `Final answer deferred: no completed markup observation of the paragraph-formatting function exists for ${pending.join(', ')}. A completed utility test does not cover that requirement. Select the relevant function from source and use verify_source; do not repeat completed tests of other functions.`;
+  let value:ReturnType<typeof parseReasoningAnswer>;
+  try{value=parseReasoningAnswer(text);}catch{return 'Return one line per Python module: filename.py | tested_function | markup_survives OR markup_escaped. No boolean, explanation, or nested JSON is needed.';}
+  if(value.files.length!==paths.length || paths.some(path=>value.files.filter(f=>f.path===path).length!==1))return 'Return exactly one classification per Python module without duplicates or extra files.';
+  for(const answer of value.files) {
+    const observation=completedMarkup(probes,answer.path).filter(p=>p.fn===answer.function).at(-1);
+    if(!observation)return `No completed relevant observation supports ${answer.path}:${answer.function}. Report the paragraph-formatting function you actually tested, or test it first.`;
+    if(answer.rawMarkup!==observation.observed)return `Final answer deferred: the classification for ${answer.path}:${answer.function} contradicts the recorded observation. Use markup_survives when the probe observed the supplied markup as an element, otherwise markup_escaped for this fixture. A fixed paragraph wrapper is not the supplied markup.`;
   }
   return null;
 }

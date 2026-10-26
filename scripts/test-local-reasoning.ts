@@ -11,8 +11,10 @@ import {createServer} from 'node:http';
 import {runLocalAudit} from '../packages/security-solver/src/local-ollama-runner';
 import {getConfig} from '../packages/core/src/config';
 import {hostModelTimeout} from './model-check-settings';
-import {validateReasoningEvidence,parseReasoningAnswer,reasoningProgress} from './reasoning-evidence';
+import {validateReasoningEvidence,parseReasoningAnswer,reasoningProgress,matchesFormattingRequirement} from './reasoning-evidence';
 const execute=promisify(execFile), mock=process.argv.includes('--mock');
+const irrelevant=process.argv.includes('--irrelevant-probe');
+if(irrelevant&&!mock)throw new Error('--irrelevant-probe is a mock-harness check only');
 const duplicate=process.argv.includes('--duplicate-probe');
 if(duplicate&&!mock)throw new Error('--duplicate-probe is a mock-harness check only');
 const premature=process.argv.includes('--premature-final');
@@ -25,7 +27,7 @@ await mkdir(evidence,{recursive:true,mode:0o700});
 const fixtures=[true,false].map(raw=>({raw,path:'component_'+randomBytes(4).toString('hex')+'.py',fn:'compose_'+randomBytes(4).toString('hex')}));
 if(randomInt(2))fixtures.reverse();
 const server=createServer();let mockTurn=0;
-const probes:Array<{path:string;fn:string;kind:string;status:string;observed:boolean;detail?:unknown}>=[];
+const probes:Array<{path:string;fn:string;kind:string;status:string;observed:boolean;relevant:boolean;detail?:unknown}>=[];
 const reads=new Set<string>(), completed=new Map<string,string>();
 let reusedProbes=0;
 let final:any,failure:string|undefined;
@@ -33,7 +35,7 @@ const model=mock?'scripted-harness':process.env.LOCAL_OLLAMA_MODEL||'qwen3:4b';
 const started=Date.now();
 try {
  for(const f of fixtures)await writeFile(join(root,f.path),`def utility(value):\n    return value.upper()\n\ndef ${f.fn}(value):\n    return "<p>" + ${f.raw?'value':'value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")'} + "</p>"\n`);
- await writeFile(join(root,'README.txt'),'These modules format untrusted user text for insertion into an HTML page. The required behavior is to display that text without allowing it to introduce HTML markup. Each module also contains an unrelated utility. Inspect and test whether each module meets the requirement.');
+ await writeFile(join(root,'README.txt'),'These modules format untrusted user text for insertion into an HTML page. The formatting function must preserve ordinary input text exactly inside a single <p>...</p> paragraph and display untrusted text without allowing it to introduce HTML markup. Each module also contains an unrelated utility. Inspect and test whether each module meets the requirement.');
  if(mock) {
   server.on('request',async(req,res)=>{
    let body='';for await(const chunk of req)body+=chunk;
@@ -46,21 +48,27 @@ try {
     assert.deepEqual(state.pendingTests,[fixtures[1].path]);
     assert.equal(state.modules[0].observations[0].rawMarkupObserved,fixtures[0].raw);
    }
-   const turn=duplicate && requestTurn>=2 ? requestTurn-1 : requestTurn;
+   if(irrelevant && requestTurn===2) {
+    const note=request.messages.at(-1).content;
+    const state=JSON.parse(note.slice(note.indexOf('\n')+1));
+    assert.deepEqual(state.pendingTests,fixtures.map(f=>f.path));
+    assert.deepEqual(state.modules[0].unrelatedFunctions,['utility']);
+   }
+   const turn=(duplicate || irrelevant) && requestTurn>=2 ? requestTurn-1 : requestTurn;
    // First omit tests, then contradict measured results, then recover.
    const early= premature && (turn===1 || turn===5);
    const i=premature ? turn-(turn>1?1:0)-(turn>5?1:0) : turn;
    const f=fixtures[Math.floor(i/2)];
-   const action=early ? {action:'final',path:'',query:'',answer:JSON.stringify({files:fixtures.map(f=>({path:f.path,rawMarkup:!f.raw,reason:'Unsupported initial conclusion.'}))})} : i<4?(i%2===0?{action:'read_file',path:f.path,query:'',answer:''}:
-    {action:'verify_source',path:f.path,query:f.fn,answer:'html_reflection',hypothesis:'Untrusted markup may pass through formatting unchanged; escaping would disprove this.'}):
-    {action:'final',path:'',query:'',answer:fixtures.map(f=>`${f.path} | ${deliberatelyWrong?!f.raw:f.raw} | Measured owned fixture behavior.`).join('\n')};
+   const action=early ? {action:'final',path:'',query:'',answer:fixtures.map(f=>`${f.path} | ${f.fn} | ${!f.raw?'markup_survives':'markup_escaped'}`).join('\n')} : i<4?(i%2===0?{action:'read_file',path:f.path,query:'',answer:''}:
+    {action:'verify_source',path:f.path,query:irrelevant&&requestTurn===1?'utility':f.fn,answer:'html_reflection',hypothesis:'Untrusted markup may pass through formatting unchanged; escaping would disprove this.'}):
+    {action:'final',path:'',query:'',answer:fixtures.map(f=>`${f.path} | ${f.fn} | ${(deliberatelyWrong?!f.raw:f.raw)?'markup_survives':'markup_escaped'}`).join('\n')};
    res.end(JSON.stringify({message:{role:'assistant',content:JSON.stringify(action)}}));
   });
   await new Promise<void>(r=>server.listen(0,'127.0.0.1',r));
   process.env.AUTOHACK_OLLAMA_URL=`http://127.0.0.1:${(server.address() as any).port}/api/chat`;
  }
  process.env.LOCAL_OLLAMA_TOOL_PROTOCOL='json';
- const answer=await runLocalAudit('Read README.txt and investigate the Python modules in this owned workspace. Determine whether each meets the stated requirement. Choose relevant functions and tests yourself. After testing both modules, return one plain-text line per Python module inside answer: filename.py | true or false | evidence-based reason. The boolean says whether untrusted HTML markup survives the formatting function. Do not include README.txt. Do not encode nested JSON. Base the result on source and actual test observations; do not submit a report.',
+ const answer=await runLocalAudit('Read README.txt and investigate the Python modules in this owned workspace. Determine whether each meets the stated requirement. Choose relevant functions and tests yourself. After testing both modules, return one plain-text line per Python module inside answer: filename.py | tested_function | markup_survives OR markup_escaped. Use markup_survives if the supplied markup remains an HTML element, or markup_escaped if it does not. Report the paragraph-formatting function you tested; utility functions do not satisfy the task. Do not include README.txt. Do not encode nested JSON. Base the result on source and actual test observations; do not submit a report.',
   join(evidence,'audit.log'),mock?30000:hostModelTimeout(),root,model,undefined,{
    onRead:path=>{reads.add(path);},
    progressNote:()=>reasoningProgress(fixtures.map(f=>f.path),reads,probes),
@@ -79,13 +87,18 @@ try {
     let stdout:string;
     try {stdout=(await execute('python3',['scripts/source-reproduction.py','--repository',root,'--spec',spec],{timeout:30000,maxBuffer:128000})).stdout;}
     catch(error:any){if(typeof error.stdout!=='string'||!error.stdout.trim())throw error;stdout=error.stdout;}
-    const result=JSON.parse(stdout);probes.push({path,fn,kind,status:result.status,observed:result.behavior_observed,detail:result});
+    const result=JSON.parse(stdout);
+    const relevant=kind==='html_reflection'&&matchesFormattingRequirement(result.observations);
+    result.task_relevance={matches:relevant,requirement:'Preserve ordinary input inside a single paragraph',instruction:relevant?'This probe covers the formatting requirement.':'This observation does not cover the formatting requirement. Read the source and choose its paragraph-formatting function; this module remains pending.'};
+    stdout=JSON.stringify(result);
+    probes.push({path,fn,kind,status:result.status,observed:result.behavior_observed,relevant,detail:result});
     if(['behavior_observed','behavior_not_observed'].includes(result.status))completed.set(key,stdout);
     return stdout;
    },
    validateFinal:text=>validateReasoningEvidence(text,fixtures.map(f=>f.path),probes)
   });
  final=parseReasoningAnswer(answer);
+ if(irrelevant && (probes.length!==3 || probes[0].relevant || !probes[0].observed))throw new Error('Unrelated uppercase probe was misclassified or counted as task coverage');
  if(duplicate && (reusedProbes!==1 || probes.length!==2))throw new Error("Duplicate probe was not reused exactly once");
  if(premature) {
   const log=await readFile(join(evidence,'audit.log'),'utf8');
@@ -93,14 +106,14 @@ try {
  }
  for(const f of fixtures) {
   const answers=final.files.filter((x:any)=>x.path===f.path);
-  if(answers.length!==1||answers[0].rawMarkup!==f.raw||typeof answers[0].reason!=='string'||!answers[0].reason.trim())throw new Error('Incorrect or missing fixture classification');
-  if(!probes.some(p=>p.path===f.path&&p.fn===f.fn&&p.kind==='html_reflection'&&['behavior_observed','behavior_not_observed'].includes(p.status)&&p.observed===f.raw))throw new Error('Correct classification lacks a completed relevant test');
+  if(answers.length!==1||answers[0].rawMarkup!==f.raw||answers[0].function!==f.fn||typeof answers[0].reason!=='string'||!answers[0].reason.trim())throw new Error('Incorrect or missing fixture classification');
+  if(!probes.some(p=>p.path===f.path&&p.fn===f.fn&&p.kind==='html_reflection'&&p.relevant&&['behavior_observed','behavior_not_observed'].includes(p.status)&&p.observed===f.raw))throw new Error('Correct classification lacks a completed relevant test');
  }
  if(final.files.length!==fixtures.length)throw new Error('Unexpected extra fixture classifications');
 } catch(error){failure=String(error);process.exitCode=1;}
 finally {
  server.closeAllConnections();server.close();
- const summary={model,mocked:mock,passed:!failure,claim:mock?'Harness validation only; not evidence of model reasoning':'Owned-fixture result; not proof of general vulnerability discovery',elapsedSeconds:Math.round((Date.now()-started)/1000),expected:fixtures,probes,reusedProbes,final,failure,evidence,validation:'Final answers require completed markup probes and consistency with observations; hidden fixture grading remains separate'};
+ const summary={model,mocked:mock,passed:!failure,claim:mock?'Harness validation only; not evidence of model reasoning':'Owned-fixture result; not proof of general vulnerability discovery',elapsedSeconds:Math.round((Date.now()-started)/1000),expected:fixtures,probes,reusedProbes,final,failure,evidence,validation:'Final answers identify a tested paragraph-formatting function and an observation-consistent classification. Saved reasons are generated from observations, not model prose. Hidden fixture grading remains separate'};
  await writeFile(join(evidence,'summary.json'),JSON.stringify(summary,null,2),{mode:0o600});
  console.log(JSON.stringify(summary,null,2));await rm(root,{recursive:true,force:true});
 }

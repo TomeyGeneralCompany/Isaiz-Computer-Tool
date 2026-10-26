@@ -8,6 +8,7 @@ inside a fresh, network-isolated namespace with resource limits.
 from __future__ import annotations
 import argparse
 import hashlib
+from html.parser import HTMLParser
 import json
 import os
 from pathlib import Path
@@ -42,6 +43,40 @@ if not isinstance(normal,str) or not isinstance(observed,str): raise ValueError(
 if len(normal)>16000 or len(observed)>16000: raise ValueError('Probe output too large')
 print(json.dumps({'control_input':control,'control_output':normal,'attack_input':attack,'attack_output':observed}))
 '''
+
+class MarkupMarker(HTMLParser):
+    """Recognize the nonce-bearing probe element, not its byte-for-byte spelling."""
+    def __init__(self, nonce):
+        super().__init__(convert_charrefs=True)
+        self.nonce = nonce.casefold()
+        self.found = False
+        self.raw_text = None
+
+    def handle_starttag(self, tag, attrs):
+        if self.raw_text:
+            return
+        if tag in {'script', 'style', 'textarea', 'title', 'xmp', 'iframe', 'noembed', 'noframes', 'plaintext'}:
+            self.raw_text = tag
+            return
+        if tag == 'em' and any(name == 'data-tomey' and value is not None and value.casefold() == self.nonce for name, value in attrs):
+            self.found = True
+
+    def handle_endtag(self, tag):
+        if tag == self.raw_text and tag != 'plaintext':
+            self.raw_text = None
+
+
+def reflected_markup(data, nonce):
+    normal, observed = data['control_output'], data['attack_output']
+    if data['control_input'].casefold() not in normal.casefold():
+        return False
+    attack_parser, control_parser = MarkupMarker(nonce), MarkupMarker(nonce)
+    attack_parser.feed(observed)
+    attack_parser.close()
+    control_parser.feed(normal)
+    control_parser.close()
+    return attack_parser.found and not control_parser.found
+
 
 def limits(node=False):
     resource.setrlimit(resource.RLIMIT_CPU,(15,15))
@@ -174,7 +209,7 @@ def run_probe(repository: Path, specification: dict, _dependency_round: int = 0)
                     'limitation':'A discrepancy from a supplied test expectation is not by itself a vulnerability. Constructor setup, expected results, real call-site reachability, policy and impact require independent review. All transactions used a fresh local EVM, not a live chain.'}
         normal,observed=data['control_output'],data['attack_output']
         if kind=='html_reflection':
-            matches=data['control_input'] in normal and data['attack_input'] in observed
+            matches=reflected_markup(data, nonce)
         else:
             # Path construction alone is not proof of an exploitable file operation.
             base=Path(os.path.normpath(normal)).parent
