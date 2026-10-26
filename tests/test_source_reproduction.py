@@ -18,6 +18,26 @@ spec.loader.exec_module(driver)
 
 
 class ValidationTests(unittest.TestCase):
+    def test_markup_transformations_and_text_contexts(self):
+        nonce='ab12'*8
+        attack='<em data-tomey="'+nonce+'">TOMEY_PROBE</em>'
+        def detected(output, control=None):
+            return driver.reflected_markup({'control_input':'TOMEY_CONTROL_'+nonce,
+                'control_output':control or 'TOMEY_CONTROL_'+nonce,
+                'attack_output':output},nonce)
+        self.assertTrue(detected(attack))
+        self.assertTrue(detected(attack.upper(), ('TOMEY_CONTROL_'+nonce).upper()))
+        self.assertTrue(detected(attack.lower(), ('TOMEY_CONTROL_'+nonce).lower()))
+        self.assertTrue(detected("<EM DATA-TOMEY='"+nonce+"'>TOMEY_PROBE</EM>"))
+        for output in (attack.replace('<','&lt;').replace('>','&gt;'),
+                       '<!--'+attack+'-->', '<textarea>'+attack+'</textarea>',
+                       '<script>"'+attack+'"</script>', '<title>'+attack+'</title>',
+                       '<div title="'+attack.replace('"','&quot;')+'">text</div>',
+                       '<em data-tomey="wrong">TOMEY_PROBE</em>'):
+            self.assertFalse(detected(output),output)
+        self.assertFalse(detected(attack, 'constant output'))
+        self.assertFalse(detected(attack, 'TOMEY_CONTROL_'+nonce+attack))
+
     def test_foundry_compiler_settings(self):
         self.assertEqual(driver.foundry_settings({}), {})
         self.assertEqual(driver.foundry_settings({'optimizer': True, 'optimizer_runs': 500, 'via_ir': True}),
@@ -56,6 +76,18 @@ class LanguageTests(unittest.TestCase):
             self.assertEqual(result["status"], "behavior_observed" if observed else "behavior_not_observed", result)
             self.assertEqual(result["behavior_observed"], observed)
             return result
+
+    def test_python_uppercase_markup(self):
+        self.probe("render.py", "def render(x):\n    return x.upper()\n")
+
+    def test_javascript_uppercase_markup(self):
+        self.probe("render.cjs", "exports.render = x => x.toUpperCase();")
+
+    def test_java_uppercase_markup(self):
+        self.probe("Render.java", 'public class Render { public static String render(String x) { return x.toUpperCase(); }}', function="Render.render")
+
+    def test_python_escaped_markup(self):
+        self.probe("render.py", "import html\ndef render(x):\n    return '<p>'+html.escape(x)+'</p>'\n", observed=False)
 
     def test_python_unchanged(self):
         self.probe("render.py", "def render(x):\n    return '<p>'+x+'</p>'\n")

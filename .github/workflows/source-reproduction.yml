@@ -40,6 +40,7 @@ jobs:
         run: |
           npx tsx scripts/test-reasoning-evidence.ts
           npx tsx scripts/test-local-reasoning.ts --mock
+          npx tsx scripts/test-local-reasoning.ts --mock --irrelevant-probe
           npx tsx scripts/test-local-reasoning.ts --mock --duplicate-probe
           npx tsx scripts/test-local-reasoning.ts --mock --premature-final
           if npx tsx scripts/test-local-reasoning.ts --mock --wrong-answer; then
