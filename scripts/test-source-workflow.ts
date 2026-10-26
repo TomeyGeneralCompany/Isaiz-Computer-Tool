@@ -39,16 +39,23 @@ try {
   server.on("request",async(req,res)=>{
     let raw="";for await(const chunk of req)raw+=chunk;
     const request=JSON.parse(raw);
+    // Production progress is appended separately; inspect the last actual tool result.
+    const latestTool=()=>[...request.messages].reverse().find((m:any)=>m.content?.startsWith("TOOL_RESULT "));
+    if(!reviewMode && request.format.properties.action.enum.length===1 && request.format.properties.action.enum[0]==='verify_source') {
+      const planned=[...request.messages].reverse().map((m:any)=>{try{return JSON.parse(m.content);}catch{return null;}}).find((a:any)=>a?.action==='plan_probe');
+      assert.ok(planned);
+      res.end(JSON.stringify({message:{role:'assistant',content:JSON.stringify({...planned,action:'verify_source'})}}));return;
+    }
     // Finish the current read before advancing the scripted investigation stage.
     // Output-token reservations may change page size; evidence must stay complete.
     if(!reviewMode && turn>0) {
-      const last=request.messages.at(-1).content;
+      const last=latestTool()?.content || request.messages.at(-1).content;
       if(last.startsWith("TOOL_RESULT ")) {
         const result=JSON.parse(last.split("\n")[0].slice(12));
         if(result.name==="read_file") {
           const page=JSON.parse(result.output);
           if(page.nextOffset!=null) {
-            const previous=JSON.parse(request.messages.at(-2).content);
+            const previous=[...request.messages].reverse().map((m:any)=>{try{return JSON.parse(m.content);}catch{return null;}}).find((a:any)=>a?.action==='read_file');
             res.end(JSON.stringify({message:{role:"assistant",content:JSON.stringify({
               action:"read_file",path:previous.path,offset:page.nextOffset,query:"",answer:""})}}));
             return;
@@ -59,7 +66,7 @@ try {
     turn++;
     if(reviewMode) {
       assert.ok(request.messages[1].content.length<7000,"Review prompt must not embed large policy/report");
-      const last=request.messages.at(-1).content;
+      const last=latestTool()?.content || request.messages.at(-1).content;
       if(last.startsWith("TOOL_RESULT ")) {
         const page=JSON.parse(JSON.parse(last.split("\n")[0].slice(12)).output);
         if(page.nextOffset===null) {reviewIndex++;reviewOffset=0;}else reviewOffset=page.nextOffset;
@@ -71,21 +78,21 @@ try {
           rubric:{exploitability:0,impactSeverity:0,evidenceQuality:3,novelty:0,scopeAlignment:3},issues:[],reasoning:"The supplied expectation is deliberately wrong; only report plumbing is under test."})};
       res.end(JSON.stringify({message:{role:"assistant",content:JSON.stringify(action)}}));return;
     }
-    assert.ok(request.format.properties.action.enum.includes("verify_source"));
+    assert.ok(request.format.properties.action.enum.includes("plan_probe"));
     assert.ok(request.messages.some((m:any)=>m.content.includes("exported JavaScript")));
     const action=(name:string,path:string,query="",answer="")=>({action:name,path,query,answer});
     let next;
     if(turn===1)next=action("read_file","source-1/"+source);
     else if(turn===2 && stateful)next=action("final","","",JSON.stringify({findings:[]}));
     else if(turn===2)next=action("read_file","source-1/"+caller);
-    else if(turn===3 && stateful) {assert.match(request.messages.at(-1).content,/No supported probe/);next={...action("verify_source","source-1/"+source,selector,"solidity_sequence"),sequence};}
+    else if(turn===3 && stateful) {assert.ok(JSON.stringify(request.messages).includes("No supported probe"));next={...action("verify_source","source-1/"+source,selector,"solidity_sequence"),sequence};}
     else if(turn===3)next=action("verify_source","source-1/"+source,source.endsWith(".java")?"Render.missing":"missing","html_reflection");
     else if(turn===4 && !stateful) {
-      const previous=JSON.parse(request.messages.at(-1).content.split("\n")[0].slice("TOOL_RESULT ".length));
+      const previous=JSON.parse((latestTool()?.content || "").split("\n")[0].slice("TOOL_RESULT ".length));
       assert.equal(JSON.parse(previous.output).status,"probe_failed");
       next=action("verify_source","source-1/"+source,selector,"html_reflection");
     } else {
-      const previous=JSON.parse(request.messages.at(-1).content.split("\n")[0].slice("TOOL_RESULT ".length));
+      const previous=JSON.parse((latestTool()?.content || "").split("\n")[0].slice("TOOL_RESULT ".length));
       caseId=JSON.parse(previous.output).caseId;assert.ok(caseId);
       next=action("final","","",JSON.stringify({findings:[{
         caseId,severity:"medium",confidence:0.7,title:stateful?"Owned fixture assertion discrepancy":"Owned fixture reflection",
@@ -95,6 +102,7 @@ try {
         falsification:"No production exploitability is claimed; only owned fixture behavior was measured."
       }]}));
     }
+    if(next.action==='verify_source')next={...next,action:'plan_probe',hypothesis:'Owned fixture behavior may violate the stated requirement; an escaped value or matching assertion would disprove it.'};
     res.setHeader("Content-Type","application/json");
     res.end(JSON.stringify({message:{role:"assistant",content:JSON.stringify(next)}}));
   });

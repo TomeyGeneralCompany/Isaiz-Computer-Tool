@@ -50,3 +50,5 @@ jobs:
           fi
       - name: Test real source audit, report creation and independent replay
         run: npx tsx scripts/test-source-workflow.ts
+      - name: Exercise shared production workflow with real isolated probes
+        run: node --import tsx scripts/test-production-workflow.ts

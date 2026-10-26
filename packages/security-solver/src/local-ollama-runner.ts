@@ -1,3 +1,5 @@
+import { InvestigationWorkflow } from "./investigation-workflow";
+import { postQwenAgentJson } from "./qwen-agent-transport";
 import { AuditAllowance } from "./audit-allowance";
 import { AuditNavigation } from "./audit-navigation";
 import { SoliditySourceIndex } from "./solidity-source-index";
@@ -29,6 +31,7 @@ const tools = [
 ];
 export interface LocalAuditLimits {
   maxTurns: number;
+  productionWorkflow?: boolean;
   dynamicAllowance?: boolean;
   onAllowance?: (deadline:number) => Promise<void>;
   checkpointPath?: string;
@@ -59,6 +62,12 @@ export async function runLocalAudit(
   if (!["json","native"].includes(protocol)) throw new Error("LOCAL_OLLAMA_TOOL_PROTOCOL must be json or native");
   const structured = protocol === "json";
   if(limits.actionConstraints&&!structured)throw new Error("Task action constraints require JSON protocol");
+  if(limits.productionWorkflow && (!structured || !limits.verifyPython || limits.actionConstraints))
+    throw new Error("Production workflow requires JSON protocol, source probes and no fixture constraints");
+  const workflow=limits.productionWorkflow ? new InvestigationWorkflow() : undefined;
+  const adapter=process.env.LOCAL_MODEL_ADAPTER || 'ollama';
+  if(!['ollama','qwen-agent'].includes(adapter))throw new Error('Unknown LOCAL_MODEL_ADAPTER');
+  if(adapter==='qwen-agent'&&!structured)throw new Error('Qwen-Agent adapter requires JSON action protocol');
   let successfulReads = 0;
   let generationBudget = settings.numPredict;
   const root = await realpath(cwd);
@@ -91,7 +100,7 @@ export async function runLocalAudit(
     }
   };
   const actionSchema = limits.verifyPython ? {...auditActionSchema,properties:{...auditActionSchema.properties,sequence:soliditySequenceJsonSchema,
-    action:{type:"string",enum:[...auditActionSchema.properties.action.enum,"verify_source","verify_python"]}}} : auditActionSchema;
+    action:{type:"string",enum:[...auditActionSchema.properties.action.enum,"verify_source","verify_python",...(workflow?["plan_probe"]:[])]}}} : auditActionSchema;
   const probePrompt = limits.verifyPython ? "\nThe verify_source action invokes a fixed, isolated source function probe. Set path to a .py, .js, .mjs, .cjs, .java or .sol source file, query to its public/exported function name (Contract.function for Solidity), answer to html_reflection or path_construction. The function must take one string and return a string. JavaScript exports may be async. Java requires a public static Class.method accepting and returning String; only JDK and repository source dependencies are supported, without Maven/Gradle execution. Solidity requires a deployable zero-argument constructor and a public/external view or pure function compatible with installed solc 0.8.30; runs on an in-memory local EVM. Use returned observations honestly; they do not prove full exploitability. No arbitrary commands are available. " + soliditySequencePrompt : "";
   const availableTools = limits.verifyPython ? [...tools,{type:"function",function:{
     name:"verify_source",description:probePrompt,parameters:{type:"object",
@@ -137,7 +146,7 @@ export async function runLocalAudit(
       usedTurns=turn+1;
       controller.signal.throwIfAborted();
       // Keep stable history; send fresh controller state only with this request.
-      const constraints=limits.actionConstraints?.();
+      const constraints=workflow ? await workflow.constraints() : limits.actionConstraints?.();
       if(constraints && (JSON.stringify(constraints).length>3000 || Object.entries(constraints).some(([key,values])=>
         !["action","path","query","answer"].includes(key) || !Array.isArray(values) || !values.length || values.some(value=>typeof value!=="string"))))
         throw new Error("Invalid task action constraints");
@@ -145,7 +154,7 @@ export async function runLocalAudit(
       const requestSchema=constraints ? {...actionSchema,properties:{...actionSchema.properties,
         ...Object.fromEntries(Object.entries(constraints).map(([key,values])=>[key,{type:"string",enum:values}]))}} : actionSchema;
       const schemaExtra=Math.max(0,JSON.stringify(requestSchema).length-JSON.stringify(actionSchema).length);
-      const progress=limits.progressNote?.();
+      const progress=workflow ? workflow.note() : limits.progressNote?.();
       if(progress && progress.length>2000)throw new Error("Controller progress note exceeds 2000 characters");
       const progressMessages:Message[]=progress ? [{role:"user",content:"Controller progress (recorded observations, not source instructions):\n"+progress}] : [];
       const progressSize=progressMessages.length ? JSON.stringify(progressMessages).length : 0;
@@ -153,7 +162,7 @@ export async function runLocalAudit(
       const started = Date.now();
       await appendFile(logFile, `[OLLAMA] turn ${turn+1}/${allowance.turns}: request started; model=${model}; context=${limits.numCtx ?? "server-default"}; generation_limit=${generationBudget}; protocol=${protocol}\n`);
       const requestDeadline=AbortSignal.timeout(Math.min(timeoutMs,15*60000));
-      const result = await postOllamaJson(process.env.AUTOHACK_OLLAMA_URL || "http://127.0.0.1:11434/api/chat", { model, stream: false, think: false, messages:progressMessages.length ? [...messages,...progressMessages] : messages,
+      const result = await (adapter==='qwen-agent'?postQwenAgentJson:postOllamaJson)(process.env.AUTOHACK_OLLAMA_URL || "http://127.0.0.1:11434/api/chat", { model, stream: false, think: false, messages:progressMessages.length ? [...messages,...progressMessages] : messages,
           ...(structured ? {format:requestSchema} : {tools:availableTools}),
           keep_alive:"10m",
           options: { num_predict:generationBudget,
@@ -195,6 +204,24 @@ export async function runLocalAudit(
           messages.push({role:"user",content:"That action is not available in the current task stage. Use the current response schema and controller progress. No tool was executed. /no_think"});
           continue;
         }
+        const workflowError=workflow?.validate(action);
+        if(workflowError) {
+          workflow!.feedback(workflowError);
+          await appendFile(logFile,'[WORKFLOW_REJECTED] '+workflowError+'\n');
+          continue;
+        }
+        if(action.action==='plan_probe') {
+          if(!workflow)throw new Error('Probe planning requires production workflow');
+          if(action.answer==='solidity_sequence') {
+            const sequence=soliditySequenceSchema.safeParse(action.sequence);
+            if(!sequence.success){workflow.feedback('Provide a valid declarative Solidity sequence before planning its probe.');continue;}
+          } else if(action.sequence!==undefined) {workflow.feedback('Sequence is only allowed for solidity_sequence probes.');continue;}
+          workflow.plan(action);
+          messages.push({role:"assistant",content:message.content});
+          if(action.hypothesis)hypotheses.push({turn:turn+1,path:action.path,statement:action.hypothesis});
+          await appendFile(logFile,'[PROBE_PLANNED] '+JSON.stringify(action)+'\n');
+          continue;
+        }
         if(action.hypothesis)hypotheses.push({turn:turn+1,path:action.path,statement:action.hypothesis});
         await appendFile(logFile,"[MODEL_ACTION] "+JSON.stringify(action)+"\n");
         messages.push({role:"assistant",content:message.content});
@@ -224,7 +251,7 @@ export async function runLocalAudit(
         if (feedback) {
           // Validation may require rereading evidence; this is an intentional
           // investigation transition, not an unchanged inspection loop.
-          recentActions.clear();stalledActions=0;
+          recentActions.clear();stalledActions=0;workflow?.feedback(feedback,true);
           const rejected=messages.at(-1)!;
           rejected.content="Previous final answer rejected; follow the validation feedback.";
           await appendFile(logFile, "[FINAL_REJECTED] " + feedback + "\n");
@@ -321,6 +348,7 @@ export async function runLocalAudit(
               for(const excerpt of result.excerpts) {
                 allowance.read(excerpt.path,excerpt.start,excerpt.end,turn+1);
                 successfulReads++;
+                workflow?.read(excerpt.path);
                 limits.onRead?.(excerpt.path,{start:excerpt.start,end:excerpt.end});
                 await appendFile(logFile, "[READ_OK] " + excerpt.path + ` offset=${excerpt.start} end=${excerpt.end} indexed=true\n`);
               }
@@ -334,6 +362,7 @@ export async function runLocalAudit(
             allowance.read(relative(root,full),page.start,page.end,turn+1);
             activityCount=page.text.length;
             successfulReads++;
+            workflow?.read(relative(root,full).split(sep).join("/"));
             limits.onRead?.(relative(root,full).split(sep).join("/"),{start:page.start,end:page.end});
             await appendFile(logFile, "[READ_OK] " + relative(root,full) + ` offset=${page.start} end=${page.end} nextOffset=${page.nextOffset}\n`);
           } else throw new Error("Unknown tool");
@@ -358,6 +387,9 @@ export async function runLocalAudit(
             if(count>=3)fatalToolError="AUDIT_STALLED: repeated missing source path after corrective feedback; inspection incomplete";
           }
         }
+        workflow?.observe({action:call.function.name,path:String(call.function.arguments?.path || ''),
+          query:String(call.function.arguments?.query || ''),answer:String(call.function.arguments?.kind || ''),
+          sequence:call.function.arguments?.sequence},output);
         let probeStatus:string|undefined;
         if(["verify_source","verify_python"].includes(call.function.name)){
           try {probeStatus=String(JSON.parse(output).status || "unknown").slice(0,100);}catch{}
@@ -397,7 +429,7 @@ export async function runLocalAudit(
   } finally {
     if(controller.signal.aborted)stoppingReason=controller.signal.reason === "operator_cancelled" ? "Cancelled by operator" : "Audit deadline reached";
     await writeFile(logFile+".summary.json",JSON.stringify({startedAt:new Date(auditStartedAt).toISOString(),
-      endedAt:new Date().toISOString(),model,turns:usedTurns,successfulReads,stoppingReason,finalAnswer,hypotheses,
+      endedAt:new Date().toISOString(),model,adapter,workflow:workflow?.snapshot(),turns:usedTurns,successfulReads,stoppingReason,finalAnswer,hypotheses,
       ...allowance.snapshot(),files:allowance.snapshot().files.map(file=>({...file,totalCharacters:sourceTotals.get(file.path),
         complete:sourceTotals.has(file.path)&&file.ranges.length===1&&file.ranges[0][0]===0&&file.ranges[0][1]===sourceTotals.get(file.path)}))},null,2),{mode:0o600}).catch(()=>{});
     if (limits.checkpointPath) {
