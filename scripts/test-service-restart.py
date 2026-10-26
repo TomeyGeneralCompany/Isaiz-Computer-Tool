@@ -90,7 +90,10 @@ def smoke(iteration):
                     return
                 time.sleep(0.8)
             output.seek(0)
-            logs=output.read()[-4500:]
+            logs=output.read()
+            # Preserve the initial compilation error instead of only repeated 500s.
+            if len(logs) > 18000:
+                logs=logs[:13500]+"\n... middle omitted ...\n"+logs[-4500:]
             raise AssertionError(f"Dashboard did not become healthy on iteration {iteration}:\n{logs}")
         finally:
             try:

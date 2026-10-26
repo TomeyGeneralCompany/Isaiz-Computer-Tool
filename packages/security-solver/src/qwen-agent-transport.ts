@@ -1,8 +1,9 @@
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { acquireOllamaGate } from '../../core/src/ollama-gate';
-const root=fileURLToPath(new URL('../../../',import.meta.url));
+// Resolve at runtime: a directory URL is treated as an asset import by webpack.
+const root=resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 /** Qwen supplies formatting/parsing only. The existing runner owns every tool. */
 export async function postQwenAgentJson(url:URL|string,payload:unknown,signal:AbortSignal):Promise<any> {
   const queued=Date.now();const release=await acquireOllamaGate(signal);
