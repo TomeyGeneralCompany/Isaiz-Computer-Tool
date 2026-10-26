@@ -182,3 +182,48 @@ independent investigation planning; `--unguided` retains the planning comparison
 Production callers retain their existing behavior unless they explicitly provide
 an action contract. CI replays repeated reads, an irrelevant utility, a duplicate
 probe, malformed finals, and a contradictory conclusion in one recovery run.
+
+### Production investigation stages and local Qwen-Agent adapter
+
+Production source investigations now use a sequential LangGraph.js controller.
+It keeps source reads, a proposed hypothesis, its exact probe specification, and
+returned observations outside the model's disposable conversation history. A
+`plan_probe` decision must identify inspected source, a function, probe kind and
+a hypothesis with a disproof condition. The following stage permits only that
+probe. Completed or failed identical probes cannot be planned again in the same
+pass; unsupported results remain incomplete, never negative evidence.
+
+After six completed inspection actions the controller requests a hypothesis or
+an honest incomplete outcome. Continuing pages of a large file does not consume
+that decision allowance. Existing source/caller, reproduction, review and report
+validation remain authoritative. Dynamic turn/time extensions remain enabled.
+Workflow state and observations are recorded in the existing audit summary.
+Restart checkpoints remain navigation hints; probes must be rerun on restart.
+
+`npm ci` installs the pinned LangGraph dependency. The reproduction-runtime
+installer also installs the pinned Qwen-Agent environment into `.venv-qwen`
+(Python venv support is required). No cloud model or subscription is used.
+
+The default remains `LOCAL_MODEL_ADAPTER=ollama`, preserving the installed JSON
+transport. `LOCAL_MODEL_ADAPTER=qwen-agent` selects the installed Qwen-Agent
+formatter/parser through a local Python bridge. This adapter accepts only a
+loopback Ollama `/api/chat` URL and retains the same inference lock, cancellation,
+thread/context options, stage restrictions and evidence validators. It performs
+one model request at a time; Qwen-Agent never executes investigation tools.
+It is an alternative transport, not a second concurrent model. Do not select it
+on the basis of mocked tests alone; compare its real-model fixture result first.
+
+Run the shared production controller on owned fixtures:
+
+```bash
+node --import tsx scripts/test-production-workflow.ts --real-model
+LOCAL_MODEL_ADAPTER=qwen-agent node --import tsx scripts/test-production-workflow.ts --real-model
+```
+
+The test saves its log and result under `data/production-workflow-tests/`.
+Unlike the earlier guided fixture, it supplies no fixture-specific action or
+function enums: production stage rules govern the model's choices. Hidden
+expected labels are checked separately. Without `--real-model` the model is
+scripted and Python probes still execute in the existing isolated runner;
+`--mock-probes` is only a controller unit check. CI also exercises the production
+source workflow through report creation and independent review on owned fixtures.

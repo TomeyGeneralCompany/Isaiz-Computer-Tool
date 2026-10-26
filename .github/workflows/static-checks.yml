@@ -33,6 +33,10 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci
+      - name: Install and exercise Qwen-Agent local adapter
+        run: |
+          bash scripts/install-qwen-agent.sh
+          node --import tsx scripts/test-qwen-agent-transport.ts
       - run: npx tsc --noEmit --project tsconfig.json
       - name: Verify persisted runtime overrides and token limits
         run: npx tsx scripts/test-runtime-config.ts

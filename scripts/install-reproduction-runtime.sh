@@ -6,6 +6,7 @@ source "$ROOT/scripts/node-runtime.sh"
 packages=()
 command -v bwrap >/dev/null 2>&1 || packages+=(bubblewrap)
 command -v python3 >/dev/null 2>&1 || packages+=(python3)
+python3 -c "import ensurepip" >/dev/null 2>&1 || packages+=(python3-venv)
 if ! command -v javac >/dev/null 2>&1 || ! command -v java >/dev/null 2>&1; then
   packages+=(default-jdk-headless)
 fi
@@ -32,3 +33,5 @@ fi
 python3 --version
 node --version
 javac -version
+
+bash "$ROOT/scripts/install-qwen-agent.sh"

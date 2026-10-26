@@ -18,6 +18,7 @@ class SetupVerification(unittest.TestCase):
             shutil.copy(ROOT / 'setup-and-run.sh', base)
             shutil.copy(ROOT / 'scripts/node-runtime.sh', base / 'scripts')
             shutil.copy(ROOT / 'scripts/install-reproduction-runtime.sh', base / 'scripts')
+            (base / 'scripts/install-qwen-agent.sh').write_text('printf installed > qwen-installed\n')
             (base / 'bwrap').write_text('#!/bin/sh\nexit 0\n')
             (base / 'bwrap').chmod(0o700)
             for executable in ('java','javac'):
@@ -41,6 +42,7 @@ class SetupVerification(unittest.TestCase):
             self.assertIn('scripts/reproduction-runtime --ignore-scripts --no-audit --no-fund', calls[1])
             self.assertIn('--provider', (base / 'acceptance-args.txt').read_text())
             self.assertFalse((base / 'launched').exists())
+            self.assertEqual((base / 'qwen-installed').read_text(), 'installed')
             self.assertEqual(stat.S_IMODE((base / '.env').stat().st_mode), 0o600)
 
     def test_runtime_installer_provisions_missing_bubblewrap_and_checks_namespaces(self):
@@ -49,6 +51,8 @@ class SetupVerification(unittest.TestCase):
             shutil.copy(ROOT/'scripts/install-reproduction-runtime.sh',base/'scripts')
             shutil.copy(ROOT/'scripts/node-runtime.sh',base/'scripts')
             (bin/'dirname').symlink_to('/usr/bin/dirname')
+            (bin/'bash').symlink_to('/bin/bash')
+            (base/'scripts/install-qwen-agent.sh').write_text('exit 0\n')
             for name,body in {
                 'id':'echo 1000', 'node':'echo 22', 'npm':'echo "$*" >> "'+str(base/'npm-log')+'"',
                 'sudo':'echo "$*" >> "'+str(base/'apt-log')+'"\nif [ "$2" = install ]; then printf "#!/bin/sh\\nexit 0\\n" > "'+str(bin/'bwrap')+'"; /bin/chmod +x "'+str(bin/'bwrap')+'"; fi',
@@ -61,7 +65,7 @@ class SetupVerification(unittest.TestCase):
             env={**os.environ,'PATH':str(bin),'AUTOHACK_NODE_BIN':str(bin/'node')}
             result=subprocess.run(['/bin/bash',str(base/'scripts/install-reproduction-runtime.sh')],env=env,capture_output=True,text=True)
             self.assertEqual(result.returncode,0,result.stderr)
-            self.assertIn('apt-get install -y bubblewrap python3 default-jdk-headless',(base/'apt-log').read_text())
+            self.assertIn('apt-get install -y bubblewrap python3 python3-venv default-jdk-headless',(base/'apt-log').read_text())
             self.assertIn('--ignore-scripts',(base/'npm-log').read_text())
             (bin/'bwrap').write_text('#!/bin/sh\nexit 1\n')
             result=subprocess.run(['/bin/bash',str(base/'scripts/install-reproduction-runtime.sh')],env=env,capture_output=True,text=True)
