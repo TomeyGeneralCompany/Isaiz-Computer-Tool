@@ -28,14 +28,18 @@ export class InvestigationWorkflow {
       ['read_file','read_solidity','outline_solidity','search_files','list_files','plan_probe','final']};
   }
   note():string {
-    return JSON.stringify({stage:this.state.stage,inspectionsSinceDecision:this.state.inspections,
+    const note={stage:this.state.stage,inspectionsSinceDecision:this.state.inspections,
       recentReadPaths:[...this.readPaths].slice(-3).map(p=>p.slice(0,160)),pending:this.state.pending ? {path:this.state.pending.path.slice(0,160),function:this.state.pending.query,kind:this.state.pending.answer} : null,
       observations:this.observations.slice(-2).map(o=>({...o,path:o.path.slice(0,160)})),feedback:this.lastFeedback,
       instruction:this.state.pending?'Execute the planned probe with exactly its path, function, kind and sequence.':
-        'Read relevant source, then plan_probe with path, query=function, answer=probe kind, hypothesis=claim AND disproof condition. After six completed inspections choose a testable hypothesis or a truthful incomplete final outcome. After testing inspect caller/mitigations before reporting; observations alone are not findings.'}).slice(0,2000);
+        'Read relevant source, then plan_probe with path, query=function, answer=probe kind, hypothesis=claim AND disproof condition. After six completed inspections choose a testable hypothesis or a truthful incomplete final outcome. After testing inspect caller/mitigations before reporting; observations alone are not findings.'};
+    while(JSON.stringify(note).length>1800 && note.recentReadPaths.length)note.recentReadPaths.shift();
+    while(JSON.stringify(note).length>1800 && note.observations.length)note.observations.shift();
+    return JSON.stringify(note);
   }
   validate(action:Action):string|null {
     if(action.action==='plan_probe') {
+      if(action.path.length>512)return 'Choose a workspace-relative source path of at most 512 characters.';
       if(!this.readPaths.has(action.path))return 'Read the candidate source before planning its test.';
       if(!action.query || !['html_reflection','path_construction','solidity_sequence'].includes(action.answer))return 'Select a function from the inspected source and a supported probe kind.';
       if(!action.hypothesis?.trim())return 'State the suspected behavior and what observation would disprove it in hypothesis.';

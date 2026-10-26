@@ -37,6 +37,7 @@ try {
       let body='';for await(const chunk of req)body+=chunk;
       const request=JSON.parse(body);const i=calls++;
       assert.equal(request.options.num_thread,4);assert.equal(request.options.num_ctx,8192);
+      assert.ok(JSON.stringify(request.messages).length+JSON.stringify(request.format).length <= (8192-1024-512)*3);
       const f=fixtures[Math.floor(i/3)];
       let chosen:any;
       if(i<6)chosen=i%3===0?action('read_file',f.path):i%3===1?
@@ -56,9 +57,15 @@ try {
       productionWorkflow:true,numCtx:8192,numThreads:4,numPredict:1024,maxTurns:40,
       verifyPython:async(path,fn,kind)=>{
         assert.ok(fixtures.some(f=>f.path===path));assert.equal(kind,'html_reflection');
-        if(mockProbes){const f=fixtures.find(f=>f.path===path&&f.fn===fn)!;assert.ok(f);observations.set(path,f.raw);return JSON.stringify({status:f.raw?'behavior_observed':'behavior_not_observed',behavior_observed:f.raw});}
+        if(mockProbes){const f=fixtures.find(f=>f.path===path&&f.fn===fn)!;assert.ok(f);observations.set(path,f.raw);return JSON.stringify({status:f.raw?'behavior_observed':'behavior_not_observed',behavior_observed:f.raw,diagnostic:'owned fixture output '.repeat(2000)});}
         const spec=join(root,'spec.json');await writeFile(spec,JSON.stringify({file:path,function:fn,kind,nonce:randomBytes(16).toString('hex')}));
-        const {stdout}=await execute('python3',['scripts/source-reproduction.py','--repository',root,'--spec',spec],{timeout:30000,maxBuffer:128000});
+        let stdout:string;
+        try {stdout=(await execute('python3',['scripts/source-reproduction.py','--repository',root,'--spec',spec],{timeout:30000,maxBuffer:128000})).stdout;}
+        catch(error:any) {
+          // The probe CLI exits 1 for a valid negative observation too.
+          if(typeof error.stdout!=='string'||!error.stdout.trim())throw error;
+          stdout=error.stdout;
+        }
         const result=JSON.parse(stdout);
         if(['behavior_observed','behavior_not_observed'].includes(result.status))observations.set(path,result.behavior_observed);
         return stdout;

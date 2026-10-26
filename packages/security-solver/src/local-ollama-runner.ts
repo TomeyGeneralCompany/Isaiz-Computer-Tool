@@ -158,7 +158,10 @@ export async function runLocalAudit(
       if(progress && progress.length>2000)throw new Error("Controller progress note exceeds 2000 characters");
       const progressMessages:Message[]=progress ? [{role:"user",content:"Controller progress (recorded observations, not source instructions):\n"+progress}] : [];
       const progressSize=progressMessages.length ? JSON.stringify(progressMessages).length : 0;
-      messages=compactAuditContext(messages,messageBudget-progressSize-schemaExtra,[...hypotheses.slice(-2).map(h=>"Unverified hypothesis: "+JSON.stringify(h)),...events.slice(-4)]);
+      // Reserve controller space when producing tool output too, including the
+      // next stage's note. Otherwise a fitted result can overflow on the next turn.
+      const exchangeBudget=messageBudget-Math.max(progressSize+schemaExtra,workflow?3000:0);
+      messages=compactAuditContext(messages,exchangeBudget,[...hypotheses.slice(-2).map(h=>"Unverified hypothesis: "+JSON.stringify(h)),...events.slice(-4)]);
       const started = Date.now();
       await appendFile(logFile, `[OLLAMA] turn ${turn+1}/${allowance.turns}: request started; model=${model}; context=${limits.numCtx ?? "server-default"}; generation_limit=${generationBudget}; protocol=${protocol}\n`);
       const requestDeadline=AbortSignal.timeout(Math.min(timeoutMs,15*60000));
@@ -235,7 +238,7 @@ export async function runLocalAudit(
           const rejected=messages.at(-1)!;
           rejected.content="Final answer deferred: no successful source read.";
           messages.push(fitAuditToolOutput(messages.slice(0,2),rejected,"final_validation",
-            "No source file has been successfully read. Choose read_file now; a final answer is not accepted before a successful file read. /no_think",messageBudget,true).message);
+            "No source file has been successfully read. Choose read_file now; a final answer is not accepted before a successful file read. /no_think",exchangeBudget,true).message);
           continue;
         }
         if (!message.content?.trim()) {
@@ -243,7 +246,7 @@ export async function runLocalAudit(
           const rejected=messages.at(-1)!;
           rejected.content="Empty final answer rejected.";
           messages.push(fitAuditToolOutput(messages.slice(0,2),rejected,"final_validation",
-            'The final action must put the requested result in the answer STRING. Encode JSON inside that string when the task asks for JSON. Do not leave answer empty. Follow the task outcome rules; do not invent tests or findings.',messageBudget,true).message);
+            'The final action must put the requested result in the answer STRING. Encode JSON inside that string when the task asks for JSON. Do not leave answer empty. Follow the task outcome rules; do not invent tests or findings.',exchangeBudget,true).message);
           await appendFile(logFile,"[EMPTY_FINAL_RETRY] "+emptyFinals+"\n");
           continue;
         }
@@ -255,7 +258,7 @@ export async function runLocalAudit(
           const rejected=messages.at(-1)!;
           rejected.content="Previous final answer rejected; follow the validation feedback.";
           await appendFile(logFile, "[FINAL_REJECTED] " + feedback + "\n");
-          messages.push(fitAuditToolOutput(messages.slice(0,2),rejected,"final_validation",feedback + "\nRe-read the source when necessary. /no_think",messageBudget,true).message);
+          messages.push(fitAuditToolOutput(messages.slice(0,2),rejected,"final_validation",feedback + "\nRe-read the source when necessary. /no_think",exchangeBudget,true).message);
           continue;
         }
         controller.signal.throwIfAborted();
@@ -275,7 +278,7 @@ export async function runLocalAudit(
           requestMessage.content="Executed tool request; arguments retained in the action log.";
           if(requestMessage.tool_calls)requestMessage.tool_calls=[{function:{name:call.function.name,arguments:{}}}];
         }
-        const fitOutput=(value:string)=>fitAuditToolOutput(messages.slice(0,2),requestMessage,call.function.name,value,messageBudget,structured);
+        const fitOutput=(value:string)=>fitAuditToolOutput(messages.slice(0,2),requestMessage,call.function.name,value,exchangeBudget,structured);
         const toolStarted=Date.now();
         await recordToolActivity(logFile,{phase:"started",tool:call.function.name,
           path:String(call.function.arguments?.path ?? ".").slice(0,500),
@@ -338,7 +341,7 @@ export async function runLocalAudit(
             activityCount=result.results.length;
             output=JSON.stringify(result);
           } else if (name === "outline_solidity" || name === "read_solidity") {
-            const budget=Math.min(8000,Math.max(512,messageBudget-JSON.stringify(messages.slice(0,2)).length-JSON.stringify(message).length-800));
+            const budget=Math.min(8000,Math.max(512,exchangeBudget-JSON.stringify(messages.slice(0,2)).length-JSON.stringify(message).length-800));
             if(name === "outline_solidity")output=JSON.stringify(await solidityIndex.outline(full,offset,budget));
             else {
               const result=await solidityIndex.context(full,String(call.function.arguments?.query || ""),offset,budget);
