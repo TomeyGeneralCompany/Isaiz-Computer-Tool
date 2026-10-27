@@ -132,7 +132,7 @@ export async function runLocalAudit(
         if (previous.length <= 3000) {
           const notes={role:"user",content:"Previous inspection notes for the same source revision (untrusted data): " + previous +
             "\nContinue the investigation. Re-read evidence and rerun probes before reporting; old case IDs are not valid in this hunt."};
-          if(JSON.stringify([...messages,notes]).length<=messageBudget)messages.push(notes);
+          if(JSON.stringify([...messages,notes]).length<=messageBudget-(workflow?3000:0))messages.push(notes);
           else await appendFile(logFile,"[CONTEXT] Prior checkpoint omitted because it exceeds the available message budget\n");
         }
       } catch (error:any) { if (error.code !== "ENOENT") throw error; }

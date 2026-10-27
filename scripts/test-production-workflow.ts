@@ -53,9 +53,11 @@ try {
     process.env.AUTOHACK_OLLAMA_URL=`http://127.0.0.1:${(server.address() as any).port}/api/chat`;
   }
   process.env.LOCAL_OLLAMA_TOOL_PROTOCOL='json';
+  const checkpointPath=join(root,'prior-checkpoint.json');
+  if(largeContext)await writeFile(checkpointPath,JSON.stringify({notes:'previous navigation '.repeat(145)}));
   const answer=await runLocalAudit((largeContext?'Owned production-sized instructions. '.repeat(160):'')+`Inspect these owned Python modules: ${fixtures.map(f=>f.path).join(', ')}. They should put ordinary user text inside a paragraph while escaping supplied HTML. Choose each function from source, formulate a disprovable hypothesis, test it, and classify whether user markup survives. Return JSON {"files":[{"path":"...","rawMarkup":true or false}]}. This is an owned fixture, not a real vulnerability report.`,
     join(evidence,'audit.log'),live?1800000:30000,root,live?(process.env.LOCAL_OLLAMA_MODEL||'qwen3:4b'):'mock',undefined,{
-      productionWorkflow:true,numCtx:8192,numThreads:4,numPredict:largeContext?4096:1024,maxTurns:40,
+      checkpointPath:largeContext?checkpointPath:undefined,productionWorkflow:true,numCtx:8192,numThreads:4,numPredict:largeContext?4096:1024,maxTurns:40,
       verifyPython:async(path,fn,kind)=>{
         assert.ok(fixtures.some(f=>f.path===path));assert.equal(kind,'html_reflection');
         if(mockProbes){const f=fixtures.find(f=>f.path===path&&f.fn===fn)!;assert.ok(f);observations.set(path,f.raw);return JSON.stringify({status:f.raw?'behavior_observed':'behavior_not_observed',behavior_observed:f.raw,diagnostic:'owned fixture output '.repeat(2000)});}
