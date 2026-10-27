@@ -46,13 +46,13 @@ function SecurityAgentIndicator() {
 export function Nav() {
 
   return (
-    <nav className="border-b border-t-4" style={{ borderBottomColor: "var(--border)", borderTopColor: "var(--brand-crimson)", background: "var(--bg-card)" }}>
+    <nav className="border-b border-t-4" style={{ borderBottomColor: "var(--border)", borderTopColor: "var(--brand-crimson)", background: "var(--bg)" }}>
       <div className="mx-auto max-w-7xl px-6">
         <div className="flex items-center justify-between py-4">
-          <Link href="/security" className="flex items-center gap-3" aria-label="Tomey Gun dashboard">
-            <Image src="/constanzo.png" alt="Constanzo, the computer mascot" width={48} height={48} className="rounded-xl" unoptimized />
+          <Link href="/security" className="flex items-center gap-3" aria-label="Tomey General dashboard">
+            <Image src="/tomey-general.png" alt="Tomey General Company lion and lighthouse logo" width={72} height={72} className="shrink-0 rounded-full" unoptimized />
             <div>
-              <div className="text-xl font-bold tracking-tight" style={{ color: "var(--text)" }}>Tomey <span style={{ color: "var(--accent)" }}>Gun</span></div>
+              <div className="text-xl font-bold tracking-tight" style={{ color: "var(--text)" }}>Tomey General</div>
               <div className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: "var(--text-dim)" }}>Tomey General Company</div>
             </div>
           </Link>

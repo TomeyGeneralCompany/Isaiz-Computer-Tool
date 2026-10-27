@@ -5,7 +5,7 @@ import { Nav } from "@/components/nav";
 
 export const metadata: Metadata = {
   title: "Tomey Gun | Tomey General Company",
-  icons: { icon: "/constanzo.png" },
+  icons: { icon: "/tomey-general.png" },
   description: "Tomey Gun — the local bounty research dashboard from Tomey General Company.",
 };
 

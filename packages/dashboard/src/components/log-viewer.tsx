@@ -69,7 +69,7 @@ function PlainLogFallback({ programId, findingId }: { programId?: string; findin
       <div
         className="flex items-center justify-center overflow-auto rounded-lg border font-mono text-xs"
         style={{
-          background: "#080810",
+          background: "var(--accent-soft)",
           borderColor: "var(--border)",
           height: 200,
           color: "var(--text-dim)",
@@ -98,13 +98,13 @@ function PlainLogViewer({ lines, maxHeight }: { lines: string[]; maxHeight: numb
       ref={scrollRef}
       className="overflow-auto rounded-lg border font-mono text-xs leading-relaxed"
       style={{
-        background: "#080810",
+        background: "var(--accent-soft)",
         borderColor: "var(--border)",
         maxHeight,
         minHeight: 200,
       }}
     >
-      <pre className="whitespace-pre-wrap break-words p-4" style={{ color: "#c4c4d4" }}>
+      <pre className="whitespace-pre-wrap break-words p-4" style={{ color: "var(--text)" }}>
         {lines.join("\n")}
       </pre>
     </div>
