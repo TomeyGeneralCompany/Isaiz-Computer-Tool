@@ -52,3 +52,8 @@ jobs:
         run: npx tsx scripts/test-source-workflow.ts
       - name: Exercise shared production workflow with real isolated probes
         run: node --import tsx scripts/test-production-workflow.ts
+
+      - name: Install pinned local static analyzers
+        run: bash scripts/install-static-analysis.sh
+      - name: Exercise offline static leads on owned source
+        run: python3 scripts/test-static-leads.py

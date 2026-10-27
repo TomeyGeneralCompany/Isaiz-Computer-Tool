@@ -71,7 +71,7 @@ export function fitAuditToolOutput(pinned:AuditMessage[], request:AuditMessage, 
     return {output:error,message:wrap(error)};
   } else {
     length=output.length;
-    candidate=size=>JSON.stringify({truncated:true,caseId:data?.caseId,status:data?.status,
+    candidate=size=>JSON.stringify({truncated:true,caseId:data?.caseId,evidenceFile:data?.evidenceFile,status:data?.status,
       behavior_observed:data?.behavior_observed,excerpt:output.slice(0,size),
       instruction:'Output abbreviated. Narrow the request; this excerpt is not complete evidence.'});
   }

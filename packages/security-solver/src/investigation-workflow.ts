@@ -16,28 +16,61 @@ const key = (a:Action) => JSON.stringify([a.path,a.query,a.answer,a.sequence]);
 export class InvestigationWorkflow {
   private state:typeof State.State={stage:'inspect',inspections:0,pending:null,tested:[]};
   private readPaths=new Set<string>();
-  private observations:Array<{path:string;function:string;kind:string;status:string;caseId?:string}>=[];
+  private observations:Array<{path:string;function:string;kind:string;status:string;caseId?:string;evidenceFile?:string;behaviorObserved?:boolean}>=[];
   private lastFeedback='';
+  private decisions:Array<{path:string;question:string;offset:number}>=[];
+  private priorNotes:string[]=[];
+  private pageTurns=0;
+  private continuations=new Map<string,number>();
+  restore(value:unknown) {
+    // Prior state directs navigation only. Current-run reads and probes must revalidate it.
+    const saved=value as any;
+    if(saved?.version!==1 || !Array.isArray(saved.notes))return;
+    this.priorNotes=saved.notes.filter((n:unknown)=>typeof n==='string').slice(-12).map((n:string)=>n.slice(0,400));
+  }
+  memory() {
+    return {version:1,notes:[...this.priorNotes,
+      ...this.decisions.slice(-6).map(d=>'Unresolved context: '+JSON.stringify(d)),
+      ...(this.state.pending?['Candidate needing fresh evidence: '+JSON.stringify(this.state.pending)]:[]),
+      ...this.observations.slice(-6).map(o=>'Prior observation; replay required: '+JSON.stringify(o))].slice(-12).map(n=>n.slice(0,400))};
+  }
+  continueInspection(action:Action) {
+    const question=action.hypothesis!.trim();
+    const id=JSON.stringify([action.path,action.offset||0,action.query,question]);
+    this.continuations.set(id,(this.continuations.get(id)||0)+1);
+    this.decisions.push({path:action.path,question,offset:action.offset||0});
+    this.decisions=this.decisions.slice(-32);
+    this.state.inspections=0;this.pageTurns=0;this.lastFeedback='';
+  }
   async constraints() {
+    if(this.pageTurns>=8)this.state.inspections=Math.max(6,this.state.inspections);
     this.state=await graph.invoke(this.state);
     if(this.state.pending) {
       const p=this.state.pending;
       return {action:['verify_source'],path:[p.path],query:[p.query],answer:[p.answer]};
     }
-    return {action:this.state.stage==='hypothesize' ? ['plan_probe','final'] :
+    return {action:this.state.stage==='hypothesize' ? ['plan_probe','continue_inspection','final'] :
       ['read_file','read_solidity','outline_solidity','search_files','list_files','plan_probe','final']};
   }
   note():string {
-    const note={stage:this.state.stage,inspectionsSinceDecision:this.state.inspections,
+    const note={unansweredQuestion:this.decisions.length?{...this.decisions.at(-1)!,path:this.decisions.at(-1)!.path.slice(0,160),question:this.decisions.at(-1)!.question.slice(0,250)}:undefined,priorNavigation:this.priorNotes.slice(-1).map(n=>n.slice(0,200)),pageTurns:this.pageTurns,stage:this.state.stage,inspectionsSinceDecision:this.state.inspections,
       recentReadPaths:[...this.readPaths].slice(-3).map(p=>p.slice(0,160)),pending:this.state.pending ? {path:this.state.pending.path.slice(0,160),function:this.state.pending.query,kind:this.state.pending.answer} : null,
-      observations:this.observations.slice(-2).map(o=>({...o,path:o.path.slice(0,160)})),feedback:this.lastFeedback,
+      observations:this.observations.slice(-2).map(o=>({...o,path:o.path.slice(0,160)})),feedback:this.lastFeedback.slice(0,240),
       instruction:this.state.pending?'Execute the planned probe with exactly its path, function, kind and sequence.':
-        'Read relevant source, then plan_probe with path, query=function, answer=probe kind, hypothesis=claim AND disproof condition. After six completed inspections choose a testable hypothesis or a truthful incomplete final outcome. After testing inspect caller/mitigations before reporting; observations alone are not findings.'};
+        'Read relevant source, then plan_probe with path, query=function, answer=probe kind, hypothesis=claim AND disproof condition. After six inspections or eight source pages, choose plan_probe, continue_inspection with a specific unanswered question in hypothesis and the next path/offset/query, or an incomplete final. Continue only to obtain that missing evidence; no forced unrelated test. Read recorded evidenceFile pages when an observation leaves context instead of repeating its probe. After testing inspect caller/mitigations before reporting; observations alone are not findings.'};
+    while(JSON.stringify(note).length>1800 && note.priorNavigation.length)note.priorNavigation.shift();
     while(JSON.stringify(note).length>1800 && note.recentReadPaths.length)note.recentReadPaths.shift();
     while(JSON.stringify(note).length>1800 && note.observations.length)note.observations.shift();
+    if(JSON.stringify(note).length>1800){note.unansweredQuestion=undefined;note.feedback=note.feedback.slice(0,100);}
     return JSON.stringify(note);
   }
   validate(action:Action):string|null {
+    if(action.action==='continue_inspection') {
+      if(!action.hypothesis?.trim() || action.hypothesis.trim().length<20 || !action.path || action.path.length>512)
+        return 'Name the next source path and explain the specific missing evidence in hypothesis (20–600 characters).';
+      const id=JSON.stringify([action.path,action.offset||0,action.query,action.hypothesis.trim()]);
+      if((this.continuations.get(id)||0)>=2)return 'This identical context request already repeated. Choose a different question or conclude incomplete.';
+    }
     if(action.action==='plan_probe') {
       if(action.path.length>512)return 'Choose a workspace-relative source path of at most 512 characters.';
       if(!this.readPaths.has(action.path))return 'Read the candidate source before planning its test.';
@@ -55,15 +88,16 @@ export class InvestigationWorkflow {
     if(action.action==='verify_source') {
       let result:any;try{result=JSON.parse(output);}catch{}
       this.observations.push({path:action.path,function:action.query,kind:action.answer,
-        status:result?.status||'tool_error',...(typeof result?.caseId==='string'?{caseId:result.caseId}: {})});
-      this.state.tested.push(key(action));this.state.pending=null;this.state.inspections=0;
+        status:result?.status||'tool_error',...(typeof result?.evidenceFile==='string'?{evidenceFile:result.evidenceFile}:{}),...(typeof result?.behavior_observed==='boolean'?{behaviorObserved:result.behavior_observed}:{}),...(typeof result?.caseId==='string'?{caseId:result.caseId}: {})});
+      this.state.tested.push(key(action));this.state.pending=null;this.state.inspections=0;this.pageTurns=0;
     } else {
       let page:any;try{page=JSON.parse(output);}catch{}
-      // Continuing a large source file is real progress, not six separate decisions.
+      // Pagination remains available, but long files also get a decision checkpoint.
+      if(['read_file','read_solidity'].includes(action.action))this.pageTurns++;
       if(output.includes('Repeated inspection action'))this.state.inspections=6;
       else if(action.action!=='read_file' || page?.nextOffset===null || output.startsWith('Tool error:'))this.state.inspections++;
     }
   }
-  feedback(message:string,reopen=false) {this.lastFeedback=message.slice(0,400);if(reopen)this.state.inspections=0;}
-  snapshot() {return {...this.state,readPaths:[...this.readPaths],observations:this.observations};}
+  feedback(message:string,reopen=false) {this.lastFeedback=message.slice(0,400);if(reopen){this.state.inspections=0;this.pageTurns=0;}}
+  snapshot() {return {...this.state,pageTurns:this.pageTurns,decisions:this.decisions,priorNotes:this.priorNotes,readPaths:[...this.readPaths],observations:this.observations};}
 }

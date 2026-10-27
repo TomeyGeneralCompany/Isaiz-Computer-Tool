@@ -38,3 +38,6 @@ token.json
 .DS_Store
 
 .venv-qwen/
+
+# Optional pinned local static analyzers
+.venv-static/
