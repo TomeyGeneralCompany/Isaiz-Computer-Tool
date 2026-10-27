@@ -1,22 +1,22 @@
 @import "tailwindcss";
 
 :root {
-  --bg: #0b1113;
-  --bg-card: #121d20;
-  --bg-hover: #1a2b2e;
-  --border: #2b4145;
-  --text: #f5f8f8;
-  --text-dim: #a2b6b9;
-  --accent: #01cac4;
-  --accent-dim: #098d90;
-  --on-accent: #06282b;
-  --accent-soft: #15383b;
-  --brand-crimson: #be0a2f;
-  --brand-crimson-soft: #34151e;
-  --green: #34d399;
-  --yellow: #fbbf24;
-  --red: #fb7185;
-  --blue: #67c7de;
+  --bg: #c90823;
+  --bg-card: #01cac4;
+  --bg-hover: #00b6b1;
+  --border: #4edad6;
+  --text: #ffffff;
+  --text-dim: #ffffff;
+  --accent: #ffffff;
+  --accent-dim: #ffffff;
+  --on-accent: #c90823;
+  --accent-soft: #009e99;
+  --brand-crimson: #c90823;
+  --brand-crimson-soft: #a5061c;
+  --green: #ffffff;
+  --yellow: #fff3bf;
+  --red: #a5061c;
+  --blue: #ffffff;
 }
 
 body {
@@ -40,7 +40,13 @@ body {
   50% { opacity: 0.4; }
 }
 
-/* Tomey General: crimson brand stripe, teal controls, white type. */
+/* Supplied Tomey General palette: crimson canvas, turquoise panels, white type. */
 ::selection { background: var(--accent); color: var(--on-accent); }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 input[type="checkbox"] { accent-color: var(--accent-dim); }
+
+/* Keep existing component structure, state, and controls; theme their surfaces. */
+button:not(:disabled) { cursor: pointer; }
+button:focus-visible, a:focus-visible { outline: 3px solid white; outline-offset: 3px; }
+button:disabled { cursor: not-allowed; }
+input, textarea, select { color-scheme: light; }

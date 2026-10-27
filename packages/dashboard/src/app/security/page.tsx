@@ -824,7 +824,7 @@ export default function SecurityPage() {
               onClick={() => killAllMutation.mutate()}
               disabled={killAllMutation.isPending}
               className="rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors"
-              style={{ background: "#450a0a", color: "#ef4444", border: "1px solid #7f1d1d" }}
+              style={{ background: "var(--brand-crimson)", color: "var(--text)", border: "1px solid var(--brand-crimson)" }}
             >
               {killAllMutation.isPending ? "Killing..." : "Kill All"}
             </button>
@@ -988,7 +988,7 @@ export default function SecurityPage() {
                           onClick={() => forceStopMutation.mutate()}
                           disabled={forceStopMutation.isPending}
                           className="rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors"
-                          style={{ background: "#450a0a", color: "#ef4444", border: "1px solid #7f1d1d" }}
+                          style={{ background: "var(--brand-crimson)", color: "var(--text)", border: "1px solid var(--brand-crimson)" }}
                         >
                           {forceStopMutation.isPending ? "Stopping..." : "Force Stop"}
                         </button>
@@ -997,7 +997,7 @@ export default function SecurityPage() {
                         <button
                           onClick={() => stopAnalyzeMutation.mutate()}
                           className="rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors"
-                          style={{ background: "#450a0a", color: "#ef4444", border: "1px solid #7f1d1d" }}
+                          style={{ background: "var(--brand-crimson)", color: "var(--text)", border: "1px solid var(--brand-crimson)" }}
                         >
                           Stop
                         </button>
@@ -1200,7 +1200,7 @@ export default function SecurityPage() {
                       <button
                         onClick={() => stopAnalyzeMutation.mutate()}
                         className="flex-1 rounded-lg py-2 text-sm font-semibold transition-colors"
-                        style={{ background: "#1c1917", color: "#ef4444", border: "1px solid #7f1d1d" }}
+                        style={{ background: "var(--brand-crimson)", color: "var(--text)", border: "1px solid var(--brand-crimson)" }}
                       >
                         Stop Analysis
                       </button>
@@ -1290,9 +1290,9 @@ export default function SecurityPage() {
                       disabled={ds.assessedPrograms === 0}
                       className="flex-1 rounded-lg py-2 text-sm font-semibold transition-colors disabled:opacity-40"
                       style={{
-                        background: autoHuntEnabled?.enabled ? "#450a0a" : "var(--green)",
-                        color: autoHuntEnabled?.enabled ? "#ef4444" : "#000",
-                        border: autoHuntEnabled?.enabled ? "1px solid #7f1d1d" : "none",
+                        background: autoHuntEnabled?.enabled ? "var(--brand-crimson)" : "var(--green)",
+                        color: autoHuntEnabled?.enabled ? "var(--text)" : "var(--on-accent)",
+                        border: autoHuntEnabled?.enabled ? "1px solid var(--brand-crimson)" : "none",
                       }}
                     >
                       {autoHuntEnabled?.enabled ? "Stop Auto Hunt" : "Start Auto Hunt"}
