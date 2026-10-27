@@ -3,7 +3,7 @@ import { postQwenAgentJson } from "./qwen-agent-transport";
 import { AuditAllowance } from "./audit-allowance";
 import { AuditNavigation } from "./audit-navigation";
 import { SoliditySourceIndex } from "./solidity-source-index";
-import { compactAuditContext, auditCheckpoint, fitAuditToolOutput } from "./audit-context";
+import { allocateAuditContext, compactAuditContext, auditCheckpoint, fitAuditToolOutput } from "./audit-context";
 import { soliditySequenceSchema, soliditySequenceJsonSchema, soliditySequencePrompt, type SoliditySequence } from "./solidity-sequence";
 import { readSourcePage, searchSourcePage, listSourcePage, pageOffset, type ReadSpan } from "./source-inspection";
 import { postOllamaJson } from "@bounty/core";
@@ -110,7 +110,7 @@ export async function runLocalAudit(
     { role: "system", content: (systemPrompt || "") + "\nPerform an offline source audit. Request exactly one tool call per response. Inspect actual files. Never invent findings or observations. No target network requests are available." + (limits.verifyPython ? probePrompt : " No source execution is available.") + (structured ? auditProtocolPrompt.replace(JSON.stringify(auditActionSchema),'Use action, path, query, answer; offset and sequence are optional. Example: {"action":"read_file","path":"file.py","query":"","answer":"","offset":0}. The response format enforces the full schema.') : "") },
     { role: "user", content: prompt + "\n/no_think" },
   ];
-  let contextBudget=Math.max(2000,(settings.numCtx-generationBudget-512)*3);
+  let contextBudget=0;
   const events:string[]=[];
   const navigation=new AuditNavigation();
   navigation.seed(limits.initialSourcePaths || []);
@@ -119,10 +119,13 @@ export async function runLocalAudit(
   const missingRequests=new Map<string,number>();
   const fixedSize=JSON.stringify(messages).length+JSON.stringify(structured ? actionSchema : availableTools).length;
   // Tools/schema also consume context. Keep a full recent exchange and reserve output.
-  let messageBudget=Math.max(JSON.stringify(messages).length+1200,contextBudget-JSON.stringify(structured ? actionSchema : availableTools).length);
+  let messageBudget=0;
   let pageSize=Math.max(128,Math.min(2000,messageBudget-JSON.stringify(messages).length-800));
   try {
-    if(fixedSize>contextBudget && limits.numCtx!==undefined)throw new Error("Audit instructions exceed configured context; increase numCtx or narrow the request");
+    const budget=allocateAuditContext(messages,structured?actionSchema:availableTools,settings.numCtx,generationBudget,workflow?3000:0);
+    generationBudget=budget.generationBudget;contextBudget=budget.contextBudget;messageBudget=budget.messageBudget;
+    pageSize=Math.max(128,Math.min(2000,messageBudget-(workflow?3000:0)-JSON.stringify(messages).length-800));
+    await appendFile(logFile,"[CONTEXT_BUDGET] "+JSON.stringify({...budget,requestedOutput:settings.numPredict,controllerReserve:workflow?3000:0,pinnedCharacters:JSON.stringify(messages).length})+"\n");
     if (limits.checkpointPath) {
       try {
         const previous = await readFile(limits.checkpointPath, "utf8");
@@ -190,12 +193,13 @@ export async function runLocalAudit(
         try {action = decodeAuditAction(message.content,!!limits.verifyPython);}
         catch {
           if (result.done_reason === "length" && generationBudget < 4096) {
-            const nextBudget = Math.min(generationBudget*2,4096);
+            const nextBudget = allocateAuditContext(messages.slice(0,2),structured?actionSchema:availableTools,settings.numCtx,Math.min(generationBudget*2,4096),workflow?3000:0).generationBudget;
+            if(nextBudget<=generationBudget)throw new Error("Truncated action exceeds available output space; use a smaller action or sequence");
             const nextContext = Math.max(2000,(settings.numCtx-nextBudget-512)*3);
             if (fixedSize > nextContext) throw new Error("Truncated action needs more context for a larger output budget; increase numCtx");
             generationBudget = nextBudget;
             contextBudget = nextContext;
-            messageBudget = Math.max(JSON.stringify(messages.slice(0,2)).length+1200,contextBudget-JSON.stringify(structured ? actionSchema : availableTools).length);
+            messageBudget = contextBudget-JSON.stringify(structured ? actionSchema : availableTools).length;
             pageSize = Math.max(128,Math.min(2000,messageBudget-JSON.stringify(messages.slice(0,2)).length-800));
             await appendFile(logFile, `[OLLAMA] truncated JSON action; retrying with generation_limit=${generationBudget}\n`);
             continue;
@@ -219,6 +223,9 @@ export async function runLocalAudit(
             const sequence=soliditySequenceSchema.safeParse(action.sequence);
             if(!sequence.success){workflow.feedback('Provide a valid declarative Solidity sequence before planning its probe.');continue;}
           } else if(action.sequence!==undefined) {workflow.feedback('Sequence is only allowed for solidity_sequence probes.');continue;}
+          if(JSON.stringify([...messages.slice(0,2),message]).length>exchangeBudget-1000) {
+            workflow.feedback('The proposed action is too large for one exchange. Plan a shorter probe sequence.');continue;
+          }
           workflow.plan(action);
           messages.push({role:"assistant",content:message.content});
           if(action.hypothesis)hypotheses.push({turn:turn+1,path:action.path,statement:action.hypothesis});

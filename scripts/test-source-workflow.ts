@@ -11,6 +11,7 @@ process.env.PROJECT_ROOT=root;
 process.env.GITHUB_TOKEN="owned-fixture";
 process.env.LOCAL_OLLAMA_MODEL="mock";
 process.env.LOCAL_OLLAMA_TOOL_PROTOCOL="json";
+process.env.LOCAL_HUNT_NUM_PREDICT="4096";
 const server=createServer();
 try {
   const fixture=join(root,"fixture");await mkdir(fixture);
@@ -22,6 +23,7 @@ try {
   await writeFile(join(fixture,"StoreCaller.sol"),'store.set(input);');
   await writeFile(join(fixture,"caller.js"),'renderer.render(input);');
   await writeFile(join(fixture,"Caller.sol"),'renderer.render(input);');
+  for(let i=0;i<35;i++)await writeFile(join(fixture,"incompatible_"+String(i).padStart(3,"0")+"_"+"x".repeat(100)+".sol"),"pragma solidity 0.6.0; contract Old {} ");
   execFileSync("git",["init","-q",fixture]);
   execFileSync("git",["-C",fixture,"add","."]);
   execFileSync("git",["-C",fixture,"-c","user.name=Fixture","-c","user.email=fixture@example.test","commit","-qm","Owned fixture"]);
@@ -29,6 +31,7 @@ try {
   const bin=join(root,"bin");await mkdir(bin);
   await writeFile(join(bin,"git"),'#!/usr/bin/python3\nimport os,sys,shutil,subprocess\nargs=sys.argv[1:]\nif "clone" in args:\n    shutil.copytree('+JSON.stringify(fixture)+',args[-1])\nelif \"fetch\" in args:\n    subprocess.run(['+JSON.stringify(realGit)+',\"cat-file\",\"-e\",args[-1]+\"^{commit}\"],check=True)\nelse:\n    os.execv('+JSON.stringify(realGit)+',['+JSON.stringify(realGit)+']+args)\n');
   await chmod(join(bin,"git"),0o700);process.env.PATH=bin+":"+originalPath;
+  let policyOffset=0,policyDone=false;
   let turn=0, caseId="", source="", caller="", selector="", stateful=false,reviewMode=false,reviewIndex=0,reviewOffset=0;
   const reviewFiles=["source/Store.sol","evidence/report.txt","evidence/replay.json","evidence/policy.txt"];
   const sequence={constructorArgs:["5"],steps:[
@@ -41,6 +44,12 @@ try {
     const request=JSON.parse(raw);
     // Production progress is appended separately; inspect the last actual tool result.
     const latestTool=()=>[...request.messages].reverse().find((m:any)=>m.content?.startsWith("TOOL_RESULT "));
+    assert.ok(JSON.stringify(request.messages).length+JSON.stringify(request.format).length <= (8192-request.options.num_predict-512)*3,'Every production request fits its declared budget');
+    if(!reviewMode && !policyDone) {
+      const last=latestTool();
+      if(last) {const page=JSON.parse(JSON.parse(last.content.split('\n')[0].slice(12)).output);policyDone=page.nextOffset===null;policyOffset=page.nextOffset;}
+      if(!policyDone) {res.end(JSON.stringify({message:{role:'assistant',content:JSON.stringify({action:'read_file',path:'audit-policy.txt',offset:policyOffset,query:'',answer:''})}}));return;}
+    }
     if(!reviewMode && request.format.properties.action.enum.length===1 && request.format.properties.action.enum[0]==='verify_source') {
       const planned=[...request.messages].reverse().map((m:any)=>{try{return JSON.parse(m.content);}catch{return null;}}).find((a:any)=>a?.action==='plan_probe');
       assert.ok(planned);
@@ -115,11 +124,11 @@ try {
   assert.equal(referencesProbedFunction("renderer.render(input)","Render.render"),true);
   assert.equal(referencesProbedFunction("renderer.prerender(input)","Render.render"),false);
   assert.equal(referencesProbedFunction("// render is declared here","Render.render"),false);
-  const program:any={id:"owned",provider:"immunefi",name:"Owned fixture",scopeSummary:JSON.stringify({scopes:[
+  const program:any={id:"owned",provider:"immunefi",name:"Owned fixture",scopeSummary:JSON.stringify({policy:"Owned fixture policy; local tests only. ".repeat(300),scopes:[
     {assetType:"SOURCE_CODE",eligibleForBounty:true,assetIdentifier:"https://github.com/fixture/owned"}
   ]})};
   for(const language of ["javascript","java","solidity","stateful_solidity"]) {
-    turn=0;caseId="";stateful=language==="stateful_solidity";
+    turn=0;policyOffset=0;policyDone=false;caseId="";stateful=language==="stateful_solidity";
     source=language==="javascript"?"render.cjs":language==="java"?"Render.java":"Render.sol";
     caller=language==="javascript"?"caller.js":language==="java"?"Caller.java":"Caller.sol";
     selector=language==="javascript"?"render":"Render.render";

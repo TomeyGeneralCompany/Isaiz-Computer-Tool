@@ -9,6 +9,7 @@ import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {runLocalAudit} from '../packages/security-solver/src/local-ollama-runner';
 import {InvestigationWorkflow} from '../packages/security-solver/src/investigation-workflow';
+const largeContext=process.argv.includes('--large-context');
 const live=process.argv.includes('--real-model'),mockProbes=process.argv.includes('--mock-probes'),execute=promisify(execFile);
 if(live&&mockProbes)throw new Error('Real model check requires real probes');
 const root=await mkdtemp(join(tmpdir(),'production-workflow-'));
@@ -37,7 +38,7 @@ try {
       let body='';for await(const chunk of req)body+=chunk;
       const request=JSON.parse(body);const i=calls++;
       assert.equal(request.options.num_thread,4);assert.equal(request.options.num_ctx,8192);
-      assert.ok(JSON.stringify(request.messages).length+JSON.stringify(request.format).length <= (8192-1024-512)*3);
+      assert.ok(JSON.stringify(request.messages).length+JSON.stringify(request.format).length <= (8192-request.options.num_predict-512)*3);
       const f=fixtures[Math.floor(i/3)];
       let chosen:any;
       if(i<6)chosen=i%3===0?action('read_file',f.path):i%3===1?
@@ -52,9 +53,9 @@ try {
     process.env.AUTOHACK_OLLAMA_URL=`http://127.0.0.1:${(server.address() as any).port}/api/chat`;
   }
   process.env.LOCAL_OLLAMA_TOOL_PROTOCOL='json';
-  const answer=await runLocalAudit(`Inspect these owned Python modules: ${fixtures.map(f=>f.path).join(', ')}. They should put ordinary user text inside a paragraph while escaping supplied HTML. Choose each function from source, formulate a disprovable hypothesis, test it, and classify whether user markup survives. Return JSON {"files":[{"path":"...","rawMarkup":true or false}]}. This is an owned fixture, not a real vulnerability report.`,
+  const answer=await runLocalAudit((largeContext?'Owned production-sized instructions. '.repeat(160):'')+`Inspect these owned Python modules: ${fixtures.map(f=>f.path).join(', ')}. They should put ordinary user text inside a paragraph while escaping supplied HTML. Choose each function from source, formulate a disprovable hypothesis, test it, and classify whether user markup survives. Return JSON {"files":[{"path":"...","rawMarkup":true or false}]}. This is an owned fixture, not a real vulnerability report.`,
     join(evidence,'audit.log'),live?1800000:30000,root,live?(process.env.LOCAL_OLLAMA_MODEL||'qwen3:4b'):'mock',undefined,{
-      productionWorkflow:true,numCtx:8192,numThreads:4,numPredict:1024,maxTurns:40,
+      productionWorkflow:true,numCtx:8192,numThreads:4,numPredict:largeContext?4096:1024,maxTurns:40,
       verifyPython:async(path,fn,kind)=>{
         assert.ok(fixtures.some(f=>f.path===path));assert.equal(kind,'html_reflection');
         if(mockProbes){const f=fixtures.find(f=>f.path===path&&f.fn===fn)!;assert.ok(f);observations.set(path,f.raw);return JSON.stringify({status:f.raw?'behavior_observed':'behavior_not_observed',behavior_observed:f.raw,diagnostic:'owned fixture output '.repeat(2000)});}
