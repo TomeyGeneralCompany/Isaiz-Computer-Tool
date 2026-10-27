@@ -1,11 +1,27 @@
 export type AuditMessage={role:string;content:string;tool_name?:string;tool_calls?:Array<{function:{name:string;arguments:Record<string,unknown>}}>};
+/** Allocate instructions, schema, controller and one useful exchange together.
+ * numPredict is a ceiling, not a reservation that may crowd out required input.
+ */
+export function allocateAuditContext(pinned:AuditMessage[],schema:unknown,numCtx:number,numPredict:number,controllerReserve=0) {
+  const pinnedSize=JSON.stringify(pinned).length;
+  const schemaSize=JSON.stringify(schema).length;
+  const exchangeReserve=controllerReserve ? 3000 : 800;
+  const maximumOutput=Math.floor(numCtx-512-(pinnedSize+schemaSize+controllerReserve+exchangeReserve)/3);
+  const generationBudget=Math.min(numPredict,maximumOutput);
+  if(generationBudget<Math.min(numPredict,256))throw new Error('Audit instructions leave no usable context; move large task data into paginated workspace files');
+  const contextBudget=(numCtx-generationBudget-512)*3;
+  return {generationBudget,contextBudget,messageBudget:contextBudget-schemaSize};
+}
 /** Keep pinned instructions and whole recent exchanges. Estimates reserve room for output. */
 export function compactAuditContext(messages:AuditMessage[],budget:number,progress:string[]=[]):AuditMessage[] {
   const pinned=messages.slice(0,2);
   if(JSON.stringify(pinned).length>budget)throw new Error("Audit instructions exceed the context budget; narrow the investigation");
   const groups:AuditMessage[][]=[];
   for(const message of messages.slice(2)) {
-    if(message.role==='assistant' || !groups.length)groups.push([]);
+    // A standalone correction is not part of an earlier completed exchange.
+    // Otherwise repeated rejected actions accumulate in one unevictable group.
+    if(message.role==='assistant' || !groups.length ||
+      (message.role==='user' && !message.content.startsWith('TOOL_RESULT ')))groups.push([]);
     groups.at(-1)!.push(message);
   }
   if(JSON.stringify(messages).length<=budget)return messages;
@@ -17,7 +33,7 @@ export function compactAuditContext(messages:AuditMessage[],budget:number,progre
   // Progress summaries are optional; never evict actual latest evidence for them.
   if(JSON.stringify([...pinned,...notes,...groups.flat()]).length>budget)notes.length=0;
   const result=[...pinned,...notes,...groups.flat()];
-  if(JSON.stringify(result).length>budget)throw new Error("Latest audit exchange exceeds the context budget; narrow the probe output");
+  if(JSON.stringify(result).length>budget)throw new Error("Latest audit exchange exceeds the context budget; narrow the probe output (budget="+budget+", pinned="+JSON.stringify(pinned).length+", latest="+JSON.stringify(groups.at(-1)).length+")");
   return result;
 }
 export function auditCheckpoint(events:string[]):string {
