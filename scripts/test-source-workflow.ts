@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import {createServer} from "node:http";
 import {execFileSync} from "node:child_process";
-import {mkdtemp,writeFile,mkdir,rm,chmod} from "node:fs/promises";
+import {mkdtemp,writeFile,readFile,mkdir,rm,chmod} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 const root=await mkdtemp(join(tmpdir(),"tomey-workflow-"));
@@ -134,6 +134,7 @@ try {
     selector=language==="javascript"?"render":"Render.render";
     if(stateful) {source="Store.sol";caller="StoreCaller.sol";selector="Store.set";}
     const result=await runLocalProgramHunt(program);
+    if(!result.success && result.auditRecord)console.error(await readFile(join(root,"data/logs",result.auditRecord),"utf8"));
     assert.equal(result.success,true,JSON.stringify(result));
     assert.equal(result.findings.length,1);
     if(!stateful)assert.ok(result.coverageDetail?.includes("1 failed probes"));
