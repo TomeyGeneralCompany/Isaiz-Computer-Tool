@@ -1,0 +1,16 @@
+rules:
+  - id: paragraph-interpolation-python
+    languages: [python]
+    severity: INFO
+    message: Inspect the input's escaping and caller before testing paragraph markup handling.
+    pattern: return "<p>" + $VALUE + "</p>"
+  - id: paragraph-interpolation-javascript
+    languages: [javascript, typescript]
+    severity: INFO
+    message: Inspect the input's escaping, exports and caller before testing markup handling.
+    pattern: return "<p>" + $VALUE + "</p>";
+  - id: paragraph-interpolation-java
+    languages: [java]
+    severity: INFO
+    message: Inspect argument types, escaping and caller; the current string probe needs public static String.
+    pattern: return "<p>" + $VALUE + "</p>";

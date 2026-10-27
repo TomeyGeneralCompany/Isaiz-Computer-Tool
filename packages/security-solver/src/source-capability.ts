@@ -54,6 +54,13 @@ export async function inspectSourceCapability(directory:string,signal?:AbortSign
     }
     const rel=relative(root,full);
     if(rel==='..'||rel.startsWith('..'+sep)|| (await stat(full)).size>256000) {unknown=true;continue;}
+    if(file.endsWith('.java')) {
+      const code=sourceCodeOnly(await readFile(full,'utf8'));
+      const methods=[...code.matchAll(/\b((?:(?:public|protected|private|static|final|synchronized|strictfp|native)\s+)+)(?:java\.lang\.)?String\s+[A-Za-z_$][\w$]*\s*\(\s*(?:final\s+)?(?:java\.lang\.)?String\s+[A-Za-z_$][\w$]*\s*\)/g)];
+      if(!methods.some(m=>/\bpublic\b/.test(m[1])&&/\bstatic\b/.test(m[1]))) {
+        unsupported.push(file+': no public static String method with one String argument for the installed Java probe');continue;
+      }
+    }
     if(!file.endsWith('.sol')) {compatible++;sourcePaths.push(file);continue;}
     const code=sourceCodeOnly(await readFile(full,'utf8'));
     const pragmas=[...code.matchAll(/\bpragma\s+solidity\s+([^;]+);/g)];
@@ -62,6 +69,6 @@ export async function inspectSourceCapability(directory:string,signal?:AbortSign
   }
   sourcePaths.sort((a,b)=>sourcePriority(b)-sourcePriority(a)||a.localeCompare(b,"en"));
   const blocked=!unknown && compatible===0;
-  return {blocked,reason:blocked?(candidates?'All candidate sources require an unsupported compiler':'No runnable Python, JavaScript, Java or Solidity sources found'):null,
-    compatibleFiles:compatible,sourcePaths,unsupported:unsupported.slice(0,30),limitation:'Preflight checks source types and recognized compiler ranges. Deployment dependencies and runtime behavior still require probes.'};
+  return {blocked,reason:blocked?(candidates?'No candidate matches the installed compiler or function-probe entrypoint':'No runnable Python, JavaScript, Java or Solidity sources found'):null,
+    compatibleFiles:compatible,sourcePaths,unsupported:unsupported.slice(0,30),limitation:'Preflight checks source types, Java string-probe entrypoints and recognized compiler ranges. Deployment dependencies and runtime behavior still require probes.'};
 }

@@ -1,3 +1,4 @@
+import {modelProfile} from './model-profile';
 import { InvestigationWorkflow } from "./investigation-workflow";
 import { postQwenAgentJson } from "./qwen-agent-transport";
 import { AuditAllowance } from "./audit-allowance";
@@ -31,6 +32,7 @@ const tools = [
 ];
 export interface LocalAuditLimits {
   maxTurns: number;
+  finalSchema?: Record<string,unknown>;
   productionWorkflow?: boolean;
   dynamicAllowance?: boolean;
   onAllowance?: (deadline:number) => Promise<void>;
@@ -99,8 +101,8 @@ export async function runLocalAudit(
       await limits.onAllowance?.(allowance.deadline);
     }
   };
-  const actionSchema = limits.verifyPython ? {...auditActionSchema,properties:{...auditActionSchema.properties,sequence:soliditySequenceJsonSchema,
-    action:{type:"string",enum:[...auditActionSchema.properties.action.enum,"verify_source","verify_python",...(workflow?["plan_probe"]:[])]}}} : auditActionSchema;
+  const actionSchema = limits.verifyPython ? {...auditActionSchema,properties:{...auditActionSchema.properties,...(limits.finalSchema?{result:limits.finalSchema}:{}),sequence:soliditySequenceJsonSchema,
+    action:{type:"string",enum:[...auditActionSchema.properties.action.enum,"verify_source","verify_python",...(workflow?["plan_probe","continue_inspection"]:[])]}}} : auditActionSchema;
   const probePrompt = limits.verifyPython ? "\nThe verify_source action invokes a fixed, isolated source function probe. Set path to a .py, .js, .mjs, .cjs, .java or .sol source file, query to its public/exported function name (Contract.function for Solidity), answer to html_reflection or path_construction. The function must take one string and return a string. JavaScript exports may be async. Java requires a public static Class.method accepting and returning String; only JDK and repository source dependencies are supported, without Maven/Gradle execution. Solidity requires a deployable zero-argument constructor and a public/external view or pure function compatible with installed solc 0.8.30; runs on an in-memory local EVM. Use returned observations honestly; they do not prove full exploitability. No arbitrary commands are available. " + soliditySequencePrompt : "";
   const availableTools = limits.verifyPython ? [...tools,{type:"function",function:{
     name:"verify_source",description:probePrompt,parameters:{type:"object",
@@ -114,6 +116,12 @@ export async function runLocalAudit(
   const events:string[]=[];
   const navigation=new AuditNavigation();
   navigation.seed(limits.initialSourcePaths || []);
+  const persistMemory=async()=>{
+    if(!workflow||!limits.checkpointPath)return;
+    const file=limits.checkpointPath+'.memory.json',temporary=file+'.'+process.pid+'.tmp';
+    try {await writeFile(temporary,JSON.stringify(workflow.memory()),{mode:0o600});await rename(temporary,file);}
+    catch {await appendFile(logFile,'[MEMORY] Checkpoint write failed; investigation continues\n');}
+  };
   const recentActions = new Map<string, {turn:number; nextOffset?:number|null; response?:Message}>();
   let stalledActions = 0;
   const missingRequests=new Map<string,number>();
@@ -136,6 +144,12 @@ export async function runLocalAudit(
           else await appendFile(logFile,"[CONTEXT] Prior checkpoint omitted because it exceeds the available message budget\n");
         }
       } catch (error:any) { if (error.code !== "ENOENT") throw error; }
+    }
+    if(workflow && limits.checkpointPath) {
+      try {
+        const saved=await readFile(limits.checkpointPath+'.memory.json','utf8');
+        if(saved.length<=16000)workflow.restore(JSON.parse(saved));
+      }catch(error:any){if(error.code!=='ENOENT')await appendFile(logFile,'[MEMORY] Invalid prior memory ignored; evidence will be read again\n');}
     }
     async function safePath(path: string): Promise<string> {
       const candidate = await realpath(resolve(root, path || "."));
@@ -168,12 +182,15 @@ export async function runLocalAudit(
       const started = Date.now();
       await appendFile(logFile, `[OLLAMA] turn ${turn+1}/${allowance.turns}: request started; model=${model}; context=${limits.numCtx ?? "server-default"}; generation_limit=${generationBudget}; protocol=${protocol}\n`);
       const requestDeadline=AbortSignal.timeout(Math.min(timeoutMs,15*60000));
-      const result = await (adapter==='qwen-agent'?postQwenAgentJson:postOllamaJson)(process.env.AUTOHACK_OLLAMA_URL || "http://127.0.0.1:11434/api/chat", { model, stream: false, think: false, messages:progressMessages.length ? [...messages,...progressMessages] : messages,
+      const profile=modelProfile(workflow?.snapshot().stage);
+      const turnMessages=progressMessages.length ? [...messages,...progressMessages] : messages;
+      const requestMessages=profile.think ? turnMessages.map(m=>({...m,content:m.content.replaceAll('/no_think','')})) : turnMessages;
+      const result = await (adapter==='qwen-agent'?postQwenAgentJson:postOllamaJson)(process.env.AUTOHACK_OLLAMA_URL || "http://127.0.0.1:11434/api/chat", { model, stream: false, think: profile.think, messages:requestMessages,
           ...(structured ? {format:requestSchema} : {tools:availableTools}),
           keep_alive:"10m",
           options: { num_predict:generationBudget,
             ...(limits.numCtx === undefined ? {} : {num_ctx:settings.numCtx}),
-            ...(limits.numThreads === undefined ? {} : {num_thread:settings.numThreads}), temperature:0 } }, AbortSignal.any([controller.signal,requestDeadline])).catch(error=>{
+            ...(limits.numThreads === undefined ? {} : {num_thread:settings.numThreads}), ...profile.options } }, AbortSignal.any([controller.signal,requestDeadline])).catch(error=>{
         if(requestDeadline.aborted && !controller.signal.aborted)throw new Error("Local model request timed out; no response within the per-request deadline");
         throw error;
       }) as { message?: Message; eval_count?: number; prompt_eval_count?: number; done_reason?: string; load_duration?:number; prompt_eval_duration?:number; eval_duration?:number; total_duration?:number; client_queue_ms?:number };
@@ -217,6 +234,13 @@ export async function runLocalAudit(
           await appendFile(logFile,'[WORKFLOW_REJECTED] '+workflowError+'\n');
           continue;
         }
+        if(action.action==='continue_inspection') {
+          if(!workflow)throw new Error('Inspection decisions require production workflow');
+          workflow.continueInspection(action);
+          await persistMemory();
+          await appendFile(logFile,'[INSPECTION_DECISION] '+JSON.stringify(action)+'\n');
+          continue;
+        }
         if(action.action==='plan_probe') {
           if(!workflow)throw new Error('Probe planning requires production workflow');
           if(action.answer==='solidity_sequence') {
@@ -227,6 +251,7 @@ export async function runLocalAudit(
             workflow.feedback('The proposed action is too large for one exchange. Plan a shorter probe sequence.');continue;
           }
           workflow.plan(action);
+          await persistMemory();
           messages.push({role:"assistant",content:message.content});
           if(action.hypothesis)hypotheses.push({turn:turn+1,path:action.path,statement:action.hypothesis});
           await appendFile(logFile,'[PROBE_PLANNED] '+JSON.stringify(action)+'\n');
@@ -426,6 +451,7 @@ export async function runLocalAudit(
         const responseMessage=fitted.message;
         messages.push(responseMessage);
         if(completedActionKey)recentActions.get(completedActionKey)!.response=responseMessage;
+        await persistMemory();
         await renew(turn+1);
       }
     }
@@ -439,9 +465,15 @@ export async function runLocalAudit(
   } finally {
     if(controller.signal.aborted)stoppingReason=controller.signal.reason === "operator_cancelled" ? "Cancelled by operator" : "Audit deadline reached";
     await writeFile(logFile+".summary.json",JSON.stringify({startedAt:new Date(auditStartedAt).toISOString(),
-      endedAt:new Date().toISOString(),model,adapter,workflow:workflow?.snapshot(),turns:usedTurns,successfulReads,stoppingReason,finalAnswer,hypotheses,
+      endedAt:new Date().toISOString(),model,adapter,profile:modelProfile().name,workflow:workflow?.snapshot(),turns:usedTurns,successfulReads,stoppingReason,finalAnswer,hypotheses,
       ...allowance.snapshot(),files:allowance.snapshot().files.map(file=>({...file,totalCharacters:sourceTotals.get(file.path),
         complete:sourceTotals.has(file.path)&&file.ranges.length===1&&file.ranges[0][0]===0&&file.ranges[0][1]===sourceTotals.get(file.path)}))},null,2),{mode:0o600}).catch(()=>{});
+    if (limits.checkpointPath && workflow) {
+      const destination=limits.checkpointPath+'.memory.json';
+      const temporary=destination+'.'+process.pid+'.tmp';
+      try {await writeFile(temporary,JSON.stringify(workflow.memory()),{mode:0o600});await rename(temporary,destination);}
+      catch {await appendFile(logFile,'[MEMORY] Could not save investigation memory\n').catch(()=>{});}
+    }
     if (limits.checkpointPath) {
       // Keep recent inspection evidence across bounded sessions, including failures.
       const checkpoint=JSON.parse(auditCheckpoint(events));

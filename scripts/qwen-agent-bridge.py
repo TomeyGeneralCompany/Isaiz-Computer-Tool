@@ -26,7 +26,7 @@ def respond(request):
     class LocalQwen(BaseFnCallModel):
         def _chat_no_stream(self, messages, generate_cfg):
             wire = {k: payload[k] for k in ('model', 'options', 'keep_alive') if k in payload}
-            wire.update(stream=False, think=False, messages=[
+            wire.update(stream=False, think=bool(payload.get('think', False)), messages=[
                 {'role': msg.role, 'content': format_as_text_message(msg, add_upload_info=False).content}
                 for msg in messages])
             opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
@@ -49,7 +49,7 @@ def respond(request):
         'max_input_tokens': 0,
     }})
     messages = [dict(role=m['role'], content=m['content']) for m in payload['messages']]
-    messages.append({'role': 'user', 'content': 'Call audit_action exactly once with the next permitted action. Do not execute any tools yourself. /no_think'})
+    messages.append({'role': 'user', 'content': 'Call audit_action exactly once with the next permitted action. Do not execute any tools yourself.' + ('' if payload.get('think') else ' /no_think')})
     result = model.chat(messages=messages, functions=[{
         'name': 'audit_action', 'description': 'Choose the next controller-validated investigation action.',
         'parameters': payload['format'],

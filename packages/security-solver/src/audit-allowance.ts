@@ -48,6 +48,6 @@ export class AuditAllowance {
     this.credits=[];
     return reason;
   }
-  snapshot() {return {turnAllowance:this.turns,deadline:new Date(this.deadline).toISOString(),
+  snapshot() {return {dynamicEnabled:this.dynamic,extensionRule:{minimumEvidenceTurns:10,windowTurns:20,recentWithinTurns:3},creditedTurns:this.credits.slice(-20),hardTurns:this.hardTurns,turnAllowance:this.turns,deadline:new Date(this.deadline).toISOString(),
     files:[...this.spans].map(([path,ranges])=>({path,ranges})),completedDistinctProbes:this.probes.size};}
 }

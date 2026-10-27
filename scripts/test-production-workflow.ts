@@ -9,6 +9,8 @@ import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {runLocalAudit} from '../packages/security-solver/src/local-ollama-runner';
 import {InvestigationWorkflow} from '../packages/security-solver/src/investigation-workflow';
+const variant=Number(process.argv.find(a=>a.startsWith('--variant='))?.split('=')[1]||0);
+if(!Number.isInteger(variant)||variant<0||variant>2)throw new Error('Variant must be 0, 1 or 2');
 const largeContext=process.argv.includes('--large-context');
 const live=process.argv.includes('--real-model'),mockProbes=process.argv.includes('--mock-probes'),execute=promisify(execFile);
 if(live&&mockProbes)throw new Error('Real model check requires real probes');
@@ -24,7 +26,7 @@ try {
   for(let i=0;i<6;i++)routing.observe(action('read_file','a.py'),JSON.stringify({nextOffset:100+i}));
   assert.ok((await routing.constraints()).action.includes('read_file'));
   for(let i=0;i<6;i++)routing.observe(action('search_files'),JSON.stringify({results:[]}));
-  assert.deepEqual((await routing.constraints()).action,['plan_probe','final']);
+  assert.deepEqual((await routing.constraints()).action,['plan_probe','continue_inspection','final']);
   assert.match(routing.validate({...action('plan_probe','missing.py','x','html_reflection'),hypothesis:'test'})!,/Read/);
   routing.read('a.py');const planned={...action('plan_probe','a.py','f','html_reflection'),hypothesis:'Markup may survive; escaping disproves it.'};
   assert.equal(routing.validate(planned),null);routing.plan(planned);
@@ -32,7 +34,11 @@ try {
   routing.observe({...planned,action:'verify_source'},'Tool error: unsupported');
   assert.match(routing.validate(planned)!,/already/);
   assert.equal(routing.snapshot().observations[0].status,'tool_error');
-  for(const f of fixtures)await writeFile(join(root,f.path),`def ${f.fn}(value):\n    return '<p>' + ${f.raw?'value':"value.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')"} + '</p>'\n`);
+  for(const f of fixtures) {
+    const escaped=variant===1?"html.escape(value, quote=False)":"value.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')";
+    const expression=variant===2?`'<p>{}</p>'.format(${f.raw?'value':escaped})`:`'<p>' + ${f.raw?'value':escaped} + '</p>'`;
+    await writeFile(join(root,f.path),`${variant===1?'import html\n':''}def unrelated(value):\n    return value.upper()\n\ndef ${f.fn}(value):\n    return ${expression}\n`);
+  }
   if(!live) {
     server.on('request',async(req,res)=>{
       let body='';for await(const chunk of req)body+=chunk;
@@ -87,6 +93,6 @@ try {
   for(const f of fixtures)assert.equal(result.files.find((r:any)=>r.path===f.path).rawMarkup,f.raw);
   const summary=JSON.parse(await readFile(join(evidence,'audit.log.summary.json'),'utf8'));
   assert.equal(summary.workflow.observations.length,2);
-  await writeFile(join(evidence,'result.json'),JSON.stringify({passed:true,mocked:!live,mockedProbes:mockProbes,productionWorkflow:true,result},null,2));
+  await writeFile(join(evidence,'result.json'),JSON.stringify({passed:true,mocked:!live,mockedProbes:mockProbes,productionWorkflow:true,variant,profile:process.env.LOCAL_MODEL_PROFILE||'deterministic',result},null,2));
   console.log(`Production workflow passed (${live?'real model':(mockProbes?'scripted model and probes':'scripted model; real Python probes')}). Evidence: ${evidence}`);
 } finally {server.close();await rm(root,{recursive:true,force:true});}
