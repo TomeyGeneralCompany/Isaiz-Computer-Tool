@@ -68,7 +68,14 @@ def analyze(repository, engine, target=None):
             with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
                 run = subprocess.run(command, stdout=out, stderr=err, timeout=90, preexec_fn=limits)
                 out.seek(0)
-                data = json.loads(out.read(8 * 1024**2))
+                raw = out.read(8 * 1024**2)
+                err.seek(0)
+                diagnostic = err.read(1000).decode('utf-8', errors='replace')
+                try:
+                    data = json.loads(raw)
+                except ValueError:
+                    return {'status': 'failed', 'reason': 'Scanner returned no valid JSON',
+                            'exitCode': run.returncode, 'diagnostic': diagnostic, 'leads': []}
         except (subprocess.TimeoutExpired, ValueError, OSError) as error:
             return {'status': 'failed', 'reason': type(error).__name__, 'leads': []}
         leads = []

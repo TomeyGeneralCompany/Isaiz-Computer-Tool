@@ -93,6 +93,11 @@ try {
   for(const f of fixtures)assert.equal(result.files.find((r:any)=>r.path===f.path).rawMarkup,f.raw);
   const summary=JSON.parse(await readFile(join(evidence,'audit.log.summary.json'),'utf8'));
   assert.equal(summary.workflow.observations.length,2);
+  for(const observation of summary.workflow.observations) {
+    assert.ok(observation.evidenceFile);
+    const saved=JSON.parse(await readFile(join(root,observation.evidenceFile),'utf8'));
+    assert.equal(saved.result.behavior_observed,observations.get(observation.path));
+  }
   await writeFile(join(evidence,'result.json'),JSON.stringify({passed:true,mocked:!live,mockedProbes:mockProbes,productionWorkflow:true,variant,profile:process.env.LOCAL_MODEL_PROFILE||'deterministic',result},null,2));
   console.log(`Production workflow passed (${live?'real model':(mockProbes?'scripted model and probes':'scripted model; real Python probes')}). Evidence: ${evidence}`);
 } finally {server.close();await rm(root,{recursive:true,force:true});}

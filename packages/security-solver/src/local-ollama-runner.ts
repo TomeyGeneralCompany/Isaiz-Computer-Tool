@@ -9,7 +9,7 @@ import { soliditySequenceSchema, soliditySequenceJsonSchema, soliditySequencePro
 import { readSourcePage, searchSourcePage, listSourcePage, pageOffset, type ReadSpan } from "./source-inspection";
 import { postOllamaJson } from "@bounty/core";
 import { auditActionSchema, auditProtocolPrompt, decodeAuditAction } from "./local-audit-protocol";
-import { readFile, realpath, appendFile, writeFile, rename } from "node:fs/promises";
+import { readFile, realpath, appendFile, writeFile, rename, mkdtemp } from "node:fs/promises";
 import { resolve, relative, sep, join } from "node:path";
 
 type Message = { role: string; content: string; tool_name?: string; tool_calls?: Array<{ function: { name: string; arguments: Record<string, unknown> } }> };
@@ -114,6 +114,7 @@ export async function runLocalAudit(
   ];
   let contextBudget=0;
   const events:string[]=[];
+  let evidenceDirectory:string|undefined;let evidenceCount=0;
   const navigation=new AuditNavigation();
   navigation.seed(limits.initialSourcePaths || []);
   const persistMemory=async()=>{
@@ -363,6 +364,13 @@ export async function runLocalAudit(
             output=await limits.verifyPython(path,String(call.function.arguments?.query || ""),kind,sequence);
             try {
               const result=JSON.parse(output);
+              if(workflow && output.length<=256000) {
+                evidenceDirectory ||= await mkdtemp(join(root,'.audit-evidence-'));
+                const evidenceFile=join(evidenceDirectory,++evidenceCount+'.json');
+                await writeFile(evidenceFile,JSON.stringify({path,function:call.function.arguments?.query,kind,result},null,2),{mode:0o600});
+                result.evidenceFile=relative(root,evidenceFile).split(sep).join('/');
+                output=JSON.stringify(result);
+              }
               if(["behavior_observed","behavior_not_observed"].includes(result.status))
                 allowance.probe(JSON.stringify([relative(root,full),call.function.arguments?.query,kind,sequence]),turn+1);
             }catch{}

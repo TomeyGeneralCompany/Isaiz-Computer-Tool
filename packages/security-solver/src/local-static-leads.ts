@@ -6,7 +6,7 @@ const exec=promisify(execFile);
 export async function collectStaticLeads(root:string,repositories:Array<{directory:string;url:string}>,paths:string[],cache:string,signal:AbortSignal) {
   const app=process.env.PROJECT_ROOT||process.cwd();
   if(process.env.LOCAL_STATIC_ANALYSIS==='false')return {status:'disabled',leads:[],runs:[]};
-  try {const saved=JSON.parse(await readFile(cache,'utf8'));if(saved.version===1&&saved.runs?.every((r:any)=>r.status==='completed'))return saved;}catch{}
+  try {const saved=JSON.parse(await readFile(cache,'utf8'));if(saved.version===1&&Array.isArray(saved.leads)&&Array.isArray(saved.runs)&&saved.runs.length>0&&saved.runs.every((r:any)=>r.status==='completed'))return saved;}catch{}
   const runs:any[]=[],leads:any[]=[];
   for(const repo of repositories) {
     const prefix=relative(root,repo.directory).split(sep).join('/');

@@ -16,7 +16,7 @@ const key = (a:Action) => JSON.stringify([a.path,a.query,a.answer,a.sequence]);
 export class InvestigationWorkflow {
   private state:typeof State.State={stage:'inspect',inspections:0,pending:null,tested:[]};
   private readPaths=new Set<string>();
-  private observations:Array<{path:string;function:string;kind:string;status:string;caseId?:string}>=[];
+  private observations:Array<{path:string;function:string;kind:string;status:string;caseId?:string;evidenceFile?:string;behaviorObserved?:boolean}>=[];
   private lastFeedback='';
   private decisions:Array<{path:string;question:string;offset:number}>=[];
   private priorNotes:string[]=[];
@@ -57,7 +57,7 @@ export class InvestigationWorkflow {
       recentReadPaths:[...this.readPaths].slice(-3).map(p=>p.slice(0,160)),pending:this.state.pending ? {path:this.state.pending.path.slice(0,160),function:this.state.pending.query,kind:this.state.pending.answer} : null,
       observations:this.observations.slice(-2).map(o=>({...o,path:o.path.slice(0,160)})),feedback:this.lastFeedback.slice(0,240),
       instruction:this.state.pending?'Execute the planned probe with exactly its path, function, kind and sequence.':
-        'Read relevant source, then plan_probe with path, query=function, answer=probe kind, hypothesis=claim AND disproof condition. After six inspections or eight source pages, choose plan_probe, continue_inspection with a specific unanswered question in hypothesis and the next path/offset/query, or an incomplete final. Continue only to obtain that missing evidence; no forced unrelated test. After testing inspect caller/mitigations before reporting; observations alone are not findings.'};
+        'Read relevant source, then plan_probe with path, query=function, answer=probe kind, hypothesis=claim AND disproof condition. After six inspections or eight source pages, choose plan_probe, continue_inspection with a specific unanswered question in hypothesis and the next path/offset/query, or an incomplete final. Continue only to obtain that missing evidence; no forced unrelated test. Read recorded evidenceFile pages when an observation leaves context instead of repeating its probe. After testing inspect caller/mitigations before reporting; observations alone are not findings.'};
     while(JSON.stringify(note).length>1800 && note.priorNavigation.length)note.priorNavigation.shift();
     while(JSON.stringify(note).length>1800 && note.recentReadPaths.length)note.recentReadPaths.shift();
     while(JSON.stringify(note).length>1800 && note.observations.length)note.observations.shift();
@@ -88,7 +88,7 @@ export class InvestigationWorkflow {
     if(action.action==='verify_source') {
       let result:any;try{result=JSON.parse(output);}catch{}
       this.observations.push({path:action.path,function:action.query,kind:action.answer,
-        status:result?.status||'tool_error',...(typeof result?.caseId==='string'?{caseId:result.caseId}: {})});
+        status:result?.status||'tool_error',...(typeof result?.evidenceFile==='string'?{evidenceFile:result.evidenceFile}:{}),...(typeof result?.behavior_observed==='boolean'?{behaviorObserved:result.behavior_observed}:{}),...(typeof result?.caseId==='string'?{caseId:result.caseId}: {})});
       this.state.tested.push(key(action));this.state.pending=null;this.state.inspections=0;this.pageTurns=0;
     } else {
       let page:any;try{page=JSON.parse(output);}catch{}

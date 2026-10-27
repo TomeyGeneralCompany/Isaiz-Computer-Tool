@@ -19,6 +19,7 @@ class SetupVerification(unittest.TestCase):
             shutil.copy(ROOT / 'scripts/node-runtime.sh', base / 'scripts')
             shutil.copy(ROOT / 'scripts/install-reproduction-runtime.sh', base / 'scripts')
             (base / 'scripts/install-qwen-agent.sh').write_text('printf installed > qwen-installed\n')
+            (base / 'scripts/install-static-analysis.sh').write_text('printf installed > static-installed\n')
             (base / 'bwrap').write_text('#!/bin/sh\nexit 0\n')
             (base / 'bwrap').chmod(0o700)
             for executable in ('java','javac'):
@@ -43,6 +44,7 @@ class SetupVerification(unittest.TestCase):
             self.assertIn('--provider', (base / 'acceptance-args.txt').read_text())
             self.assertFalse((base / 'launched').exists())
             self.assertEqual((base / 'qwen-installed').read_text(), 'installed')
+            self.assertEqual((base / 'static-installed').read_text(), 'installed')
             self.assertEqual(stat.S_IMODE((base / '.env').stat().st_mode), 0o600)
 
     def test_runtime_installer_provisions_missing_bubblewrap_and_checks_namespaces(self):
@@ -53,6 +55,7 @@ class SetupVerification(unittest.TestCase):
             (bin/'dirname').symlink_to('/usr/bin/dirname')
             (bin/'bash').symlink_to('/bin/bash')
             (base/'scripts/install-qwen-agent.sh').write_text('exit 0\n')
+            (base/'scripts/install-static-analysis.sh').write_text('exit 0\n')
             for name,body in {
                 'id':'echo 1000', 'node':'echo 22', 'npm':'echo "$*" >> "'+str(base/'npm-log')+'"',
                 'sudo':'echo "$*" >> "'+str(base/'apt-log')+'"\nif [ "$2" = install ]; then printf "#!/bin/sh\\nexit 0\\n" > "'+str(bin/'bwrap')+'"; /bin/chmod +x "'+str(bin/'bwrap')+'"; fi',
