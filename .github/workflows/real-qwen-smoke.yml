@@ -21,6 +21,7 @@ jobs:
           npm ci
           sudo apt-get update -qq
           sudo apt-get install -y bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Install Ollama and load the actual Qwen3 4B model
         run: |
           curl -fsSL https://ollama.com/install.sh | sh
