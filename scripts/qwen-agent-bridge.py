@@ -26,17 +26,46 @@ def respond(request):
     class LocalQwen(BaseFnCallModel):
         def _chat_no_stream(self, messages, generate_cfg):
             wire = {k: payload[k] for k in ('model', 'options', 'keep_alive') if k in payload}
-            wire.update(stream=False, think=bool(payload.get('think', False)), messages=[
+            wire.update(stream=True, think=bool(payload.get('think', False)), messages=[
                 {'role': msg.role, 'content': format_as_text_message(msg, add_upload_info=False).content}
                 for msg in messages])
             opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
             req = urllib.request.Request(endpoint, data=json.dumps(wire).encode(),
                                          headers={'Content-Type': 'application/json'})
             with opener.open(req, timeout=900) as response:
-                raw = response.read(1048577)
-            if len(raw) > 1048576:
-                raise ValueError('Model response exceeds 1 MiB')
-            result = json.loads(raw)
+                if 'ndjson' not in response.headers.get('Content-Type', ''):
+                    raw = response.read(1048577)
+                    if len(raw) > 1048576:
+                        raise ValueError('Model response exceeds 1 MiB')
+                    result = json.loads(raw)
+                else:
+                    size, content, thinking = 0, '', ''
+                    result = None
+                    while True:
+                        raw = response.readline(1048577)
+                        if not raw:
+                            break
+                        size += len(raw)
+                        if size > 1048576:
+                            raise ValueError('Model response exceeds 1 MiB')
+                        if not raw.strip():
+                            continue
+                        frame = json.loads(raw)
+                        if frame.get('error') or result is not None:
+                            raise ValueError('Invalid model stream')
+                        message = frame.get('message', {})
+                        content += message.get('content', '')
+                        thinking += message.get('thinking', '')
+                        if message.get('content') or message.get('thinking'):
+                            print('[MODEL_PROGRESS] ' + json.dumps({
+                                'contentCharacters': len(content),
+                                'thinkingCharacters': len(thinking), 'toolCalls': 0,
+                            }), file=sys.stderr, flush=True)
+                        if frame.get('done') is True:
+                            result = frame
+                    if result is None:
+                        raise ValueError('Model stream ended before completion')
+                    result['message'] = {'role': 'assistant', 'content': content}
             stats.update({k: v for k, v in result.items() if k != 'message'})
             return [Message(role='assistant', content=result['message'].get('content', ''))]
 

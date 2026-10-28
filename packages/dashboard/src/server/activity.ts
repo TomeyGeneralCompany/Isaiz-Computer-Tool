@@ -114,6 +114,14 @@ export async function readLocalActivity(dataDir:string,status:{active:boolean;st
           tool==="read_file"?"Reading source":tool==="search_files"?"Searching source":
           tool==="list_files"?"Listing source files":"Inspecting source";
       }else if(/^\[OLLAMA\].*request started/.test(line)){task="Waiting for local model";detail=line.match(/turn \d+\/\d+/)?.[0] || "";language=null;}
+      else if(line.startsWith('[MODEL_PROGRESS] ')){
+        try {
+          const progress=JSON.parse(line.slice(17));
+          if([progress.turn,progress.contentCharacters,progress.thinkingCharacters].every(value=>Number.isSafeInteger(value)&&value>=0)){
+            task='Local model generating';detail=`turn ${progress.turn}: ${progress.contentCharacters} response characters, ${progress.thinkingCharacters} thinking characters received`;language=null;
+          }
+        }catch{}
+      }
       else if(/^\[OLLAMA\].*response received/.test(line)){task="Processing model response";detail=line.slice(0,300);}
       else if(line.startsWith("[FINAL_REJECTED]")){task="Checking report evidence";detail="The model is revising an answer that did not meet the evidence checks.";}
     }

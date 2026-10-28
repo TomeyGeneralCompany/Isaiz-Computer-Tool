@@ -26,6 +26,10 @@ try {
   result=await readLocalActivity(root,{active:true,startedAt});
   assert.equal(result.task,"Running isolated reproduction");
   assert.equal(result.language,null,"Do not infer probe language from a previously read caller");
+  await writeFile(path,content+'[MODEL_PROGRESS] '+JSON.stringify({turn:3,contentCharacters:120,thinkingCharacters:40})+'\n');
+  result=await readLocalActivity(root,{active:true,startedAt});
+  assert.equal(result.task,'Local model generating');assert.match(result.detail,/120 response/);
+  assert.equal(result.counts.filesRead,1,'Generation does not add to the one recorded source read');
   assert.equal((await readLocalActivity(root,{active:false,startedAt})).task,"No active source hunt");
   assert.equal(describeHuntFailure("No supported function reproduction completed").stage,"Source reproduction");
   assert.equal(describeHuntFailure("Ollama audit timed out").stage,"Model inspection");
