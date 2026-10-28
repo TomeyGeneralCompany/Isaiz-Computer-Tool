@@ -15,7 +15,7 @@ jobs:
           import ast
           roots = [Path("scripts"), Path(".autohack-next-stage")]
           paths = [p for root in roots for p in root.rglob("*.py")
-                   if "repos" not in p.parts and "__pycache__" not in p.parts]
+                   if "vendor" not in p.parts and "repos" not in p.parts and "__pycache__" not in p.parts]
           for path in paths:
               ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
           print(f"Validated {len(paths)} Python files")
@@ -52,6 +52,7 @@ jobs:
         run: |
           npx tsx scripts/test-missing-source-loop.ts
           npx tsx scripts/test-investigation-records.ts
+          npx tsx scripts/test-source-candidates.ts
           npx tsx scripts/test-audit-allowance.ts
           node --import tsx scripts/test-investigation-decisions.ts
           npx tsx scripts/test-progress-controller.ts

@@ -31,6 +31,8 @@ def analyze(repository, engine, target=None):
         source = Path(temporary) / 'source'
         source.mkdir()
         size = 0
+        copied = 0
+        skipped = 0
         for name in paths[:10000]:
             path = repository / name
             if path.suffix not in ('.py', '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.java', '.sol'):
@@ -39,8 +41,10 @@ def analyze(repository, engine, target=None):
                 continue
             count = path.stat().st_size
             if count > 256000 or size + count > 30 * 1024**2:
+                skipped += 1
                 continue
             size += count
+            copied += 1
             dest = source / name
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(path, dest)
@@ -50,12 +54,13 @@ def analyze(repository, engine, target=None):
                 command += ['--ro-bind', folder, folder]
         command += ['--ro-bind', str(runtime), str(runtime), '--ro-bind', str(source), '/repo',
                     '--ro-bind', str(ROOT / 'scripts/static-leads.yaml'), '/rules.yaml',
+                    '--ro-bind', str(ROOT / 'scripts/vendor/semgrep-rules'), '/vendor-rules',
                     '--proc', '/proc', '--dev', '/dev', '--tmpfs', '/tmp', '--dir', '/home',
                     '--setenv', 'HOME', '/home', '--setenv', 'PATH', str(runtime / 'bin') + ':/usr/bin:/bin',
                     '--setenv', 'SEMGREP_SEND_METRICS', 'off', '--setenv', 'SEMGREP_ENABLE_VERSION_CHECK', '0',
                     '--setenv', 'PYTHONNOUSERSITE', '1', '--chdir', '/repo', str(binary)]
         if engine == 'semgrep':
-            command += ['scan', '--config', '/rules.yaml', '--json', '--metrics=off', '--disable-version-check', '--jobs=1', '--max-memory=512', '--timeout=5', '/repo']
+            command += ['scan', '--config', '/rules.yaml', '--config', '/vendor-rules', '--json', '--metrics=off', '--disable-version-check', '--jobs=1', '--max-memory=512', '--timeout=5', '/repo']
         else:
             if not target or not (source / target).resolve().is_relative_to(source) or not (source / target).is_file() or not target.endswith('.sol'):
                 return {'status': 'unsupported_target', 'leads': []}
@@ -80,16 +85,17 @@ def analyze(repository, engine, target=None):
             return {'status': 'failed', 'reason': type(error).__name__, 'leads': []}
         leads = []
         if engine == 'semgrep':
-            for item in data.get('results', [])[:64]:
-                leads.append({'path': item.get('path', '').removeprefix('/repo/'), 'line': item.get('start', {}).get('line'), 'rule': item.get('check_id'), 'message': str(item.get('extra', {}).get('message', ''))[:300]})
+            for item in data.get('results', []):
+                leads.append({'path': item.get('path', '').removeprefix('/repo/'), 'line': item.get('start', {}).get('line'), 'rule': item.get('check_id'), 'message': str(item.get('extra', {}).get('message', ''))[:300], 'severity': item.get('extra', {}).get('severity', 'INFO')})
         else:
             for item in data.get('results', {}).get('detectors', [])[:32]:
                 for element in item.get('elements', [])[:2]:
                     mapping = element.get('source_mapping', {})
                     leads.append({'path': str(mapping.get('filename_absolute', '')).removeprefix('/repo/'), 'line': (mapping.get('lines') or [0])[0], 'rule': item.get('check'), 'message': str(item.get('description', ''))[:300]})
         leads = [lead for lead in leads if isinstance(lead['path'], str) and not Path(lead['path']).is_absolute() and '..' not in Path(lead['path']).parts and isinstance(lead['line'], int) and lead['line'] > 0]
+        leads.sort(key=lambda lead: ({'ERROR': 0, 'WARNING': 1}.get(lead.get('severity'), 2), lead['path'], lead['line']))
         complete = run.returncode == 0 and not data.get('errors') and data.get('success', True)
-        return {'status': 'completed' if complete else 'partial', 'complete': False, 'leads': leads[:64], 'limitation': 'Bounded navigation leads only; scanner output is not a verified finding. Source/size limits and tool coverage apply.'}
+        return {'status': 'completed' if complete else 'partial', 'complete': False, 'coverage': {'copiedFiles': copied, 'skippedSizeFiles': skipped, 'filesBeyondLimit': max(0, len(paths) - 10000), 'scannerErrors': len(data.get('errors', [])), 'detectedLeads': len(leads)}, 'leads': leads[:64], 'limitation': 'Bounded navigation leads only; scanner output is not a verified finding. Source/size limits and tool coverage apply.'}
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()

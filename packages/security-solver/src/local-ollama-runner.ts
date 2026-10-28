@@ -38,6 +38,7 @@ export interface LocalAuditLimits {
   onAllowance?: (deadline:number) => Promise<void>;
   checkpointPath?: string;
   initialSourcePaths?: string[];
+  initialSourceLocations?: Array<{path:string;offset:number}>;
   numPredict: number;
   numCtx: number;
   numThreads: number;
@@ -116,7 +117,7 @@ export async function runLocalAudit(
   const events:string[]=[];
   let evidenceDirectory:string|undefined;let evidenceCount=0;
   const navigation=new AuditNavigation();
-  navigation.seed(limits.initialSourcePaths || []);
+  navigation.seed(limits.initialSourcePaths || [],limits.initialSourceLocations);
   const persistMemory=async()=>{
     if(!workflow||!limits.checkpointPath)return;
     const file=limits.checkpointPath+'.memory.json',temporary=file+'.'+process.pid+'.tmp';
