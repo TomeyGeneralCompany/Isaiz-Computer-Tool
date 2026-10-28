@@ -45,6 +45,7 @@ jobs:
       - name: Verify local model HTTP deadlines
         run: |
           npx tsx scripts/test-ollama-http.ts
+          npx tsx scripts/test-ollama-stream.ts
           npx tsx scripts/test-ollama-gate.ts
       - name: Exercise direct Ollama agent with mock server
         run: npx tsx scripts/test-mock-agent.ts

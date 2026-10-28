@@ -7,7 +7,7 @@ import { SoliditySourceIndex } from "./solidity-source-index";
 import { allocateAuditContext, compactAuditContext, auditCheckpoint, fitAuditToolOutput } from "./audit-context";
 import { soliditySequenceSchema, soliditySequenceJsonSchema, soliditySequencePrompt, type SoliditySequence } from "./solidity-sequence";
 import { readSourcePage, searchSourcePage, listSourcePage, pageOffset, type ReadSpan } from "./source-inspection";
-import { postOllamaJson } from "@bounty/core";
+import { postOllamaChat } from "../../core/src/ollama-chat";
 import { auditActionSchema, auditProtocolPrompt, decodeAuditAction } from "./local-audit-protocol";
 import { readFile, realpath, appendFile, writeFile, rename, mkdtemp } from "node:fs/promises";
 import { resolve, relative, sep, join } from "node:path";
@@ -183,19 +183,21 @@ export async function runLocalAudit(
       messages=compactAuditContext(messages,exchangeBudget,[...hypotheses.slice(-2).map(h=>"Unverified hypothesis: "+JSON.stringify(h)),...events.slice(-4)]);
       const started = Date.now();
       await appendFile(logFile, `[OLLAMA] turn ${turn+1}/${allowance.turns}: request started; model=${model}; context=${limits.numCtx ?? "server-default"}; generation_limit=${generationBudget}; protocol=${protocol}\n`);
-      const requestDeadline=AbortSignal.timeout(Math.min(timeoutMs,15*60000));
+      let lastProgressLog=0;
+      const onProgress=(progress:{contentCharacters:number;thinkingCharacters:number;toolCalls:number})=>{
+        if(Date.now()-lastProgressLog<15000)return;
+        lastProgressLog=Date.now();
+        void appendFile(logFile,"[MODEL_PROGRESS] "+JSON.stringify({turn:turn+1,elapsedMs:Date.now()-started,...progress})+"\n").catch(()=>{});
+      };
       const profile=modelProfile(workflow?.snapshot().stage);
       const turnMessages=progressMessages.length ? [...messages,...progressMessages] : messages;
       const requestMessages=profile.think ? turnMessages.map(m=>({...m,content:m.content.replaceAll('/no_think','')})) : turnMessages;
-      const result = await (adapter==='qwen-agent'?postQwenAgentJson:postOllamaJson)(process.env.AUTOHACK_OLLAMA_URL || "http://127.0.0.1:11434/api/chat", { model, stream: false, think: profile.think, messages:requestMessages,
+      const result = await (adapter==='qwen-agent'?postQwenAgentJson:postOllamaChat)(process.env.AUTOHACK_OLLAMA_URL || "http://127.0.0.1:11434/api/chat", { model, stream: false, think: profile.think, messages:requestMessages,
           ...(structured ? {format:requestSchema} : {tools:availableTools}),
           keep_alive:"10m",
           options: { num_predict:generationBudget,
             ...(limits.numCtx === undefined ? {} : {num_ctx:settings.numCtx}),
-            ...(limits.numThreads === undefined ? {} : {num_thread:settings.numThreads}), ...profile.options } }, AbortSignal.any([controller.signal,requestDeadline])).catch(error=>{
-        if(requestDeadline.aborted && !controller.signal.aborted)throw new Error("Local model request timed out; no response within the per-request deadline");
-        throw error;
-      }) as { message?: Message; eval_count?: number; prompt_eval_count?: number; done_reason?: string; load_duration?:number; prompt_eval_duration?:number; eval_duration?:number; total_duration?:number; client_queue_ms?:number };
+            ...(limits.numThreads === undefined ? {} : {num_thread:settings.numThreads}), ...profile.options } }, controller.signal,{onProgress}) as { message?: Message; eval_count?: number; prompt_eval_count?: number; done_reason?: string; load_duration?:number; prompt_eval_duration?:number; eval_duration?:number; total_duration?:number; client_queue_ms?:number };
       await appendFile(logFile, `[OLLAMA] turn ${turn+1}: response received in ${Date.now()-started}ms; prompt_tokens=${result.prompt_eval_count ?? "unknown"}; generated_tokens=${result.eval_count ?? "unknown"}\n`);
       await appendFile(logFile, "[TIMING] " + JSON.stringify({at:new Date().toISOString(),turn:turn+1,
         queueMs:result.client_queue_ms,loadMs:result.load_duration == null ? null : result.load_duration/1e6,

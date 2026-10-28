@@ -9,7 +9,15 @@ server.on('request',async(req,res)=>{
  assert.equal(request.think,false);assert.equal(request.tools,undefined);
  assert.ok(JSON.stringify(request.messages).includes('audit_action'));
  if(mode==='hang')return;
+ assert.equal(request.stream,true);
  const tool='<tool_call>\n'+JSON.stringify({name:'audit_action',arguments:{action:'read_file',path:'owned.py',query:'',answer:''}})+'\n</tool_call>';
+ if(mode==='stream'){
+   res.writeHead(200,{'Content-Type':'application/x-ndjson'});
+   res.write(JSON.stringify({message:{thinking:'consider'},done:false})+'\n');
+   res.write(JSON.stringify({message:{content:tool.slice(0,20)},done:false})+'\n');
+   res.end(JSON.stringify({message:{content:tool.slice(20)},done:true,eval_count:42})+'\n');return;
+ }
+ if(mode==='truncated'){res.writeHead(200,{'Content-Type':'application/x-ndjson'});res.end(JSON.stringify({message:{content:tool},done:false})+'\n');return;}
  res.end(JSON.stringify({message:{role:'assistant',content:mode==='multiple'?tool+'\n'+tool:tool},eval_count:42}));
 });
 await new Promise<void>(r=>server.listen(0,'127.0.0.1',r));
@@ -18,10 +26,14 @@ const payload={model:'qwen3:4b',options:{num_ctx:8192,num_thread:4,num_predict:1
 try {
  const result=await postQwenAgentJson(url,payload,AbortSignal.timeout(30000));
  assert.equal(JSON.parse(result.message.content).path,'owned.py');assert.equal(result.eval_count,42);
+ mode='stream';let progress=0;
+ const streamed=await postQwenAgentJson(url,payload,AbortSignal.timeout(30000),{onProgress:()=>progress++});
+ assert.equal(JSON.parse(streamed.message.content).path,'owned.py');assert.equal(streamed.eval_count,42);assert(progress>0);
+ mode='truncated';await assert.rejects(postQwenAgentJson(url,payload,AbortSignal.timeout(30000)),/before completion/);
  mode='multiple';await assert.rejects(postQwenAgentJson(url,payload,AbortSignal.timeout(30000)),/exactly one/);
  await assert.rejects(postQwenAgentJson('https://example.com/api/chat',payload,AbortSignal.timeout(30000)),/local Ollama/);
- mode='hang';const controller=new AbortController();const request=postQwenAgentJson(url,payload,controller.signal);
- const timer=setInterval(()=>{if(calls>=3)controller.abort();},25);
+ mode='hang';const beforeHang=calls;const controller=new AbortController();const request=postQwenAgentJson(url,payload,controller.signal);
+ const timer=setInterval(()=>{if(calls>beforeHang)controller.abort();},25);
  try{await assert.rejects(request,/cancelled/);}finally{clearInterval(timer);}
  mode='ok';await postQwenAgentJson(url,payload,AbortSignal.timeout(30000));
  console.log('Qwen-Agent real package formatting/parsing, local-only endpoint, multiple-call rejection, cancellation and gate release PASSED');

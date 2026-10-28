@@ -53,7 +53,11 @@ try {
       else chosen=action('final','','',JSON.stringify({files:fixtures.map(f=>({path:f.path,rawMarkup:f.raw}))}));
       assert.ok(request.format.properties.action.enum.includes(chosen.action));
       assert.ok(request.messages.at(-1).content.includes('Controller progress'));
-      res.end(JSON.stringify({message:{role:'assistant',content:JSON.stringify(chosen)}}));
+      assert.equal(request.stream,true);
+      const output=JSON.stringify(chosen),split=Math.floor(output.length/2);
+      res.setHeader('Content-Type','application/x-ndjson');
+      res.write(JSON.stringify({message:{role:'assistant',content:output.slice(0,split)},done:false})+'\n');
+      res.end(JSON.stringify({message:{role:'assistant',content:output.slice(split)},done:true})+'\n');
     });
     await new Promise<void>(r=>server.listen(0,'127.0.0.1',r));
     process.env.AUTOHACK_OLLAMA_URL=`http://127.0.0.1:${(server.address() as any).port}/api/chat`;
