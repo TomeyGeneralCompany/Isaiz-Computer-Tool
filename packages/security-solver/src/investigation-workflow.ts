@@ -74,7 +74,7 @@ export class InvestigationWorkflow {
         return 'Name the next source path and explain the specific missing evidence in hypothesis (20–600 characters).';
       const id=JSON.stringify([action.path,action.offset||0,action.query]);
       if((this.continuations.get(id)||0)>=1)return 'This source continuation was already attempted at the same offset. Choose new evidence, a supported probe, or conclude incomplete.';
-      if(this.sourceProgress<=this.progressAtDecision)return 'No new source range was read since the last decision. Plan a supported probe or conclude incomplete; repeating inspection cannot provide new evidence.';
+      if(this.decisions.length>0 && this.sourceProgress<=this.progressAtDecision)return 'No new source range was read since the last decision. Plan a supported probe or conclude incomplete; repeating inspection cannot provide new evidence.';
     }
     if(action.action==='plan_probe') {
       if(action.path.length>512)return 'Choose a workspace-relative source path of at most 512 characters.';
