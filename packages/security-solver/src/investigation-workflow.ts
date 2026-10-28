@@ -22,6 +22,9 @@ export class InvestigationWorkflow {
   private priorNotes:string[]=[];
   private pageTurns=0;
   private continuations=new Map<string,number>();
+  private readSpans=new Set<string>();
+  private sourceProgress=0;
+  private progressAtDecision=0;
   restore(value:unknown) {
     // Prior state directs navigation only. Current-run reads and probes must revalidate it.
     const saved=value as any;
@@ -36,7 +39,8 @@ export class InvestigationWorkflow {
   }
   continueInspection(action:Action) {
     const question=action.hypothesis!.trim();
-    const id=JSON.stringify([action.path,action.offset||0,action.query,question]);
+    const id=JSON.stringify([action.path,action.offset||0,action.query]);
+    this.progressAtDecision=this.sourceProgress;
     this.continuations.set(id,(this.continuations.get(id)||0)+1);
     this.decisions.push({path:action.path,question,offset:action.offset||0});
     this.decisions=this.decisions.slice(-32);
@@ -68,8 +72,9 @@ export class InvestigationWorkflow {
     if(action.action==='continue_inspection') {
       if(!action.hypothesis?.trim() || action.hypothesis.trim().length<20 || !action.path || action.path.length>512)
         return 'Name the next source path and explain the specific missing evidence in hypothesis (20–600 characters).';
-      const id=JSON.stringify([action.path,action.offset||0,action.query,action.hypothesis.trim()]);
-      if((this.continuations.get(id)||0)>=2)return 'This identical context request already repeated. Choose a different question or conclude incomplete.';
+      const id=JSON.stringify([action.path,action.offset||0,action.query]);
+      if((this.continuations.get(id)||0)>=1)return 'This source continuation was already attempted at the same offset. Choose new evidence, a supported probe, or conclude incomplete.';
+      if(this.sourceProgress<=this.progressAtDecision)return 'No new source range was read since the last decision. Plan a supported probe or conclude incomplete; repeating inspection cannot provide new evidence.';
     }
     if(action.action==='plan_probe') {
       if(action.path.length>512)return 'Choose a workspace-relative source path of at most 512 characters.';
@@ -92,12 +97,23 @@ export class InvestigationWorkflow {
       this.state.tested.push(key(action));this.state.pending=null;this.state.inspections=0;this.pageTurns=0;
     } else {
       let page:any;try{page=JSON.parse(output);}catch{}
-      // Pagination remains available, but long files also get a decision checkpoint.
-      if(['read_file','read_solidity'].includes(action.action))this.pageTurns++;
+      // Only genuinely new source spans justify another continuation decision.
+      // Errors, repeated pages and navigation assertions do not count as evidence.
+      if(['read_file','read_solidity'].includes(action.action)) {
+        this.pageTurns++;
+        const spans=action.action==='read_solidity' && Array.isArray(page?.excerpts)
+          ? page.excerpts.map((e:any)=>({path:e.path,start:e.start,end:e.end}))
+          : [{path:action.path,start:page?.start,end:page?.end}];
+        for(const span of spans) {
+          if(typeof span.path!=='string'||!Number.isSafeInteger(span.start)||!Number.isSafeInteger(span.end)||span.end<=span.start)continue;
+          const id=JSON.stringify([span.path,span.start,span.end]);
+          if(!this.readSpans.has(id)){this.readSpans.add(id);this.sourceProgress++;}
+        }
+      }
       if(output.includes('Repeated inspection action'))this.state.inspections=6;
       else if(action.action!=='read_file' || page?.nextOffset===null || output.startsWith('Tool error:'))this.state.inspections++;
     }
   }
   feedback(message:string,reopen=false) {this.lastFeedback=message.slice(0,400);if(reopen){this.state.inspections=0;this.pageTurns=0;}}
-  snapshot() {return {...this.state,pageTurns:this.pageTurns,decisions:this.decisions,priorNotes:this.priorNotes,readPaths:[...this.readPaths],observations:this.observations};}
+  snapshot() {return {...this.state,pageTurns:this.pageTurns,sourceProgress:this.sourceProgress,decisions:this.decisions,priorNotes:this.priorNotes,readPaths:[...this.readPaths],observations:this.observations};}
 }
