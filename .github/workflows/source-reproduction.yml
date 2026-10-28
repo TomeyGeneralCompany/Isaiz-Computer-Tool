@@ -55,5 +55,9 @@ jobs:
 
       - name: Install pinned local static analyzers
         run: bash scripts/install-static-analysis.sh
+      - name: Verify vendored upstream rules and positive/negative fixtures
+        run: |
+          python3 scripts/check-vendored-rules.py
+          SEMGREP_SEND_METRICS=off SEMGREP_ENABLE_VERSION_CHECK=0 .venv-static/bin/semgrep --test --config scripts/vendor/semgrep-rules scripts/vendor/semgrep-rules
       - name: Exercise offline static leads on owned source
         run: python3 scripts/test-static-leads.py

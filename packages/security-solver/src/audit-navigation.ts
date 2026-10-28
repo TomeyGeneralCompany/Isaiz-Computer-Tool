@@ -4,10 +4,10 @@ export class AuditNavigation {
   private pending=new Map<string,{action:string;path:string;offset:number;query?:string}>();
   private visited=new Set<string>();
   private recent:Array<Record<string,unknown>>=[];
-  seed(paths:string[]) {
+  seed(paths:string[],locations:Array<{path:string;offset:number}>=[]) {
     for(const path of paths.slice(0,32)) {
       if(!path || posix.isAbsolute(path) || path.split('/').includes('..'))continue;
-      this.pending.set(JSON.stringify(['read_file',path,'']),{action:'read_file',path,offset:0});
+      this.pending.set(JSON.stringify(['read_file',path,'']),{action:'read_file',path,offset:locations.find(item=>item.path===path && Number.isSafeInteger(item.offset) && item.offset>=0)?.offset || 0});
     }
   }
   observe(action:string,path:string,offset:number,query:string,result:any) {

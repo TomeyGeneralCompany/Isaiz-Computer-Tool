@@ -1,0 +1,198 @@
+{
+  "repository": "https://github.com/semgrep/semgrep-rules",
+  "commit": "16b9e6d45f10649f6a531ec4838ed9924372c3bc",
+  "files": [
+    {
+      "path": "python/flask/security/injection/raw-html-concat.yaml",
+      "sha256": "51617bcbaa7e85c2e7754a3acbe2306d2e45abb9a3cb873a5481913e9c3b1252"
+    },
+    {
+      "path": "python/flask/security/injection/raw-html-concat.py",
+      "sha256": "b4cddbd4b745429dbeae05546c8f53c990b070cbf298edfe1fb4590132cb5470"
+    },
+    {
+      "path": "python/flask/security/injection/path-traversal-open.yaml",
+      "sha256": "6334bed72d7dc051b208c0d0a44c7f492110f31e89b48afe43e486d0dc49ebe1"
+    },
+    {
+      "path": "python/flask/security/injection/path-traversal-open.py",
+      "sha256": "b9abfaaf0a5dfd55007809589591647c198fc2eaa53d20cb31084cddc51fee22"
+    },
+    {
+      "path": "python/flask/security/injection/tainted-sql-string.yaml",
+      "sha256": "d9b562b5eb8bd7efaaa696ebd0db97e47fc498edeec094c6956ba3567bbddd77"
+    },
+    {
+      "path": "python/flask/security/injection/tainted-sql-string.py",
+      "sha256": "e230baab5b3d267c889a7a2316072c73c35c9dcde2db09a6e8131b64f4c80bf1"
+    },
+    {
+      "path": "python/flask/security/injection/user-eval.yaml",
+      "sha256": "1b264b83aca5b0cb5f6bda721cef7f6f97ba6733cbab89471fa9d98875bb67e5"
+    },
+    {
+      "path": "python/flask/security/injection/user-eval.py",
+      "sha256": "3bccf3f2a047d298b8da45638690358bc8b755f27df4f1ac544ffa78365a7ca6"
+    },
+    {
+      "path": "python/flask/security/injection/ssrf-requests.yaml",
+      "sha256": "b58b26365b07722e9408f38956365fa6b3a1a7351ad2b4a9c98a00d796f42452"
+    },
+    {
+      "path": "python/flask/security/injection/ssrf-requests.py",
+      "sha256": "320457280821fca6252a8f90d94d1e5f7ddaacb387b9f595891742d559d23b3d"
+    },
+    {
+      "path": "python/flask/security/insecure-deserialization.yaml",
+      "sha256": "bd53d297cfc842c23b289f6d15b2a98847b626d9e8fd71b71da794891a4aca34"
+    },
+    {
+      "path": "python/flask/security/insecure-deserialization.py",
+      "sha256": "b7dcff9acf25e71660c55f4d208ec63a1df8024722e559a4220da83c5162cb90"
+    },
+    {
+      "path": "python/django/security/audit/raw-query.yaml",
+      "sha256": "3ed9f9713f2928257c648cf4c5c20fda908f17c07eea153f243c9950c34a1d10"
+    },
+    {
+      "path": "python/django/security/audit/raw-query.py",
+      "sha256": "3688274106f21d2c8519c0bc1be082efc2324915e121f339dff084cddf7d3bb7"
+    },
+    {
+      "path": "python/lang/security/audit/subprocess-shell-true.yaml",
+      "sha256": "753ba9d29d592b3d7f5086e671e424ee05138acbf75a39b663d92aa3275f5380"
+    },
+    {
+      "path": "python/lang/security/audit/subprocess-shell-true.py",
+      "sha256": "2d56365bde3f9f421afd249b32acd836eb1b5bcbc74e989d4dc651be761af99c"
+    },
+    {
+      "path": "python/lang/security/audit/eval-detected.yaml",
+      "sha256": "4a7d2769392c93fecb74a76b313b36b499c0ca22b42966d48f174761d85a5eec"
+    },
+    {
+      "path": "python/lang/security/audit/eval-detected.py",
+      "sha256": "d4e806bfeab29e1c12a42be9b510677ff8ea822fb705da97a1db09e8b0889d7e"
+    },
+    {
+      "path": "javascript/lang/security/detect-eval-with-expression.yaml",
+      "sha256": "3b8fe2524b094c72c34aaa6d21b0408ffdac2471a335125cf726993253777951"
+    },
+    {
+      "path": "javascript/lang/security/detect-eval-with-expression.js",
+      "sha256": "d6e655a27c418381e5cb9a42b6aa28232d3aca7e3b69da3b320c3ab92df15d6e"
+    },
+    {
+      "path": "javascript/lang/security/audit/sqli/node-mysql-sqli.yaml",
+      "sha256": "152d5848cbcb5bdd3555507eb4a55b5ee2cd7276effbd5975a7da97d82bba0d0"
+    },
+    {
+      "path": "javascript/lang/security/audit/sqli/node-mysql-sqli.js",
+      "sha256": "0494aa748a334274f90225b4b47fafb3f4d9e7707a3c2ee06353271ea2cc7965"
+    },
+    {
+      "path": "javascript/lang/security/audit/sqli/node-postgres-sqli.yaml",
+      "sha256": "23709e35b9ce213d8306c793a3174320dcf3141043e31297fcdec48735c1bbd8"
+    },
+    {
+      "path": "javascript/lang/security/audit/sqli/node-postgres-sqli.js",
+      "sha256": "bc1a3404b40e53e505b57441e061150548acef88f0bf9200796a2c48ee46d0cb"
+    },
+    {
+      "path": "javascript/lang/security/audit/dangerous-spawn-shell.yaml",
+      "sha256": "1a81f91e9ad9ea4c62a9b0bda4dcf3cf2fc1bb6f2d9e2580ea3effa6bfe9ba74"
+    },
+    {
+      "path": "javascript/lang/security/audit/dangerous-spawn-shell.js",
+      "sha256": "c6535d02ec338186315e86e290f3a0f94f3ca22c29dcd43f9734ab602572c527"
+    },
+    {
+      "path": "javascript/lang/security/audit/prototype-pollution/prototype-pollution-assignment.yaml",
+      "sha256": "c494050bfb86b17b96497f1acb6f2cffe68890c2658e3ccf36945c6fda61e67d"
+    },
+    {
+      "path": "javascript/lang/security/audit/prototype-pollution/prototype-pollution-assignment.js",
+      "sha256": "7450361323d1161da988e432df69cae2bfab6e939ee6a9c59a2d518a5c9eaee1"
+    },
+    {
+      "path": "javascript/express/security/injection/tainted-sql-string.yaml",
+      "sha256": "22dab9b0182dd25bb5aaf3ae796973dc53ea91ccb0e747055fd15ee1ef9a8592"
+    },
+    {
+      "path": "javascript/express/security/injection/tainted-sql-string.js",
+      "sha256": "3722cc7f5ebb8b26112c6367eef88bb77d1f05bff76ada39de7d3be2a2f171a0"
+    },
+    {
+      "path": "javascript/express/security/injection/raw-html-format.yaml",
+      "sha256": "d00b6ba1fe8476e9fe29c9e9e9e1b631bd67c466d94087d0e0834f5036fcc6af"
+    },
+    {
+      "path": "javascript/express/security/injection/raw-html-format.js",
+      "sha256": "c326927f53b0cb7441c926ba18ef8acc47c886573fd3ff771604351ac09e28b1"
+    },
+    {
+      "path": "java/lang/security/servletresponse-writer-xss.yaml",
+      "sha256": "15bd86d8dccd2680d4035d27e95ed34d2512ba863812a0bd44ca0adbdd66fa1c"
+    },
+    {
+      "path": "java/lang/security/servletresponse-writer-xss.java",
+      "sha256": "f0b07bb20ce28d5b526331855f2fef98276cb7cff4bff6ad80d2d416b7716d16"
+    },
+    {
+      "path": "java/lang/security/audit/sqli/jdbc-sqli.yaml",
+      "sha256": "37ace89ff03ccf9384e0187f6b03a53e97838d902f8b3ca14e1223bd279956b5"
+    },
+    {
+      "path": "java/lang/security/audit/sqli/jdbc-sqli.java",
+      "sha256": "af726c77afe1462539a73dba5ec25da2add1d3c186c3e66f511461a00e55f119"
+    },
+    {
+      "path": "java/lang/security/use-snakeyaml-constructor.yaml",
+      "sha256": "78107010bf3ba6725311a12486620974f8c6bc1c663e1e55f96205da74371c18"
+    },
+    {
+      "path": "java/lang/security/use-snakeyaml-constructor.java",
+      "sha256": "f32655c36f209525212dfab3a32856dda2b6fbd159aed1562c64605147204f57"
+    },
+    {
+      "path": "java/lang/security/audit/xml-decoder.yaml",
+      "sha256": "70a198756d67ba9455a7aa1d9bbbfc0feb0e8468ffb63f08e0a7c3677e2e7952"
+    },
+    {
+      "path": "java/lang/security/audit/xml-decoder.java",
+      "sha256": "358e9106f9c40179f4508138c3cf799f8f377832512a1e8b39555eba0c095a2b"
+    },
+    {
+      "path": "java/lang/security/httpservlet-path-traversal.yaml",
+      "sha256": "b80ab0816edf64337c2699bad25fe4a71b1c223f51e8eeebc3c2722ad021ae1e"
+    },
+    {
+      "path": "java/lang/security/httpservlet-path-traversal.java",
+      "sha256": "b99e9b151fd5991982afac599025963d0f276e5cbfa0cc5cba45127ee28ba114"
+    },
+    {
+      "path": "java/spring/security/injection/tainted-system-command.yaml",
+      "sha256": "de12d7ac6167039ca2acce0ed860694fbeb3c4904112170cfb9f1644d6200d98"
+    },
+    {
+      "path": "java/spring/security/injection/tainted-system-command.java",
+      "sha256": "e8c70a43898ded44f69a5c0d8ccd2bdc3a9c78b01bd2cff645e9a1ccbf104e0a"
+    },
+    {
+      "path": "java/spring/security/injection/tainted-file-path.yaml",
+      "sha256": "3c724b2467238c355d41f9ba61097481f535e12f923b12a83664df1ca8994bee"
+    },
+    {
+      "path": "java/spring/security/injection/tainted-file-path.java",
+      "sha256": "cc06da65fc939756f6530d98e258f2832fc283394402af62c30ce5e6c832e824"
+    },
+    {
+      "path": "java/spring/security/injection/tainted-url-host.yaml",
+      "sha256": "56e7b17126fd37b46930ca896a3bae6237c9efb3f0fd819ab851579897b4f348"
+    },
+    {
+      "path": "java/spring/security/injection/tainted-url-host.java",
+      "sha256": "c7f6996bd58599589e7da5647085cca2bc181a2b342fa4e29e87cbe3450a9306"
+    }
+  ]
+}

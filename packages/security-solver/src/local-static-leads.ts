@@ -1,3 +1,4 @@
+import {createHash} from 'node:crypto';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {readFile,writeFile,rename} from 'node:fs/promises';
@@ -6,7 +7,15 @@ const exec=promisify(execFile);
 export async function collectStaticLeads(root:string,repositories:Array<{directory:string;url:string}>,paths:string[],cache:string,signal:AbortSignal) {
   const app=process.env.PROJECT_ROOT||process.cwd();
   if(process.env.LOCAL_STATIC_ANALYSIS==='false')return {status:'disabled',leads:[],runs:[]};
-  try {const saved=JSON.parse(await readFile(cache,'utf8'));if(saved.version===1&&Array.isArray(saved.leads)&&Array.isArray(saved.runs)&&saved.runs.length>0&&saved.runs.every((r:any)=>r.status==='completed'))return saved;}catch{}
+  const revision=createHash('sha256');
+  try {
+    for(const file of ['scripts/source-static.py','scripts/static-leads.yaml','scripts/vendor/semgrep-rules/manifest.json']) revision.update(await readFile(resolve(app,file)));
+  } catch(error:any) {
+    signal.throwIfAborted();
+    return {status:'unavailable',leads:[],runs:[{engine:'configuration',status:'unavailable',reason:error.code||error.name}]};
+  }
+  const rulesRevision=revision.digest('hex');
+  try {const saved=JSON.parse(await readFile(cache,'utf8'));if(saved.version===2&&saved.rulesRevision===rulesRevision&&Array.isArray(saved.leads)&&Array.isArray(saved.runs)&&saved.runs.length>0&&saved.runs.every((r:any)=>r.status==='completed'))return saved;}catch{}
   const runs:any[]=[],leads:any[]=[];
   for(const repo of repositories) {
     const prefix=relative(root,repo.directory).split(sep).join('/');
@@ -15,17 +24,17 @@ export async function collectStaticLeads(root:string,repositories:Array<{directo
       signal.throwIfAborted();
       try {
         const {stdout}=await exec('python3',[resolve(app,'scripts/source-static.py'),'--repository',repo.directory,'--engine',engine,...(engine==='slither'?['--target',solidity!]:[])],{signal,timeout:110000,maxBuffer:128000,cwd:app});
-        const value=JSON.parse(stdout);runs.push({repository:repo.url,engine,status:value.status,reason:value.reason});
+        const value=JSON.parse(stdout);runs.push({repository:repo.url,engine,status:value.status,reason:value.reason,coverage:value.coverage});
         for(const lead of (Array.isArray(value.leads)?value.leads:[]).slice(0,64)) {
           if(typeof lead.path!=='string'||!Number.isSafeInteger(lead.line)||lead.line<1)continue;
           const full=resolve(repo.directory,lead.path),local=relative(repo.directory,full);
           if(local==='..'||local.startsWith('..'+sep)||local.startsWith('/'))continue;
-          leads.push({path:prefix+'/'+local.split(sep).join('/'),line:lead.line,rule:String(lead.rule).slice(0,160),message:String(lead.message).slice(0,300),engine});
+          leads.push({path:prefix+'/'+local.split(sep).join('/'),line:lead.line,rule:String(lead.rule).slice(0,160),message:String(lead.message).slice(0,300),severity:lead.severity,engine});
         }
       }catch(error:any){signal.throwIfAborted();runs.push({repository:repo.url,engine,status:'failed',reason:error.code||error.name});}
     }
   }
-  const result={version:1,status:'navigation_only',leads:leads.slice(0,128),runs,limitation:'Detectors produce candidates, not verified findings. Inspect and reproduce before reporting. Unsupported scanners do not block source reading.'};
+  const result={version:2,rulesRevision,status:'navigation_only',leads:leads.slice(0,128),runs,limitation:'Detectors produce candidates, not verified findings. Inspect and reproduce before reporting. Unsupported scanners do not block source reading.'};
   const temporary=cache+'.'+process.pid+'.tmp';
   await writeFile(temporary,JSON.stringify(result),{mode:0o600});await rename(temporary,cache);
   return result;
