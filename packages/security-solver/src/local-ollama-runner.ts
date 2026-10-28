@@ -1,5 +1,6 @@
 import {modelProfile} from './model-profile';
 import { InvestigationWorkflow } from "./investigation-workflow";
+import {guidedSourceProbe} from './source-guided-probes';
 import { postQwenAgentJson } from "./qwen-agent-transport";
 import { AuditAllowance } from "./audit-allowance";
 import { AuditNavigation } from "./audit-navigation";
@@ -160,6 +161,76 @@ export async function runLocalAudit(
         throw new Error("Path outside authorized workspace");
       }
       return candidate;
+    }
+    // Source locations have already been selected from an authorized workspace.
+    // Feed real source pages to the model, then run only narrowly recognizable
+    // local probes in the same isolated verifier. Never manufacture evidence.
+    const seededPaths=limits.initialSourcePaths?.slice(0,3) || [];
+    if(workflow && structured && process.env.AUTOHACK_AUTO_SOURCE_PREFETCH !== 'false') {
+      for(const seededPath of seededPaths) {
+        const seeded=limits.initialSourceLocations?.find(item=>item.path===seededPath);
+        const offset=seeded?.offset ?? 0;
+        try {
+          controller.signal.throwIfAborted();
+          const full=await safePath(seededPath);
+          const page=await readSourcePage(full,offset,pageSize);
+          const action={action:'read_file',path:seededPath,query:'',answer:'',offset};
+          const request:Message={role:'assistant',content:JSON.stringify(action)};
+          const remaining=messageBudget-3000-JSON.stringify(messages.slice(2)).length;
+          const fitted=fitAuditToolOutput(messages.slice(0,2),request,'read_file',JSON.stringify(page),remaining,true);
+          const delivered=JSON.parse(fitted.output) as typeof page;
+          if(!delivered.text || delivered.end<=delivered.start)throw new Error('No source text fits the initial context budget');
+          messages.push(request,fitted.message);
+          const path=relative(root,full).split(sep).join('/');
+          sourceTotals.set(path,delivered.totalCharacters);
+          allowance.read(path,delivered.start,delivered.end,0);
+          workflow.read(path);
+          workflow.observe(action,fitted.output);
+          limits.onRead?.(path,{start:delivered.start,end:delivered.end});
+          navigation.observe('read_file',path,offset,'',delivered);
+          successfulReads++;
+          recentActions.set(JSON.stringify(['read_file',path,offset,'']),{turn:-1,nextOffset:delivered.nextOffset,response:fitted.message});
+          events.push(JSON.stringify({tool:'read_file',path,offset,end:delivered.end,nextOffset:delivered.nextOffset,status:'prefetched'}).slice(0,180));
+          await appendFile(logFile,'[INITIAL_SOURCE_READ] '+JSON.stringify({path,start:delivered.start,end:delivered.end,nextOffset:delivered.nextOffset})+'\n');
+          if(process.env.AUTOHACK_GUIDED_SOURCE_PROBES==='false' || delivered.nextOffset!==null || offset!==0 || !limits.verifyPython)continue;
+          const hint=guidedSourceProbe(path,delivered.text);
+          if(!hint)continue;
+          const planned={action:'plan_probe',path,query:hint.functionName,answer:hint.kind,hypothesis:hint.hypothesis};
+          if(workflow.validate(planned as any))continue;
+          workflow.plan(planned as any);
+          let raw:string;
+          try {raw=await limits.verifyPython(path,hint.functionName,hint.kind);}
+          catch(error) {raw=JSON.stringify({status:'probe_failed',detail:String(error).slice(0,500),behavior_observed:false});}
+          let result:any;
+          try {result=JSON.parse(raw);}catch {result={status:'probe_failed',detail:'Verifier returned invalid JSON',behavior_observed:false};}
+          // A failed or unsupported attempt is recorded as such, never as evidence
+          // of a vulnerability or a passing result.
+          if(typeof result!=='object'||result===null||Array.isArray(result))result={status:'probe_failed',detail:'Invalid verifier result'};
+          evidenceDirectory ||= await mkdtemp(join(root,'.audit-evidence-'));
+          const evidenceFile=join(evidenceDirectory,++evidenceCount+'.json');
+          await writeFile(evidenceFile,JSON.stringify({path,function:hint.functionName,kind:hint.kind,result},null,2),{mode:0o600});
+          result.evidenceFile=relative(root,evidenceFile).split(sep).join('/');
+          const output=JSON.stringify(result);
+          const verify={action:'verify_source',path,query:hint.functionName,answer:hint.kind};
+          workflow.observe(verify as any,output);
+          if(['behavior_observed','behavior_not_observed'].includes(result.status))
+            allowance.probe(JSON.stringify([path,hint.functionName,hint.kind,undefined]),0);
+          const record:Message={role:'assistant',content:JSON.stringify(verify)};
+          const available=messageBudget-3000-JSON.stringify(messages.slice(2)).length;
+          try {
+            const response=fitAuditToolOutput(messages.slice(0,2),record,'verify_source',output,available,true);
+            messages.push(record,response.message);
+          }catch { // The evidence file remains available for a later explicit read.
+            messages.push({role:'user',content:'An isolated probe was attempted for '+path+
+              '; result status '+String(result.status)+'. Read '+result.evidenceFile+' for the full observation. /no_think'});
+          }
+          await appendFile(logFile,'[GUIDED_SOURCE_PROBE] '+JSON.stringify({path,function:hint.functionName,status:result.status,evidenceFile:result.evidenceFile})+'\n');
+        } catch(error) {
+          if(controller.signal.aborted)throw error;
+          // Bad hints never authorize additional paths or imply a successful read.
+          await appendFile(logFile,'[INITIAL_SOURCE_SKIPPED] '+String(error).slice(0,180)+'\n');
+        }
+      }
     }
     for (let turn = 0; turn < allowance.turns; turn++) {
       usedTurns=turn+1;

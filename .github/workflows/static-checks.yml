@@ -54,12 +54,14 @@ jobs:
           npx tsx scripts/test-missing-source-loop.ts
           npx tsx scripts/test-investigation-records.ts
           npx tsx scripts/test-source-candidates.ts
+          npx tsx scripts/test-guided-source-probes.ts
           npx tsx scripts/test-audit-allowance.ts
           node --import tsx scripts/test-investigation-decisions.ts
           npx tsx scripts/test-progress-controller.ts
           npx tsx scripts/test-hunt-reliability.ts
           npx tsx scripts/test-audit-context-loop.ts
           node --import tsx scripts/test-production-workflow.ts --mock-probes --large-context
+          node --import tsx scripts/test-production-workflow.ts --mock-probes --prefetch
           npx tsx scripts/test-audit-output-budget.ts
           npx tsx scripts/test-native-batch.ts
           npx tsx scripts/test-audit-stalls.ts

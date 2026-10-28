@@ -12,7 +12,7 @@ import {InvestigationWorkflow} from '../packages/security-solver/src/investigati
 const variant=Number(process.argv.find(a=>a.startsWith('--variant='))?.split('=')[1]||0);
 if(!Number.isInteger(variant)||variant<0||variant>2)throw new Error('Variant must be 0, 1 or 2');
 const largeContext=process.argv.includes('--large-context');
-const live=process.argv.includes('--real-model'),mockProbes=process.argv.includes('--mock-probes'),execute=promisify(execFile);
+const live=process.argv.includes('--real-model'),mockProbes=process.argv.includes('--mock-probes'),prefetch=process.argv.includes('--prefetch'),execute=promisify(execFile);
 if(live&&mockProbes)throw new Error('Real model check requires real probes');
 const root=await mkdtemp(join(tmpdir(),'production-workflow-'));
 const evidence=resolve('data/production-workflow-tests',new Date().toISOString().replaceAll(':','-'));
@@ -47,7 +47,23 @@ try {
       assert.ok(JSON.stringify(request.messages).length+JSON.stringify(request.format).length <= (8192-request.options.num_predict-512)*3);
       const f=fixtures[Math.floor(i/3)];
       let chosen:any;
-      if(i<6)chosen=i%3===0?action('read_file',f.path):i%3===1?
+      if(prefetch) {
+        if(i===0) {
+          const delivered=request.messages.some((m:any)=>m.role==='assistant' && m.content.includes(fixtures[0].path) && m.content.includes('"action":"read_file"')) &&
+            request.messages.some((m:any)=>m.content.startsWith('TOOL_RESULT ') && m.content.includes('\\\"text\\\"'));
+          if(!delivered) {
+            const diagnostic=await readFile(join(evidence,'audit.log'),'utf8');
+            throw new Error('Seeded source missing from first model context. Initial source diagnostic: '+
+              diagnostic.split('\\n').filter(line=>line.includes('INITIAL_SOURCE')).join(' | ')+
+              '; roles='+JSON.stringify(request.messages.map((m:any)=>({role:m.role,head:m.content.slice(0,120)}))));
+          }
+        }
+        const current=i<2?fixtures[0]:fixtures[1];
+        if(i===0||i===3)chosen={...action('plan_probe',current.path,current.fn,'html_reflection'),hypothesis:'Markup survives interpolation; escaping disproves it.'};
+        else if(i===1||i===4)chosen=action('verify_source',current.path,current.fn,'html_reflection');
+        else if(i===2)chosen=action('read_file',current.path);
+        else chosen=action('final','','',JSON.stringify({files:fixtures.map(f=>({path:f.path,rawMarkup:f.raw}))}));
+      } else if(i<6)chosen=i%3===0?action('read_file',f.path):i%3===1?
         {...action('plan_probe',f.path,f.fn,'html_reflection'),hypothesis:'Markup survives interpolation; escaped marker would disprove it.'}:
         action('verify_source',f.path,f.fn,'html_reflection');
       else chosen=action('final','','',JSON.stringify({files:fixtures.map(f=>({path:f.path,rawMarkup:f.raw}))}));
@@ -63,11 +79,14 @@ try {
     process.env.AUTOHACK_OLLAMA_URL=`http://127.0.0.1:${(server.address() as any).port}/api/chat`;
   }
   process.env.LOCAL_OLLAMA_TOOL_PROTOCOL='json';
+  if(!live)process.env.AUTOHACK_GUIDED_SOURCE_PROBES='false'; // Scripted actions test the normal model-driven transition.
   const checkpointPath=join(root,'prior-checkpoint.json');
   if(largeContext)await writeFile(checkpointPath,JSON.stringify({notes:'previous navigation '.repeat(145)}));
   const answer=await runLocalAudit((largeContext?'Owned production-sized instructions. '.repeat(160):'')+`Inspect these owned Python modules: ${fixtures.map(f=>f.path).join(', ')}. They should put ordinary user text inside a paragraph while escaping supplied HTML. Choose each function from source, formulate a disprovable hypothesis, test it, and classify whether user markup survives. Return JSON {"files":[{"path":"...","rawMarkup":true or false}]}. This is an owned fixture, not a real vulnerability report.`,
     join(evidence,'audit.log'),live?1800000:30000,root,live?(process.env.LOCAL_OLLAMA_MODEL||'qwen3:4b'):'mock',undefined,{
-      checkpointPath:largeContext?checkpointPath:undefined,productionWorkflow:true,numCtx:8192,numThreads:4,numPredict:largeContext?4096:1024,maxTurns:40,
+      checkpointPath:largeContext?checkpointPath:undefined,productionWorkflow:true,
+      initialSourcePaths:prefetch?(live?fixtures.map(f=>f.path):[fixtures[0].path]):undefined,
+      initialSourceLocations:prefetch?(live?fixtures.map(f=>({path:f.path,offset:0})):[{path:fixtures[0].path,offset:0}]):undefined,numCtx:8192,numThreads:4,numPredict:largeContext?4096:1024,maxTurns:40,
       verifyPython:async(path,fn,kind)=>{
         assert.ok(fixtures.some(f=>f.path===path));assert.equal(kind,'html_reflection');
         if(mockProbes){const f=fixtures.find(f=>f.path===path&&f.fn===fn)!;assert.ok(f);observations.set(path,f.raw);return JSON.stringify({status:f.raw?'behavior_observed':'behavior_not_observed',behavior_observed:f.raw,diagnostic:'owned fixture output '.repeat(2000)});}
