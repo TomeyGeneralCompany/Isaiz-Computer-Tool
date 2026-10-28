@@ -48,8 +48,15 @@ try {
       const f=fixtures[Math.floor(i/3)];
       let chosen:any;
       if(prefetch) {
-        if(i===0)assert.ok(request.messages.some((m:any)=>m.content.includes('TOOL_RESULT') && m.content.includes(fixtures[0].path)),
-          'The actual selected source must reach the model before its first turn');
+        if(i===0) {
+          const delivered=request.messages.some((m:any)=>m.content.includes('TOOL_RESULT') && m.content.includes(fixtures[0].path));
+          if(!delivered) {
+            const diagnostic=await readFile(join(evidence,'audit.log'),'utf8');
+            throw new Error('Seeded source missing from first model context. Initial source diagnostic: '+
+              diagnostic.split('\\n').filter(line=>line.includes('INITIAL_SOURCE')).join(' | ')+
+              '; roles='+JSON.stringify(request.messages.map((m:any)=>({role:m.role,head:m.content.slice(0,120)}))));
+          }
+        }
         const current=i<2?fixtures[0]:fixtures[1];
         if(i===0||i===3)chosen={...action('plan_probe',current.path,current.fn,'html_reflection'),hypothesis:'Markup survives interpolation; escaping disproves it.'};
         else if(i===1||i===4)chosen=action('verify_source',current.path,current.fn,'html_reflection');
