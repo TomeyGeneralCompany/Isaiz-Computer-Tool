@@ -49,7 +49,8 @@ try {
       let chosen:any;
       if(prefetch) {
         if(i===0) {
-          const delivered=request.messages.some((m:any)=>m.content.includes('TOOL_RESULT') && m.content.includes(fixtures[0].path));
+          const delivered=request.messages.some((m:any)=>m.role==='assistant' && m.content.includes(fixtures[0].path) && m.content.includes('"action":"read_file"')) &&
+            request.messages.some((m:any)=>m.content.startsWith('TOOL_RESULT ') && m.content.includes('\\\"text\\\"'));
           if(!delivered) {
             const diagnostic=await readFile(join(evidence,'audit.log'),'utf8');
             throw new Error('Seeded source missing from first model context. Initial source diagnostic: '+
