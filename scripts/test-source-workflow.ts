@@ -11,6 +11,9 @@ process.env.PROJECT_ROOT=root;
 process.env.GITHUB_TOKEN="owned-fixture";
 process.env.LOCAL_OLLAMA_MODEL="mock";
 process.env.LOCAL_OLLAMA_TOOL_PROTOCOL="json";
+// This scripted fixture expects to drive the first read itself; the separate
+// seeded-source fixture exercises production's automatic first read.
+process.env.AUTOHACK_AUTO_SOURCE_PREFETCH="false";
 process.env.LOCAL_HUNT_NUM_PREDICT="4096";
 const server=createServer();
 try {
