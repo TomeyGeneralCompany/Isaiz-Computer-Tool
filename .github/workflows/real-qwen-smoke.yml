@@ -43,6 +43,8 @@ jobs:
           LOCAL_HUNT_DYNAMIC_ALLOWANCE: 'false'
         run: |
           node --import tsx scripts/test-production-workflow.ts --real-model --prefetch --variant=0
+          node --import tsx scripts/test-production-workflow.ts --real-model --prefetch --variant=1
+          node --import tsx scripts/test-production-workflow.ts --real-model --prefetch --variant=2
       - name: Preserve diagnostic logs even on failure
         if: always()
         uses: actions/upload-artifact@v4
