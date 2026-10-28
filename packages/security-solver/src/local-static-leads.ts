@@ -8,7 +8,12 @@ export async function collectStaticLeads(root:string,repositories:Array<{directo
   const app=process.env.PROJECT_ROOT||process.cwd();
   if(process.env.LOCAL_STATIC_ANALYSIS==='false')return {status:'disabled',leads:[],runs:[]};
   const revision=createHash('sha256');
-  for(const file of ['scripts/source-static.py','scripts/static-leads.yaml','scripts/vendor/semgrep-rules/manifest.json']) revision.update(await readFile(resolve(app,file)));
+  try {
+    for(const file of ['scripts/source-static.py','scripts/static-leads.yaml','scripts/vendor/semgrep-rules/manifest.json']) revision.update(await readFile(resolve(app,file)));
+  } catch(error:any) {
+    signal.throwIfAborted();
+    return {status:'unavailable',leads:[],runs:[{engine:'configuration',status:'unavailable',reason:error.code||error.name}]};
+  }
   const rulesRevision=revision.digest('hex');
   try {const saved=JSON.parse(await readFile(cache,'utf8'));if(saved.version===2&&saved.rulesRevision===rulesRevision&&Array.isArray(saved.leads)&&Array.isArray(saved.runs)&&saved.runs.length>0&&saved.runs.every((r:any)=>r.status==='completed'))return saved;}catch{}
   const runs:any[]=[],leads:any[]=[];

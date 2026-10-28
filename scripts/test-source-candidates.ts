@@ -4,6 +4,7 @@ import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {prioritizeSourceCandidates} from '../packages/security-solver/src/source-candidates';
 import {AuditNavigation} from '../packages/security-solver/src/audit-navigation';
+import {collectStaticLeads} from '../packages/security-solver/src/local-static-leads';
 const root=await mkdtemp(join(tmpdir(),'candidate-selection-'));
 try {
   const paths=Array.from({length:200},(_,i)=>`file-${i}.py`);
@@ -27,5 +28,12 @@ try {
   assert.equal(focused.paths[0],paths[5]);
   await symlink('/etc/passwd',join(root,'outside.py'));
   assert.equal((await prioritizeSourceCandidates(root,['outside.py'],['outside.py'],[])).paths.length,0);
+  const previous=process.env.PROJECT_ROOT;
+  try {
+    process.env.PROJECT_ROOT=root;
+    const unavailable=await collectStaticLeads(root,[],[],join(root,'cache.json'),new AbortController().signal);
+    assert.equal(unavailable.status,'unavailable','Missing optional scanners must not abort source inspection');
+    assert.deepEqual(unavailable.leads,[]);
+  } finally {if(previous===undefined)delete process.env.PROJECT_ROOT;else process.env.PROJECT_ROOT=previous;}
   console.log('Candidate prioritization, bounded offsets, scope boundaries and chunk continuation PASSED');
 } finally {await rm(root,{recursive:true,force:true});}
