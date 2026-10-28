@@ -165,7 +165,7 @@ export async function runLocalAudit(
     // source page before inference, saving a model turn without inventing evidence.
     // Only production investigations with explicitly supplied source hints use this.
     const seededPath=limits.initialSourcePaths?.[0];
-    if(workflow && structured && seededPath) {
+    if(workflow && structured && seededPath && process.env.AUTOHACK_AUTO_SOURCE_PREFETCH !== 'false') {
       const seeded=limits.initialSourceLocations?.find(item=>item.path===seededPath);
       const offset=seeded?.offset ?? 0;
       try {
