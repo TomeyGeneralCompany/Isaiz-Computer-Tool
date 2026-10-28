@@ -161,6 +161,42 @@ export async function runLocalAudit(
       }
       return candidate;
     }
+    // The scanner has already selected a scoped source location. Read one actual
+    // source page before inference, saving a model turn without inventing evidence.
+    // Only production investigations with explicitly supplied source hints use this.
+    const seededPath=limits.initialSourcePaths?.[0];
+    if(workflow && structured && seededPath) {
+      const seeded=limits.initialSourceLocations?.find(item=>item.path===seededPath);
+      const offset=seeded?.offset ?? 0;
+      try {
+        controller.signal.throwIfAborted();
+        const full=await safePath(seededPath);
+        const page=await readSourcePage(full,offset,pageSize);
+        const action={action:'read_file',path:seededPath,query:'',answer:'',offset};
+        const request:Message={role:'assistant',content:JSON.stringify(action)};
+        const remaining=messageBudget-3000-JSON.stringify(messages.slice(2)).length;
+        const fitted=fitAuditToolOutput(messages.slice(0,2),request,'read_file',JSON.stringify(page),remaining,true);
+        const delivered=JSON.parse(fitted.output) as typeof page;
+        if(!delivered.text || delivered.end<=delivered.start)throw new Error('No source text fits the initial context budget');
+        messages.push(request,fitted.message);
+        const path=relative(root,full).split(sep).join('/');
+        sourceTotals.set(path,delivered.totalCharacters);
+        allowance.read(path,delivered.start,delivered.end,0);
+        workflow.read(path);
+        workflow.observe(action,fitted.output);
+        limits.onRead?.(path,{start:delivered.start,end:delivered.end});
+        navigation.observe('read_file',path,offset,'',delivered);
+        successfulReads++;
+        recentActions.set(JSON.stringify(['read_file',path,offset,'']),{turn:-1,nextOffset:delivered.nextOffset,response:fitted.message});
+        events.push(JSON.stringify({tool:'read_file',path,offset,end:delivered.end,nextOffset:delivered.nextOffset,status:'prefetched'}).slice(0,180));
+        await appendFile(logFile,'[INITIAL_SOURCE_READ] '+JSON.stringify({path,start:delivered.start,end:delivered.end,nextOffset:delivered.nextOffset})+'\n');
+      } catch(error) {
+        if(controller.signal.aborted)throw error;
+        // If the hint or initial page cannot fit, the ordinary guarded model
+        // navigation remains available; never claim an unread page as evidence.
+        await appendFile(logFile,'[INITIAL_SOURCE_SKIPPED] '+String(error).slice(0,180)+'\n');
+      }
+    }
     for (let turn = 0; turn < allowance.turns; turn++) {
       usedTurns=turn+1;
       controller.signal.throwIfAborted();
