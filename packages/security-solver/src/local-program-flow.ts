@@ -234,7 +234,14 @@ Do not claim production testing, JavaScript execution, file access or other effe
               if(!reads.sawLine(finding.callerFile,text,finding.callerLine))return "Read the page containing the entire claimed caller line before reporting.";
             }
             parsed=value;return null;
-          }catch{return "Return only the requested findings JSON. Omit findings that lack supported reproduction and source evidence.";}
+          }catch(error) {
+            if(error instanceof z.ZodError) {
+              const issues=error.issues.slice(0,5).map(issue=>({path:issue.path.join('.'),message:issue.message}));
+              return "Findings JSON violates the required result schema: "+JSON.stringify(issues).slice(0,900)+
+                ". Correct these exact fields using actual inspected source and verified probe evidence. Do not invent case IDs or callers.";
+            }
+            return "Return a parseable findings JSON object with findings:[] or up to three evidence-supported candidates. Do not invent test results.";
+          }
         },
       });
     signal.throwIfAborted();
