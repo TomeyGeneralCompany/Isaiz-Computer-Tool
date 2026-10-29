@@ -253,7 +253,7 @@ Do not claim production testing, JavaScript execution, file access or other effe
                 if(!candidateRepo || candidateRepo.url!==record.repositoryUrl)continue;
                 try {
                   const code=await readFile(join(root,candidatePath),'utf8');
-                  for(let line=1;line<=code.split('\\n').length;line++)
+                  for(let line=1;line<=code.split('\n').length;line++)
                     if(callerLineReferences(code,line,record.spec.function) && reads.sawLine(candidatePath,code,line))
                       sites.push({file:candidatePath,line});
                 }catch{}
@@ -297,7 +297,7 @@ Do not claim production testing, JavaScript execution, file access or other effe
                   if(!sourceRepo || sourceRepo.url!==record.repositoryUrl)continue;
                   try {
                     const candidateText=await readFile(join(root,sourcePath),'utf8');
-                    const lines=candidateText.split('\\n');
+                    const lines=candidateText.split('\n');
                     for(let i=0;i<lines.length && otherCallers.length<5;i++) {
                       if(callerLineReferences(candidateText,i+1,record.spec.function) &&
                          reads.sawLine(sourcePath,candidateText,i+1))
