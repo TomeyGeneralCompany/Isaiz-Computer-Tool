@@ -94,6 +94,8 @@ export async function runLocalAudit(
   let usedTurns=0, finalAnswer:string|undefined, stoppingReason="Inspection interrupted";
   let emptyFinals=0;
   let rejectedPlans=0;
+  let repeatedWorkflowRejections=0;
+  let previousWorkflowRejection='';
   const sourceTotals=new Map<string,number>();
   const hypotheses:Array<{turn:number;path:string;statement:string}>=[];
   const renew=async(turn:number)=>{
@@ -237,7 +239,13 @@ export async function runLocalAudit(
       usedTurns=turn+1;
       controller.signal.throwIfAborted();
       // Keep stable history; send fresh controller state only with this request.
-      const constraints=workflow ? await workflow.constraints() : limits.actionConstraints?.();
+      let constraints=workflow ? await workflow.constraints() : limits.actionConstraints?.();
+      // When the controller has already run this exact probe, do not permit
+      // 80 identical attempts. Retain final and continuation options.
+      if(workflow && repeatedWorkflowRejections>=2 && constraints?.action?.includes('plan_probe')) {
+        const remaining=constraints.action.filter(a=>a!=='plan_probe');
+        if(remaining.length)constraints={...constraints,action:remaining};
+      }
       if(constraints && (JSON.stringify(constraints).length>3000 || Object.entries(constraints).some(([key,values])=>
         !["action","path","query","answer"].includes(key) || !Array.isArray(values) || !values.length || values.some(value=>typeof value!=="string"))))
         throw new Error("Invalid task action constraints");
@@ -324,7 +332,10 @@ export async function runLocalAudit(
         const workflowError=workflow?.validate(action);
         if(workflowError) {
           workflow!.feedback(workflowError);
+          if(previousWorkflowRejection===workflowError)repeatedWorkflowRejections++;
+          else {previousWorkflowRejection=workflowError;repeatedWorkflowRejections=1;}
           await appendFile(logFile,'[WORKFLOW_REJECTED] '+workflowError+'\n');
+          messages.push({role:'user',content:'Rejected action: '+workflowError+' Use recorded test evidence and choose an available next action; do not repeat this plan. /no_think'});
           continue;
         }
         if(action.action==='continue_inspection') {
@@ -363,6 +374,7 @@ export async function runLocalAudit(
           await appendFile(logFile,'[PROBE_PLANNED] '+JSON.stringify(action)+'\n');
           continue;
         }
+        repeatedWorkflowRejections=0;previousWorkflowRejection='';
         if(action.hypothesis)hypotheses.push({turn:turn+1,path:action.path,statement:action.hypothesis});
         await appendFile(logFile,"[MODEL_ACTION] "+JSON.stringify(action)+"\n");
         messages.push({role:"assistant",content:message.content});
