@@ -87,7 +87,6 @@ try {
           hypothesis:'Markup survives interpolation; proper HTML encoding would disprove it.'});
         const probe=(f:typeof fixtures[number])=>action('verify_source',f.path,f.fn,'html_reflection');
         chosen=[plan(fixtures[0]),probe(fixtures[0]),plan(fixtures[0]),plan(fixtures[0]),
-          {...action('continue_inspection',fixtures[1].path),hypothesis:'Inspect second module for escaping and record separate reproduction.'},
           action('read_file',fixtures[1].path),plan(fixtures[1]),probe(fixtures[1]),
           action('final','','',JSON.stringify({files:fixtures.map(f=>({path:f.path,rawMarkup:f.raw}))}))][i];
         assert.ok(chosen,'Repeated probe recovery exceeded expected turns');
@@ -143,7 +142,7 @@ try {
       }
     });
   const result=JSON.parse(answer);
-  if(!live&&duplicateProbePlan)assert.equal(calls,9);
+  if(!live&&duplicateProbePlan)assert.equal(calls,8);
   if(!live&&prematureFinal){assert.equal(calls,8);assert.match(await readFile(join(evidence,'audit.log'),'utf8'),/FINAL_REJECTED/);}
   for(const f of fixtures)assert.equal(result.files.find((r:any)=>r.path===f.path).rawMarkup,f.raw);
   const summary=JSON.parse(await readFile(join(evidence,'audit.log.summary.json'),'utf8'));
