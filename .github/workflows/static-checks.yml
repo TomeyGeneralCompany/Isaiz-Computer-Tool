@@ -21,7 +21,7 @@ jobs:
           print(f"Validated {len(paths)} Python files")
           PY
       - name: Validate launch scripts
-        run: bash -n run-local-autohack.sh run-complete-autohack.sh setup-and-run.sh scripts/install-user-service.sh scripts/control-user-service.sh scripts/node-runtime.sh scripts/verify-host.sh scripts/configure-hackerone.sh scripts/verify-model.sh scripts/verify-assessment.sh
+        run: bash -n scripts/run-one-bounty.sh run-local-autohack.sh run-complete-autohack.sh setup-and-run.sh scripts/install-user-service.sh scripts/control-user-service.sh scripts/node-runtime.sh scripts/verify-host.sh scripts/configure-hackerone.sh scripts/verify-model.sh scripts/verify-assessment.sh
       - name: Test offline ingestion
         run: python3 -m unittest discover -s tests -p "test_*.py" -v
   typescript:
@@ -55,6 +55,8 @@ jobs:
           npx tsx scripts/test-investigation-records.ts
           npx tsx scripts/test-source-candidates.ts
           npx tsx scripts/test-guided-source-probes.ts
+          node --import tsx scripts/one-bounty.ts --help
+          if node --import tsx scripts/one-bounty.ts --timeout-min 0; then echo 'Invalid one-bounty timeout accepted'; exit 1; fi
           npx tsx scripts/test-audit-allowance.ts
           node --import tsx scripts/test-investigation-decisions.ts
           npx tsx scripts/test-progress-controller.ts
