@@ -7,6 +7,7 @@ import 'dotenv/config';
 import {mkdirSync, writeFileSync} from 'node:fs';
 import {join, resolve} from 'node:path';
 import {eq} from 'drizzle-orm';
+import {ensureOneBountyLocalModel} from './one-bounty-settings';
 
 type Args={list:boolean; program?:string; timeoutMin:number; help:boolean};
 export function parseOneBountyArgs(argv:string[]):Args {
@@ -44,11 +45,11 @@ async function main() {
   process.env.PROJECT_ROOT=root;
   // This opt-out is process-local; never alter the operator's saved settings.
   process.env.AUTOHACK_SINGLE_BOUNTY_DIAGNOSTIC='1';
+  // Match the configured application's Qwen3 default when .env omits the optional name.
+  ensureOneBountyLocalModel(process.env);
   const {getDb,schema}=await import('../packages/core/src/index');
   const {rankEligiblePrograms,huntProgram,processAdversarialQueue,getProgramSelectionSummary}=await import('../packages/security-solver/src/index');
   const {requestLocalJobCancellation}=await import('../packages/security-solver/src/local-job');
-  if(!process.env.LOCAL_OLLAMA_MODEL?.trim())
-    throw new Error('LOCAL_OLLAMA_MODEL is missing. This command requires the configured local Ollama engine.');
   const ranked=rankEligiblePrograms();
   if(options.list){
     if(!ranked.length)console.log('No currently eligible, assessed programs. Selection: '+JSON.stringify(getProgramSelectionSummary()));

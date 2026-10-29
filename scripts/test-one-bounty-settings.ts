@@ -1,0 +1,12 @@
+import assert from 'node:assert/strict';
+import {ensureOneBountyLocalModel} from './one-bounty-settings';
+const empty:NodeJS.ProcessEnv={};
+assert.equal(ensureOneBountyLocalModel(empty),'qwen3:4b');
+assert.equal(empty.LOCAL_OLLAMA_MODEL,'qwen3:4b');
+const assessor:NodeJS.ProcessEnv={OLLAMA_MODEL:'qwen3:0.6b'};
+assert.equal(ensureOneBountyLocalModel(assessor),'qwen3:4b');
+const explicit:NodeJS.ProcessEnv={LOCAL_OLLAMA_MODEL:'qwen3:4b',OLLAMA_MODEL:'other'};
+assert.equal(ensureOneBountyLocalModel(explicit),'qwen3:4b');
+const blank:NodeJS.ProcessEnv={LOCAL_OLLAMA_MODEL:'  ',OLLAMA_MODEL:' '};
+assert.equal(ensureOneBountyLocalModel(blank),'qwen3:4b');
+console.log('One-bounty local-model fallback PASSED');
