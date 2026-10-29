@@ -68,6 +68,7 @@ jobs:
           node --import tsx scripts/test-production-workflow.ts --mock-probes --premature-final
           node --import tsx scripts/test-production-workflow.ts --mock-probes --prefetch
           node --import tsx scripts/test-production-workflow.ts --mock-probes --empty-sequence
+          node --import tsx scripts/test-production-workflow.ts --mock-probes --prefetch --duplicate-probe-plan
           npx tsx scripts/test-audit-output-budget.ts
           npx tsx scripts/test-native-batch.ts
           npx tsx scripts/test-audit-stalls.ts

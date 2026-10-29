@@ -225,7 +225,14 @@ Do not claim production testing, JavaScript execution, file access or other effe
               if(!reads.sawLine(finding.callerFile,text,finding.callerLine))return "Read the page containing the entire claimed caller line before reporting.";
             }
             parsed=value;return null;
-          }catch{return "Return only the requested findings JSON. Omit findings that lack supported reproduction and source evidence.";}
+          }catch(error) {
+            if(error instanceof z.ZodError) {
+              const issues=error.issues.slice(0,5).map(issue=>({field:issue.path.join('.'),message:issue.message}));
+              return "Your final JSON does not match the required evidence schema: "+JSON.stringify(issues).slice(0,900)+
+                ". Fix these exact fields; caseId must come from the real recorded probe and callerFile/callerLine must refer to the actual invoking code, not the function definition. Do not invent evidence.";
+            }
+            return "Return only valid findings JSON. Use actual probe case IDs, inspected caller lines, and recorded evidence; omit unsupported findings.";
+          }
         },
       });
     signal.throwIfAborted();
