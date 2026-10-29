@@ -1,0 +1,49 @@
+name: Actual local-model production-controller acceptance
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/real-model-acceptance.yml'
+      - 'scripts/test-production-workflow.ts'
+      - 'packages/security-solver/src/**'
+jobs:
+  qwen3-production-controller:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci
+      - name: Start isolated Ollama and fetch actual Qwen3:4b
+        run: |
+          docker run -d --name autohack-ollama -p 127.0.0.1:11434:11434 ollama/ollama:latest
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:11434/api/tags >/dev/null; then break; fi
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:11434/api/tags
+          docker exec autohack-ollama ollama pull qwen3:4b
+      - name: Real Qwen3 production-controller run with actual sandbox probes
+        timeout-minutes: 35
+        env:
+          LOCAL_OLLAMA_MODEL: qwen3:4b
+          LOCAL_MODEL_ADAPTER: ollama
+          LOCAL_OLLAMA_TOOL_PROTOCOL: json
+          LOCAL_MODEL_PROFILE: deterministic
+          AUTOHACK_OLLAMA_URL: http://127.0.0.1:11434/api/chat
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          node --import tsx scripts/test-production-workflow.ts --real-model --prefetch
+      - name: Upload actual model transcript and observations
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qwen3-real-controller-evidence
+          path: data/production-workflow-tests/
+          if-no-files-found: warn
+      - name: Stop local model
+        if: always()
+        run: docker rm -f autohack-ollama || true
