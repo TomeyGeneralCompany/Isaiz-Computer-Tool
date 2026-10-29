@@ -95,6 +95,23 @@ class LanguageTests(unittest.TestCase):
     def test_java_static_string(self):
         self.probe("Render.java", 'public class Render { public static String render(String x) { return "<p>"+x+"</p>"; }}', function="Render.render")
 
+    def test_java_instance_string_reflection(self):
+        self.probe("Render.java",
+                   'public class Render { public Render() {} public String render(String x) { return "<p>"+x+"</p>"; }}',
+                   function="Render.render")
+
+    def test_java_static_byte_array_reflection(self):
+        self.probe("Render.java",
+                   'import java.nio.charset.StandardCharsets; public class Render {'
+                   'public static byte[] render(byte[] x) { return ("<p>"+new String(x, StandardCharsets.UTF_8)+"</p>").getBytes(StandardCharsets.UTF_8); }}',
+                   function="Render.render")
+
+    def test_java_instance_byte_array_negative(self):
+        self.probe("Render.java",
+                   'import java.nio.charset.StandardCharsets; public class Render { public Render() {} '
+                   'public byte[] render(byte[] x) { return new String(x, StandardCharsets.UTF_8).replace("<","&lt;").getBytes(StandardCharsets.UTF_8); }}',
+                   function="Render.render", observed=False)
+
     def test_java_package_and_source_dependency(self):
         self.probe("src/main/java/example/Render.java",
                    'package example; public class Render { public static String render(String x) { return Helper.wrap(x); }}',
