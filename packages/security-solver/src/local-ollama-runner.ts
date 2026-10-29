@@ -242,7 +242,7 @@ export async function runLocalAudit(
         !["action","path","query","answer"].includes(key) || !Array.isArray(values) || !values.length || values.some(value=>typeof value!=="string"))))
         throw new Error("Invalid task action constraints");
       if(constraints?.action?.some(action=>!actionSchema.properties.action.enum.includes(action)))throw new Error("Task requested an unavailable action");
-      let requestSchema=constraints ? {...actionSchema,properties:{...actionSchema.properties,
+      let requestSchema:Record<string,any>=constraints ? {...actionSchema,properties:{...actionSchema.properties,
         ...Object.fromEntries(Object.entries(constraints).map(([key,values])=>[key,{type:"string",enum:values}]))}} : actionSchema;
       if(structured && limits.finalSchema && emptyFinals>=2 &&
           (!constraints?.action || constraints.action.includes('final'))) {
