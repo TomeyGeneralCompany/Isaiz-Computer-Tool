@@ -4,7 +4,8 @@
  * The per-run report records observed results, including failures.
  */
 import 'dotenv/config';
-import {mkdirSync, writeFileSync} from 'node:fs';
+import {mkdirSync, writeFileSync, readdirSync, statSync, readFileSync} from 'node:fs';
+import {advanceBountyProgress,idleBountyExpired,type BountyProgress} from './one-bounty-progress';
 import {join, resolve} from 'node:path';
 import {eq} from 'drizzle-orm';
 import {ensureOneBountyLocalModel} from './one-bounty-settings';
@@ -35,6 +36,7 @@ const usage=`Usage:
   bash scripts/run-one-bounty.sh [--program ID_OR_HANDLE] [--timeout-min 35]
 
 Runs exactly one already-assessed, eligible program and its normal review.
+The time limit applies to INACTIVITY, not to total time while work continues.
 No automatic bounty submission. No program discovery, scheduler or loop.
 The result is saved in data/one-bounty/ for inspection.`;
 
@@ -73,15 +75,71 @@ async function main() {
   let cancelled=false;
   const summary:any={version:1,runId:id,program:{id:program.id,provider:program.provider,
     name:program.name,handle:program.providerProgramId},startedAt:new Date(startedAt).toISOString(),
-    timeoutMinutes:options.timeoutMin,automaticSubmission:false,status:'started'};
+    idleTimeoutMinutes:options.timeoutMin,timeoutPolicy:'no productive log or stage activity',automaticSubmission:false,status:'started'};
   const save=()=>writeFileSync(summaryPath,JSON.stringify(summary,null,2)+'\n',{mode:0o600});
   save();
   const onSignal=()=>{cancelled=true;console.error('Cancellation requested. Stopping the active local hunt.');requestLocalJobCancellation();};
   process.on('SIGINT',onSignal);
   process.on('SIGTERM',onSignal);
-  const timer=setTimeout(()=>{timedOut=true;console.error('One-bounty time limit reached; cancelling the active hunt.');requestLocalJobCancellation();},options.timeoutMin*60000);
+  // Logs from the real controller include source acquisition, scanner progress,
+  // streaming Ollama tokens, source reads and verification results. Never kill
+  // a run merely because it has been active for 35 minutes.
+  let progress:BountyProgress={lastActivityAt:startedAt,logPath:null,logBytes:0,stage:'starting'};
+  let lastProgressDisplay=startedAt;
+  let lastProgressNote='';
+  const observe=()=>{
+    if(timedOut||cancelled)return;
+    const now=Date.now();
+    let stage=progress.stage;
+    try {
+      const status=JSON.parse(readFileSync(join(root,'data','security-solver-status.json'),'utf8'));
+      if(status.active&&status.programId===program.id)stage=String(status.stage||'hunting');
+    }catch {}
+    let file=progress.logPath;
+    let bytes:number|undefined;
+    try {
+      const logs=join(root,'data','logs');
+      if(!file) {
+        let newest=startedAt-1000;
+        for(const name of readdirSync(logs)) {
+          if(!/^local-hunt-[a-f0-9]+\\.log$/.test(name))continue;
+          const path=join(logs,name);
+          const stamp=statSync(path).mtimeMs;
+          if(stamp>newest){file=path;newest=stamp;}
+        }
+      }
+      if(file)bytes=statSync(file).size;
+    }catch {}
+    const prior=progress;
+    progress=advanceBountyProgress(progress,now,{logPath:file,logBytes:bytes,stage});
+    // Keep the useful current step visible, without echoing untrusted source.
+    let note='';
+    if(progress.logPath&&progress.logBytes!==prior.logBytes){
+      try {
+        const text=readFileSync(progress.logPath,'utf8').slice(-5000);
+        const events=text.split('\\n').filter(line=>/^\\[(?:ACQUISITION_|CAPABILITY_|STATIC_LEADS|SOURCE_MAP|MODEL_START|MODEL_PROGRESS|OLLAMA|READ_OK|GUIDED_SOURCE_PROBE|PROBE_|FINAL_|TOOL)\\]/.test(line));
+        const last=events.at(-1)||'';
+        note=last.slice(0,220);
+      }catch {}
+    }
+    if(note)lastProgressNote=note;
+    if(now-lastProgressDisplay>=15000 || (prior.stage!==progress.stage)){
+      const elapsed=Math.floor((now-startedAt)/60000);
+      const quiet=Math.floor((now-progress.lastActivityAt)/1000);
+      console.log('[one-bounty] elapsed='+elapsed+'m stage='+progress.stage+
+        ' idle='+quiet+'s '+(lastProgressNote?'event='+lastProgressNote:'waiting for stage telemetry'));
+      lastProgressDisplay=now;
+    }
+    if(idleBountyExpired(progress,now,options.timeoutMin)){
+      timedOut=true;
+      console.error('One-bounty investigation stalled: no new source/model/probe activity for '+
+        options.timeoutMin+' minutes. Cancelling; see '+(progress.logPath||summaryPath));
+      requestLocalJobCancellation();
+    }
+  };
+  const watcher=setInterval(observe,5000);
   console.log('Single-bounty investigation: '+program.name+' ('+program.id+')');
-  console.log('Review enabled; automatic submission disabled. Time cap: '+options.timeoutMin+' minutes.');
+  console.log('Review enabled; automatic submission disabled. Inactivity watchdog: '+options.timeoutMin+' minutes. No fixed run deadline.');
   console.log('Summary: '+summaryPath);
   try {
     const outcome=await huntProgram(program,'manual');
@@ -96,10 +154,13 @@ async function main() {
     summary.error=String(error instanceof Error?error.message:error).slice(0,1000);
     throw error;
   }finally {
-    clearTimeout(timer);
+    clearInterval(watcher);
     process.off('SIGINT',onSignal);process.off('SIGTERM',onSignal);
     summary.finishedAt=new Date().toISOString();
     summary.elapsedSeconds=Math.round((Date.now()-startedAt)/1000);
+    summary.lastActivityAt=new Date(progress.lastActivityAt).toISOString();
+    summary.lastHuntLog=progress.logPath?progress.logPath.slice(root.length+1):null;
+    summary.lastStage=progress.stage;
     summary.coverage=(()=>{try{return JSON.parse(db.select().from(schema.securityPrograms)
       .where(eq(schema.securityPrograms.id,program.id)).get()?.scopeSummary||'{}').huntCoverage||null;}catch{return null;}})();
     summary.findings=db.select().from(schema.securityFindings).where(eq(schema.securityFindings.programId,program.id)).all()
