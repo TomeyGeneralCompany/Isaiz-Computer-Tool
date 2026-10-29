@@ -316,6 +316,7 @@ export async function processLocalReviewQueue(programId?:string):Promise<void> {
   const signal = job.signal;
   try {
     const db=getDb();const config=getConfig();
+    const allowAutoSubmission=config.SECURITY_AUTO_SUBMIT && process.env.AUTOHACK_SINGLE_BOUNTY_DIAGNOSTIC !== '1';
     const pending=db.select().from(schema.securityFindings).where(programId
       ? and(eq(schema.securityFindings.programId,programId),inArray(schema.securityFindings.status,["report_ready","reviewing"]))
       : inArray(schema.securityFindings.status,["report_ready","reviewing"])).all();
@@ -336,7 +337,7 @@ export async function processLocalReviewQueue(programId?:string):Promise<void> {
         // Completed manual/cautious reviews wait for the operator. Resume a
         // submit recommendation only when automatic submission is enabled.
         if (notes.adversarialReview?.reviewedAt &&
-            (notes.adversarialReview.recommendation !== "submit" || !config.SECURITY_AUTO_SUBMIT ||
+            (notes.adversarialReview.recommendation !== "submit" || !allowAutoSubmission ||
              !config.HACKERONE_ENABLED || program.provider !== "hackerone")) continue;
         // Every automatic submission gets a fresh independent replay and review.
         await writeAdversarialReviewStatus({active:true,total:pending.length,completed:0,currentFindingId:finding.id,currentFindingTitle:finding.title,startedAt:new Date().toISOString()});
@@ -351,7 +352,7 @@ export async function processLocalReviewQueue(programId?:string):Promise<void> {
         const nextNotes={...notes,localReproduction:{caseId:evidence.caseId,sourceSha256:evidence.sourceSha256,replayedAt:evidence.replayedAt},
           adversarialReview:{...review,recommendation,rubricTotal:total,reviewedAt:new Date().toISOString(),repoCloned:true,toolEnabled:true}};
         db.update(schema.securityFindings).set({status:accepted && recommendation!=="dont_submit"?"reviewing":"bot_rejected",analysisNotes:JSON.stringify(nextNotes),severity:review.severity,confidenceScore:review.confidence,updatedAt:new Date()}).where(eq(schema.securityFindings.id,finding.id)).run();
-        if(!accepted || recommendation!=="submit" || !config.SECURITY_AUTO_SUBMIT || !config.HACKERONE_ENABLED || program.provider!=="hackerone" || !program.providerProgramId)continue;
+        if(!accepted || recommendation!=="submit" || !allowAutoSubmission || !config.HACKERONE_ENABLED || program.provider!=="hackerone" || !program.providerProgramId)continue;
         const [freshScopes,signalRequirement]=await Promise.all([fetchProgramScopes(program.providerProgramId),fetchProgramSignalRequirement(program.providerProgramId)]);
         if(config.SKIP_SIGNAL_REQUIRED && (signalRequirement===true || signalRequirement===null && program.requiresSignal))continue;
         assertAuthorizedTarget(JSON.stringify({scopes:freshScopes}),finding.targetAsset || "");
