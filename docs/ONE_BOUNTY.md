@@ -45,9 +45,10 @@ contains an eligible candidate; an empty list prints selection exclusions.
 
 This command requires `LOCAL_OLLAMA_MODEL` in `.env`, the existing configured
 database and Ollama server, the Python/JavaScript/Solidity reproduction prerequisites,
-and `SECURITY_AUTO_SUBMIT=false` in the effective runtime configuration. The
-diagnostic **does not submit reports**. Eligible findings stay in the normal
-review/report system for operator inspection.
+while the diagnostic process locally disables automatic submission regardless
+of the saved dashboard override. It does **not** change saved configuration or
+submit reports. Eligible findings stay in the normal review/report system for
+operator inspection.
 
 ## Observe and stop
 
