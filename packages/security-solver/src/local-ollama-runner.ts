@@ -256,10 +256,19 @@ export async function runLocalAudit(
         // and result omitted. Once that is observed, require the typed final
         // result in the NEXT model response rather than repeating an identical
         // unconstrained prompt. The semantic validator still checks every claim.
+        const strictResult=JSON.parse(JSON.stringify(limits.finalSchema)) as Record<string,any>;
+        // Give the tiny model exact recorded observation IDs in the schema,
+        // rather than asking it to reproduce a 64-character digest unaided.
+        // This only narrows options to real probes; it does not validate impact.
+        const recordedIds=[...new Set(workflow.snapshot().observations
+          .map(o=>o.caseId).filter((id):id is string=>typeof id==='string'&&/^[a-f0-9]{64}$/.test(id)))];
+        const item=strictResult.properties?.findings?.items;
+        if(recordedIds.length && item?.properties?.caseId)
+          item.properties.caseId={...item.properties.caseId,enum:recordedIds};
         requestSchema={...requestSchema,
           properties:{...requestSchema.properties,
             action:{type:'string',enum:['final']},
-            result:limits.finalSchema},
+            result:strictResult},
           required:[...new Set([...actionSchema.required,'result'])]};
         await appendFile(logFile,'[FINAL_RESULT_REQUIRED] Recovery from empty final; evidence validation still required\\n');
       }
