@@ -78,12 +78,17 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
     const logFile=join(directory,"local-hunt-"+randomBytes(8).toString("hex")+".log");await writeFile(logFile,"",{mode:0o600});
     investigationLog=logFile;
     auditRecord=relative(directory,logFile);
+    const note=async (stage:string,details:Record<string,unknown>={})=>{
+      await appendFile(logFile,'['+stage+'] '+JSON.stringify(details)+'\n');
+      log.info({programId:program.id,...details},'Local source investigation: '+stage);
+    };
     const statusStartedAt=new Date().toISOString();
     await appendFile(logFile,"[AUDIT_PROGRAM] "+JSON.stringify({id:program.id,name:program.name})+"\n");
     await writeSecuritySolverStatus({active:true,programId:program.id,programName:program.name,stage:"hunting",startedAt:statusStartedAt,timeoutMinutes:getConfig().SECURITY_SOURCE_CODE_TIMEOUT_MINUTES,pid:process.pid});
     const repos:ProbeRepository[]=[];
     const acquisitionFailures:string[]=[];
     const allowedUrls = authorizedSourceUrls(scopes(program));
+    await note('ACQUISITION_START',{eligibleRepositories:allowedUrls.length});
     if (focus && !allowedUrls.includes(focus.repositoryUrl)) throw new Error("Lead repository is outside current program scope");
     const tracking=JSON.parse(program.scopeSummary || "{}");
     const cached=tracking.sourceCapabilities;
@@ -98,8 +103,10 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
       const destination=join(root,"source-"+(i+1));
       signal.throwIfAborted();
       try {
+        await note('ACQUISITION_REPOSITORY_START',{index:i+1,repository:url});
         const acquired=await cloneAuthorizedSource(url,destination,{signal,allowPartialDependencies:true,...(focus ? {commit:focus.commit} : {})});
         repos.push({directory:destination,url});
+        await note('ACQUISITION_REPOSITORY_DONE',{index:i+1,repository:url});
         acquisitionChecks.push({repository:url,reason:null,retryAfter:null});
         if(acquired.missingDependencies.length) {
           missingDependencies.set(url,acquired.missingDependencies);
@@ -116,7 +123,9 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
       }
     }
     if(!repos.length)throw new Error("No authorized source repository was acquired; " + (acquisitionFailures.join("; ") || "no source URLs remain after scope/capability filtering"));
+    await note('CAPABILITY_START',{repositories:repos.length});
     const capabilities=await Promise.all(repos.map(async repo=>({repository:repo.url,...await inspectSourceCapability(repo.directory,signal,!missingDependencies.has(repo.url))})));
+    await note('CAPABILITY_DONE',{eligibleFiles:capabilities.reduce((n,c)=>n+c.sourcePaths.length,0),blockedRepositories:capabilities.filter(c=>c.blocked).length});
     capabilityChecks=capabilities.map(c=>({repository:c.repository,blocked:c.blocked,reason:c.reason,checkedAt:Date.now()}));
     if(capabilities.every(c=>c.blocked))preparationFailure="Source capability preflight: "+capabilities.map(c=>c.reason).join("; ");
     if(capabilities.every(c=>c.blocked))return {auditRecord,success:false,coverage:"unsupported",acquisitionChecks,findings:[],rawOutput:"",
@@ -143,12 +152,14 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
       const repo=repos.find(r=>r.url===c.repository);
       return repo?c.sourcePaths.map(p=>relative(root,join(repo.directory,p)).split(sep).join('/')):[];
     });
+    await note('STATIC_SCAN_START',{eligibleFiles:eligiblePaths.length});
     const staticLeads=await collectStaticLeads(root,repos,eligiblePaths,join(checkpointDirectory,checkpointKey+'.static-v2.json'),signal);
     await writeFile(join(root,'audit-static-leads.json'),JSON.stringify(staticLeads,null,2),{mode:0o600});
     await appendFile(logFile,'[STATIC_LEADS] '+JSON.stringify({runs:staticLeads.runs,count:staticLeads.leads.length})+'\n');
     const selection=await prioritizeSourceCandidates(root,eligiblePaths,fallbackHints,staticLeads.leads,focus ? 'source-1/'+focus.file : undefined);
     const sourceHints=selection.paths;
     await writeFile(join(root,'audit-candidates.json'),JSON.stringify(selection,null,2),{mode:0o600});
+    await note('SOURCE_MAP_START',{selectedFiles:sourceHints.length});
     const sourceMap=await buildSourceMap(root,[...new Set([...sourceHints,...eligiblePaths])]);
     await writeFile(join(root,'audit-source-map.json'),JSON.stringify(sourceMap,null,2),{mode:0o600});
     await appendFile(logFile,'[SOURCE_MAP] '+JSON.stringify({files:sourceMap.scannedFiles,symbols:sourceMap.symbols.length,skipped:sourceMap.skippedFiles})+'\n');
@@ -180,6 +191,7 @@ Do not claim production testing, JavaScript execution, file access or other effe
     let parsed:z.infer<typeof huntSchema> | undefined;
     signal.throwIfAborted();
     beforeInspection?.();
+    await note('MODEL_START',{model:process.env.LOCAL_OLLAMA_MODEL||'qwen3:4b',selectedFiles:sourceHints.length});
     const answer=await runLocalAudit(prompt,logFile,getConfig().SECURITY_SOURCE_CODE_TIMEOUT_MINUTES*60000,root,
       process.env.LOCAL_OLLAMA_MODEL || "qwen3:4b",undefined,{
         onAllowance:async deadline=>writeSecuritySolverStatus({active:true,programId:program.id,programName:program.name,
@@ -217,6 +229,7 @@ Do not claim production testing, JavaScript execution, file access or other effe
         },
       });
     signal.throwIfAborted();
+    await note('MODEL_DONE',{completedProbes:session.completedProbes});
     if(parsed?.outcome === "no_testable_candidate")return {auditRecord,success:true,coverage:"partial",acquisitionChecks,capabilityChecks,
       coverageDetail:"Inspection incomplete: "+parsed.reason,findings:[],rawOutput:answer};
     if (session.blockedReason) throw new Error("Reproduction unavailable: " + session.blockedReason);
