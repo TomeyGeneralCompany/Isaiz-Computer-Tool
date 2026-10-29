@@ -228,6 +228,43 @@ Do not claim production testing, JavaScript execution, file access or other effe
             }
             if(!session.completedProbes && !session.blockedReason)return "No supported probe has completed. Use verify_source for a concrete candidate, or return outcome=no_testable_candidate with a reason and empty findings to save incomplete coverage.";
             if(value.findings.length && !reads.covers("audit-policy.txt",0,policyText.length))return "Read every page of audit-policy.txt before reporting a finding; continue at nextOffset.";
+            // Reconcile an erroneous caller pointer only when the model chose a
+            // genuine recorded case and exactly one caller line has already
+            // been inspected and verified in the same authorized repository.
+            // This does not infer a vulnerability or make an uninspected call
+            // admissible. The independent review must still assess impact.
+            for(const finding of value.findings) {
+              const record=session.cases.get(finding.caseId);
+              if(!record || finding.reachability==='direct_transaction')continue;
+              let claimedValid=false;
+              try {
+                const current=await readFile(join(root,finding.callerFile),'utf8');
+                const callerRepo=record.repositoryUrl===repos.find(r=>
+                  finding.callerFile.startsWith(relative(root,r.directory).split(sep).join('/')+'/'))?.url;
+                claimedValid=callerRepo &&
+                  callerLineReferences(current,finding.callerLine,record.spec.function) &&
+                  reads.sawLine(finding.callerFile,current,finding.callerLine) ? true : false;
+              }catch{}
+              if(claimedValid)continue;
+              const sites:{file:string,line:number}[]=[];
+              for(const candidatePath of eligiblePaths.slice(0,80)) {
+                if(sites.length>1)break;
+                const candidateRepo=repos.find(r=>candidatePath.startsWith(relative(root,r.directory).split(sep).join('/')+'/'));
+                if(!candidateRepo || candidateRepo.url!==record.repositoryUrl)continue;
+                try {
+                  const code=await readFile(join(root,candidatePath),'utf8');
+                  for(let line=1;line<=code.split('\\n').length;line++)
+                    if(callerLineReferences(code,line,record.spec.function) && reads.sawLine(candidatePath,code,line))
+                      sites.push({file:candidatePath,line});
+                }catch{}
+              }
+              if(sites.length===1) {
+                finding.callerFile=sites[0].file;
+                finding.callerLine=sites[0].line;
+                await appendFile(logFile,'[CALLER_RECONCILED] '+JSON.stringify({caseId:finding.caseId,
+                  callerFile:finding.callerFile,callerLine:finding.callerLine,reason:'unique previously inspected caller'})+'\\n');
+              }
+            }
             for(const finding of value.findings) {
               const record=session.cases.get(finding.caseId);
               if(!record) {
