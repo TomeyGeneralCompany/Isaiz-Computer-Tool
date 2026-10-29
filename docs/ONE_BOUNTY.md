@@ -10,11 +10,11 @@ scheduler, or another program.
 ## Update an existing Linux checkout
 
 Use the path to your **current checkout**; the usual installation is
-`~/isaiz-bugbounty/autohack`. The commands deliberately do not reset local Git
+`/home/izy/isaiz-bugbounty/autohack-complete`. The commands deliberately do not reset local Git
 changes or overwrite `.env`.
 
 ```bash
-cd ~/isaiz-bugbounty/autohack
+cd /home/izy/isaiz-bugbounty/autohack-complete
 systemctl --user stop autohack.service  # only if installed; no-op if absent
 git switch main
 git pull --ff-only origin main
@@ -43,10 +43,10 @@ assessment, no explicit eligible source scope, or other selection blockers are n
 silently forced into scope. Run `--list` to see whether the saved catalog
 contains an eligible candidate; an empty list prints selection exclusions.
 
-This command requires `LOCAL_OLLAMA_MODEL` in `.env`, the existing configured
-database and Ollama server, the Python/JavaScript/Solidity reproduction prerequisites,
-while the diagnostic process locally disables automatic submission regardless
-of the saved dashboard override. It does **not** change saved configuration or
+This command uses `LOCAL_OLLAMA_MODEL` when set, or the application's
+`qwen3:4b` research default when it is not. It requires the existing configured
+database, Ollama server, and language reproduction prerequisites. The diagnostic
+process disables automatic submission regardless of the saved dashboard override. It does **not** change saved configuration or
 submit reports. Eligible findings stay in the normal review/report system for
 operator inspection.
 
@@ -58,11 +58,15 @@ under `data/logs/`. It uses the normal source acquisition and reproduction
 evidence store. Failure and incomplete coverage are explicitly recorded and are
 not treated as vulnerabilities.
 
-Run in the foreground; use Ctrl+C to request cancellation. The shell supplies a
-hard stop in addition to the CLI's cancellation request, so it cannot occupy the
-terminal indefinitely. The `--timeout-min` setting is a **whole-program** cap,
-covering acquisition, model inference, verification and review. If the cap is hit,
-the summary records a timeout rather than a successful hunt.
+Run in the foreground; use Ctrl+C to request cancellation. `--timeout-min 35`
+now means **35 minutes without fresh source, analyzer, model, or probe activity**,
+not 35 minutes of total run time. An active program can run longer; it is still
+only one program, with no next-program dispatch. Source acquisition, static analysis,
+model inference and reproduction stages are logged to the terminal as they start
+and complete. A status heartbeat shows the current stage and latest recorded
+activity every 15 seconds. If there is no new activity for the configured
+inactivity interval, the run is cancelled and the summary reports a stall.
+An active run has no new arbitrary wall-clock cutoff from this launcher.
 
 The script takes both supervisor/orchestrator file locks, so the regular AutoHack
 service must be stopped first. It neither deletes the database nor resets daily
