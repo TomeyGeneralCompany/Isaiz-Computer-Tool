@@ -1,4 +1,5 @@
 /** Shared production controller + real owned Python probes. Mock model by default. */
+import 'dotenv/config';
 import assert from 'node:assert/strict';
 import {createServer} from 'node:http';
 import {randomBytes} from 'node:crypto';
@@ -9,10 +10,13 @@ import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {runLocalAudit} from '../packages/security-solver/src/local-ollama-runner';
 import {InvestigationWorkflow} from '../packages/security-solver/src/investigation-workflow';
+import {modelProfile} from '../packages/security-solver/src/model-profile';
+import {hostModelTimeout} from './model-check-settings';
 const variant=Number(process.argv.find(a=>a.startsWith('--variant='))?.split('=')[1]||0);
 if(!Number.isInteger(variant)||variant<0||variant>2)throw new Error('Variant must be 0, 1 or 2');
 const largeContext=process.argv.includes('--large-context');
 const emptySequence=process.argv.includes('--empty-sequence');
+const prematureFinal=process.argv.includes('--premature-final');
 const live=process.argv.includes('--real-model'),mockProbes=process.argv.includes('--mock-probes'),prefetch=process.argv.includes('--prefetch'),execute=promisify(execFile);
 if(live&&mockProbes)throw new Error('Real model check requires real probes');
 const root=await mkdtemp(join(tmpdir(),'production-workflow-'));
@@ -68,6 +72,15 @@ try {
         {...action('plan_probe',f.path,f.fn,'html_reflection'),hypothesis:'Markup survives interpolation; escaped marker would disprove it.'}:
         action('verify_source',f.path,f.fn,'html_reflection');
       else chosen=action('final','','',JSON.stringify({files:fixtures.map(f=>({path:f.path,rawMarkup:f.raw}))}));
+      if(prematureFinal) {
+        const final=action('final','','',JSON.stringify({files:fixtures.map(f=>({path:f.path,rawMarkup:f.raw}))}));
+        const plan=(f:typeof fixtures[number])=>({...action('plan_probe',f.path,f.fn,'html_reflection'),hypothesis:'Markup survives interpolation; an escaped marker would disprove it.'});
+        const probe=(f:typeof fixtures[number])=>action('verify_source',f.path,f.fn,'html_reflection');
+        chosen=[action('read_file',fixtures[0].path),action('read_file',fixtures[1].path),final,
+          plan(fixtures[0]),probe(fixtures[0]),plan(fixtures[1]),probe(fixtures[1]),final][i];
+        assert.ok(chosen,'Rejected final recovery used unexpected extra turns');
+        if(i===3)assert.deepEqual(request.format.properties.action.enum,['plan_probe','continue_inspection','final']);
+      }
       if(emptySequence && ['plan_probe','verify_source'].includes(chosen.action) && chosen.answer!=='solidity_sequence')chosen.sequence={};
       assert.ok(request.format.properties.action.enum.includes(chosen.action));
       assert.ok(request.messages.at(-1).content.includes('Controller progress'));
@@ -85,7 +98,7 @@ try {
   const checkpointPath=join(root,'prior-checkpoint.json');
   if(largeContext)await writeFile(checkpointPath,JSON.stringify({notes:'previous navigation '.repeat(145)}));
   const answer=await runLocalAudit((largeContext?'Owned production-sized instructions. '.repeat(160):'')+`Inspect these owned Python modules: ${fixtures.map(f=>f.path).join(', ')}. They should put ordinary user text inside a paragraph while escaping supplied HTML. Choose each function from source, formulate a disprovable hypothesis, test it, and classify whether user markup survives. Return JSON {"files":[{"path":"...","rawMarkup":true or false}]}. This is an owned fixture, not a real vulnerability report.`,
-    join(evidence,'audit.log'),live?1800000:30000,root,live?(process.env.LOCAL_OLLAMA_MODEL||'qwen3:4b'):'mock',undefined,{
+    join(evidence,'audit.log'),live?(process.argv.includes('--host-timeout')?hostModelTimeout():1800000):30000,root,live?(process.env.LOCAL_OLLAMA_MODEL||'qwen3:4b'):'mock',undefined,{
       checkpointPath:largeContext?checkpointPath:undefined,productionWorkflow:true,
       initialSourcePaths:prefetch?(live?fixtures.map(f=>f.path):[fixtures[0].path]):undefined,
       initialSourceLocations:prefetch?(live?fixtures.map(f=>({path:f.path,offset:0})):[{path:fixtures[0].path,offset:0}]):undefined,numCtx:8192,numThreads:4,numPredict:largeContext?4096:1024,maxTurns:40,
@@ -115,6 +128,7 @@ try {
       }
     });
   const result=JSON.parse(answer);
+  if(!live&&prematureFinal){assert.equal(calls,8);assert.match(await readFile(join(evidence,'audit.log'),'utf8'),/FINAL_REJECTED/);}
   for(const f of fixtures)assert.equal(result.files.find((r:any)=>r.path===f.path).rawMarkup,f.raw);
   const summary=JSON.parse(await readFile(join(evidence,'audit.log.summary.json'),'utf8'));
   assert.equal(summary.workflow.observations.length,2);
@@ -123,6 +137,6 @@ try {
     const saved=JSON.parse(await readFile(join(root,observation.evidenceFile),'utf8'));
     assert.equal(saved.result.behavior_observed,observations.get(observation.path));
   }
-  await writeFile(join(evidence,'result.json'),JSON.stringify({passed:true,mocked:!live,mockedProbes:mockProbes,productionWorkflow:true,variant,profile:process.env.LOCAL_MODEL_PROFILE||'deterministic',result},null,2));
+  await writeFile(join(evidence,'result.json'),JSON.stringify({passed:true,mocked:!live,mockedProbes:mockProbes,productionWorkflow:true,variant,profile:modelProfile().name,result},null,2));
   console.log(`Production workflow passed (${live?'real model':(mockProbes?'scripted model and probes':'scripted model; real Python probes')}). Evidence: ${evidence}`);
 } finally {server.close();await rm(root,{recursive:true,force:true});}

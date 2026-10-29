@@ -51,7 +51,9 @@ jobs:
       - name: Test real source audit, report creation and independent replay
         run: npx tsx scripts/test-source-workflow.ts
       - name: Exercise shared production workflow with real isolated probes
-        run: node --import tsx scripts/test-production-workflow.ts
+        run: |
+          node --import tsx scripts/test-production-workflow.ts
+          node --import tsx scripts/test-production-workflow.ts --premature-final
 
       - name: Install pinned local static analyzers
         run: bash scripts/install-static-analysis.sh

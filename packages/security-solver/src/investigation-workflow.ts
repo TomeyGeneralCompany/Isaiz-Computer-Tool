@@ -114,6 +114,12 @@ export class InvestigationWorkflow {
       else if(action.action!=='read_file' || page?.nextOffset===null || output.startsWith('Tool error:'))this.state.inspections++;
     }
   }
+  finalRejected(message:string) {
+    // Keep the inspection checkpoint after a rejected conclusion. The model can
+    // plan a probe, request specific missing context, or correct its final answer.
+    this.lastFeedback=message.slice(0,400);
+    this.state.inspections=Math.max(6,this.state.inspections);
+  }
   feedback(message:string,reopen=false) {this.lastFeedback=message.slice(0,400);if(reopen){this.state.inspections=0;this.pageTurns=0;}}
   snapshot() {return {...this.state,pageTurns:this.pageTurns,sourceProgress:this.sourceProgress,decisions:this.decisions,priorNotes:this.priorNotes,readPaths:[...this.readPaths],observations:this.observations};}
 }

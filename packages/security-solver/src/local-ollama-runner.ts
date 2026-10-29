@@ -380,9 +380,9 @@ export async function runLocalAudit(
         }
         const feedback = await limits.validateFinal?.(message.content);
         if (feedback) {
-          // Validation may require rereading evidence; this is an intentional
-          // investigation transition, not an unchanged inspection loop.
-          recentActions.clear();stalledActions=0;workflow?.feedback(feedback,true);
+          // Fresh evidence may be needed, but a rejected final must not reset
+          // the inspection checkpoint and reopen an unconditional read loop.
+          recentActions.clear();stalledActions=0;workflow?.finalRejected(feedback);
           const rejected=messages.at(-1)!;
           rejected.content="Previous final answer rejected; follow the validation feedback.";
           await appendFile(logFile, "[FINAL_REJECTED] " + feedback + "\n");
