@@ -10,4 +10,10 @@ assert.equal(guidedSourceProbe('../escape.py','def f(value):\n    return "<p>"+v
 // Caller still enforces the real workspace boundary and isolated probe eligibility.
 assert.equal(guidedSourceProbe('output.json',raw),null);
 assert.equal(guidedSourceProbe('function.py','@decorator\ndef f(v,w):\n    return "<p>"+v+"</p>"\n'),null);
+assert.equal(guidedSourceProbe('src/Render.java',
+  'public class Render { public static String render(String value) { return "<p>" + value + "</p>"; }}')?.functionName,'Render.render');
+assert.equal(guidedSourceProbe('src/Render.java',
+  'public class Render { public String render(String value) { return "<p>" + value + "</p>"; }}')?.functionName,'Render.render');
+assert.equal(guidedSourceProbe('src/Render.java',
+  'public class Render { public static String render(String value) { return value; }}'),null);
 console.log('Bounded source-guided function selection PASSED');
