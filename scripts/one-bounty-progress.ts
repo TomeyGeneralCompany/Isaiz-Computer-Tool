@@ -16,7 +16,7 @@ export function advanceBountyProgress(previous:BountyProgress,now:number,
     next.logBytes=0;
     changed=true;
   }
-  if(Number.isFinite(observation.logBytes)&&observation.logBytes!>=0&&next.logPath){
+  if(Number.isFinite(observation.logBytes)&&(observation.logBytes ?? -1)>=0&&next.logPath){
     const bytes=observation.logBytes!;
     if(bytes!==next.logBytes){
       // A log can be rotated/replaced, both are observable activity.
