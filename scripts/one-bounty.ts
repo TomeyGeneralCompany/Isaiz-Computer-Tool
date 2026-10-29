@@ -124,7 +124,7 @@ async function main() {
           readSync(fd,buffer,0,length,Math.max(0,progress.logBytes-length));
           text=buffer.toString('utf8');
         } finally {closeSync(fd);}
-        const events=text.split('\n').filter(line=>/^\\[(?:ACQUISITION_[A-Z_]+|CAPABILITY_[A-Z_]+|STATIC_LEADS|SOURCE_MAP|MODEL_START|MODEL_PROGRESS|OLLAMA|READ_OK|GUIDED_SOURCE_PROBE|PROBE_[A-Z_]+|FINAL_[A-Z_]+|TOOL)/.test(line));
+        const events=text.split('\n').filter(line=>/^\[(?:ACQUISITION_[A-Z_]+|CAPABILITY_[A-Z_]+|STATIC_LEADS|SOURCE_MAP|MODEL_START|MODEL_PROGRESS|OLLAMA|READ_OK|GUIDED_SOURCE_PROBE|PROBE_[A-Z_]+|FINAL_[A-Z_]+|TOOL)/.test(line));
         const last=events.at(-1)||'';
         note=last.slice(0,220);
       }catch {}
