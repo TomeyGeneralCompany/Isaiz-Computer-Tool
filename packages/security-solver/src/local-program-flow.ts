@@ -196,7 +196,7 @@ Do not claim production testing, JavaScript execution, file access or other effe
       process.env.LOCAL_OLLAMA_MODEL || "qwen3:4b",undefined,{
         onAllowance:async deadline=>writeSecuritySolverStatus({active:true,programId:program.id,programName:program.name,
           stage:"hunting",startedAt:statusStartedAt,timeoutMinutes:(deadline-Date.parse(statusStartedAt))/60000,pid:process.pid}),
-        signal,maxTurns,finalSchema:z.toJSONSchema(z.object({findings:z.array(candidateSchema),outcome:z.string().optional(),reason:z.string().optional()})),productionWorkflow:true,dynamicAllowance:process.env.LOCAL_HUNT_DYNAMIC_ALLOWANCE !== "false",initialSourcePaths:sourceHints,initialSourceLocations:selection.locations,checkpointPath:join(checkpointDirectory,checkpointKey+".json"),numCtx:8192,numThreads:4,numPredict:getConfig().LOCAL_HUNT_NUM_PREDICT,onRead:(path,span)=>reads.add(path,span),verifyPython:async (path,fn,kind,sequence) => {
+        signal,maxTurns,finalSchema:z.toJSONSchema(z.object({findings:z.array(candidateSchema),outcome:z.string().optional(),reason:z.string().optional()})),productionWorkflow:true,dynamicAllowance:process.env.LOCAL_HUNT_DYNAMIC_ALLOWANCE !== "false",initialSourcePaths:["audit-policy.txt",...sourceHints],initialSourceLocations:selection.locations,checkpointPath:join(checkpointDirectory,checkpointKey+".json"),numCtx:8192,numThreads:4,numPredict:getConfig().LOCAL_HUNT_NUM_PREDICT,onRead:(path,span)=>reads.add(path,span),verifyPython:async (path,fn,kind,sequence) => {
           if (focus && path !== "source-1/"+focus.file) throw new Error("Probe must target the imported lead file");
           const normalized=relative(root,resolve(root,path)).split(sep).join("/");
           const repository=repos.find(repo=>normalized===relative(root,repo.directory) || normalized.startsWith(relative(root,repo.directory)+"/"));
@@ -251,8 +251,11 @@ Do not claim production testing, JavaScript execution, file access or other effe
           }catch(error) {
             if(error instanceof z.ZodError) {
               const issues=error.issues.slice(0,5).map(issue=>({field:issue.path.join('.'),message:issue.message}));
+              const available=[...session.cases].filter(([,c])=>c.result.behavior_observed)
+                .slice(0,5).map(([caseId,c])=>({caseId,file:c.spec.file,function:c.spec.function}));
               return "Your final JSON does not match the required evidence schema: "+JSON.stringify(issues).slice(0,900)+
-                ". Fix these exact fields; caseId must come from the real recorded probe and callerFile/callerLine must refer to the actual invoking code, not the function definition. Do not invent evidence.";
+                ". Valid observed case IDs from the current hunt: "+JSON.stringify(available)+
+                ". Copy only an exact recorded case ID; callerFile/callerLine must refer to inspected calling code, not the function declaration. Do not invent evidence.";
             }
             return "Return only valid findings JSON. Use actual probe case IDs, inspected caller lines, and recorded evidence; omit unsupported findings.";
           }
