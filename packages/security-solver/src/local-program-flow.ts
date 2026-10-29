@@ -205,7 +205,12 @@ Do not claim production testing, JavaScript execution, file access or other effe
         },
         validateFinal:async text=>{
           try {
-            const value=huntSchema.parse(JSON.parse(text));
+            const proposed=JSON.parse(text);
+            if(proposed && typeof proposed==='object' && !Array.isArray(proposed) &&
+                Array.isArray(proposed.findings) && proposed.findings.length>0 &&
+                ['testable_candidate','testable_candidate_found'].includes(proposed.outcome))
+              proposed.outcome='inspected';
+            const value=huntSchema.parse(proposed);
             if(value.outcome === "no_testable_candidate") {
               if(session.completedProbes) {
                 const observed=[...session.cases].map(([caseId,record])=>({caseId,
