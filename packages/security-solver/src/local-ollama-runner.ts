@@ -95,6 +95,7 @@ export async function runLocalAudit(
   let timer = setTimeout(() => controller.abort(), timeoutMs);
   let usedTurns=0, finalAnswer:string|undefined, stoppingReason="Inspection interrupted";
   let emptyFinals=0;
+  let invalidReviewFinals=0;
   let rejectedPlans=0;
   let consecutiveWorkflowRejections=0;
   let lastWorkflowRejection='';
@@ -252,7 +253,7 @@ export async function runLocalAudit(
       if(constraints?.action?.some(action=>!actionSchema.properties.action.enum.includes(action)))throw new Error("Task requested an unavailable action");
       let requestSchema:Record<string,any>=constraints ? {...actionSchema,properties:{...actionSchema.properties,
         ...Object.fromEntries(Object.entries(constraints).map(([key,values])=>[key,{type:"string",enum:values}]))}} : actionSchema;
-      if(structured && limits.finalSchema && emptyFinals>=1 &&
+      if(structured && limits.finalSchema && (emptyFinals>=1 || invalidReviewFinals>=2) &&
          (!constraints?.action || constraints.action.includes('final'))) {
         // Qwen3:4b sometimes returns a valid "final" action with both answer=""
         // and result omitted. Once that is observed, require the typed final
@@ -419,6 +420,10 @@ export async function runLocalAudit(
         emptyFinals=0;
         const feedback = await limits.validateFinal?.(message.content);
         if (feedback) {
+          // Escalate only repeated output-format failures; evidence-coverage failures
+          // must remain free to request more source pages.
+          invalidReviewFinals = !workflow && feedback.startsWith('Return the requested review JSON')
+            ? invalidReviewFinals + 1 : 0;
           // Fresh evidence may be needed, but a rejected final must not reset
           // the inspection checkpoint and reopen an unconditional read loop.
           recentActions.clear();stalledActions=0;workflow?.finalRejected(feedback);
@@ -429,6 +434,7 @@ export async function runLocalAudit(
           continue;
         }
         controller.signal.throwIfAborted();
+        invalidReviewFinals=0;
         finalAnswer=message.content;stoppingReason="Validated final answer";
         return message.content;
       }
