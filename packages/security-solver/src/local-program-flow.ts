@@ -210,7 +210,13 @@ Do not claim production testing, JavaScript execution, file access or other effe
             if(!session.completedProbes && !session.blockedReason)return "No supported probe has completed. Use verify_source for a concrete candidate, or return outcome=no_testable_candidate with a reason and empty findings to save incomplete coverage.";
             if(value.findings.length && !reads.covers("audit-policy.txt",0,policyText.length))return "Read every page of audit-policy.txt before reporting a finding; continue at nextOffset.";
             for(const finding of value.findings) {
-              const record=session.cases.get(finding.caseId);if(!record)return "Use a successful verify_source result from this hunt; an invented case ID is invalid.";
+              const record=session.cases.get(finding.caseId);
+              if(!record) {
+                const known=[...session.cases].filter(([,c])=>c.result.behavior_observed)
+                  .slice(0,5).map(([caseId,c])=>({caseId,file:c.spec.file,function:c.spec.function,kind:c.spec.kind}));
+                return "The proposed caseId is not an observed reproduction. Valid observed case IDs from THIS hunt: "+
+                  JSON.stringify(known)+". Copy an exact listed caseId; callerFile must name a separate, inspected real source file that invokes that function, with its actual callerLine. Never invent case IDs or caller lines.";
+              }
               if (focus && record.spec.file !== focus.file) return "Only report a reproduced finding in the imported lead file.";
               const repo=repos.find(repo=>repo.url===record.repositoryUrl)!;
               if(!reads.has(sourceFileInWorkspace(repo,record.spec.file,root)) || !reads.has(finding.callerFile))return "Read the tested source file and the claimed caller file before reporting.";
