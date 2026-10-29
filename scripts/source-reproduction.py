@@ -78,9 +78,9 @@ def reflected_markup(data, nonce):
     return attack_parser.found and not control_parser.found
 
 
-def limits(node=False):
+def limits(node=False, java=False):
     resource.setrlimit(resource.RLIMIT_CPU,(15,15))
-    resource.setrlimit(resource.RLIMIT_AS,((32 if node else 1)*1024**3,)*2)
+    resource.setrlimit(resource.RLIMIT_AS,((32 if node else 4 if java else 1)*1024**3,)*2)
     resource.setrlimit(resource.RLIMIT_FSIZE,(1024**2,1024**2))
     resource.setrlimit(resource.RLIMIT_NOFILE,(64,64))
     resource.setrlimit(resource.RLIMIT_CORE,(0,0))
@@ -176,7 +176,7 @@ def run_probe(repository: Path, specification: dict, _dependency_round: int = 0)
                  *runtime_binds,'--',*invocation]
         with (work/'stdout').open('wb') as output,(work/'stderr').open('wb') as error:
             process=subprocess.Popen(command,stdout=output,stderr=error,env={'PATH':'/usr/bin:/bin'},
-                                     start_new_session=True,preexec_fn=lambda: limits(language != 'python'))
+                                     start_new_session=True,preexec_fn=lambda: limits(language in ('javascript','solidity'),language == 'java'))
             try: code=process.wait(timeout=25)
             except subprocess.TimeoutExpired:
                 os.killpg(process.pid,signal.SIGKILL);process.wait()
