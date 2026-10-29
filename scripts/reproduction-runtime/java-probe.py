@@ -62,7 +62,10 @@ public class TomeyJavaProbe {
 }
 ''')
 jvm = ['-Xmx128m', '-XX:ActiveProcessorCount=2', '-XX:+UseSerialGC']
-subprocess.run(['/jdk/bin/javac', *['-J'+x for x in jvm], '-proc:none', '-encoding', 'UTF-8',
+# javac on JDK 21 can exceed a 128 MiB heap while initializing compiler
+# modules; keep runtime probes tight, but give compilation bounded headroom.
+javac_jvm = ['-Xmx512m', '-XX:ActiveProcessorCount=2', '-XX:+UseSerialGC']
+subprocess.run(['/jdk/bin/javac', *['-J'+x for x in javac_jvm], '-proc:none', '-encoding', 'UTF-8',
                 '-classpath', str(classes), '-sourcepath', str(source_root), '-d', str(classes),
                 str(target), str(harness)], check=True, timeout=15)
 control = 'TOMEY_CONTROL_' + spec['nonce']
