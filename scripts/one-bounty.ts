@@ -96,13 +96,14 @@ async function main() {
       if(status.active&&status.programId===program.id)stage=String(status.stage||'hunting');
     }catch {}
     let file=progress.logPath;
+    if(stage==='reviewing'&&file?.includes('/local-hunt-'))file=null;
     let bytes:number|undefined;
     try {
       const logs=join(root,'data','logs');
       if(!file) {
         let newest=startedAt-1000;
         for(const name of readdirSync(logs)) {
-          if(!/^local-hunt-[a-f0-9]+\.log$/.test(name))continue;
+          if(!(stage==='reviewing'?/^local-review-[^/]+\.log$/:/^local-hunt-[a-f0-9]+\.log$/).test(name))continue;
           const path=join(logs,name);
           const stamp=statSync(path).mtimeMs;
           if(stamp>newest){file=path;newest=stamp;}
@@ -153,6 +154,7 @@ async function main() {
     summary.findingsCreated=outcome.findingsCreated;
     if(timedOut||cancelled)throw new Error('Run cancelled before review could start');
     console.log('Hunt completed: '+outcome.findingsCreated+' new candidate finding(s). Starting independent review.');
+    progress={...progress,stage:'reviewing',lastActivityAt:Date.now(),logPath:null,logBytes:0};
     await processAdversarialQueue(program.id);
     summary.status=timedOut?'timed_out':cancelled?'cancelled':'completed';
     console.log('Independent review finished.');
