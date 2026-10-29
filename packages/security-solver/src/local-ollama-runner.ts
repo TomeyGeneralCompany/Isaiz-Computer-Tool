@@ -93,6 +93,7 @@ export async function runLocalAudit(
   let timer = setTimeout(() => controller.abort(), timeoutMs);
   let usedTurns=0, finalAnswer:string|undefined, stoppingReason="Inspection interrupted";
   let emptyFinals=0;
+  let rejectedPlans=0;
   const sourceTotals=new Map<string,number>();
   const hypotheses:Array<{turn:number;path:string;statement:string}>=[];
   const renew=async(turn:number)=>{
@@ -320,11 +321,30 @@ export async function runLocalAudit(
           if(!workflow)throw new Error('Probe planning requires production workflow');
           if(action.answer==='solidity_sequence') {
             const sequence=soliditySequenceSchema.safeParse(action.sequence);
-            if(!sequence.success){workflow.feedback('Provide a valid declarative Solidity sequence before planning its probe.');continue;}
-          } else if(action.sequence!==undefined) {workflow.feedback('Sequence is only allowed for solidity_sequence probes.');continue;}
-          if(JSON.stringify([...messages.slice(0,2),message]).length>exchangeBudget-1000) {
-            workflow.feedback('The proposed action is too large for one exchange. Plan a shorter probe sequence.');continue;
+            if(!sequence.success) {
+              const feedback='Provide a valid declarative Solidity sequence before planning its probe.';
+              workflow.feedback(feedback);
+              await appendFile(logFile,'[PLAN_REJECTED] '+feedback+'\n');
+              messages.push({role:'user',content:feedback+' /no_think'});
+              if(++rejectedPlans>=3)throw new Error('Repeated invalid Solidity probe plans');
+              continue;
+            }
+          } else if(action.sequence!==undefined) {
+            // An unused sequence cannot change a non-Solidity test. Local
+            // structured-output models often populate optional objects with {}.
+            // Discard it instead of silently rejecting the same plan 80 times.
+            delete action.sequence;
+            await appendFile(logFile,'[PLAN_UNUSED_SEQUENCE_IGNORED] '+JSON.stringify({path:action.path,kind:action.answer})+'\n');
           }
+          if(JSON.stringify([...messages.slice(0,2),message]).length>exchangeBudget-1000) {
+            const feedback='The proposed action is too large for one exchange. Plan a shorter probe sequence.';
+            workflow.feedback(feedback);
+            await appendFile(logFile,'[PLAN_REJECTED] '+feedback+'\n');
+            messages.push({role:'user',content:feedback+' /no_think'});
+            if(++rejectedPlans>=3)throw new Error('Repeated oversized probe plans');
+            continue;
+          }
+          rejectedPlans=0;
           workflow.plan(action);
           await persistMemory();
           messages.push({role:"assistant",content:message.content});
