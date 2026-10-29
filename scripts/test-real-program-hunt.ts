@@ -23,7 +23,17 @@ try {
   await writeFile(join(fixture,'render.py'),
     'def render(value):\n    return "<p>" + value + "</p>"\n');
   await writeFile(join(fixture,'caller.py'),
-    'from render import render\n\ndef display(value):\n    return render(value)\n');
+    'from http.server import BaseHTTPRequestHandler\\n' +
+    'from urllib.parse import parse_qs, urlsplit\\n' +
+    'from render import render\\n' +
+    'class OwnedHandler(BaseHTTPRequestHandler):\\n' +
+    '    def do_GET(self):\\n' +
+    '        value = parse_qs(urlsplit(self.path).query).get("q", [""])[0]\\n' +
+    '        body = render(value).encode("utf-8")\\n' +
+    '        self.send_response(200)\\n' +
+    '        self.send_header("Content-Type", "text/html; charset=utf-8")\\n' +
+    '        self.end_headers()\\n' +
+    '        self.wfile.write(body)\\n');
   execFileSync('git',['init','-q',fixture]);
   execFileSync('git',['-C',fixture,'add','.']);
   execFileSync('git',['-C',fixture,'-c','user.name=Fixture','-c','user.email=fixture@example.test','commit','-qm','Owned fixture']);
