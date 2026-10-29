@@ -403,7 +403,7 @@ Return final JSON only:
 Independently assign severity and confidence from observed impact, source reachability and evidence limits. Do not copy the hunter ratings or raise them to pass a threshold.
 Use one enum value per string. Scores are integers 0..3. bet100=false requires dont_submit. Approval requires a demonstrated reportable issue, not just a passing probe.`;
     await runLocalAudit(prompt,logFile,getConfig().SECURITY_HUNT_TIMEOUT_MINUTES*60000,root,process.env.LOCAL_OLLAMA_MODEL || "qwen3:4b",undefined,{
-      signal,maxTurns:200,dynamicAllowance:process.env.LOCAL_HUNT_DYNAMIC_ALLOWANCE !== "false",finalSchema:z.toJSONSchema(reviewSchema),numCtx:8192,numThreads:4,numPredict:getConfig().LOCAL_HUNT_NUM_PREDICT,initialSourcePaths:["evidence/report.txt","evidence/replay.json","evidence/policy.txt","source/"+record.spec.file,"source/"+caller[1]],onRead:(path,span)=>reads.add(path,span),validateFinal:async text=>{
+      signal,maxTurns:200,dynamicAllowance:process.env.LOCAL_HUNT_DYNAMIC_ALLOWANCE !== "false",prefetchReadOnly:true,finalSchema:z.toJSONSchema(reviewSchema),numCtx:8192,numThreads:4,numPredict:getConfig().LOCAL_HUNT_NUM_PREDICT,initialSourcePaths:["evidence/report.txt","evidence/replay.json","evidence/policy.txt","source/"+record.spec.file,"source/"+caller[1]],onRead:(path,span)=>reads.add(path,span),validateFinal:async text=>{
         try {
           const value=reviewSchema.parse(JSON.parse(text));
           for(const name of ["report.txt","replay.json","policy.txt"] as const)
