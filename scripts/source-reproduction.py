@@ -127,6 +127,17 @@ def run_probe(repository: Path, specification: dict, _dependency_round: int = 0)
     runtime = Path(__file__).resolve().parent / 'reproduction-runtime'
     node = shutil.which('node') if language in ('javascript','solidity') else None
     java_home = Path(shutil.which('javac')).resolve().parent.parent if shutil.which('javac') else None
+    java_config_binds = []
+    if language == 'java' and java_home:
+        # Debian/Ubuntu JDKs symlink conf/security/java.security into /etc.
+        # Bind only the resolved JDK configuration directory, read-only.
+        security_link = java_home / 'conf/security/java.security'
+        if security_link.is_symlink():
+            resolved_security = security_link.resolve()
+            if resolved_security.is_relative_to('/etc/') and resolved_security.is_file():
+                config_root = resolved_security.parent.parent
+                if config_root.parent == Path('/etc'):
+                    java_config_binds = ['--dir', '/etc', '--ro-bind', str(config_root), str(config_root)]
     if language == 'java' and (not java_home or not (java_home/'bin/java').is_file()):
         return {'status':'blocked_no_runtime','behavior_observed':False,'detail':'Run scripts/install-reproduction-runtime.sh to install a JDK'}
     if language in ('javascript','solidity') and not node:
@@ -162,7 +173,7 @@ def run_probe(repository: Path, specification: dict, _dependency_round: int = 0)
         work=Path(temporary)
         (work/'probe.py').write_text((runtime/'java-probe.py').read_text() if language == 'java' else PROBE)
         (work/'spec.json').write_text(json.dumps(specification))
-        runtime_binds = ['--ro-bind',str(java_home),'/jdk','--ro-bind',str(runtime),'/runtime'] if language == 'java' else [] if language == 'python' else [
+        runtime_binds = ['--ro-bind',str(java_home),'/jdk',*java_config_binds,'--ro-bind',str(runtime),'/runtime'] if language == 'java' else [] if language == 'python' else [
             '--ro-bind',str(Path(node).resolve()),'/probe-node',
             '--ro-bind',str(runtime),'/runtime']
         invocation = ['/usr/bin/python3','-I','/probe.py'] if language in ('python','java') else [
