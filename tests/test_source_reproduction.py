@@ -118,6 +118,38 @@ class LanguageTests(unittest.TestCase):
                    function="Render.render", extra={"src/main/java/example/Helper.java":
                        'package example; public class Helper { public static String wrap(String x) { return x; }}'})
 
+    def test_java_charsequence_and_object_output(self):
+        self.probe("Render.java",
+                   'public class Render { public static Object render(CharSequence x) { return "<p>"+x+"</p>"; }}',
+                   function="Render.render")
+
+    def test_java_stringbuilder_overload(self):
+        self.probe("Render.java",
+                   'public class Render { public static StringBuilder render(StringBuilder x) { return new StringBuilder("<p>").append(x).append("</p>"); }}',
+                   function="Render.render")
+
+    def test_java_bytebuffer(self):
+        self.probe("Render.java",
+                   'import java.nio.ByteBuffer; import java.nio.charset.StandardCharsets; '
+                   'public class Render { public static ByteBuffer render(ByteBuffer x) { '
+                   'return ByteBuffer.wrap(("<p>"+StandardCharsets.UTF_8.decode(x)+"</p>").getBytes(StandardCharsets.UTF_8)); }}',
+                   function="Render.render")
+
+    def test_java_path_parameter_and_result(self):
+        self.probe("Render.java",
+                   'import java.nio.file.Path; public class Render { public static Path render(Path x) { return Path.of("/safe").resolve(x); }}',
+                   function="Render.render", kind="path_construction")
+
+    def test_java_file_parameter_and_result(self):
+        self.probe("Render.java",
+                   'import java.io.File; public class Render { public static File render(File x) { return new File("/safe",x.toString()); }}',
+                   function="Render.render", kind="path_construction")
+
+    def test_java_uri_parameter_and_result(self):
+        self.probe("Render.java",
+                   'import java.net.URI; public class Render { public static URI render(URI x) { return URI.create("/safe/"+x.toString()); }}',
+                   function="Render.render", kind="path_construction")
+
     def test_java_negative_control(self):
         self.probe("Render.java", 'public class Render { public static String render(String x) { return x.replace("<", "&lt;"); }}',
                    function="Render.render", observed=False)

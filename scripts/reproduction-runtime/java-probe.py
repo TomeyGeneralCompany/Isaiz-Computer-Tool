@@ -30,34 +30,78 @@ harness = Path('/tmp/TomeyJavaProbe.java')
 harness.write_text(r'''
 import java.lang.reflect.*;
 import java.nio.charset.StandardCharsets;
+import java.nio.ByteBuffer;
+import java.nio.file.Path;
+import java.io.File;
+import java.net.URI;
 import java.util.Base64;
 public class TomeyJavaProbe {
+ static int priority(Class<?> c) {
+  if(c == String.class)return 0;
+  if(c == byte[].class)return 1;
+  if(c == CharSequence.class)return 2;
+  if(c == StringBuilder.class)return 3;
+  if(c == StringBuffer.class)return 4;
+  if(c == ByteBuffer.class)return 5;
+  if(c == Path.class)return 6;
+  if(c == File.class)return 7;
+  if(c == URI.class)return 8;
+  if(c == Object.class)return 9;
+  return -1;
+ }
+ static Object argument(Class<?> c, byte[] data) {
+  String value = new String(data,StandardCharsets.UTF_8);
+  if(c == String.class || c == CharSequence.class || c == Object.class)return value;
+  if(c == byte[].class)return data;
+  if(c == StringBuilder.class)return new StringBuilder(value);
+  if(c == StringBuffer.class)return new StringBuffer(value);
+  if(c == ByteBuffer.class)return ByteBuffer.wrap(data);
+  if(c == Path.class)return Path.of(value);
+  if(c == File.class)return new File(value);
+  if(c == URI.class)return URI.create(value);
+  throw new IllegalArgumentException("Unsupported argument type");
+ }
+ static byte[] outputBytes(Object value) {
+  if(value == null)throw new IllegalArgumentException("Null probe result");
+  if(value instanceof byte[])return (byte[])value;
+  if(value instanceof ByteBuffer) {
+   ByteBuffer b=((ByteBuffer)value).asReadOnlyBuffer();
+   if(b.remaining()>16000)throw new IllegalArgumentException("Probe output too large");
+   byte[] result=new byte[b.remaining()];b.get(result);return result;
+  }
+  if(value instanceof CharSequence || value instanceof Path ||
+     value instanceof File || value instanceof URI)
+   return value.toString().getBytes(StandardCharsets.UTF_8);
+  throw new IllegalArgumentException("Unsupported probe result type");
+ }
  public static void main(String[] args) throws Exception {
-  java.io.PrintStream output = System.out;
+  java.io.PrintStream output=System.out;
   System.setOut(new java.io.PrintStream(java.io.OutputStream.nullOutputStream()));
-  Class<?> target = Class.forName(args[0]);
-  Method method;
-  boolean bytesInput;
-  try {
-   method = target.getMethod(args[1], String.class);
-   bytesInput = false;
-  } catch (NoSuchMethodException missingStringOverload) {
-   method = target.getMethod(args[1], byte[].class);
-   bytesInput = true;
+  Class<?> target=Class.forName(args[0]);
+  Method method=null;
+  int best=100;
+  for(Method candidate:target.getMethods()) {
+   if(!candidate.getName().equals(args[1]) || candidate.getParameterCount()!=1)continue;
+   int rank=priority(candidate.getParameterTypes()[0]);
+   if(rank<0 || rank>=best)continue;
+   Class<?> ret=candidate.getReturnType();
+   if(ret != String.class && ret != byte[].class && ret != Object.class &&
+      !CharSequence.class.isAssignableFrom(ret) && !ByteBuffer.class.isAssignableFrom(ret) &&
+      !Path.class.isAssignableFrom(ret) && !File.class.isAssignableFrom(ret) &&
+      !URI.class.isAssignableFrom(ret))continue;
+   method=candidate;best=rank;
   }
-  if (method.getReturnType() != String.class && method.getReturnType() != byte[].class)
-   throw new IllegalArgumentException("Probe requires a String or byte[] result");
-  Object receiver = Modifier.isStatic(method.getModifiers()) ? null : target.getConstructor().newInstance();
-  String[] results = new String[2];
+  if(method==null)throw new IllegalArgumentException("No supported public one-argument overload");
+  Object receiver=Modifier.isStatic(method.getModifiers())?null:target.getConstructor().newInstance();
+  String[] results=new String[2];
   for(int i=0;i<2;i++) {
-   byte[] input = Base64.getDecoder().decode(args[i+2]);
-   Object result = method.invoke(receiver, bytesInput ? input : new String(input, StandardCharsets.UTF_8));
-   if(result == null) throw new IllegalArgumentException("Null probe result");
-   byte[] outputBytes = result instanceof String ? ((String)result).getBytes(StandardCharsets.UTF_8) : (byte[])result;
-   if(outputBytes.length>16000) throw new IllegalArgumentException("Probe output too large");
-   results[i] = Base64.getEncoder().encodeToString(outputBytes);
+   byte[] input=Base64.getDecoder().decode(args[i+2]);
+   Object value=method.invoke(receiver,argument(method.getParameterTypes()[0],input));
+   byte[] bytes=outputBytes(value);
+   if(bytes.length>16000)throw new IllegalArgumentException("Probe output too large");
+   results[i]=Base64.getEncoder().encodeToString(bytes);
   }
-  output.println(results[0]); output.println(results[1]);
+  output.println(results[0]);output.println(results[1]);
  }
 }
 ''')
