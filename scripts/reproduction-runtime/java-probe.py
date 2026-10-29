@@ -53,9 +53,9 @@ public class TomeyJavaProbe {
    byte[] input = Base64.getDecoder().decode(args[i+2]);
    Object result = method.invoke(receiver, bytesInput ? input : new String(input, StandardCharsets.UTF_8));
    if(result == null) throw new IllegalArgumentException("Null probe result");
-   byte[] output = result instanceof String ? ((String)result).getBytes(StandardCharsets.UTF_8) : (byte[])result;
-   if(output.length>16000) throw new IllegalArgumentException("Probe output too large");
-   results[i] = Base64.getEncoder().encodeToString(output);
+   byte[] outputBytes = result instanceof String ? ((String)result).getBytes(StandardCharsets.UTF_8) : (byte[])result;
+   if(outputBytes.length>16000) throw new IllegalArgumentException("Probe output too large");
+   results[i] = Base64.getEncoder().encodeToString(outputBytes);
   }
   output.println(results[0]); output.println(results[1]);
  }
