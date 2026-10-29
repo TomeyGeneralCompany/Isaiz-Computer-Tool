@@ -304,6 +304,13 @@ export async function runLocalAudit(
           messages.push({role:"user",content:"That action is not available in the current task stage. Use the current response schema and controller progress. No tool was executed. /no_think"});
           continue;
         }
+        if(['plan_probe','verify_source','verify_python'].includes(action.action) &&
+            action.answer!=='solidity_sequence' && action.sequence!==undefined) {
+          // Normalize optional structured-output fields before validation,
+          // planning and duplicate detection; they are unused by these probes.
+          delete action.sequence;
+          await appendFile(logFile,'[UNUSED_SEQUENCE_IGNORED] '+JSON.stringify({action:action.action,path:action.path,kind:action.answer})+'\n');
+        }
         const workflowError=workflow?.validate(action);
         if(workflowError) {
           workflow!.feedback(workflowError);
@@ -329,12 +336,6 @@ export async function runLocalAudit(
               if(++rejectedPlans>=3)throw new Error('Repeated invalid Solidity probe plans');
               continue;
             }
-          } else if(action.sequence!==undefined) {
-            // An unused sequence cannot change a non-Solidity test. Local
-            // structured-output models often populate optional objects with {}.
-            // Discard it instead of silently rejecting the same plan 80 times.
-            delete action.sequence;
-            await appendFile(logFile,'[PLAN_UNUSED_SEQUENCE_IGNORED] '+JSON.stringify({path:action.path,kind:action.answer})+'\n');
           }
           if(JSON.stringify([...messages.slice(0,2),message]).length>exchangeBudget-1000) {
             const feedback='The proposed action is too large for one exchange. Plan a shorter probe sequence.';
