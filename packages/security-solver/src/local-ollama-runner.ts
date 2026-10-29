@@ -374,10 +374,13 @@ export async function runLocalAudit(
           const rejected=messages.at(-1)!;
           rejected.content="Empty final answer rejected.";
           messages.push(fitAuditToolOutput(messages.slice(0,2),rejected,"final_validation",
-            'The final action must put the requested result in the answer STRING. Encode JSON inside that string when the task asks for JSON. Do not leave answer empty. Follow the task outcome rules; do not invent tests or findings.',exchangeBudget,true).message);
+            'Your final action was empty. The response MUST include either a nonempty answer STRING containing the requested JSON or a result OBJECT with the requested findings. Do not omit both. A completed source probe exists when the progress record shows an observation; use its real caseId and read the actual caller before claiming a finding. No invented tests or findings.',exchangeBudget,true).message);
           await appendFile(logFile,"[EMPTY_FINAL_RETRY] "+emptyFinals+"\n");
           continue;
         }
+        // An earlier empty final must not consume retries after the model later
+        // produces a substantive answer or returns to source inspection.
+        emptyFinals=0;
         const feedback = await limits.validateFinal?.(message.content);
         if (feedback) {
           // Validation may require rereading evidence; this is an intentional
