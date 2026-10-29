@@ -36,15 +36,26 @@ public class TomeyJavaProbe {
   java.io.PrintStream output = System.out;
   System.setOut(new java.io.PrintStream(java.io.OutputStream.nullOutputStream()));
   Class<?> target = Class.forName(args[0]);
-  Method method = target.getMethod(args[1], String.class);
-  if (!Modifier.isStatic(method.getModifiers()) || method.getReturnType() != String.class)
-   throw new IllegalArgumentException("Public static String method required");
+  Method method;
+  boolean bytesInput;
+  try {
+   method = target.getMethod(args[1], String.class);
+   bytesInput = false;
+  } catch (NoSuchMethodException missingStringOverload) {
+   method = target.getMethod(args[1], byte[].class);
+   bytesInput = true;
+  }
+  if (method.getReturnType() != String.class && method.getReturnType() != byte[].class)
+   throw new IllegalArgumentException("Probe requires a String or byte[] result");
+  Object receiver = Modifier.isStatic(method.getModifiers()) ? null : target.getConstructor().newInstance();
   String[] results = new String[2];
   for(int i=0;i<2;i++) {
-   String input = new String(Base64.getDecoder().decode(args[i+2]), StandardCharsets.UTF_8);
-   String result = (String)method.invoke(null, input);
-   if(result == null || result.length()>16000) throw new IllegalArgumentException("Invalid result size");
-   results[i] = Base64.getEncoder().encodeToString(result.getBytes(StandardCharsets.UTF_8));
+   byte[] input = Base64.getDecoder().decode(args[i+2]);
+   Object result = method.invoke(receiver, bytesInput ? input : new String(input, StandardCharsets.UTF_8));
+   if(result == null) throw new IllegalArgumentException("Null probe result");
+   byte[] outputBytes = result instanceof String ? ((String)result).getBytes(StandardCharsets.UTF_8) : (byte[])result;
+   if(outputBytes.length>16000) throw new IllegalArgumentException("Probe output too large");
+   results[i] = Base64.getEncoder().encodeToString(outputBytes);
   }
   output.println(results[0]); output.println(results[1]);
  }
@@ -64,6 +75,6 @@ result = subprocess.run(['/jdk/bin/java', *jvm, '-cp', str(classes), 'TomeyJavaP
 lines = result.stdout.decode().splitlines()
 if len(lines) != 2:
     raise ValueError('Invalid Java probe output')
-normal, observed = [base64.b64decode(x, validate=True).decode() for x in lines]
+normal, observed = [base64.b64decode(x, validate=True).decode('utf-8') for x in lines]
 print(json.dumps(dict(control_input=control, control_output=normal,
                      attack_input=attack, attack_output=observed)))
