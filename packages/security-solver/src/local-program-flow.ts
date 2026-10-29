@@ -206,7 +206,15 @@ Do not claim production testing, JavaScript execution, file access or other effe
         validateFinal:async text=>{
           try {
             const value=huntSchema.parse(JSON.parse(text));
-            if(value.outcome === "no_testable_candidate") {parsed=value;return null;}
+            if(value.outcome === "no_testable_candidate") {
+              if(session.completedProbes) {
+                const known=[...session.cases].slice(0,5).map(([caseId,c])=>({caseId,file:c.spec.file,
+                  function:c.spec.function,status:c.result.status,behaviorObserved:c.result.behavior_observed}));
+                return "A supported source probe HAS completed in this hunt. Do not claim no testable candidate or no probes. Recorded observations: "+
+                  JSON.stringify(known)+". If no reportable vulnerability is supported after inspecting real callers, return outcome=inspected with findings=[], not no_testable_candidate.";
+              }
+              parsed=value;return null;
+            }
             if(!session.completedProbes && !session.blockedReason)return "No supported probe has completed. Use verify_source for a concrete candidate, or return outcome=no_testable_candidate with a reason and empty findings to save incomplete coverage.";
             if(value.findings.length && !reads.covers("audit-policy.txt",0,policyText.length))return "Read every page of audit-policy.txt before reporting a finding; continue at nextOffset.";
             for(const finding of value.findings) {
@@ -227,7 +235,16 @@ Do not claim production testing, JavaScript execution, file access or other effe
               const callerRelative=relative(repo.directory,join(root,finding.callerFile));
               if(callerRelative === ".." || callerRelative.startsWith(".."+sep))return "Caller must be inside the reproduced repository.";
               const text=await readFile(join(root,finding.callerFile),"utf8");
-              if(!validReachability(finding,record,callerRelative.split(sep).join("/"),text))return "Provide a real call expression or direct_transaction evidence from a recorded Solidity send. Comments and declarations are not callers.";
+              if(!validReachability(finding,record,callerRelative.split(sep).join("/"),text)) {
+                const inspectedLines=text.split("\n").flatMap((line,index)=>
+                  callerLineReferences(text,index+1,record.spec.function) &&
+                    reads.sawLine(finding.callerFile,text,index+1) ? [{line:index+1,code:line.slice(0,180)}] : []).slice(0,4);
+                return "Caller evidence invalid: "+finding.callerFile+":"+finding.callerLine+
+                  " does not invoke "+record.spec.function+". Previously read real call lines in that file: "+
+                  JSON.stringify(inspectedLines)+". Other prioritized source files to inspect for callers: "+
+                  JSON.stringify(sourceHints.slice(0,8))+
+                  ". Do not claim the function declaration as its own caller or invent a line.";
+              }
               if(!reads.sawLine(finding.callerFile,text,finding.callerLine))return "Read the page containing the entire claimed caller line before reporting.";
             }
             parsed=value;return null;
