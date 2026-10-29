@@ -205,7 +205,18 @@ Do not claim production testing, JavaScript execution, file access or other effe
         },
         validateFinal:async text=>{
           try {
-            const value=huntSchema.parse(JSON.parse(text));
+            const proposed=JSON.parse(text);
+            // Small local models sometimes select the contradictory outcome
+            // no_testable_candidate while also supplying reproduced findings.
+            // Normalize only the transport label; validate every finding's
+            // real case, caller, policy, and observed evidence unchanged.
+            if(proposed && typeof proposed==='object' && !Array.isArray(proposed) &&
+                Array.isArray(proposed.findings) && proposed.findings.length>0 &&
+                proposed.outcome==='no_testable_candidate') {
+              proposed.outcome='inspected';
+              delete proposed.reason;
+            }
+            const value=huntSchema.parse(proposed);
             if(value.outcome === "no_testable_candidate") {
               if(session.completedProbes) {
                 const known=[...session.cases].slice(0,5).map(([caseId,c])=>({caseId,file:c.spec.file,
@@ -239,9 +250,27 @@ Do not claim production testing, JavaScript execution, file access or other effe
                 const inspectedLines=text.split("\n").flatMap((line,index)=>
                   callerLineReferences(text,index+1,record.spec.function) &&
                     reads.sawLine(finding.callerFile,text,index+1) ? [{line:index+1,code:line.slice(0,180)}] : []).slice(0,4);
+                const otherCallers:{file:string,line:number,code:string}[]=[];
+                // Offer exact, previously inspected call sites. Do not infer a
+                // vulnerability or forge caller evidence to fix model output.
+                for(const sourcePath of eligiblePaths.slice(0,40)) {
+                  if(otherCallers.length>=5)break;
+                  const targetRepoPath=sourcePath.replace(/\\/g,'/');
+                  const sourceRepo=repos.find(r=>targetRepoPath.startsWith(relative(root,r.directory).split(sep).join('/')+'/'));
+                  if(!sourceRepo || sourceRepo.url!==record.repositoryUrl)continue;
+                  try {
+                    const candidateText=await readFile(join(root,sourcePath),'utf8');
+                    const lines=candidateText.split('\\n');
+                    for(let i=0;i<lines.length && otherCallers.length<5;i++) {
+                      if(callerLineReferences(candidateText,i+1,record.spec.function) &&
+                         reads.sawLine(sourcePath,candidateText,i+1))
+                        otherCallers.push({file:sourcePath,line:i+1,code:lines[i].slice(0,120)});
+                    }
+                  }catch{}
+                }
                 return "Caller evidence invalid: "+finding.callerFile+":"+finding.callerLine+
                   " does not invoke "+record.spec.function+". Previously read real call lines in that file: "+
-                  JSON.stringify(inspectedLines)+". Other prioritized source files to inspect for callers: "+
+                  JSON.stringify(inspectedLines)+". Recorded real caller sites in inspected source: "+JSON.stringify(otherCallers)+". Other prioritized source files to inspect for callers: "+
                   JSON.stringify(sourceHints.slice(0,8))+
                   ". Do not claim the function declaration as its own caller or invent a line.";
               }
