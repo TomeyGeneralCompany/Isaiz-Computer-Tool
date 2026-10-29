@@ -162,11 +162,16 @@ def main() -> int:
         run("agent_backend", ["node", "--import", "tsx", "scripts/test-local-agent.ts"], model_timeout)
         if RESULTS["agent_backend"]["passed"]:
             run("real_model_fixture_pipeline", ["node", "--import", "tsx", "scripts/test-offline-end-to-end.ts", "--real-model"], model_timeout)
+            # Report serialization is not proof that the production controller
+            # can inspect source, execute probes, and classify their observations.
+            run("real_model_production_workflow", ["node", "--import", "tsx", "scripts/test-production-workflow.ts", "--real-model", "--prefetch", "--host-timeout"], model_timeout)
         else:
             record("real_model_fixture_pipeline", False, "Blocked by failed file-read agent check; fix that result first")
+            record("real_model_production_workflow", False, "Blocked by failed file-read agent check")
     else:
         record("agent_backend", False, "Local inference or tsx unavailable")
         record("real_model_fixture_pipeline", False, "Local inference or tsx unavailable")
+        record("real_model_production_workflow", False, "Local inference or tsx unavailable")
     if settings.get("discoveryDirect"):
         if RESULTS.get("local_model", {}).get("passed") and settings["assessmentModel"] in names:
             run("local_program_assessment", ["node", "--import", "tsx", "scripts/test-local-assessment.ts"], 210)

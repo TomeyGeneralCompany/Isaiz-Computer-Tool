@@ -20,6 +20,23 @@ assert.equal(restored.snapshot().readPaths.length,0);
 assert.match(restored.validate({...action,action:'plan_probe',query:'f',answer:'html_reflection',hypothesis:'Escaping disproves reflection'})!,/Read/);
 flow.continueInspection(continuation);assert.match(flow.validate(continuation)!,/already attempted/);
 assert.match(flow.validate({...continuation,offset:1500,hypothesis:'A different question still has no new source evidence since the last decision.'})!,/No new source range/);
+// Rejection preserves known evidence and still permits deliberate missing-context
+// recovery or a corrected final, without resetting into unconditional inspection.
+const rejected=new InvestigationWorkflow();
+rejected.read('large.py');
+rejected.observe(action,JSON.stringify({start:0,end:401,nextOffset:401}));
+rejected.finalRejected('Read the next page before drawing a conclusion.');
+assert.deepEqual((await rejected.constraints()).action,['plan_probe','continue_inspection','final']);
+assert.equal(rejected.snapshot().pageTurns,1);
+assert.equal(rejected.snapshot().sourceProgress,1);
+assert.deepEqual(rejected.snapshot().readPaths,['large.py']);
+const missingContext={...continuation,offset:401};
+assert.equal(rejected.validate(missingContext),null);
+rejected.continueInspection(missingContext);
+assert.ok((await rejected.constraints()).action.includes('read_file'));
+rejected.finalRejected('The required evidence is still missing.');
+assert.match(rejected.validate(missingContext)!,/already attempted/);
+assert.ok((await rejected.constraints()).action.includes('final'));
 assert.equal(decodeAuditAction(JSON.stringify({...action,action:'final',result:{findings:[]}})).answer,'{"findings":[]}');
 assert.throws(()=>decodeAuditAction(JSON.stringify({...action,result:{findings:[]}})));
 const original=process.env.LOCAL_MODEL_PROFILE;
