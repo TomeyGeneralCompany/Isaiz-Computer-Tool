@@ -56,6 +56,7 @@ jobs:
           npx tsx scripts/test-source-candidates.ts
           npx tsx scripts/test-guided-source-probes.ts
           npx tsx scripts/test-one-bounty-settings.ts
+          npx tsx scripts/test-one-bounty-progress.ts
           node --import tsx scripts/one-bounty.ts --help
           if node --import tsx scripts/one-bounty.ts --timeout-min 0; then echo 'Invalid one-bounty timeout accepted'; exit 1; fi
           npx tsx scripts/test-audit-allowance.ts
