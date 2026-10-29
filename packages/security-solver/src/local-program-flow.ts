@@ -247,7 +247,7 @@ Do not claim production testing, JavaScript execution, file access or other effe
               }catch{}
               if(claimedValid)continue;
               const sites:{file:string,line:number}[]=[];
-              for(const candidatePath of eligiblePaths.slice(0,80)) {
+              for(const candidatePath of [...new Set([...sourceHints,...eligiblePaths])].slice(0,80)) {
                 if(sites.length>1)break;
                 const candidateRepo=repos.find(r=>candidatePath.startsWith(relative(root,r.directory).split(sep).join('/')+'/'));
                 if(!candidateRepo || candidateRepo.url!==record.repositoryUrl)continue;
@@ -290,7 +290,7 @@ Do not claim production testing, JavaScript execution, file access or other effe
                 const otherCallers:{file:string,line:number,code:string}[]=[];
                 // Offer exact, previously inspected call sites. Do not infer a
                 // vulnerability or forge caller evidence to fix model output.
-                for(const sourcePath of eligiblePaths.slice(0,40)) {
+                for(const sourcePath of [...new Set([...sourceHints,...eligiblePaths])].slice(0,40)) {
                   if(otherCallers.length>=5)break;
                   const targetRepoPath=sourcePath.replace(/\\/g,'/');
                   const sourceRepo=repos.find(r=>targetRepoPath.startsWith(relative(root,r.directory).split(sep).join('/')+'/'));
