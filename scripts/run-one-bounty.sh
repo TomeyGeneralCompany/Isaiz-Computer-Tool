@@ -6,7 +6,7 @@ umask 077
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 source "$ROOT/scripts/node-runtime.sh"
-for exe in flock timeout tee node; do
+for exe in flock tee node; do
   command -v "$exe" >/dev/null 2>&1 || { echo "Missing dependency: $exe" >&2; exit 127; }
 done
 [[ -d node_modules && -f .env ]] || {
@@ -20,7 +20,7 @@ flock -n 8 || { echo "AutoHack supervisor is running. Stop it before one-bounty 
 exec 9>data/orchestrator.lock
 flock -n 9 || { echo "AutoHack orchestrator is running. Stop it before one-bounty mode." >&2; exit 2; }
 export PROJECT_ROOT="$ROOT"
-# A single cap bounds discovery, inference, review and cleanup.
+# --timeout-min limits inactivity, not productive wall-clock run time.
 minutes=35
 args=("$@")
 for ((i=0;i<${#args[@]};i++)); do
@@ -39,10 +39,7 @@ fi
 LOG="data/one-bounty/terminal-$(date -u +%Y%m%dT%H%M%SZ).log"
 echo "One-bounty terminal log: $ROOT/$LOG"
 set +e
-timeout --signal=TERM --kill-after=30s "$((10#$minutes*60+45))" node --import tsx scripts/one-bounty.ts "$@" 2>&1 | tee "$LOG"
+node --import tsx scripts/one-bounty.ts "$@" 2>&1 | tee "$LOG"
 code=${PIPESTATUS[0]}
 set -e
-if (( code==124 || code==137 )); then
-  echo "Time cap hit; inspect the saved log and per-run JSON summary." >&2
-fi
 exit "$code"
