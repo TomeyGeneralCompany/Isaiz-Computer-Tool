@@ -97,7 +97,7 @@ try {
           'The model must receive explicit rejection feedback in conversation context');
       }
       if(emptySequence && ['plan_probe','verify_source'].includes(chosen.action) && chosen.answer!=='solidity_sequence')chosen.sequence={};
-      assert.ok(request.format.properties.action.enum.includes(chosen.action));
+      assert.ok(request.format.properties.action.enum.includes(chosen.action), 'Turn '+i+' rejected scripted action '+chosen.action+'; allowed='+JSON.stringify(request.format.properties.action.enum));
       assert.ok(request.messages.at(-1).content.includes('Controller progress'));
       assert.equal(request.stream,true);
       const output=JSON.stringify(chosen),split=Math.floor(output.length/2);
