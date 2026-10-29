@@ -4,7 +4,7 @@
  * The per-run report records observed results, including failures.
  */
 import 'dotenv/config';
-import {mkdirSync, writeFileSync, readdirSync, statSync, readFileSync} from 'node:fs';
+import {mkdirSync, writeFileSync, readdirSync, statSync, readFileSync, openSync, readSync, closeSync} from 'node:fs';
 import {advanceBountyProgress,idleBountyExpired,type BountyProgress} from './one-bounty-progress';
 import {join, resolve} from 'node:path';
 import {eq} from 'drizzle-orm';
@@ -102,7 +102,7 @@ async function main() {
       if(!file) {
         let newest=startedAt-1000;
         for(const name of readdirSync(logs)) {
-          if(!/^local-hunt-[a-f0-9]+\\.log$/.test(name))continue;
+          if(!/^local-hunt-[a-f0-9]+\.log$/.test(name))continue;
           const path=join(logs,name);
           const stamp=statSync(path).mtimeMs;
           if(stamp>newest){file=path;newest=stamp;}
@@ -116,8 +116,15 @@ async function main() {
     let note='';
     if(progress.logPath&&progress.logBytes!==prior.logBytes){
       try {
-        const text=readFileSync(progress.logPath,'utf8').slice(-5000);
-        const events=text.split('\\n').filter(line=>/^\\[(?:ACQUISITION_|CAPABILITY_|STATIC_LEADS|SOURCE_MAP|MODEL_START|MODEL_PROGRESS|OLLAMA|READ_OK|GUIDED_SOURCE_PROBE|PROBE_|FINAL_|TOOL)\\]/.test(line));
+        const fd=openSync(progress.logPath,'r');
+        let text:string;
+        try {
+          const length=Math.min(5000,statSync(progress.logPath).size);
+          const buffer=Buffer.alloc(length);
+          readSync(fd,buffer,0,length,Math.max(0,progress.logBytes-length));
+          text=buffer.toString('utf8');
+        } finally {closeSync(fd);}
+        const events=text.split('\n').filter(line=>/^\\[(?:ACQUISITION_[A-Z_]+|CAPABILITY_[A-Z_]+|STATIC_LEADS|SOURCE_MAP|MODEL_START|MODEL_PROGRESS|OLLAMA|READ_OK|GUIDED_SOURCE_PROBE|PROBE_[A-Z_]+|FINAL_[A-Z_]+|TOOL)/.test(line));
         const last=events.at(-1)||'';
         note=last.slice(0,220);
       }catch {}
