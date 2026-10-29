@@ -2,7 +2,7 @@
  * All source belongs to a fresh local test repository; no provider or production requests.
  */
 import assert from 'node:assert/strict';
-import {mkdtemp,mkdir,writeFile,readFile,chmod,rm} from 'node:fs/promises';
+import {mkdtemp,mkdir,writeFile,readFile,chmod,rm,readdir,copyFile} from 'node:fs/promises';
 import {execFileSync} from 'node:child_process';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
@@ -79,5 +79,16 @@ else:
   console.log('Actual Qwen3:4b scoped program hunt, source probe, report, replay and independent review PASSED');
 } finally {
   process.env.PATH=originalPath;
+  // Preserve reviewer turn/action logs before deleting the isolated fixture workspace.
+  // Without this, a review timeout leaves only the generic 720-second CI error.
+  try {
+    const sourceLogs=join(root,'data','logs');
+    const destination=join(process.cwd(),'data','production-workflow-tests','review-diagnostics');
+    for(const name of await readdir(sourceLogs).catch(()=>[])) {
+      if(!name.startsWith('local-review-') || !(name.endsWith('.log') || name.endsWith('.summary.json')))continue;
+      await mkdir(destination,{recursive:true});
+      await copyFile(join(sourceLogs,name),join(destination,name));
+    }
+  }catch(error) {console.error('Could not preserve reviewer diagnostics:',error);}
   await rm(root,{recursive:true,force:true});
 }
