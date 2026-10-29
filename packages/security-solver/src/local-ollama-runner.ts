@@ -242,8 +242,18 @@ export async function runLocalAudit(
         !["action","path","query","answer"].includes(key) || !Array.isArray(values) || !values.length || values.some(value=>typeof value!=="string"))))
         throw new Error("Invalid task action constraints");
       if(constraints?.action?.some(action=>!actionSchema.properties.action.enum.includes(action)))throw new Error("Task requested an unavailable action");
-      const requestSchema=constraints ? {...actionSchema,properties:{...actionSchema.properties,
+      let requestSchema=constraints ? {...actionSchema,properties:{...actionSchema.properties,
         ...Object.fromEntries(Object.entries(constraints).map(([key,values])=>[key,{type:"string",enum:values}]))}} : actionSchema;
+      if(structured && limits.finalSchema && emptyFinals>=2 &&
+          (!constraints?.action || constraints.action.includes('final'))) {
+        // Third attempt after empty finals must contain an actual final result.
+        // Constrain only its transport shape, never its substantive conclusions.
+        requestSchema={...requestSchema,
+          properties:{...requestSchema.properties,action:{type:'string',enum:['final']},
+            result:limits.finalSchema},
+          required:[...actionSchema.required,'result']};
+        await appendFile(logFile,'[FINAL_RESULT_OBJECT_REQUIRED] Empty final recovery; no result fabricated\\n');
+      }
       const schemaExtra=Math.max(0,JSON.stringify(requestSchema).length-JSON.stringify(actionSchema).length);
       const progress=workflow ? workflow.note() : limits.progressNote?.();
       if(progress && progress.length>2000)throw new Error("Controller progress note exceeds 2000 characters");
