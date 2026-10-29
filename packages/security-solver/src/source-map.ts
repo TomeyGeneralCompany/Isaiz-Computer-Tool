@@ -14,12 +14,12 @@ export async function buildSourceMap(root:string,paths:string[]) {
       if(size>256000 || bytes+size>2000000){skipped++;continue;}
       const text=await readFile(full,'utf8');bytes+=size;
       const code=sourceCodeOnly(text);sources.push({path,code});
-      const declarations=/\b(?:def|function)\s+([A-Za-z_$][\w$]*)\s*\([^\n)]*\)|\b(?:public\s+)?(?:static\s+)?String\s+([A-Za-z_$][\w$]*)\s*\([^\n)]*\)|\b(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?\([^\n)]*\)\s*=>/g;
+      const declarations=/\b(?:def|function)\s+([A-Za-z_$][\w$]*)\s*\([^\n)]*\)|\b(?:(?:public|protected|private|final|static|synchronized)\s+){0,5}(?:String|byte\s*\[\s*\])\s+([A-Za-z_$][\w$]*)\s*\([^\n)]*\)|\b(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?\([^\n)]*\)\s*=>/g;
       for(const match of code.matchAll(declarations)) {
         if(symbols.length>=256)break;
         const signature=text.slice(match.index!,match.index!+match[0].length);
         const probeHint=path.endsWith('.sol')?'Solidity: inspect ABI/constructor and state assertions':
-          path.endsWith('.java')&&!/public\s+static\s+String/.test(signature)?'Not a supported public static String entrypoint; inspect caller or choose another candidate':
+          path.endsWith('.java')?'Java candidate: inspect a public String or UTF-8 byte[] function and its caller; static or public no-argument-constructible instance methods are supported':
           'Candidate only: string probes require one string argument and a string result; inspect body, exports, dependencies and caller';
         symbols.push({path,name:match[1]||match[2]||match[3],offset:match.index!,line:text.slice(0,match.index).split('\n').length,signature,probeHint,callers:[]});
       }
