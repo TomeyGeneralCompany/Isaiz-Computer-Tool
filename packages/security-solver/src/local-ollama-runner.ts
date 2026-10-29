@@ -94,6 +94,8 @@ export async function runLocalAudit(
   let usedTurns=0, finalAnswer:string|undefined, stoppingReason="Inspection interrupted";
   let emptyFinals=0;
   let rejectedPlans=0;
+  let consecutiveWorkflowRejections=0;
+  let lastWorkflowRejection='';
   const sourceTotals=new Map<string,number>();
   const hypotheses:Array<{turn:number;path:string;statement:string}>=[];
   const renew=async(turn:number)=>{
@@ -237,7 +239,11 @@ export async function runLocalAudit(
       usedTurns=turn+1;
       controller.signal.throwIfAborted();
       // Keep stable history; send fresh controller state only with this request.
-      const constraints=workflow ? await workflow.constraints() : limits.actionConstraints?.();
+      let constraints=workflow ? await workflow.constraints() : limits.actionConstraints?.();
+      if(workflow && consecutiveWorkflowRejections>=2 && constraints?.action?.includes('plan_probe')) {
+        const otherActions=constraints.action.filter(name=>name!=='plan_probe');
+        if(otherActions.length)constraints={...constraints,action:otherActions};
+      }
       if(constraints && (JSON.stringify(constraints).length>3000 || Object.entries(constraints).some(([key,values])=>
         !["action","path","query","answer"].includes(key) || !Array.isArray(values) || !values.length || values.some(value=>typeof value!=="string"))))
         throw new Error("Invalid task action constraints");
@@ -314,9 +320,15 @@ export async function runLocalAudit(
         const workflowError=workflow?.validate(action);
         if(workflowError) {
           workflow!.feedback(workflowError);
+          consecutiveWorkflowRejections=lastWorkflowRejection===workflowError?consecutiveWorkflowRejections+1:1;
+          lastWorkflowRejection=workflowError;
           await appendFile(logFile,'[WORKFLOW_REJECTED] '+workflowError+'\n');
+          messages.push({role:'user',content:'Controller rejected the last action: '+workflowError+
+            '. Do not repeat the rejected probe. Inspect a new call site, use recorded evidence, or give an evidence-based final finding or incomplete outcome. /no_think'});
           continue;
         }
+        consecutiveWorkflowRejections=0;
+        lastWorkflowRejection='';
         if(action.action==='continue_inspection') {
           if(!workflow)throw new Error('Inspection decisions require production workflow');
           workflow.continueInspection(action);
