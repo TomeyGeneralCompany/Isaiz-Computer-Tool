@@ -205,8 +205,22 @@ Do not claim production testing, JavaScript execution, file access or other effe
         },
         validateFinal:async text=>{
           try {
-            const value=huntSchema.parse(JSON.parse(text));
-            if(value.outcome === "no_testable_candidate") {parsed=value;return null;}
+            const proposed=JSON.parse(text);
+            if(proposed && typeof proposed==='object' && !Array.isArray(proposed) &&
+                Array.isArray(proposed.findings) && proposed.findings.length>0 &&
+                ['testable_candidate','testable_candidate_found'].includes(proposed.outcome))
+              proposed.outcome='inspected';
+            const value=huntSchema.parse(proposed);
+            if(value.outcome === "no_testable_candidate") {
+              if(session.completedProbes) {
+                const observed=[...session.cases].map(([caseId,record])=>({caseId,
+                  path:record.spec.file,function:record.spec.function,
+                  kind:record.spec.kind,observed:record.result.behavior_observed})).slice(0,3);
+                return "A real source probe already completed in this hunt. Do not claim no testable function or no probe. Recorded cases: "+
+                  JSON.stringify(observed)+". Read a real caller and its line, check mitigations, and report only evidence-supported findings using an actual caseId. If no reportable issue is supported, return findings=[] without outcome=no_testable_candidate.";
+              }
+              parsed=value;return null;
+            }
             if(!session.completedProbes && !session.blockedReason)return "No supported probe has completed. Use verify_source for a concrete candidate, or return outcome=no_testable_candidate with a reason and empty findings to save incomplete coverage.";
             if(value.findings.length && !reads.covers("audit-policy.txt",0,policyText.length))return "Read every page of audit-policy.txt before reporting a finding; continue at nextOffset.";
             for(const finding of value.findings) {
@@ -225,7 +239,14 @@ Do not claim production testing, JavaScript execution, file access or other effe
               if(!reads.sawLine(finding.callerFile,text,finding.callerLine))return "Read the page containing the entire claimed caller line before reporting.";
             }
             parsed=value;return null;
-          }catch{return "Return only the requested findings JSON. Omit findings that lack supported reproduction and source evidence.";}
+          }catch(error) {
+            if(error instanceof z.ZodError) {
+              const issues=error.issues.slice(0,5).map(issue=>({path:issue.path.join('.'),message:issue.message}));
+              return "Findings JSON violates the required result schema: "+JSON.stringify(issues).slice(0,900)+
+                ". Correct these exact fields using actual inspected source and verified probe evidence. Do not invent case IDs or callers.";
+            }
+            return "Return a parseable findings JSON object with findings:[] or up to three evidence-supported candidates. Do not invent test results.";
+          }
         },
       });
     signal.throwIfAborted();

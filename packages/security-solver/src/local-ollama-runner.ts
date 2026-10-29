@@ -94,6 +94,8 @@ export async function runLocalAudit(
   let usedTurns=0, finalAnswer:string|undefined, stoppingReason="Inspection interrupted";
   let emptyFinals=0;
   let rejectedPlans=0;
+  let repeatedWorkflowRejections=0;
+  let previousWorkflowRejection='';
   const sourceTotals=new Map<string,number>();
   const hypotheses:Array<{turn:number;path:string;statement:string}>=[];
   const renew=async(turn:number)=>{
@@ -237,13 +239,29 @@ export async function runLocalAudit(
       usedTurns=turn+1;
       controller.signal.throwIfAborted();
       // Keep stable history; send fresh controller state only with this request.
-      const constraints=workflow ? await workflow.constraints() : limits.actionConstraints?.();
+      let constraints=workflow ? await workflow.constraints() : limits.actionConstraints?.();
+      // When the controller has already run this exact probe, do not permit
+      // 80 identical attempts. Retain final and continuation options.
+      if(workflow && repeatedWorkflowRejections>=2 && constraints?.action?.includes('plan_probe')) {
+        const remaining=constraints.action.filter(a=>a!=='plan_probe');
+        if(remaining.length)constraints={...constraints,action:remaining};
+      }
       if(constraints && (JSON.stringify(constraints).length>3000 || Object.entries(constraints).some(([key,values])=>
         !["action","path","query","answer"].includes(key) || !Array.isArray(values) || !values.length || values.some(value=>typeof value!=="string"))))
         throw new Error("Invalid task action constraints");
       if(constraints?.action?.some(action=>!actionSchema.properties.action.enum.includes(action)))throw new Error("Task requested an unavailable action");
-      const requestSchema=constraints ? {...actionSchema,properties:{...actionSchema.properties,
+      let requestSchema:Record<string,any>=constraints ? {...actionSchema,properties:{...actionSchema.properties,
         ...Object.fromEntries(Object.entries(constraints).map(([key,values])=>[key,{type:"string",enum:values}]))}} : actionSchema;
+      if(structured && limits.finalSchema && emptyFinals>=2 &&
+          (!constraints?.action || constraints.action.includes('final'))) {
+        // Third attempt after empty finals must contain an actual final result.
+        // Constrain only its transport shape, never its substantive conclusions.
+        requestSchema={...requestSchema,
+          properties:{...requestSchema.properties,action:{type:'string',enum:['final']},
+            result:limits.finalSchema},
+          required:[...actionSchema.required,'result']};
+        await appendFile(logFile,'[FINAL_RESULT_OBJECT_REQUIRED] Empty final recovery; no result fabricated\\n');
+      }
       const schemaExtra=Math.max(0,JSON.stringify(requestSchema).length-JSON.stringify(actionSchema).length);
       const progress=workflow ? workflow.note() : limits.progressNote?.();
       if(progress && progress.length>2000)throw new Error("Controller progress note exceeds 2000 characters");
@@ -314,7 +332,10 @@ export async function runLocalAudit(
         const workflowError=workflow?.validate(action);
         if(workflowError) {
           workflow!.feedback(workflowError);
+          if(previousWorkflowRejection===workflowError)repeatedWorkflowRejections++;
+          else {previousWorkflowRejection=workflowError;repeatedWorkflowRejections=1;}
           await appendFile(logFile,'[WORKFLOW_REJECTED] '+workflowError+'\n');
+          messages.push({role:'user',content:'Rejected action: '+workflowError+' Use recorded test evidence and choose an available next action; do not repeat this plan. /no_think'});
           continue;
         }
         if(action.action==='continue_inspection') {
@@ -353,6 +374,7 @@ export async function runLocalAudit(
           await appendFile(logFile,'[PROBE_PLANNED] '+JSON.stringify(action)+'\n');
           continue;
         }
+        repeatedWorkflowRejections=0;previousWorkflowRejection='';
         if(action.hypothesis)hypotheses.push({turn:turn+1,path:action.path,statement:action.hypothesis});
         await appendFile(logFile,"[MODEL_ACTION] "+JSON.stringify(action)+"\n");
         messages.push({role:"assistant",content:message.content});
@@ -374,10 +396,13 @@ export async function runLocalAudit(
           const rejected=messages.at(-1)!;
           rejected.content="Empty final answer rejected.";
           messages.push(fitAuditToolOutput(messages.slice(0,2),rejected,"final_validation",
-            'The final action must put the requested result in the answer STRING. Encode JSON inside that string when the task asks for JSON. Do not leave answer empty. Follow the task outcome rules; do not invent tests or findings.',exchangeBudget,true).message);
+            'Your final action was empty. The response MUST include either a nonempty answer STRING containing the requested JSON or a result OBJECT with the requested findings. Do not omit both. A completed source probe exists when the progress record shows an observation; use its real caseId and read the actual caller before claiming a finding. No invented tests or findings.',exchangeBudget,true).message);
           await appendFile(logFile,"[EMPTY_FINAL_RETRY] "+emptyFinals+"\n");
           continue;
         }
+        // An earlier empty final must not consume retries after the model later
+        // produces a substantive answer or returns to source inspection.
+        emptyFinals=0;
         const feedback = await limits.validateFinal?.(message.content);
         if (feedback) {
           // Validation may require rereading evidence; this is an intentional
