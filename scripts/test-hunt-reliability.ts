@@ -37,9 +37,9 @@ try {
  assert.deepEqual(mixed.sourcePaths,['New.sol'],'Preflight exposes compatible source paths, excluding unsupported compiler files');
  await writeFile(join(root,'Render.java'),'public class Render {}');
  execFileSync('git',['-C',root,'add','.']);
- assert.ok(!(await inspectSourceCapability(root)).sourcePaths.includes('Render.java'),'A Java class alone is not a runnable string probe');
+ assert.ok((await inspectSourceCapability(root)).sourcePaths.includes('Render.java'),'Java source remains inspectable even without a supported probe entrypoint');
  await writeFile(join(root,'Render.java'),'public class Render { public String instance(String value) { return value; } }');
- assert.ok(!(await inspectSourceCapability(root)).sourcePaths.includes('Render.java'),'Instance methods need unsupported setup');
+ assert.ok((await inspectSourceCapability(root)).sourcePaths.includes('Render.java'),'Public instance methods remain available for local inspection');
  await writeFile(join(root,'Render.java'),'public class Render { public static String render(final String value) { return value; } }');
  assert.ok((await inspectSourceCapability(root)).sourcePaths.includes('Render.java'),'Compatible entrypoints remain available');
  await symlink('absent.sol',join(root,'Broken.sol'));
