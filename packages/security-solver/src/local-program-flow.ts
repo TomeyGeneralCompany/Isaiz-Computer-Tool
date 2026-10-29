@@ -206,7 +206,16 @@ Do not claim production testing, JavaScript execution, file access or other effe
         validateFinal:async text=>{
           try {
             const value=huntSchema.parse(JSON.parse(text));
-            if(value.outcome === "no_testable_candidate") {parsed=value;return null;}
+            if(value.outcome === "no_testable_candidate") {
+              if(session.completedProbes) {
+                const observed=[...session.cases].map(([caseId,record])=>({caseId,
+                  path:record.spec.file,function:record.spec.function,
+                  kind:record.spec.kind,observed:record.result.behavior_observed})).slice(0,3);
+                return "A real source probe already completed in this hunt. Do not claim no testable function or no probe. Recorded cases: "+
+                  JSON.stringify(observed)+". Read a real caller and its line, check mitigations, and report only evidence-supported findings using an actual caseId. If no reportable issue is supported, return findings=[] without outcome=no_testable_candidate.";
+              }
+              parsed=value;return null;
+            }
             if(!session.completedProbes && !session.blockedReason)return "No supported probe has completed. Use verify_source for a concrete candidate, or return outcome=no_testable_candidate with a reason and empty findings to save incomplete coverage.";
             if(value.findings.length && !reads.covers("audit-policy.txt",0,policyText.length))return "Read every page of audit-policy.txt before reporting a finding; continue at nextOffset.";
             for(const finding of value.findings) {
