@@ -93,6 +93,7 @@ export async function runLocalAudit(
   let timer = setTimeout(() => controller.abort(), timeoutMs);
   let usedTurns=0, finalAnswer:string|undefined, stoppingReason="Inspection interrupted";
   let emptyFinals=0;
+  let rejectedPlans=0;
   const sourceTotals=new Map<string,number>();
   const hypotheses:Array<{turn:number;path:string;statement:string}>=[];
   const renew=async(turn:number)=>{
@@ -303,6 +304,13 @@ export async function runLocalAudit(
           messages.push({role:"user",content:"That action is not available in the current task stage. Use the current response schema and controller progress. No tool was executed. /no_think"});
           continue;
         }
+        if(['plan_probe','verify_source','verify_python'].includes(action.action) &&
+            action.answer!=='solidity_sequence' && action.sequence!==undefined) {
+          // Normalize optional structured-output fields before validation,
+          // planning and duplicate detection; they are unused by these probes.
+          delete action.sequence;
+          await appendFile(logFile,'[UNUSED_SEQUENCE_IGNORED] '+JSON.stringify({action:action.action,path:action.path,kind:action.answer})+'\n');
+        }
         const workflowError=workflow?.validate(action);
         if(workflowError) {
           workflow!.feedback(workflowError);
@@ -320,11 +328,24 @@ export async function runLocalAudit(
           if(!workflow)throw new Error('Probe planning requires production workflow');
           if(action.answer==='solidity_sequence') {
             const sequence=soliditySequenceSchema.safeParse(action.sequence);
-            if(!sequence.success){workflow.feedback('Provide a valid declarative Solidity sequence before planning its probe.');continue;}
-          } else if(action.sequence!==undefined) {workflow.feedback('Sequence is only allowed for solidity_sequence probes.');continue;}
-          if(JSON.stringify([...messages.slice(0,2),message]).length>exchangeBudget-1000) {
-            workflow.feedback('The proposed action is too large for one exchange. Plan a shorter probe sequence.');continue;
+            if(!sequence.success) {
+              const feedback='Provide a valid declarative Solidity sequence before planning its probe.';
+              workflow.feedback(feedback);
+              await appendFile(logFile,'[PLAN_REJECTED] '+feedback+'\n');
+              messages.push({role:'user',content:feedback+' /no_think'});
+              if(++rejectedPlans>=3)throw new Error('Repeated invalid Solidity probe plans');
+              continue;
+            }
           }
+          if(JSON.stringify([...messages.slice(0,2),message]).length>exchangeBudget-1000) {
+            const feedback='The proposed action is too large for one exchange. Plan a shorter probe sequence.';
+            workflow.feedback(feedback);
+            await appendFile(logFile,'[PLAN_REJECTED] '+feedback+'\n');
+            messages.push({role:'user',content:feedback+' /no_think'});
+            if(++rejectedPlans>=3)throw new Error('Repeated oversized probe plans');
+            continue;
+          }
+          rejectedPlans=0;
           workflow.plan(action);
           await persistMemory();
           messages.push({role:"assistant",content:message.content});

@@ -12,6 +12,7 @@ import {InvestigationWorkflow} from '../packages/security-solver/src/investigati
 const variant=Number(process.argv.find(a=>a.startsWith('--variant='))?.split('=')[1]||0);
 if(!Number.isInteger(variant)||variant<0||variant>2)throw new Error('Variant must be 0, 1 or 2');
 const largeContext=process.argv.includes('--large-context');
+const emptySequence=process.argv.includes('--empty-sequence');
 const live=process.argv.includes('--real-model'),mockProbes=process.argv.includes('--mock-probes'),prefetch=process.argv.includes('--prefetch'),execute=promisify(execFile);
 if(live&&mockProbes)throw new Error('Real model check requires real probes');
 const root=await mkdtemp(join(tmpdir(),'production-workflow-'));
@@ -67,6 +68,7 @@ try {
         {...action('plan_probe',f.path,f.fn,'html_reflection'),hypothesis:'Markup survives interpolation; escaped marker would disprove it.'}:
         action('verify_source',f.path,f.fn,'html_reflection');
       else chosen=action('final','','',JSON.stringify({files:fixtures.map(f=>({path:f.path,rawMarkup:f.raw}))}));
+      if(emptySequence && ['plan_probe','verify_source'].includes(chosen.action) && chosen.answer!=='solidity_sequence')chosen.sequence={};
       assert.ok(request.format.properties.action.enum.includes(chosen.action));
       assert.ok(request.messages.at(-1).content.includes('Controller progress'));
       assert.equal(request.stream,true);
