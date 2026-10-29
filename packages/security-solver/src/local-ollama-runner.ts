@@ -248,8 +248,21 @@ export async function runLocalAudit(
         !["action","path","query","answer"].includes(key) || !Array.isArray(values) || !values.length || values.some(value=>typeof value!=="string"))))
         throw new Error("Invalid task action constraints");
       if(constraints?.action?.some(action=>!actionSchema.properties.action.enum.includes(action)))throw new Error("Task requested an unavailable action");
-      const requestSchema=constraints ? {...actionSchema,properties:{...actionSchema.properties,
+      let requestSchema:Record<string,any>=constraints ? {...actionSchema,properties:{...actionSchema.properties,
         ...Object.fromEntries(Object.entries(constraints).map(([key,values])=>[key,{type:"string",enum:values}]))}} : actionSchema;
+      if(structured && workflow && limits.finalSchema && emptyFinals>=1 &&
+         (!constraints?.action || constraints.action.includes('final'))) {
+        // Qwen3:4b sometimes returns a valid "final" action with both answer=""
+        // and result omitted. Once that is observed, require the typed final
+        // result in the NEXT model response rather than repeating an identical
+        // unconstrained prompt. The semantic validator still checks every claim.
+        requestSchema={...requestSchema,
+          properties:{...requestSchema.properties,
+            action:{type:'string',enum:['final']},
+            result:limits.finalSchema},
+          required:[...new Set([...actionSchema.required,'result'])]};
+        await appendFile(logFile,'[FINAL_RESULT_REQUIRED] Recovery from empty final; evidence validation still required\\n');
+      }
       const schemaExtra=Math.max(0,JSON.stringify(requestSchema).length-JSON.stringify(actionSchema).length);
       const progress=workflow ? workflow.note() : limits.progressNote?.();
       if(progress && progress.length>2000)throw new Error("Controller progress note exceeds 2000 characters");
