@@ -36,6 +36,8 @@ export interface LocalAuditLimits {
   finalSchema?: Record<string,unknown>;
   productionWorkflow?: boolean;
   dynamicAllowance?: boolean;
+  /** Pre-read only authorized source pages for read-only independent review. */
+  prefetchReadOnly?: boolean;
   onAllowance?: (deadline:number) => Promise<void>;
   checkpointPath?: string;
   initialSourcePaths?: string[];
@@ -169,7 +171,7 @@ export async function runLocalAudit(
     // Feed real source pages to the model, then run only narrowly recognizable
     // local probes in the same isolated verifier. Never manufacture evidence.
     const seededPaths=limits.initialSourcePaths?.slice(0,3) || [];
-    if(workflow && structured && process.env.AUTOHACK_AUTO_SOURCE_PREFETCH !== 'false') {
+    if(structured && (workflow || limits.prefetchReadOnly) && process.env.AUTOHACK_AUTO_SOURCE_PREFETCH !== 'false') {
       for(const seededPath of seededPaths) {
         const seeded=limits.initialSourceLocations?.find(item=>item.path===seededPath);
         const offset=seeded?.offset ?? 0;
@@ -187,8 +189,8 @@ export async function runLocalAudit(
           const path=relative(root,full).split(sep).join('/');
           sourceTotals.set(path,delivered.totalCharacters);
           allowance.read(path,delivered.start,delivered.end,0);
-          workflow.read(path);
-          workflow.observe(action,fitted.output);
+          workflow?.read(path);
+          workflow?.observe(action,fitted.output);
           limits.onRead?.(path,{start:delivered.start,end:delivered.end});
           navigation.observe('read_file',path,offset,'',delivered);
           successfulReads++;
