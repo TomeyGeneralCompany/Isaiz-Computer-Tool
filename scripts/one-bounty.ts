@@ -42,12 +42,13 @@ async function main() {
   if(options.help){console.log(usage);return;}
   const root=resolve(process.cwd());
   process.env.PROJECT_ROOT=root;
-  const {getDb,schema,getConfig}=await import('../packages/core/src/index');
+  // This opt-out is process-local; never alter the operator's saved settings.
+  process.env.AUTOHACK_SINGLE_BOUNTY_DIAGNOSTIC='1';
+  const {getDb,schema}=await import('../packages/core/src/index');
   const {rankEligiblePrograms,huntProgram,processAdversarialQueue,getProgramSelectionSummary}=await import('../packages/security-solver/src/index');
   const {requestLocalJobCancellation}=await import('../packages/security-solver/src/local-job');
   if(!process.env.LOCAL_OLLAMA_MODEL?.trim())
     throw new Error('LOCAL_OLLAMA_MODEL is missing. This command requires the configured local Ollama engine.');
-  const config=getConfig();
   const ranked=rankEligiblePrograms();
   if(options.list){
     if(!ranked.length)console.log('No currently eligible, assessed programs. Selection: '+JSON.stringify(getProgramSelectionSummary()));
@@ -55,8 +56,6 @@ async function main() {
       console.log([program.id,program.provider,program.providerProgramId||'',program.name,'difficulty='+difficulty].join(' | '));
     return;
   }
-  if(config.SECURITY_AUTO_SUBMIT)
-    throw new Error('Automatic submission is enabled in runtime settings. Disable SECURITY_AUTO_SUBMIT in the dashboard before running this diagnostic.');
   const matches=options.program?ranked.filter(x=>[x.program.id,x.program.providerProgramId||'',x.program.name]
     .some(s=>s.toLowerCase()===options.program!.toLowerCase())):ranked.slice(0,1);
   if(matches.length!==1)throw new Error(options.program?
@@ -70,12 +69,13 @@ async function main() {
   const summaryPath=join(directory,id+'.json');
   const startedAt=Date.now();
   let timedOut=false;
+  let cancelled=false;
   const summary:any={version:1,runId:id,program:{id:program.id,provider:program.provider,
     name:program.name,handle:program.providerProgramId},startedAt:new Date(startedAt).toISOString(),
     timeoutMinutes:options.timeoutMin,automaticSubmission:false,status:'started'};
   const save=()=>writeFileSync(summaryPath,JSON.stringify(summary,null,2)+'\n',{mode:0o600});
   save();
-  const onSignal=()=>{console.error('Cancellation requested. Stopping the active local hunt.');requestLocalJobCancellation();};
+  const onSignal=()=>{cancelled=true;console.error('Cancellation requested. Stopping the active local hunt.');requestLocalJobCancellation();};
   process.on('SIGINT',onSignal);
   process.on('SIGTERM',onSignal);
   const timer=setTimeout(()=>{timedOut=true;console.error('One-bounty time limit reached; cancelling the active hunt.');requestLocalJobCancellation();},options.timeoutMin*60000);
@@ -85,12 +85,13 @@ async function main() {
   try {
     const outcome=await huntProgram(program,'manual');
     summary.findingsCreated=outcome.findingsCreated;
+    if(timedOut||cancelled)throw new Error('Run cancelled before review could start');
     console.log('Hunt completed: '+outcome.findingsCreated+' new candidate finding(s). Starting independent review.');
     await processAdversarialQueue(program.id);
-    summary.status=timedOut?'timed_out':'completed';
+    summary.status=timedOut?'timed_out':cancelled?'cancelled':'completed';
     console.log('Independent review finished.');
   }catch(error) {
-    summary.status=timedOut?'timed_out':'failed';
+    summary.status=timedOut?'timed_out':cancelled?'cancelled':'failed';
     summary.error=String(error instanceof Error?error.message:error).slice(0,1000);
     throw error;
   }finally {
