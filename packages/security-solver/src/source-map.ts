@@ -14,7 +14,7 @@ export async function buildSourceMap(root:string,paths:string[]) {
       if(size>256000 || bytes+size>2000000){skipped++;continue;}
       const text=await readFile(full,'utf8');bytes+=size;
       const code=sourceCodeOnly(text);sources.push({path,code});
-      const declarations=/\b(?:def|function)\s+([A-Za-z_$][\w$]*)\s*\([^\n)]*\)|\b(?:public\s+)?(?:static\s+)?String\s+([A-Za-z_$][\w$]*)\s*\([^\n)]*\)|\b(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?\([^\n)]*\)\s*=>/g;
+      const declarations=/\b(?:def|function)\s+([A-Za-z_$][\w$]*)\s*\([^\n)]*\)|\b(?:(?:public|protected|private|final|static|synchronized)\s+){0,5}(?:String|byte\s*\[\s*\])\s+([A-Za-z_$][\w$]*)\s*\([^\n)]*\)|\b(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?\([^\n)]*\)\s*=>/g;
       for(const match of code.matchAll(declarations)) {
         if(symbols.length>=256)break;
         const signature=text.slice(match.index!,match.index!+match[0].length);
