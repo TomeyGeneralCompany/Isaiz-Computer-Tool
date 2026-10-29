@@ -36,6 +36,8 @@ export interface LocalAuditLimits {
   finalSchema?: Record<string,unknown>;
   productionWorkflow?: boolean;
   dynamicAllowance?: boolean;
+  /** Pre-read only authorized source pages for read-only independent review. */
+  prefetchReadOnly?: boolean;
   onAllowance?: (deadline:number) => Promise<void>;
   checkpointPath?: string;
   initialSourcePaths?: string[];
@@ -93,6 +95,7 @@ export async function runLocalAudit(
   let timer = setTimeout(() => controller.abort(), timeoutMs);
   let usedTurns=0, finalAnswer:string|undefined, stoppingReason="Inspection interrupted";
   let emptyFinals=0;
+  let invalidReviewFinals=0;
   let rejectedPlans=0;
   let consecutiveWorkflowRejections=0;
   let lastWorkflowRejection='';
@@ -107,7 +110,7 @@ export async function runLocalAudit(
     }
   };
   const actionSchema = limits.verifyPython ? {...auditActionSchema,properties:{...auditActionSchema.properties,...(limits.finalSchema?{result:limits.finalSchema}:{}),sequence:soliditySequenceJsonSchema,
-    action:{type:"string",enum:[...auditActionSchema.properties.action.enum,"verify_source","verify_python",...(workflow?["plan_probe","continue_inspection"]:[])]}}} : auditActionSchema;
+    action:{type:"string",enum:[...auditActionSchema.properties.action.enum,"verify_source","verify_python",...(workflow?["plan_probe","continue_inspection"]:[])]}}} : {...auditActionSchema,properties:{...auditActionSchema.properties,...(limits.finalSchema?{result:limits.finalSchema}:{})}};
   const probePrompt = limits.verifyPython ? "\nThe verify_source action invokes a fixed, isolated source function probe. Set path to a .py, .js, .mjs, .cjs, .java or .sol source file, query to its public/exported function name (Contract.function for Solidity), answer to html_reflection or path_construction. The function must take one string and return a string. JavaScript exports may be async. Java supports public Class.method with a String or byte[] argument and String or UTF-8 byte[] return value, either static or with a public no-argument constructor; only JDK and repository source dependencies are supported, without Maven/Gradle execution. Solidity requires a deployable zero-argument constructor and a public/external view or pure function compatible with installed solc 0.8.30; runs on an in-memory local EVM. Use returned observations honestly; they do not prove full exploitability. No arbitrary commands are available. " + soliditySequencePrompt : "";
   const availableTools = limits.verifyPython ? [...tools,{type:"function",function:{
     name:"verify_source",description:probePrompt,parameters:{type:"object",
@@ -169,7 +172,7 @@ export async function runLocalAudit(
     // Feed real source pages to the model, then run only narrowly recognizable
     // local probes in the same isolated verifier. Never manufacture evidence.
     const seededPaths=limits.initialSourcePaths?.slice(0,3) || [];
-    if(workflow && structured && process.env.AUTOHACK_AUTO_SOURCE_PREFETCH !== 'false') {
+    if(structured && (workflow || limits.prefetchReadOnly) && process.env.AUTOHACK_AUTO_SOURCE_PREFETCH !== 'false') {
       for(const seededPath of seededPaths) {
         const seeded=limits.initialSourceLocations?.find(item=>item.path===seededPath);
         const offset=seeded?.offset ?? 0;
@@ -187,15 +190,15 @@ export async function runLocalAudit(
           const path=relative(root,full).split(sep).join('/');
           sourceTotals.set(path,delivered.totalCharacters);
           allowance.read(path,delivered.start,delivered.end,0);
-          workflow.read(path);
-          workflow.observe(action,fitted.output);
+          workflow?.read(path);
+          workflow?.observe(action,fitted.output);
           limits.onRead?.(path,{start:delivered.start,end:delivered.end});
           navigation.observe('read_file',path,offset,'',delivered);
           successfulReads++;
           recentActions.set(JSON.stringify(['read_file',path,offset,'']),{turn:-1,nextOffset:delivered.nextOffset,response:fitted.message});
           events.push(JSON.stringify({tool:'read_file',path,offset,end:delivered.end,nextOffset:delivered.nextOffset,status:'prefetched'}).slice(0,180));
           await appendFile(logFile,'[INITIAL_SOURCE_READ] '+JSON.stringify({path,start:delivered.start,end:delivered.end,nextOffset:delivered.nextOffset})+'\n');
-          if(process.env.AUTOHACK_GUIDED_SOURCE_PROBES==='false' || delivered.nextOffset!==null || offset!==0 || !limits.verifyPython)continue;
+          if(!workflow || process.env.AUTOHACK_GUIDED_SOURCE_PROBES==='false' || delivered.nextOffset!==null || offset!==0 || !limits.verifyPython)continue;
           const hint=guidedSourceProbe(path,delivered.text);
           if(!hint)continue;
           const planned={action:'plan_probe',path,query:hint.functionName,answer:hint.kind,hypothesis:hint.hypothesis};
@@ -248,8 +251,30 @@ export async function runLocalAudit(
         !["action","path","query","answer"].includes(key) || !Array.isArray(values) || !values.length || values.some(value=>typeof value!=="string"))))
         throw new Error("Invalid task action constraints");
       if(constraints?.action?.some(action=>!actionSchema.properties.action.enum.includes(action)))throw new Error("Task requested an unavailable action");
-      const requestSchema=constraints ? {...actionSchema,properties:{...actionSchema.properties,
+      let requestSchema:Record<string,any>=constraints ? {...actionSchema,properties:{...actionSchema.properties,
         ...Object.fromEntries(Object.entries(constraints).map(([key,values])=>[key,{type:"string",enum:values}]))}} : actionSchema;
+      if(structured && limits.finalSchema && (emptyFinals>=1 || invalidReviewFinals>=2) &&
+         (!constraints?.action || constraints.action.includes('final'))) {
+        // Qwen3:4b sometimes returns a valid "final" action with both answer=""
+        // and result omitted. Once that is observed, require the typed final
+        // result in the NEXT model response rather than repeating an identical
+        // unconstrained prompt. The semantic validator still checks every claim.
+        const strictResult=JSON.parse(JSON.stringify(limits.finalSchema)) as Record<string,any>;
+        // Give the tiny model exact recorded observation IDs in the schema,
+        // rather than asking it to reproduce a 64-character digest unaided.
+        // This only narrows options to real probes; it does not validate impact.
+        const recordedIds=[...new Set((workflow?.snapshot().observations || [])
+          .map(o=>o.caseId).filter((id):id is string=>typeof id==='string'&&/^[a-f0-9]{64}$/.test(id)))];
+        const item=strictResult.properties?.findings?.items;
+        if(recordedIds.length && item?.properties?.caseId)
+          item.properties.caseId={...item.properties.caseId,enum:recordedIds};
+        requestSchema={...requestSchema,
+          properties:{...requestSchema.properties,
+            action:{type:'string',enum:['final']},
+            result:strictResult},
+          required:[...new Set([...actionSchema.required,'result'])]};
+        await appendFile(logFile,'[FINAL_RESULT_REQUIRED] Recovery from empty final; evidence validation still required\\n');
+      }
       const schemaExtra=Math.max(0,JSON.stringify(requestSchema).length-JSON.stringify(actionSchema).length);
       const progress=workflow ? workflow.note() : limits.progressNote?.();
       if(progress && progress.length>2000)throw new Error("Controller progress note exceeds 2000 characters");
@@ -368,7 +393,7 @@ export async function runLocalAudit(
         if(action.hypothesis)hypotheses.push({turn:turn+1,path:action.path,statement:action.hypothesis});
         await appendFile(logFile,"[MODEL_ACTION] "+JSON.stringify(action)+"\n");
         messages.push({role:"assistant",content:message.content});
-        message = action.action === "final" ? {role:"assistant",content:action.answer} : {
+        message = action.action === "final" ? {role:"assistant",content:action.answer?.trim() || (action.result ? JSON.stringify(action.result) : "")} : {
           role:"assistant",content:"",tool_calls:[{function:{name:action.action,arguments:{path:action.path,query:action.query,kind:action.answer,offset:action.offset,sequence:action.sequence}}}],
         };
       } else {messages.push(message);}
@@ -386,12 +411,19 @@ export async function runLocalAudit(
           const rejected=messages.at(-1)!;
           rejected.content="Empty final answer rejected.";
           messages.push(fitAuditToolOutput(messages.slice(0,2),rejected,"final_validation",
-            'The final action must put the requested result in the answer STRING. Encode JSON inside that string when the task asks for JSON. Do not leave answer empty. Follow the task outcome rules; do not invent tests or findings.',exchangeBudget,true).message);
+            'Your final action had neither a nonempty answer nor a populated result object. Return a final action with the requested JSON either in answer as a JSON-encoded string OR in result as a JSON object, with answer set to "". Do not omit both. Use only recorded test evidence and actual inspected caller lines.',exchangeBudget,true).message);
           await appendFile(logFile,"[EMPTY_FINAL_RETRY] "+emptyFinals+"\n");
           continue;
         }
+        // Only CONSECUTIVE empty finals count as a retry streak. A substantive
+        // final rejected for source/schema reasons must not carry an old empty count.
+        emptyFinals=0;
         const feedback = await limits.validateFinal?.(message.content);
         if (feedback) {
+          // Escalate only repeated output-format failures; evidence-coverage failures
+          // must remain free to request more source pages.
+          invalidReviewFinals = !workflow && feedback.startsWith('Return the requested review JSON')
+            ? invalidReviewFinals + 1 : 0;
           // Fresh evidence may be needed, but a rejected final must not reset
           // the inspection checkpoint and reopen an unconditional read loop.
           recentActions.clear();stalledActions=0;workflow?.finalRejected(feedback);
@@ -402,6 +434,7 @@ export async function runLocalAudit(
           continue;
         }
         controller.signal.throwIfAborted();
+        invalidReviewFinals=0;
         finalAnswer=message.content;stoppingReason="Validated final answer";
         return message.content;
       }

@@ -4,6 +4,7 @@ on:
     paths:
       - '.github/workflows/real-model-acceptance.yml'
       - 'scripts/test-production-workflow.ts'
+      - 'scripts/test-real-program-hunt.ts'
       - 'packages/security-solver/src/**'
 jobs:
   qwen3-production-controller:
@@ -37,12 +38,26 @@ jobs:
           sudo apt-get install -y bubblewrap
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           node --import tsx scripts/test-production-workflow.ts --real-model --prefetch
+      - name: Real Qwen3 one-program source hunt, verified finding and independent review
+        timeout-minutes: 40
+        env:
+          LOCAL_OLLAMA_MODEL: qwen3:4b
+          LOCAL_MODEL_ADAPTER: ollama
+          LOCAL_OLLAMA_TOOL_PROTOCOL: json
+          LOCAL_MODEL_PROFILE: deterministic
+          AUTOHACK_OLLAMA_URL: http://127.0.0.1:11434/api/chat
+          SECURITY_SOURCE_CODE_TIMEOUT_MINUTES: '25'
+          SECURITY_HUNT_TIMEOUT_MINUTES: '12'
+        run: node --import tsx scripts/test-real-program-hunt.ts
       - name: Upload actual model transcript and observations
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: qwen3-real-controller-evidence
-          path: data/production-workflow-tests/
+          path: |
+            data/production-workflow-tests/
+            data/logs/local-review-*.log
+            data/logs/local-review-*.log.summary.json
           if-no-files-found: warn
       - name: Stop local model
         if: always()

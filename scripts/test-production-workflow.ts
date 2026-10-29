@@ -18,6 +18,7 @@ const largeContext=process.argv.includes('--large-context');
 const emptySequence=process.argv.includes('--empty-sequence');
 const prematureFinal=process.argv.includes('--premature-final');
 const duplicateProbePlan=process.argv.includes('--duplicate-probe-plan');
+const emptyFinalRecovery=process.argv.includes('--empty-final-recovery');
 const live=process.argv.includes('--real-model'),mockProbes=process.argv.includes('--mock-probes'),prefetch=process.argv.includes('--prefetch'),execute=promisify(execFile);
 if(live&&mockProbes)throw new Error('Real model check requires real probes');
 const root=await mkdtemp(join(tmpdir(),'production-workflow-'));
@@ -95,6 +96,17 @@ try {
         if(i===4)assert.ok(request.messages.some((m:any)=>m.content.includes('Controller rejected the last action')),
           'The model must receive explicit rejection feedback in conversation context');
       }
+      if(emptyFinalRecovery) {
+        const plan=(f:typeof fixtures[number])=>({...action('plan_probe',f.path,f.fn,'html_reflection'),
+          hypothesis:'Unescaped markup may survive into HTML; escaping input disproves it.'});
+        const probe=(f:typeof fixtures[number])=>action('verify_source',f.path,f.fn,'html_reflection');
+        const correctFinal=action('final','','',JSON.stringify({files:fixtures.map(f=>({path:f.path,rawMarkup:f.raw}))}));
+        chosen=[plan(fixtures[0]),probe(fixtures[0]),action('final'),correctFinal,action('final'),
+          {...action('continue_inspection',fixtures[1].path),
+            hypothesis:'Read the second source function and run a separate reproduction before concluding.'},
+          action('read_file',fixtures[1].path),plan(fixtures[1]),probe(fixtures[1]),correctFinal][i];
+        assert.ok(chosen,'Empty-final recovery exceeded expected turns');
+      }
       if(emptySequence && ['plan_probe','verify_source'].includes(chosen.action) && chosen.answer!=='solidity_sequence')chosen.sequence={};
       assert.ok(request.format.properties.action.enum.includes(chosen.action), 'Turn '+i+' rejected scripted action '+chosen.action+'; allowed='+JSON.stringify(request.format.properties.action.enum));
       assert.ok(request.messages.at(-1).content.includes('Controller progress'));
@@ -143,6 +155,7 @@ try {
     });
   const result=JSON.parse(answer);
   if(!live&&duplicateProbePlan)assert.equal(calls,8);
+  if(!live&&emptyFinalRecovery){assert.equal(calls,10);assert.match(await readFile(join(evidence,'audit.log'),'utf8'),/EMPTY_FINAL_RETRY/);}
   if(!live&&prematureFinal){assert.equal(calls,8);assert.match(await readFile(join(evidence,'audit.log'),'utf8'),/FINAL_REJECTED/);}
   for(const f of fixtures)assert.equal(result.files.find((r:any)=>r.path===f.path).rawMarkup,f.raw);
   const summary=JSON.parse(await readFile(join(evidence,'audit.log.summary.json'),'utf8'));

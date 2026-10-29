@@ -196,7 +196,7 @@ Do not claim production testing, JavaScript execution, file access or other effe
       process.env.LOCAL_OLLAMA_MODEL || "qwen3:4b",undefined,{
         onAllowance:async deadline=>writeSecuritySolverStatus({active:true,programId:program.id,programName:program.name,
           stage:"hunting",startedAt:statusStartedAt,timeoutMinutes:(deadline-Date.parse(statusStartedAt))/60000,pid:process.pid}),
-        signal,maxTurns,finalSchema:z.toJSONSchema(z.object({findings:z.array(candidateSchema),outcome:z.string().optional(),reason:z.string().optional()})),productionWorkflow:true,dynamicAllowance:process.env.LOCAL_HUNT_DYNAMIC_ALLOWANCE !== "false",initialSourcePaths:sourceHints,initialSourceLocations:selection.locations,checkpointPath:join(checkpointDirectory,checkpointKey+".json"),numCtx:8192,numThreads:4,numPredict:getConfig().LOCAL_HUNT_NUM_PREDICT,onRead:(path,span)=>reads.add(path,span),verifyPython:async (path,fn,kind,sequence) => {
+        signal,maxTurns,finalSchema:z.toJSONSchema(huntSchema),productionWorkflow:true,dynamicAllowance:process.env.LOCAL_HUNT_DYNAMIC_ALLOWANCE !== "false",initialSourcePaths:["audit-policy.txt",...sourceHints],initialSourceLocations:selection.locations,checkpointPath:join(checkpointDirectory,checkpointKey+".json"),numCtx:8192,numThreads:4,numPredict:getConfig().LOCAL_HUNT_NUM_PREDICT,onRead:(path,span)=>reads.add(path,span),verifyPython:async (path,fn,kind,sequence) => {
           if (focus && path !== "source-1/"+focus.file) throw new Error("Probe must target the imported lead file");
           const normalized=relative(root,resolve(root,path)).split(sep).join("/");
           const repository=repos.find(repo=>normalized===relative(root,repo.directory) || normalized.startsWith(relative(root,repo.directory)+"/"));
@@ -205,12 +205,74 @@ Do not claim production testing, JavaScript execution, file access or other effe
         },
         validateFinal:async text=>{
           try {
-            const value=huntSchema.parse(JSON.parse(text));
-            if(value.outcome === "no_testable_candidate") {parsed=value;return null;}
+            const proposed=JSON.parse(text);
+            // Small local models sometimes select the contradictory outcome
+            // no_testable_candidate while also supplying reproduced findings.
+            // Normalize only the transport label; validate every finding's
+            // real case, caller, policy, and observed evidence unchanged.
+            if(proposed && typeof proposed==='object' && !Array.isArray(proposed) &&
+                Array.isArray(proposed.findings) && proposed.findings.length>0 &&
+                proposed.outcome==='no_testable_candidate') {
+              proposed.outcome='inspected';
+              delete proposed.reason;
+            }
+            const value=huntSchema.parse(proposed);
+            if(value.outcome === "no_testable_candidate") {
+              if(session.completedProbes) {
+                const known=[...session.cases].slice(0,5).map(([caseId,c])=>({caseId,file:c.spec.file,
+                  function:c.spec.function,status:c.result.status,behaviorObserved:c.result.behavior_observed}));
+                return "A supported source probe HAS completed in this hunt. Do not claim no testable candidate or no probes. Recorded observations: "+
+                  JSON.stringify(known)+". If no reportable vulnerability is supported after inspecting real callers, return outcome=inspected with findings=[], not no_testable_candidate.";
+              }
+              parsed=value;return null;
+            }
             if(!session.completedProbes && !session.blockedReason)return "No supported probe has completed. Use verify_source for a concrete candidate, or return outcome=no_testable_candidate with a reason and empty findings to save incomplete coverage.";
             if(value.findings.length && !reads.covers("audit-policy.txt",0,policyText.length))return "Read every page of audit-policy.txt before reporting a finding; continue at nextOffset.";
+            // Reconcile an erroneous caller pointer only when the model chose a
+            // genuine recorded case and exactly one caller line has already
+            // been inspected and verified in the same authorized repository.
+            // This does not infer a vulnerability or make an uninspected call
+            // admissible. The independent review must still assess impact.
             for(const finding of value.findings) {
-              const record=session.cases.get(finding.caseId);if(!record)return "Use a successful verify_source result from this hunt; an invented case ID is invalid.";
+              const record=session.cases.get(finding.caseId);
+              if(!record || finding.reachability==='direct_transaction')continue;
+              let claimedValid=false;
+              try {
+                const current=await readFile(join(root,finding.callerFile),'utf8');
+                const callerRepo=record.repositoryUrl===repos.find(r=>
+                  finding.callerFile.startsWith(relative(root,r.directory).split(sep).join('/')+'/'))?.url;
+                claimedValid=callerRepo &&
+                  callerLineReferences(current,finding.callerLine,record.spec.function) &&
+                  reads.sawLine(finding.callerFile,current,finding.callerLine) ? true : false;
+              }catch{}
+              if(claimedValid)continue;
+              const sites:{file:string,line:number}[]=[];
+              for(const candidatePath of [...new Set([...sourceHints,...eligiblePaths])].slice(0,80)) {
+                if(sites.length>1)break;
+                const candidateRepo=repos.find(r=>candidatePath.startsWith(relative(root,r.directory).split(sep).join('/')+'/'));
+                if(!candidateRepo || candidateRepo.url!==record.repositoryUrl)continue;
+                try {
+                  const code=await readFile(join(root,candidatePath),'utf8');
+                  for(let line=1;line<=code.split('\n').length;line++)
+                    if(callerLineReferences(code,line,record.spec.function) && reads.sawLine(candidatePath,code,line))
+                      sites.push({file:candidatePath,line});
+                }catch{}
+              }
+              if(sites.length===1) {
+                finding.callerFile=sites[0].file;
+                finding.callerLine=sites[0].line;
+                await appendFile(logFile,'[CALLER_RECONCILED] '+JSON.stringify({caseId:finding.caseId,
+                  callerFile:finding.callerFile,callerLine:finding.callerLine,reason:'unique previously inspected caller'})+'\\n');
+              }
+            }
+            for(const finding of value.findings) {
+              const record=session.cases.get(finding.caseId);
+              if(!record) {
+                const known=[...session.cases].filter(([,c])=>c.result.behavior_observed)
+                  .slice(0,5).map(([caseId,c])=>({caseId,file:c.spec.file,function:c.spec.function,kind:c.spec.kind}));
+                return "The proposed caseId is not an observed reproduction. Valid observed case IDs from THIS hunt: "+
+                  JSON.stringify(known)+". Copy an exact listed caseId; callerFile must name a separate, inspected real source file that invokes that function, with its actual callerLine. Never invent case IDs or caller lines.";
+              }
               if (focus && record.spec.file !== focus.file) return "Only report a reproduced finding in the imported lead file.";
               const repo=repos.find(repo=>repo.url===record.repositoryUrl)!;
               if(!reads.has(sourceFileInWorkspace(repo,record.spec.file,root)) || !reads.has(finding.callerFile))return "Read the tested source file and the claimed caller file before reporting.";
@@ -221,15 +283,45 @@ Do not claim production testing, JavaScript execution, file access or other effe
               const callerRelative=relative(repo.directory,join(root,finding.callerFile));
               if(callerRelative === ".." || callerRelative.startsWith(".."+sep))return "Caller must be inside the reproduced repository.";
               const text=await readFile(join(root,finding.callerFile),"utf8");
-              if(!validReachability(finding,record,callerRelative.split(sep).join("/"),text))return "Provide a real call expression or direct_transaction evidence from a recorded Solidity send. Comments and declarations are not callers.";
+              if(!validReachability(finding,record,callerRelative.split(sep).join("/"),text)) {
+                const inspectedLines=text.split("\n").flatMap((line,index)=>
+                  callerLineReferences(text,index+1,record.spec.function) &&
+                    reads.sawLine(finding.callerFile,text,index+1) ? [{line:index+1,code:line.slice(0,180)}] : []).slice(0,4);
+                const otherCallers:{file:string,line:number,code:string}[]=[];
+                // Offer exact, previously inspected call sites. Do not infer a
+                // vulnerability or forge caller evidence to fix model output.
+                for(const sourcePath of [...new Set([...sourceHints,...eligiblePaths])].slice(0,40)) {
+                  if(otherCallers.length>=5)break;
+                  const targetRepoPath=sourcePath.replace(/\\/g,'/');
+                  const sourceRepo=repos.find(r=>targetRepoPath.startsWith(relative(root,r.directory).split(sep).join('/')+'/'));
+                  if(!sourceRepo || sourceRepo.url!==record.repositoryUrl)continue;
+                  try {
+                    const candidateText=await readFile(join(root,sourcePath),'utf8');
+                    const lines=candidateText.split('\n');
+                    for(let i=0;i<lines.length && otherCallers.length<5;i++) {
+                      if(callerLineReferences(candidateText,i+1,record.spec.function) &&
+                         reads.sawLine(sourcePath,candidateText,i+1))
+                        otherCallers.push({file:sourcePath,line:i+1,code:lines[i].slice(0,120)});
+                    }
+                  }catch{}
+                }
+                return "Caller evidence invalid: "+finding.callerFile+":"+finding.callerLine+
+                  " does not invoke "+record.spec.function+". Previously read real call lines in that file: "+
+                  JSON.stringify(inspectedLines)+". Recorded real caller sites in inspected source: "+JSON.stringify(otherCallers)+". Other prioritized source files to inspect for callers: "+
+                  JSON.stringify(sourceHints.slice(0,8))+
+                  ". Do not claim the function declaration as its own caller or invent a line.";
+              }
               if(!reads.sawLine(finding.callerFile,text,finding.callerLine))return "Read the page containing the entire claimed caller line before reporting.";
             }
             parsed=value;return null;
           }catch(error) {
             if(error instanceof z.ZodError) {
               const issues=error.issues.slice(0,5).map(issue=>({field:issue.path.join('.'),message:issue.message}));
+              const available=[...session.cases].filter(([,c])=>c.result.behavior_observed)
+                .slice(0,5).map(([caseId,c])=>({caseId,file:c.spec.file,function:c.spec.function}));
               return "Your final JSON does not match the required evidence schema: "+JSON.stringify(issues).slice(0,900)+
-                ". Fix these exact fields; caseId must come from the real recorded probe and callerFile/callerLine must refer to the actual invoking code, not the function definition. Do not invent evidence.";
+                ". Valid observed case IDs from the current hunt: "+JSON.stringify(available)+
+                ". Copy only an exact recorded case ID; callerFile/callerLine must refer to inspected calling code, not the function declaration. Do not invent evidence.";
             }
             return "Return only valid findings JSON. Use actual probe case IDs, inspected caller lines, and recorded evidence; omit unsupported findings.";
           }
@@ -311,7 +403,7 @@ Return final JSON only:
 Independently assign severity and confidence from observed impact, source reachability and evidence limits. Do not copy the hunter ratings or raise them to pass a threshold.
 Use one enum value per string. Scores are integers 0..3. bet100=false requires dont_submit. Approval requires a demonstrated reportable issue, not just a passing probe.`;
     await runLocalAudit(prompt,logFile,getConfig().SECURITY_HUNT_TIMEOUT_MINUTES*60000,root,process.env.LOCAL_OLLAMA_MODEL || "qwen3:4b",undefined,{
-      signal,maxTurns:200,numCtx:8192,numThreads:4,numPredict:getConfig().LOCAL_HUNT_NUM_PREDICT,onRead:(path,span)=>reads.add(path,span),validateFinal:async text=>{
+      signal,maxTurns:200,dynamicAllowance:process.env.LOCAL_HUNT_DYNAMIC_ALLOWANCE !== "false",prefetchReadOnly:true,finalSchema:z.toJSONSchema(reviewSchema),numCtx:8192,numThreads:4,numPredict:getConfig().LOCAL_HUNT_NUM_PREDICT,initialSourcePaths:["evidence/report.txt","evidence/replay.json","evidence/policy.txt","source/"+record.spec.file,"source/"+caller[1]],onRead:(path,span)=>reads.add(path,span),validateFinal:async text=>{
         try {
           const value=reviewSchema.parse(JSON.parse(text));
           for(const name of ["report.txt","replay.json","policy.txt"] as const)
