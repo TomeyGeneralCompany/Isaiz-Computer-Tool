@@ -48,8 +48,6 @@ async function main() {
   if(!process.env.LOCAL_OLLAMA_MODEL?.trim())
     throw new Error('LOCAL_OLLAMA_MODEL is missing. This command requires the configured local Ollama engine.');
   const config=getConfig();
-  if(config.SECURITY_AUTO_SUBMIT)
-    throw new Error('Automatic submission is enabled in runtime settings. Disable SECURITY_AUTO_SUBMIT in the dashboard before running this diagnostic.');
   const ranked=rankEligiblePrograms();
   if(options.list){
     if(!ranked.length)console.log('No currently eligible, assessed programs. Selection: '+JSON.stringify(getProgramSelectionSummary()));
@@ -57,6 +55,8 @@ async function main() {
       console.log([program.id,program.provider,program.providerProgramId||'',program.name,'difficulty='+difficulty].join(' | '));
     return;
   }
+  if(config.SECURITY_AUTO_SUBMIT)
+    throw new Error('Automatic submission is enabled in runtime settings. Disable SECURITY_AUTO_SUBMIT in the dashboard before running this diagnostic.');
   const matches=options.program?ranked.filter(x=>[x.program.id,x.program.providerProgramId||'',x.program.name]
     .some(s=>s.toLowerCase()===options.program!.toLowerCase())):ranked.slice(0,1);
   if(matches.length!==1)throw new Error(options.program?
