@@ -145,6 +145,15 @@ class LanguageTests(unittest.TestCase):
                    function="Render.render", extra={"src/main/java/example/Helper.java":
                        'package example; public class Helper { public static String wrap(String x) { return x; }}'})
 
+    def test_java_cross_module_source_dependency(self):
+        self.probe("module-a/src/main/java/example/Render.java",
+                   'package example; import shared.Helper; public class Render { '
+                   'public static String render(String x) { return Helper.wrap(x); }}',
+                   function="Render.render", extra={
+                     "module-b/src/main/java/shared/Helper.java":
+                       'package shared; public class Helper { '
+                       'public static String wrap(String x) { return "<p>"+x+"</p>"; }}'})
+
     def test_java_charsequence_and_object_output(self):
         self.probe("Render.java",
                    'public class Render { public static Object render(CharSequence x) { return "<p>"+x+"</p>"; }}',
