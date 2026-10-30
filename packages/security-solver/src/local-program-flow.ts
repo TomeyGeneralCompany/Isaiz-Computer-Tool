@@ -224,20 +224,22 @@ Do not claim production testing, JavaScript execution, file access or other effe
                 return "A supported source probe HAS completed in this hunt. Do not claim no testable candidate or no probes. Recorded observations: "+
                   JSON.stringify(known)+". If no reportable vulnerability is supported after inspecting real callers, return outcome=inspected with findings=[], not no_testable_candidate.";
               }
-              // A single partial read cannot justify ending a multi-file
-              // investigation as having no testable candidate. Require the
-              // model to inspect at least two distinct eligible source files
-              // before accepting this explicitly incomplete outcome.
+              // A partial conclusion cannot skip unexamined selected candidates.
+              // Bound this pass to the selected batch; never require all 1,531
+              // repository files or fabricate a probe just to satisfy a quota.
               const inspected=reads.inspectedPaths(eligiblePaths);
-              if(eligiblePaths.length>1 && inspected.length<2) {
-                const next=sourceHints.find(path=>!reads.has(path)) ||
-                  eligiblePaths.find(path=>!reads.has(path));
-                return "Inspection is incomplete: you have inspected only "+
-                  inspected.length+" eligible source file(s) out of "+eligiblePaths.length+
-                  ". Read another eligible application source before concluding no testable candidate."+
-                  (next ? " Suggested next file: "+next+"." : "")+
-                  " Use outline_solidity/read_solidity for Solidity and read_file for others; then reassess supported probes.";
+              const uninspected=sourceHints.filter(path=>!reads.has(path));
+              if(uninspected.length) {
+                return "Inspection is incomplete: "+inspected.length+" eligible source file(s) inspected; "+
+                  uninspected.length+" prioritized candidate file(s) remain unread in this bounded pass. "+
+                  "Read the next candidate and evaluate its signatures and call sites before concluding. "+
+                  "Suggested next file: "+uninspected[0]+
+                  ". Use read_file or the appropriate Solidity source tool; follow nextOffset as needed.";
               }
+              // An incomplete outcome must describe this pass, not claim that
+              // no relevant methods exist anywhere in the repository.
+              if(/(all|entire|whole) (source|repository|codebase)|further inspection .*redundant|no (testable candidates|suitable functions) exist/i.test(value.reason))
+                return "State only what the selected files and attempted probes support. Do not assert repository-wide absence or that more inspection is redundant; return a scoped incomplete reason.";
               parsed=value;return null;
             }
             if(!session.completedProbes && !session.blockedReason)return "No supported probe has completed. Use verify_source for a concrete candidate, or return outcome=no_testable_candidate with a reason and empty findings to save incomplete coverage.";
