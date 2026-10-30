@@ -1,6 +1,7 @@
 import {modelProfile} from './model-profile';
 import { InvestigationWorkflow } from "./investigation-workflow";
 import {guidedSourceProbe} from './source-guided-probes';
+import {declaredProbeTarget} from './probe-target-validation';
 import { postQwenAgentJson } from "./qwen-agent-transport";
 import { AuditAllowance } from "./audit-allowance";
 import { AuditNavigation } from "./audit-navigation";
@@ -379,6 +380,22 @@ export async function runLocalAudit(
         }
         if(action.action==='plan_probe') {
           if(!workflow)throw new Error('Probe planning requires production workflow');
+          if(/\.(?:sol|java|py|js|mjs|cjs)$/.test(action.path)) {
+            let declared=false;
+            try {
+              const target=await safePath(action.path);
+              declared=action.path.endsWith('.sol') ?
+                await solidityIndex.hasFunction(target,action.query) :
+                await declaredProbeTarget(target,action.query);
+            }catch{}
+            if(!declared) {
+              const feedback='No matching source function declaration for '+action.query+'. Inspect a real exported/public method name in the source (outline_solidity for Solidity); no probe was run.';
+              workflow.feedback(feedback);
+              await appendFile(logFile,'[PLAN_REJECTED] '+feedback+'\n');
+              messages.push({role:'user',content:feedback+' /no_think'});
+              continue;
+            }
+          }
           if(action.answer==='solidity_sequence') {
             const sequence=soliditySequenceSchema.safeParse(action.sequence);
             if(!sequence.success) {

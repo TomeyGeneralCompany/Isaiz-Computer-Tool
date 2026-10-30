@@ -206,6 +206,18 @@ Do not claim production testing, JavaScript execution, file access or other effe
         validateFinal:async text=>{
           try {
             const proposed=JSON.parse(text);
+            // Case IDs are verifier-generated, never model-generated. Suppress
+            // unsupported proposals before giving Qwen another expensive final
+            // retry; the normal coverage checks still decide whether to stop.
+            if(proposed && typeof proposed==='object' && !Array.isArray(proposed) &&
+               Array.isArray(proposed.findings) && proposed.findings.length &&
+               proposed.findings.every((finding:any)=>!session.cases.has(finding?.caseId)) &&
+               session.cases.size===0) {
+              await appendFile(logFile,'[UNRECORDED_CASES_DROPPED] '+JSON.stringify({count:proposed.findings.length})+'\\n');
+              proposed.findings=[];
+              proposed.outcome='no_testable_candidate';
+              proposed.reason='This bounded pass has no recorded reproduction case. Model-proposed identifiers are not evidence; continue candidate coverage as required.';
+            }
             // Small local models sometimes select the contradictory outcome
             // no_testable_candidate while also supplying reproduced findings.
             // Normalize only the transport label; validate every finding's

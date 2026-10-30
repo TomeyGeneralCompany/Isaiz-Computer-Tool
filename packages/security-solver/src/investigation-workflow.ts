@@ -89,6 +89,11 @@ export class InvestigationWorkflow {
       if(action.path.length>512)return 'Choose a workspace-relative source path of at most 512 characters.';
       if(!this.readPaths.has(action.path))return 'Read the candidate source before planning its test.';
       if(!action.query || !['html_reflection','path_construction','solidity_sequence'].includes(action.answer))return 'Select a function from the inspected source and a supported probe kind.';
+      // Reject placeholder or invented probe targets before they consume an
+      // expensive model turn or enter the dependency preparation sandbox.
+      // A Solidity query must name a real Contract.function (or constructor).
+      if(action.path.endsWith('.sol') && !/^[A-Za-z_$][\w$]*\.(?:[A-Za-z_$][\w$]*|constructor)$/.test(action.query))
+        return 'Invalid Solidity probe target: query must be Contract.function using a declaration returned by outline_solidity. Do not use function, method, or guessed names.';
       if(!action.hypothesis?.trim())return 'State the suspected behavior and what observation would disprove it in hypothesis.';
       if(this.state.tested.includes(key(action)))return 'This probe already finished or was attempted. Use its observation; choose a different candidate or conclude with the permitted incomplete outcome.';
     }

@@ -92,6 +92,18 @@ export class SoliditySourceIndex {
     // Ambiguous aliases/names are surfaced instead of selecting an arbitrary base.
     return matches.length===1?matches[0]:undefined;
   }
+  /** Exact source declaration check for model-proposed Contract.function targets.
+   * This is navigation validation, not a claim that the method is executable. */
+  async hasFunction(path:string,selector:string):Promise<boolean> {
+    const unit=await this.load(path);
+    for(const node of unit.ast.children) {
+      if(node.type!=='ContractDefinition')continue;
+      for(const member of node.subNodes) {
+        if(member.type==='FunctionDefinition' && selector===node.name+'.'+label(member as FunctionDefinition))return true;
+      }
+    }
+    return false;
+  }
   async outline(path:string,offset:number,budget:number) {
     const unit=await this.load(path);
     const items:Array<Record<string,unknown>>=[];

@@ -15,6 +15,17 @@ process.env.LOCAL_OLLAMA_TOOL_PROTOCOL="json";
 // seeded-source fixture exercises production's automatic first read.
 process.env.AUTOHACK_AUTO_SOURCE_PREFETCH="false";
 process.env.LOCAL_HUNT_NUM_PREDICT="4096";
+const workflowText=await readFile(join(process.cwd(),"packages/security-solver/src/investigation-workflow.ts"),"utf8");
+assert.ok(workflowText.includes("Invalid Solidity probe target"),"placeholder Solidity method targets must be rejected before verification");
+const {declaredProbeTarget}=await import("../packages/security-solver/src/probe-target-validation");
+const probeFixtures=join(root,"probe-declarations");await mkdir(probeFixtures);
+await writeFile(join(probeFixtures,"Target.java"),"public class Target { public static String actual(String input) { return input; } }");
+await writeFile(join(probeFixtures,"target.py"),"def actual(value):\\n    return value\\n".replaceAll("\\\\n","\\n"));
+await writeFile(join(probeFixtures,"target.js"),"exports.actual = function(value) { return value; };");
+for(const [file,actual,missing] of [["Target.java","Target.actual","Target.function"],["target.py","actual","function"],["target.js","actual","function"]]) {
+  assert.equal(await declaredProbeTarget(join(probeFixtures,file),actual),true,"declared probe name in "+file);
+  assert.equal(await declaredProbeTarget(join(probeFixtures,file),missing),false,"invented probe name in "+file);
+}
 const controllerText=await readFile(join(process.cwd(),"packages/security-solver/src/local-ollama-runner.ts"),"utf8");
 const flowText=await readFile(join(process.cwd(),"packages/security-solver/src/local-program-flow.ts"),"utf8");
 assert.ok(flowText.includes("sourceHints.filter(path=>!reads.has(path))"),"incomplete conclusions must advance through selected candidate batch");
@@ -110,8 +121,9 @@ try {
     else if(turn===3 && stateful) {assert.ok(JSON.stringify(request.messages).includes("No supported probe"));next={...action("verify_source","source-1/"+source,selector,"solidity_sequence"),sequence};}
     else if(turn===3)next=action("verify_source","source-1/"+source,source.endsWith(".java")?"Render.missing":"missing","html_reflection");
     else if(turn===4 && !stateful) {
-      const previous=JSON.parse((latestTool()?.content || "").split("\n")[0].slice("TOOL_RESULT ".length));
-      assert.equal(JSON.parse(previous.output).status,source.endsWith(".java")?"invalid_probe":"probe_failed");
+      const latest=latestTool()?.content || "";
+      // Declaration preflight rejects invented function names before the verifier.
+      // The model receives the rejection through the controller; its exact prompt may be compacted.
       next=action("verify_source","source-1/"+source,selector,"html_reflection");
     } else {
       const previous=JSON.parse((latestTool()?.content || "").split("\n")[0].slice("TOOL_RESULT ".length));
@@ -150,7 +162,7 @@ try {
     if(!result.success && result.auditRecord)console.error(await readFile(join(root,"data/logs",result.auditRecord),"utf8"));
     assert.equal(result.success,true,JSON.stringify(result));
     assert.equal(result.findings.length,1);
-    if(!stateful)assert.ok(result.coverageDetail?.includes(language==="java"?"1 unsupported probes":"1 failed probes"));
+    if(!stateful)assert.ok(result.coverageDetail && !result.coverageDetail.includes("1 failed probes") && !result.coverageDetail.includes("1 unsupported probes"),"invented probe should be stopped at declaration preflight");
     else assert.equal(result.findings[0].vulnerabilityType,"State assertion discrepancy");
     const record=await readSourceCase(caseId,program);
     assert.equal((await replaySourceCase(record,fixture)).behavior_observed,true);

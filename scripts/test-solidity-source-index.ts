@@ -20,6 +20,10 @@ contract Vault is Parent {
 }`;
   await writeFile(join(root,'Base.sol'),base);await writeFile(join(root,'Vault.sol'),source);
   const index=new SoliditySourceIndex(root);
+  assert.equal(await index.hasFunction(join(root,'Vault.sol'),'Vault.withdraw'),true);
+  assert.equal(await index.hasFunction(join(root,'Vault.sol'),'Vault.constructor'),true);
+  assert.equal(await index.hasFunction(join(root,'Vault.sol'),'Vault.function'),false,'placeholder is not a declared method');
+  assert.equal(await index.hasFunction(join(root,'Vault.sol'),'Vault.randomMethod'),false,'invented function is not a declared method');
   const outline=await index.outline(join(root,'Vault.sol'),0,8000);
   const functions=outline.items.filter(x=>x.kind==='FunctionDefinition');
   assert.equal(functions.length,4);assert.ok(functions.some(x=>x.name==='constructor'));
