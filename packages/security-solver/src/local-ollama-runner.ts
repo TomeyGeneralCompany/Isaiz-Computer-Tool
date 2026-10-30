@@ -554,6 +554,15 @@ export async function runLocalAudit(
               ? `Continue at offset ${previous.nextOffset}, or choose a different file/search.`
               : "This action is complete. Choose a different file/search or proceed to a supported test or evidence-based final answer.";
             await appendFile(logFile, "[NO_PROGRESS] " + JSON.stringify({action:name,path,offset,attempt:stalledActions}) + "\n");
+            if(stalledActions>=3 && workflow) {
+              // A small CPU model can request a page whose content has fallen
+              // out of active context. Repeated completed-page requests are
+              // recoverable navigation feedback, not a fatal hunt failure.
+              // Keep the finite turn allowance as the ultimate bound.
+              await appendFile(logFile,"[CONTEXT_RECOVERY] "+JSON.stringify({tool:name,path,offset,attempt:stalledActions})+"\\n");
+              stalledActions=0;
+              throw new Error("Completed source page is already recorded. Choose another selected source or use the saved observation; do not request this completed page again. "+navigation.hint());
+            }
             if(stalledActions>=3) {
               await recordToolActivity(logFile,{phase:"failed",tool:name,path,offset,error:"Repeated inspection actions without new evidence after corrective feedback"});
               throw new Error(`AUDIT_STALLED: repeated ${name} ${relative(root,full)} at offset ${offset}; the completed result is still in context; choose a different source or probe`);

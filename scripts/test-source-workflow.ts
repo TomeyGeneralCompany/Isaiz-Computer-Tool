@@ -27,6 +27,8 @@ for(const [file,actual,missing] of [["Target.java","Target.actual","Target.funct
   assert.equal(await declaredProbeTarget(join(probeFixtures,file),missing),false,"invented probe name in "+file);
 }
 const controllerText=await readFile(join(process.cwd(),"packages/security-solver/src/local-ollama-runner.ts"),"utf8");
+assert.ok(controllerText.includes("[CONTEXT_RECOVERY]"),"repeated completed source pages must recover rather than end a production hunt");
+
 const flowText=await readFile(join(process.cwd(),"packages/security-solver/src/local-program-flow.ts"),"utf8");
 assert.ok(flowText.includes("sourceHints.filter(path=>!reads.has(path))"),"incomplete conclusions must advance through selected candidate batch");
 assert.ok(flowText.includes("prioritized candidate file(s) remain unread"),"coverage feedback must enumerate unfinished candidates");
