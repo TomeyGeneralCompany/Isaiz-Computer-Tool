@@ -17,6 +17,8 @@ process.env.AUTOHACK_AUTO_SOURCE_PREFETCH="false";
 process.env.LOCAL_HUNT_NUM_PREDICT="4096";
 const controllerText=await readFile(join(process.cwd(),"packages/security-solver/src/local-ollama-runner.ts"),"utf8");
 assert.ok(controllerText.includes("requiredNextSource"),"coverage rejection must enforce a fresh eligible source read");
+assert.ok(controllerText.includes("[EMPTY_FINAL_RECOVER]"),"repeated empty finals must reopen source investigation");
+assert.ok(controllerText.includes("requireInvestigationAfterEmpty"),"recovery must require a tool action rather than another empty final");
 assert.ok(!controllerText.includes("recentActions.clear();stalledActions=0"),"final rejection must preserve read history");
 const server=createServer();
 try {
