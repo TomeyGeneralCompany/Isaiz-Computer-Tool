@@ -26,6 +26,7 @@ export class InvestigationWorkflow {
   private continuations=new Map<string,number>();
   private readSpans=new Set<string>();
   private sourceProgress=0;
+  private nextOffsets=new Map<string,number|null>();
   private progressAtDecision=0;
   restore(value:unknown) {
     // Prior state directs navigation only. Current-run reads and probes must revalidate it.
@@ -62,12 +63,13 @@ export class InvestigationWorkflow {
   }
   note():string {
     const note={unansweredQuestion:this.decisions.length?{...this.decisions.at(-1)!,path:this.decisions.at(-1)!.path.slice(0,160),question:this.decisions.at(-1)!.question.slice(0,250)}:undefined,priorNavigation:this.priorNotes.slice(-1).map(n=>n.slice(0,200)),pageTurns:this.pageTurns,stage:this.state.stage,inspectionsSinceDecision:this.state.inspections,
-      recentReadPaths:[...this.readPaths].slice(-3).map(p=>p.slice(0,160)),pending:this.state.pending ? {path:this.state.pending.path.slice(0,160),function:this.state.pending.query,kind:this.state.pending.answer} : null,
+      recentReadPaths:[...this.readPaths].slice(-3).map(p=>p.slice(0,160)),nextUnreadPages:[...this.nextOffsets].filter(([,offset])=>offset!==null).slice(-3).map(([path,offset])=>({path:path.slice(0,160),offset})),pending:this.state.pending ? {path:this.state.pending.path.slice(0,160),function:this.state.pending.query,kind:this.state.pending.answer} : null,
       observations:this.observations.slice(-2).map(o=>({...o,path:o.path.slice(0,160)})),feedback:this.lastFeedback.slice(0,240),
       instruction:this.state.pending?'Execute the planned probe with exactly its path, function, kind and sequence.':
         'Read relevant source, then plan_probe with path, query=function, answer=probe kind, hypothesis=claim AND disproof condition. After six inspections or eight source pages, choose plan_probe, continue_inspection with a specific unanswered question in hypothesis and the next path/offset/query, or an incomplete final. Continue only to obtain that missing evidence; no forced unrelated test. A failed or unsupported verification is not proof of absence or presence. After inspecting recorded evidence, change candidate or request specific missing context; do not repeat completed evidence pages. Read recorded evidenceFile pages when an observation leaves context instead of repeating its probe. After testing inspect caller/mitigations before reporting; observations alone are not findings.'};
     while(JSON.stringify(note).length>1800 && note.priorNavigation.length)note.priorNavigation.shift();
     while(JSON.stringify(note).length>1800 && note.recentReadPaths.length)note.recentReadPaths.shift();
+    while(JSON.stringify(note).length>1800 && note.nextUnreadPages.length)note.nextUnreadPages.shift();
     while(JSON.stringify(note).length>1800 && note.observations.length)note.observations.shift();
     if(JSON.stringify(note).length>1800){note.unansweredQuestion=undefined;note.feedback=note.feedback.slice(0,100);}
     return JSON.stringify(note);
@@ -111,6 +113,7 @@ export class InvestigationWorkflow {
         const spans=action.action==='read_solidity' && Array.isArray(page?.excerpts)
           ? page.excerpts.map((e:any)=>({path:e.path,start:e.start,end:e.end}))
           : [{path:action.path,start:page?.start,end:page?.end}];
+        if(action.action==='read_file' && typeof action.path==='string' && (page?.nextOffset===null || Number.isSafeInteger(page?.nextOffset)))this.nextOffsets.set(action.path,page.nextOffset);
         for(const span of spans) {
           if(typeof span.path!=='string'||!Number.isSafeInteger(span.start)||!Number.isSafeInteger(span.end)||span.end<=span.start)continue;
           const id=JSON.stringify([span.path,span.start,span.end]);
