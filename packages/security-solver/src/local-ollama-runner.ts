@@ -344,7 +344,8 @@ export async function runLocalAudit(
         }
         const workflowError=workflow?.validate(action);
         if(workflowError) {
-          workflow!.feedback(workflowError);
+          if(action.action==='plan_probe' && workflowError==='Read the candidate source before planning its test.')workflow!.requireSource(action.path);
+          else workflow!.feedback(workflowError);
           consecutiveWorkflowRejections=lastWorkflowRejection===workflowError?consecutiveWorkflowRejections+1:1;
           lastWorkflowRejection=workflowError;
           await appendFile(logFile,'[WORKFLOW_REJECTED] '+workflowError+'\n');

@@ -16,6 +16,7 @@ const key = (a:Action) => JSON.stringify([a.path,a.query,a.answer,a.sequence]);
 export class InvestigationWorkflow {
   private state:typeof State.State={stage:'inspect',inspections:0,pending:null,tested:[]};
   private readPaths=new Set<string>();
+  private requiredSource:string|null=null;
   private observations:Array<{path:string;function:string;kind:string;status:string;caseId?:string;evidenceFile?:string;behaviorObserved?:boolean}>=[];
   private lastFeedback='';
   private decisions:Array<{path:string;question:string;offset:number}>=[];
@@ -49,6 +50,7 @@ export class InvestigationWorkflow {
   async constraints() {
     if(this.pageTurns>=8)this.state.inspections=Math.max(6,this.state.inspections);
     this.state=await graph.invoke(this.state);
+    if(this.requiredSource)return {action:['read_file'],path:[this.requiredSource]};
     if(this.state.pending) {
       const p=this.state.pending;
       return {action:['verify_source'],path:[p.path],query:[p.query],answer:[p.answer]};
@@ -68,7 +70,9 @@ export class InvestigationWorkflow {
     if(JSON.stringify(note).length>1800){note.unansweredQuestion=undefined;note.feedback=note.feedback.slice(0,100);}
     return JSON.stringify(note);
   }
+  requireSource(path:string) {this.requiredSource=path;this.feedback('Read '+path+' before planning its test.',true);}
   validate(action:Action):string|null {
+    if(this.requiredSource && (action.action!=='read_file' || action.path!==this.requiredSource))return 'Read the required candidate source '+this.requiredSource+' before other actions.';
     if(action.action==='continue_inspection') {
       if(!action.hypothesis?.trim() || action.hypothesis.trim().length<20 || !action.path || action.path.length>512)
         return 'Name the next source path and explain the specific missing evidence in hypothesis (20–600 characters).';
@@ -88,7 +92,7 @@ export class InvestigationWorkflow {
     return null;
   }
   plan(action:Action) { this.state.pending=action;this.lastFeedback=''; }
-  read(path:string) { this.readPaths.add(path); }
+  read(path:string) { this.readPaths.add(path); if(path===this.requiredSource)this.requiredSource=null; }
   observe(action:Action,output:string) {
     if(action.action==='verify_source') {
       let result:any;try{result=JSON.parse(output);}catch{}
