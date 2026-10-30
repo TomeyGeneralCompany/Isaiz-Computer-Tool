@@ -247,6 +247,10 @@ export async function runLocalAudit(
         const otherActions=constraints.action.filter(name=>name!=='plan_probe');
         if(otherActions.length)constraints={...constraints,action:otherActions};
       }
+      // Repeated empty conclusions in a source audit require NEW investigation actions,
+      // not another unconstrained attempt to finish the same unsupported claim.
+      if(workflow && emptyFinals>=1 && constraints?.action?.includes('final') && constraints.action.length>1)
+        constraints={...constraints,action:constraints.action.filter(name=>name!=='final')};
       if(constraints && (JSON.stringify(constraints).length>3000 || Object.entries(constraints).some(([key,values])=>
         !["action","path","query","answer"].includes(key) || !Array.isArray(values) || !values.length || values.some(value=>typeof value!=="string"))))
         throw new Error("Invalid task action constraints");
