@@ -263,8 +263,7 @@ export async function runLocalAudit(
         // Give the tiny model exact recorded observation IDs in the schema,
         // rather than asking it to reproduce a 64-character digest unaided.
         // This only narrows options to real probes; it does not validate impact.
-        const recordedIds=[...new Set((workflow?.snapshot().observations || [])
-          .map(o=>o.caseId).filter((id):id is string=>typeof id==='string'&&/^[a-f0-9]{64}$/.test(id)))];
+        const recordedIds:string[]=[]; // Review recovery has no investigation workflow; findings still pass semantic validation.
         const item=strictResult.properties?.findings?.items;
         if(recordedIds.length && item?.properties?.caseId)
           item.properties.caseId={...item.properties.caseId,enum:recordedIds};
