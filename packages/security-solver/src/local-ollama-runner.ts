@@ -335,6 +335,12 @@ export async function runLocalAudit(
           messages.push({role:"user",content:"That action is not available in the current task stage. Use the current response schema and controller progress. No tool was executed. /no_think"});
           continue;
         }
+        if((action.action==='plan_probe'||action.action==='verify_source') &&
+            action.path.endsWith('.java') && /^[A-Za-z_$][\\w$]*$/.test(action.query)) {
+          const javaClass=action.path.split('/').at(-1)!.slice(0,-5);
+          action.query=javaClass+'.'+action.query;
+          await appendFile(logFile,'[JAVA_QUERY_NORMALIZED] '+JSON.stringify({path:action.path,query:action.query})+'\\n');
+        }
         if(['plan_probe','verify_source','verify_python'].includes(action.action) &&
             action.answer!=='solidity_sequence' && action.sequence!==undefined) {
           // Normalize optional structured-output fields before validation,
@@ -345,6 +351,7 @@ export async function runLocalAudit(
         const workflowError=workflow?.validate(action);
         if(workflowError) {
           if(action.action==='plan_probe' && workflowError==='Read the candidate source before planning its test.')workflow!.requireSource(action.path);
+          else if(action.action==='plan_probe' && workflowError==='This probe already finished or was attempted. Use its observation; choose a different candidate or conclude with the permitted incomplete outcome.')workflow!.rejectedDuplicateProbe();
           else workflow!.feedback(workflowError);
           consecutiveWorkflowRejections=lastWorkflowRejection===workflowError?consecutiveWorkflowRejections+1:1;
           lastWorkflowRejection=workflowError;
