@@ -111,7 +111,7 @@ export async function runLocalAudit(
   };
   const actionSchema = limits.verifyPython ? {...auditActionSchema,properties:{...auditActionSchema.properties,...(limits.finalSchema?{result:limits.finalSchema}:{}),sequence:soliditySequenceJsonSchema,
     action:{type:"string",enum:[...auditActionSchema.properties.action.enum,"verify_source","verify_python",...(workflow?["plan_probe","continue_inspection"]:[])]}}} : {...auditActionSchema,properties:{...auditActionSchema.properties,...(limits.finalSchema?{result:limits.finalSchema}:{})}};
-  const probePrompt = limits.verifyPython ? "\nThe verify_source action invokes a fixed, isolated source function probe. Set path to a .py, .js, .mjs, .cjs, .java or .sol source file, query to its public/exported function name (Contract.function for Solidity), answer to html_reflection or path_construction. The function must take one string and return a string. JavaScript exports may be async. Java supports public Class.method with one String, byte[], CharSequence, StringBuilder, StringBuffer, ByteBuffer, Path, File, URI or Object input and text, bytes, buffer or path output; instances need a public no-arg constructor. No multi-argument/domain objects, Maven or Gradle. Solidity requires a deployable zero-argument constructor and a public/external view or pure function compatible with installed solc 0.8.30; runs on an in-memory local EVM. Use returned observations honestly; they do not prove full exploitability. No arbitrary commands are available. " + soliditySequencePrompt : "";
+  const probePrompt = limits.verifyPython ? "\nJava verify_source query must use Class.method, not method alone. " + "\nThe verify_source action invokes a fixed, isolated source function probe. Set path to a .py, .js, .mjs, .cjs, .java or .sol source file, query to its public/exported function name (Contract.function for Solidity), answer to html_reflection or path_construction. The function must take one string and return a string. JavaScript exports may be async. Java supports public Class.method with one String, byte[], CharSequence, StringBuilder, StringBuffer, ByteBuffer, Path, File, URI or Object input and text, bytes, buffer or path output; instances need a public no-arg constructor. No multi-argument/domain objects, Maven or Gradle. Solidity requires a deployable zero-argument constructor and a public/external view or pure function compatible with installed solc 0.8.30; runs on an in-memory local EVM. Use returned observations honestly; they do not prove full exploitability. No arbitrary commands are available. " + soliditySequencePrompt : "";
   const availableTools = limits.verifyPython ? [...tools,{type:"function",function:{
     name:"verify_source",description:probePrompt,parameters:{type:"object",
       properties:{path:{type:"string"},query:{type:"string"},kind:{type:"string"},sequence:soliditySequenceJsonSchema},required:["path","query","kind"]},
@@ -483,7 +483,7 @@ export async function runLocalAudit(
             call.function.arguments.offset=offset;
             await appendFile(logFile,"[PAGE_ADVANCE] "+JSON.stringify({tool:name,path,requestedOffset,offset})+"\n");
           }
-          if(inspection && previous && turn-previous.turn<=8) {
+          if(inspection && previous && (turn-previous.turn<=8 || previous.nextOffset===null)) {
             stalledActions++;
             const instruction = previous.nextOffset != null
               ? `Continue at offset ${previous.nextOffset}, or choose a different file/search.`
