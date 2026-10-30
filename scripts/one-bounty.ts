@@ -172,12 +172,16 @@ async function main() {
     summary.lastStage=progress.stage;
     summary.coverage=(()=>{try{return JSON.parse(db.select().from(schema.securityPrograms)
       .where(eq(schema.securityPrograms.id,program.id)).get()?.scopeSummary||'{}').huntCoverage||null;}catch{return null;}})();
+    summary.investigationCoverage=summary.coverage?.status || 'unknown';
+    summary.completedProbes=summary.coverage?.completedProbes ?? null;
+    summary.eligibleFiles=summary.coverage?.eligibleFiles ?? null;
+    summary.inspectedFiles=summary.coverage?.inspectedFiles ?? null;
     summary.findings=db.select().from(schema.securityFindings).where(eq(schema.securityFindings.programId,program.id)).all()
       .filter(f=>f.discoveredAt.getTime()>=startedAt-1000)
       .map(f=>({id:f.id,title:f.title,severity:f.severity,status:f.status,
         reportRecorded:!!f.reportBody,reportUrl:f.reportUrl||null}));
     save();
-    console.log('One-bounty result: '+summary.status+'; '+summary.findings.length+' new records. See '+summaryPath);
+    console.log('One-bounty result: workflow='+summary.status+'; investigation='+summary.investigationCoverage+'; completedProbes='+String(summary.completedProbes ?? 'not recorded')+'; '+summary.findings.length+' new records. See '+summaryPath);
   }
 }
 main().catch(error=>{console.error('One-bounty run failed: '+String(error));process.exitCode=1;});

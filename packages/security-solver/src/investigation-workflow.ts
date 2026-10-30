@@ -65,7 +65,7 @@ export class InvestigationWorkflow {
       recentReadPaths:[...this.readPaths].slice(-3).map(p=>p.slice(0,160)),pending:this.state.pending ? {path:this.state.pending.path.slice(0,160),function:this.state.pending.query,kind:this.state.pending.answer} : null,
       observations:this.observations.slice(-2).map(o=>({...o,path:o.path.slice(0,160)})),feedback:this.lastFeedback.slice(0,240),
       instruction:this.state.pending?'Execute the planned probe with exactly its path, function, kind and sequence.':
-        'Read relevant source, then plan_probe with path, query=function, answer=probe kind, hypothesis=claim AND disproof condition. After six inspections or eight source pages, choose plan_probe, continue_inspection with a specific unanswered question in hypothesis and the next path/offset/query, or an incomplete final. Continue only to obtain that missing evidence; no forced unrelated test. Read recorded evidenceFile pages when an observation leaves context instead of repeating its probe. After testing inspect caller/mitigations before reporting; observations alone are not findings.'};
+        'Read relevant source, then plan_probe with path, query=function, answer=probe kind, hypothesis=claim AND disproof condition. After six inspections or eight source pages, choose plan_probe, continue_inspection with a specific unanswered question in hypothesis and the next path/offset/query, or an incomplete final. Continue only to obtain that missing evidence; no forced unrelated test. A failed or unsupported verification is not proof of absence or presence. After inspecting recorded evidence, change candidate or request specific missing context; do not repeat completed evidence pages. Read recorded evidenceFile pages when an observation leaves context instead of repeating its probe. After testing inspect caller/mitigations before reporting; observations alone are not findings.'};
     while(JSON.stringify(note).length>1800 && note.priorNavigation.length)note.priorNavigation.shift();
     while(JSON.stringify(note).length>1800 && note.recentReadPaths.length)note.recentReadPaths.shift();
     while(JSON.stringify(note).length>1800 && note.observations.length)note.observations.shift();
@@ -124,7 +124,7 @@ export class InvestigationWorkflow {
   finalRejected(message:string) {
     // Keep the inspection checkpoint after a rejected conclusion. The model can
     // plan a probe, request specific missing context, or correct its final answer.
-    this.lastFeedback=message.slice(0,400);
+    this.lastFeedback=(message+' Do not re-read already completed pages or repeat unsupported candidate findings; use a different eligible source or a supported test.').slice(0,400);
     this.state.inspections=Math.max(6,this.state.inspections);
   }
   feedback(message:string,reopen=false) {this.lastFeedback=message.slice(0,400);if(reopen){this.state.inspections=0;this.pageTurns=0;}}

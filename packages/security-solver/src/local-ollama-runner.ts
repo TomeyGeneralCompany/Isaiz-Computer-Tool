@@ -434,7 +434,14 @@ export async function runLocalAudit(
             ? invalidReviewFinals + 1 : 0;
           // Fresh evidence may be needed, but a rejected final must not reset
           // the inspection checkpoint and reopen an unconditional read loop.
-          recentActions.clear();stalledActions=0;workflow?.finalRejected(feedback);
+          // Retain read-action history: rejecting a final answer does not make prior pages new evidence.
+          if(!workflow)recentActions.clear(); // Legacy no-workflow repair may explicitly require a fresh source read.
+          stalledActions=0;workflow?.finalRejected(feedback);
+          // Coverage validator can name the next inspected candidate. Make the
+          // next source read deterministic instead of asking a small model to
+          // infer another path from an already rejected conclusion.
+          const requiredNextSource=feedback.match(/Suggested next file:\s*(\S+?\.(?:sol|java|ts|tsx|js|jsx|py))\b/i)?.[1];
+          if(requiredNextSource && workflow)workflow.requireSource(requiredNextSource);
           const rejected=messages.at(-1)!;
           rejected.content="Previous final answer rejected; follow the validation feedback.";
           await appendFile(logFile, "[FINAL_REJECTED] " + feedback + "\n");
