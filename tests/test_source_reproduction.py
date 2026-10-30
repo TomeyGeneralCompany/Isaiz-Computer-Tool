@@ -83,6 +83,33 @@ class LanguageTests(unittest.TestCase):
     def test_javascript_uppercase_markup(self):
         self.probe("render.cjs", "exports.render = x => x.toUpperCase();")
 
+    def test_java_tron_interface_probe_is_invalid_not_compilation_failure(self):
+        # Real TRON-style interface: non-string arguments and void return.
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            target = repo / "actuator/src/main/java/org/tron/core/vm/program/listener/ProgramListener.java"
+            target.parent.mkdir(parents=True)
+            target.write_text("package org.tron.core.vm.program.listener; "
+                              "public interface ProgramListener { "
+                              "void onMemoryWrite(int address, byte[] data); "
+                              "void onStoragePut(DataWord key, DataWord value); }")
+            result = driver.run_probe(repo, {"file":str(target.relative_to(repo)),
+                "function":"ProgramListener.onMemoryWrite", "kind":"html_reflection", "nonce":"a"*32})
+            self.assertEqual(result["status"], "invalid_probe", result)
+            self.assertFalse(result["behavior_observed"])
+            self.assertIn("one-input/text-output", result["detail"])
+
+    def test_java_missing_dependency_is_not_false_reproduction(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            (repo / "Render.java").write_text(
+                "public class Render { public static String render(String x) { "
+                "return UnknownDependency.process(x); } }")
+            result = driver.run_probe(repo, {"file":"Render.java",
+                "function":"Render.render", "kind":"html_reflection", "nonce":"a"*32})
+            self.assertEqual(result["status"], "unsupported_dependencies", result)
+            self.assertFalse(result["behavior_observed"])
+
     def test_java_uppercase_markup(self):
         self.probe("Render.java", 'public class Render { public static String render(String x) { return x.toUpperCase(); }}', function="Render.render")
 
