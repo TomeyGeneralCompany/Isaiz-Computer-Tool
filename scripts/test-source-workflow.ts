@@ -101,7 +101,7 @@ try {
     else if(turn===3)next=action("verify_source","source-1/"+source,source.endsWith(".java")?"Render.missing":"missing","html_reflection");
     else if(turn===4 && !stateful) {
       const previous=JSON.parse((latestTool()?.content || "").split("\n")[0].slice("TOOL_RESULT ".length));
-      assert.equal(JSON.parse(previous.output).status,"probe_failed");
+      assert.equal(JSON.parse(previous.output).status,source.endsWith(".java")?"invalid_probe":"probe_failed");
       next=action("verify_source","source-1/"+source,selector,"html_reflection");
     } else {
       const previous=JSON.parse((latestTool()?.content || "").split("\n")[0].slice("TOOL_RESULT ".length));
