@@ -336,10 +336,10 @@ export async function runLocalAudit(
           continue;
         }
         if((action.action==='plan_probe'||action.action==='verify_source') &&
-            action.path.endsWith('.java') && /^[A-Za-z_$][\\w$]*$/.test(action.query)) {
+            action.path.endsWith('.java') && /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(action.query)) {
           const javaClass=action.path.split('/').at(-1)!.slice(0,-5);
           action.query=javaClass+'.'+action.query;
-          await appendFile(logFile,'[JAVA_QUERY_NORMALIZED] '+JSON.stringify({path:action.path,query:action.query})+'\\n');
+          await appendFile(logFile,'[JAVA_QUERY_NORMALIZED] '+JSON.stringify({path:action.path,query:action.query})+'\n');
         }
         if(['plan_probe','verify_source','verify_python'].includes(action.action) &&
             action.answer!=='solidity_sequence' && action.sequence!==undefined) {
