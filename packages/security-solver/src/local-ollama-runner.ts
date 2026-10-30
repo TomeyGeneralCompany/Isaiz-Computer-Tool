@@ -379,6 +379,17 @@ export async function runLocalAudit(
         }
         if(action.action==='plan_probe') {
           if(!workflow)throw new Error('Probe planning requires production workflow');
+          if(action.path.endsWith('.sol')) {
+            let declared=false;
+            try { declared=await solidityIndex.hasFunction(await safePath(action.path),action.query); }catch{}
+            if(!declared) {
+              const feedback='No matching Solidity function declaration for '+action.query+'. Use outline_solidity to obtain a real Contract.function target; no probe was run.';
+              workflow.feedback(feedback);
+              await appendFile(logFile,'[PLAN_REJECTED] '+feedback+'\n');
+              messages.push({role:'user',content:feedback+' /no_think'});
+              continue;
+            }
+          }
           if(action.answer==='solidity_sequence') {
             const sequence=soliditySequenceSchema.safeParse(action.sequence);
             if(!sequence.success) {
