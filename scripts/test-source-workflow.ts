@@ -162,7 +162,7 @@ try {
     if(!result.success && result.auditRecord)console.error(await readFile(join(root,"data/logs",result.auditRecord),"utf8"));
     assert.equal(result.success,true,JSON.stringify(result));
     assert.equal(result.findings.length,1);
-    if(!stateful)assert.ok(result.coverageDetail?.includes(language==="java"?"1 unsupported probes":"1 failed probes"));
+    if(!stateful)assert.ok(result.coverageDetail && !result.coverageDetail.includes("1 failed probes") && !result.coverageDetail.includes("1 unsupported probes"),"invented probe should be stopped at declaration preflight");
     else assert.equal(result.findings[0].vulnerabilityType,"State assertion discrepancy");
     const record=await readSourceCase(caseId,program);
     assert.equal((await replaySourceCase(record,fixture)).behavior_observed,true);
