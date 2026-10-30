@@ -1,6 +1,7 @@
 """Fixed Java adapter, invoked only inside the isolated reproduction namespace."""
 import base64
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -40,6 +41,26 @@ for component in reversed(package.split('.') if package else []):
     source_root = source_root.parent
 if not source_root.is_relative_to('/repo'):
     raise ValueError('Java source root outside repository')
+# Resolve other checked-out module source roots without running Maven/Gradle,
+# downloading dependencies or mounting host caches. Bound the traversal so a
+# large repository cannot turn a single probe into an unbounded tree walk.
+roots = [source_root]
+seen = {str(source_root)}
+directories_visited = 0
+for parent, directories, _ in os.walk('/repo', followlinks=False):
+    directories_visited += 1
+    if directories_visited > 12000 or len(roots) >= 48:
+        break
+    directories[:] = sorted(d for d in directories if d not in (
+        '.git', '.gradle', '.m2', 'node_modules', 'target', 'build',
+        'dist', 'vendor', '.venv', '__pycache__'))
+    relative_parent = Path(parent).relative_to('/repo')
+    if relative_parent.parts[-3:] == ('src', 'main', 'java'):
+        if parent not in seen:
+            roots.append(Path(parent))
+            seen.add(parent)
+        directories[:] = []
+sourcepath = os.pathsep.join(str(root) for root in roots)
 classes = Path('/tmp/classes')
 classes.mkdir()
 harness = Path('/tmp/TomeyJavaProbe.java')
@@ -126,7 +147,7 @@ jvm = ['-Xmx128m', '-XX:ActiveProcessorCount=2', '-XX:+UseSerialGC']
 # modules; keep runtime probes tight, but give compilation bounded headroom.
 javac_jvm = ['-Xmx512m', '-XX:ActiveProcessorCount=2', '-XX:+UseSerialGC']
 subprocess.run(['/jdk/bin/javac', *['-J'+x for x in javac_jvm], '-proc:none', '-encoding', 'UTF-8',
-                '-classpath', str(classes), '-sourcepath', str(source_root), '-d', str(classes),
+                '-classpath', str(classes), '-sourcepath', sourcepath, '-d', str(classes),
                 str(target), str(harness)], check=True, timeout=15)
 control = 'TOMEY_CONTROL_' + spec['nonce']
 attack = ('<em data-tomey="'+spec['nonce']+'">TOMEY_PROBE</em>'
