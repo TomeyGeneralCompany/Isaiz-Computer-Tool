@@ -435,6 +435,7 @@ export async function runLocalAudit(
           // Fresh evidence may be needed, but a rejected final must not reset
           // the inspection checkpoint and reopen an unconditional read loop.
           // Retain read-action history: rejecting a final answer does not make prior pages new evidence.
+          if(!workflow)recentActions.clear(); // Legacy no-workflow repair may explicitly require a fresh source read.
           stalledActions=0;workflow?.finalRejected(feedback);
           // Coverage validator can name the next inspected candidate. Make the
           // next source read deterministic instead of asking a small model to
