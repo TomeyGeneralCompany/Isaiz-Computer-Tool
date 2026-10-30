@@ -11,8 +11,34 @@ export async function prioritizeSourceCandidates(root:string,eligible:string[],f
   // source consistently for detector hits and fallbacks, without discarding
   // eligible files or treating a detector hit as verified evidence.
   const candidates=[...new Set([...(focus?[focus]:[]),...selected.map(lead=>lead.path),...fallback])].filter(path=>allowed.has(path));
-  const paths=focus ? candidates.slice(0,8) : candidates
-    .sort((a,b)=>sourcePriority(b)-sourcePriority(a) || (a.endsWith('.sol')? -1:0) - (b.endsWith('.sol')? -1:0))
+  // Rank a bounded navigation pool by demonstrably probe-compatible signatures.
+  // Lexical hints are not evidence; an actual source read and isolated probe
+  // still determine whether any candidate is testable or vulnerable.
+  const ranked=candidates.sort((a,b)=>sourcePriority(b)-sourcePriority(a) ||
+    (a.endsWith('.sol')? -1:0) - (b.endsWith('.sol')? -1:0));
+  const rankedPool=focus ? ranked.slice(0,8) : ranked.slice(0,48);
+  const signatureScores=new Map<string,number>();
+  if(!focus) {
+    let examinedBytes=0;
+    for(const path of rankedPool) {
+      try {
+        const full=await realpath(resolve(base,path)),local=relative(base,full);
+        if(local==='..'||local.startsWith('..'+sep))continue;
+        const size=(await stat(full)).size;
+        if(size>128000 || examinedBytes+size>1500000)continue;
+        examinedBytes+=size;
+        const source=await readFile(full,'utf8');
+        const javaCandidate=path.endsWith('.java') &&
+          /\\bpublic\\s+(?:(?:static|final|synchronized)\\s+)*(?:String|byte\\s*\\[\\s*\\]|CharSequence|StringBuilder|StringBuffer|ByteBuffer|Path|File|URI)\\s+\\w+\\s*\\(\\s*(?:final\\s+)?(?:String|byte\\s*\\[\\s*\\]|CharSequence|StringBuilder|StringBuffer|ByteBuffer|Path|File|URI|Object)\\s+\\w+\\s*\\)/.test(source);
+        const solidityCandidate=path.endsWith('.sol') &&
+          /\\bfunction\\s+\\w+\\s*\\(\\s*string\\b[^)]*\\)\\s+[^;{]*\\b(?:pure|view)\\b[^;{]*\\breturns\\s*\\(\\s*string\\b/.test(source);
+        if(javaCandidate||solidityCandidate)signatureScores.set(path,1);
+      }catch{}
+    }
+  }
+  const paths=focus ? rankedPool : rankedPool
+    .sort((a,b)=>(signatureScores.get(b)||0)-(signatureScores.get(a)||0) ||
+      sourcePriority(b)-sourcePriority(a))
     .slice(0,8);
   const locations:Array<{path:string;offset:number;line:number;rule?:string;hypothesis?:string}>=[];
   for(const path of paths) {
