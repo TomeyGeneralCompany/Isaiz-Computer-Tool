@@ -432,7 +432,8 @@ export async function runLocalAudit(
             messages.push({role:"user",content:"Empty final rejected twice. Execute an allowed inspection/probe action next, using existing source evidence. Do not claim unverified findings. /no_think"});
             continue;
           }
-          if(emptyFinals>2 || (workflow && emptyFinalRecoveryCycles>3))throw new Error("Ollama returned repeated empty final responses despite investigative recovery");
+          if(!workflow && emptyFinals>2)throw new Error("Ollama returned empty final response after two corrective retries");
+          if(workflow && emptyFinalRecoveryCycles>3)throw new Error("Ollama returned repeated empty final responses despite investigative recovery");
           const rejected=messages.at(-1)!;
           rejected.content="Empty final answer rejected.";
           messages.push(fitAuditToolOutput(messages.slice(0,2),rejected,"final_validation",
