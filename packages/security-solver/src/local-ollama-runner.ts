@@ -253,7 +253,7 @@ export async function runLocalAudit(
       if(constraints?.action?.some(action=>!actionSchema.properties.action.enum.includes(action)))throw new Error("Task requested an unavailable action");
       let requestSchema:Record<string,any>=constraints ? {...actionSchema,properties:{...actionSchema.properties,
         ...Object.fromEntries(Object.entries(constraints).map(([key,values])=>[key,{type:"string",enum:values}]))}} : actionSchema;
-      if(structured && limits.finalSchema && (emptyFinals>=1 || invalidReviewFinals>=2) &&
+      if(structured && limits.finalSchema && (!workflow && emptyFinals>=1 || invalidReviewFinals>=2) &&
          (!constraints?.action || constraints.action.includes('final'))) {
         // Qwen3:4b sometimes returns a valid "final" action with both answer=""
         // and result omitted. Once that is observed, require the typed final
@@ -434,7 +434,8 @@ export async function runLocalAudit(
             ? invalidReviewFinals + 1 : 0;
           // Fresh evidence may be needed, but a rejected final must not reset
           // the inspection checkpoint and reopen an unconditional read loop.
-          recentActions.clear();stalledActions=0;workflow?.finalRejected(feedback);
+          // Retain read-action history: rejecting a final answer does not make prior pages new evidence.
+          stalledActions=0;workflow?.finalRejected(feedback);
           const rejected=messages.at(-1)!;
           rejected.content="Previous final answer rejected; follow the validation feedback.";
           await appendFile(logFile, "[FINAL_REJECTED] " + feedback + "\n");
