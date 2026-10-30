@@ -29,9 +29,9 @@ export async function prioritizeSourceCandidates(root:string,eligible:string[],f
         examinedBytes+=size;
         const source=await readFile(full,'utf8');
         const javaCandidate=path.endsWith('.java') &&
-          /\\bpublic\\s+(?:(?:static|final|synchronized)\\s+)*(?:String|byte\\s*\\[\\s*\\]|CharSequence|StringBuilder|StringBuffer|ByteBuffer|Path|File|URI)\\s+\\w+\\s*\\(\\s*(?:final\\s+)?(?:String|byte\\s*\\[\\s*\\]|CharSequence|StringBuilder|StringBuffer|ByteBuffer|Path|File|URI|Object)\\s+\\w+\\s*\\)/.test(source);
+          /\bpublic\s+(?:(?:static|final|synchronized)\s+)*(?:String|byte\s*\[\s*\]|CharSequence|StringBuilder|StringBuffer|ByteBuffer|Path|File|URI)\s+\w+\s*\(\s*(?:final\s+)?(?:String|byte\s*\[\s*\]|CharSequence|StringBuilder|StringBuffer|ByteBuffer|Path|File|URI|Object)\s+\w+\s*\)/.test(source);
         const solidityCandidate=path.endsWith('.sol') &&
-          /\\bfunction\\s+\\w+\\s*\\(\\s*string\\b[^)]*\\)\\s+[^;{]*\\b(?:pure|view)\\b[^;{]*\\breturns\\s*\\(\\s*string\\b/.test(source);
+          /\bfunction\s+\w+\s*\(\s*string\b[^)]*\)\s+[^;{]*\b(?:pure|view)\b[^;{]*\breturns\s*\(\s*string\b/.test(source);
         if(javaCandidate||solidityCandidate)signatureScores.set(path,1);
       }catch{}
     }
