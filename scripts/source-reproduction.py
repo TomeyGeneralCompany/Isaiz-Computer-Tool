@@ -206,6 +206,14 @@ def run_probe(repository: Path, specification: dict, _dependency_round: int = 0)
                 except (DependencyError, OSError, ValueError) as error:
                     return {'status':'unsupported_dependencies','behavior_observed':False,'detail':str(error)[:1000]}
                 return run_probe(repository, specification, _dependency_round + 1)
+        if code and language == 'java':
+            diagnostic = (work/'stderr').read_text(errors='replace')
+            if 'TOMEY_INVALID_JAVA_PROBE:' in diagnostic:
+                return {'status':'invalid_probe','behavior_observed':False,
+                        'detail':diagnostic.split('TOMEY_INVALID_JAVA_PROBE:',1)[1].splitlines()[0][:400]}
+            if 'error: cannot find symbol' in diagnostic or 'error: package ' in diagnostic:
+                return {'status':'unsupported_dependencies','behavior_observed':False,
+                        'detail':'Java project types missing from isolated compiler classpath: '+diagnostic[-700:]}
         if code:
             return {'status':'probe_failed','behavior_observed':False,'exit_code':code,
                     'detail':(work/'stderr').read_text(errors='replace')[-1200:]}

@@ -101,7 +101,7 @@ try {
     else if(turn===3)next=action("verify_source","source-1/"+source,source.endsWith(".java")?"Render.missing":"missing","html_reflection");
     else if(turn===4 && !stateful) {
       const previous=JSON.parse((latestTool()?.content || "").split("\n")[0].slice("TOOL_RESULT ".length));
-      assert.equal(JSON.parse(previous.output).status,"probe_failed");
+      assert.equal(JSON.parse(previous.output).status,source.endsWith(".java")?"invalid_probe":"probe_failed");
       next=action("verify_source","source-1/"+source,selector,"html_reflection");
     } else {
       const previous=JSON.parse((latestTool()?.content || "").split("\n")[0].slice("TOOL_RESULT ".length));
@@ -140,7 +140,7 @@ try {
     if(!result.success && result.auditRecord)console.error(await readFile(join(root,"data/logs",result.auditRecord),"utf8"));
     assert.equal(result.success,true,JSON.stringify(result));
     assert.equal(result.findings.length,1);
-    if(!stateful)assert.ok(result.coverageDetail?.includes("1 failed probes"));
+    if(!stateful)assert.ok(result.coverageDetail?.includes(language==="java"?"1 unsupported probes":"1 failed probes"));
     else assert.equal(result.findings[0].vulnerabilityType,"State assertion discrepancy");
     const record=await readSourceCase(caseId,program);
     assert.equal((await replaySourceCase(record,fixture)).behavior_observed,true);
