@@ -119,7 +119,7 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
         acquisitionChecks.push({repository:url,reason,retryAfter:acquisitionRetryAfter(error)});
         acquisitionFailures.push(`${url}: ${reason}`);
         await appendFile(logFile,"[ACQUISITION_FAILED] "+JSON.stringify({repository:url,reason})+"\n");
-        log.warn({error,url},"Source acquisition failed");
+        log.warn({url,reason,errorName:error instanceof Error?error.name:"unknown"},"Source acquisition failed");
       }
     }
     if(!repos.length)throw new Error("No authorized source repository was acquired; " + (acquisitionFailures.join("; ") || "no source URLs remain after scope/capability filtering"));
