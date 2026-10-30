@@ -238,7 +238,7 @@ Do not claim production testing, JavaScript execution, file access or other effe
               }
               // An incomplete outcome must describe this pass, not claim that
               // no relevant methods exist anywhere in the repository.
-              if(/(all|entire|whole) (source|repository|codebase)|further inspection .*redundant|no (testable candidates|suitable functions) exist/i.test(value.reason))
+              if(/(all|entire|whole) (source|repository|codebase)|further inspection .*redundant|no (testable candidates|suitable functions) exist/i.test(value.reason || ""))
                 return "State only what the selected files and attempted probes support. Do not assert repository-wide absence or that more inspection is redundant; return a scoped incomplete reason.";
               parsed=value;return null;
             }
