@@ -22,16 +22,16 @@ if len(parts) != 2 or parts[0] != target.stem:
 # String/byte/Path probe; compilation errors must not hide that fact.
 method_name = re.escape(parts[1])
 declaration = re.search(
-    r'\\b(?:public\\s+)?(?:static\\s+)?(?:final\\s+)?'
-    r'(?:String|byte\\[\\]|CharSequence|StringBuilder|StringBuffer|ByteBuffer|Path|File|URI|Object)\\s+'
-    + method_name + r'\\s*\\(\\s*(?:final\\s+)?'
-    r'(?:String|byte\\[\\]|CharSequence|StringBuilder|StringBuffer|ByteBuffer|Path|File|URI|Object)'
-    r'\\s+[A-Za-z_$][\\w$]*\\s*\\)',
+    r'\b(?:public\s+)?(?:static\s+)?(?:final\s+)?'
+    r'(?:String|byte\[\]|CharSequence|StringBuilder|StringBuffer|ByteBuffer|Path|File|URI|Object)\s+'
+    + method_name + r'\s*\(\s*(?:final\s+)?'
+    r'(?:String|byte\[\]|CharSequence|StringBuilder|StringBuffer|ByteBuffer|Path|File|URI|Object)'
+    r'\s+[A-Za-z_$][\w$]*\s*\)',
     code
 )
 if not declaration:
     raise ValueError('TOMEY_INVALID_JAVA_PROBE: no supported one-input/text-output declaration')
-if re.search(r'\\binterface\\s+' + re.escape(parts[0]) + r'\\b', code) and not re.search(r'\\bstatic\\b', declaration.group(0)):
+if re.search(r'\binterface\s+' + re.escape(parts[0]) + r'\b', code) and not re.search(r'\bstatic\b', declaration.group(0)):
     raise ValueError('TOMEY_INVALID_JAVA_PROBE: interface instance method cannot be constructed')
 source_root = target.parent
 for component in reversed(package.split('.') if package else []):
