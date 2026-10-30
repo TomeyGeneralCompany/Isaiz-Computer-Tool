@@ -53,6 +53,7 @@ export class SourceReads {
     return end===start;
   }
   has(path:string) { return this.spans.has(path); }
+  inspectedPaths(paths:readonly string[]):string[] { return paths.filter(path=>this.spans.has(path)); }
   sawLine(path:string, text:string, line:number):boolean {
     if (!Number.isSafeInteger(line) || line < 1) return false;
     const lines = text.split("\n");
