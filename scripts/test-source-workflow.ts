@@ -17,6 +17,15 @@ process.env.AUTOHACK_AUTO_SOURCE_PREFETCH="false";
 process.env.LOCAL_HUNT_NUM_PREDICT="4096";
 const workflowText=await readFile(join(process.cwd(),"packages/security-solver/src/investigation-workflow.ts"),"utf8");
 assert.ok(workflowText.includes("Invalid Solidity probe target"),"placeholder Solidity method targets must be rejected before verification");
+const {declaredProbeTarget}=await import("../packages/security-solver/src/probe-target-validation");
+const probeFixtures=join(root,"probe-declarations");await mkdir(probeFixtures);
+await writeFile(join(probeFixtures,"Target.java"),"public class Target { public static String actual(String input) { return input; } }");
+await writeFile(join(probeFixtures,"target.py"),"def actual(value):\\n    return value\\n".replaceAll("\\\\n","\\n"));
+await writeFile(join(probeFixtures,"target.js"),"exports.actual = function(value) { return value; };");
+for(const [file,actual,missing] of [["Target.java","Target.actual","Target.function"],["target.py","actual","function"],["target.js","actual","function"]]) {
+  assert.equal(await declaredProbeTarget(join(probeFixtures,file),actual),true,"declared probe name in "+file);
+  assert.equal(await declaredProbeTarget(join(probeFixtures,file),missing),false,"invented probe name in "+file);
+}
 const controllerText=await readFile(join(process.cwd(),"packages/security-solver/src/local-ollama-runner.ts"),"utf8");
 const flowText=await readFile(join(process.cwd(),"packages/security-solver/src/local-program-flow.ts"),"utf8");
 assert.ok(flowText.includes("sourceHints.filter(path=>!reads.has(path))"),"incomplete conclusions must advance through selected candidate batch");
