@@ -121,8 +121,9 @@ try {
     else if(turn===3 && stateful) {assert.ok(JSON.stringify(request.messages).includes("No supported probe"));next={...action("verify_source","source-1/"+source,selector,"solidity_sequence"),sequence};}
     else if(turn===3)next=action("verify_source","source-1/"+source,source.endsWith(".java")?"Render.missing":"missing","html_reflection");
     else if(turn===4 && !stateful) {
-      const previous=JSON.parse((latestTool()?.content || "").split("\n")[0].slice("TOOL_RESULT ".length));
-      assert.equal(JSON.parse(previous.output).status,source.endsWith(".java")?"invalid_probe":"probe_failed");
+      const latest=latestTool()?.content || "";
+      // Declaration preflight rejects invented function names before the verifier.
+      assert.ok(JSON.stringify(request.messages).includes("No matching source function declaration") || latest.includes("No matching source function declaration"),"invalid function preflight should be explained");
       next=action("verify_source","source-1/"+source,selector,"html_reflection");
     } else {
       const previous=JSON.parse((latestTool()?.content || "").split("\n")[0].slice("TOOL_RESULT ".length));
