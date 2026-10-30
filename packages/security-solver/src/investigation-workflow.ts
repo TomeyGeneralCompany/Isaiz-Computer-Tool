@@ -92,7 +92,7 @@ export class InvestigationWorkflow {
       // Reject placeholder or invented probe targets before they consume an
       // expensive model turn or enter the dependency preparation sandbox.
       // A Solidity query must name a real Contract.function (or constructor).
-      if(action.path.endsWith('.sol') && !/^[A-Za-z_$][\\w$]*\\.(?:[A-Za-z_$][\\w$]*|constructor)$/.test(action.query))
+      if(action.path.endsWith('.sol') && !/^[A-Za-z_$][\w$]*\.(?:[A-Za-z_$][\w$]*|constructor)$/.test(action.query))
         return 'Invalid Solidity probe target: query must be Contract.function using a declaration returned by outline_solidity. Do not use function, method, or guessed names.';
       if(!action.hypothesis?.trim())return 'State the suspected behavior and what observation would disprove it in hypothesis.';
       if(this.state.tested.includes(key(action)))return 'This probe already finished or was attempted. Use its observation; choose a different candidate or conclude with the permitted incomplete outcome.';
