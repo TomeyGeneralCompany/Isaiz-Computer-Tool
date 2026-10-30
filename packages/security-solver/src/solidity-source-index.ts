@@ -99,7 +99,7 @@ export class SoliditySourceIndex {
     for(const node of unit.ast.children) {
       if(node.type!=='ContractDefinition')continue;
       for(const member of node.subNodes) {
-        if(member.type==='FunctionDefinition' && selector===node.name+'.'+label(member))return true;
+        if(member.type==='FunctionDefinition' && selector===node.name+'.'+label(member as FunctionDefinition))return true;
       }
     }
     return false;
