@@ -95,6 +95,8 @@ export async function runLocalAudit(
   let timer = setTimeout(() => controller.abort(), timeoutMs);
   let usedTurns=0, finalAnswer:string|undefined, stoppingReason="Inspection interrupted";
   let emptyFinals=0;
+  let emptyFinalRecoveryCycles=0;
+  let requireInvestigationAfterEmpty=false;
   let invalidReviewFinals=0;
   let rejectedPlans=0;
   let consecutiveWorkflowRejections=0;
@@ -243,6 +245,10 @@ export async function runLocalAudit(
       controller.signal.throwIfAborted();
       // Keep stable history; send fresh controller state only with this request.
       let constraints=workflow ? await workflow.constraints() : limits.actionConstraints?.();
+      if(workflow && requireInvestigationAfterEmpty && constraints?.action?.includes('final') && constraints.action.length>1) {
+        constraints={...constraints,action:constraints.action.filter(name=>name!=='final')};
+        await appendFile(logFile,'[EMPTY_FINAL_INVESTIGATE] Require a concrete tool action before another conclusion\n');
+      }
       if(workflow && consecutiveWorkflowRejections>=2 && constraints?.action?.includes('plan_probe')) {
         const otherActions=constraints.action.filter(name=>name!=='plan_probe');
         if(otherActions.length)constraints={...constraints,action:otherActions};
@@ -253,7 +259,7 @@ export async function runLocalAudit(
       if(constraints?.action?.some(action=>!actionSchema.properties.action.enum.includes(action)))throw new Error("Task requested an unavailable action");
       let requestSchema:Record<string,any>=constraints ? {...actionSchema,properties:{...actionSchema.properties,
         ...Object.fromEntries(Object.entries(constraints).map(([key,values])=>[key,{type:"string",enum:values}]))}} : actionSchema;
-      if(structured && limits.finalSchema && (emptyFinals>=1 || invalidReviewFinals>=2) &&
+      if(structured && !requireInvestigationAfterEmpty && limits.finalSchema && (emptyFinals>=1 || invalidReviewFinals>=2) &&
          (!constraints?.action || constraints.action.includes('final'))) {
         // Qwen3:4b sometimes returns a valid "final" action with both answer=""
         // and result omitted. Once that is observed, require the typed final
@@ -415,7 +421,19 @@ export async function runLocalAudit(
           continue;
         }
         if (!message.content?.trim()) {
-          if(++emptyFinals>2)throw new Error("Ollama returned empty final response after two corrective retries");
+          emptyFinals++;
+          if(workflow && emptyFinals>=2 && ++emptyFinalRecoveryCycles<=3) {
+            // A typed-final retry failed. Resume actual investigation rather than
+            // spend every subsequent turn on another forced empty conclusion.
+            emptyFinals=0;
+            requireInvestigationAfterEmpty=true;
+            workflow.feedback("An empty final response contains no evidence. Choose an eligible inspection or supported probe; do not finish until there is a valid result.");
+            await appendFile(logFile,"[EMPTY_FINAL_RECOVER] Reopening investigative actions; cycle="+emptyFinalRecoveryCycles+"\n");
+            messages.push({role:"user",content:"Empty final rejected twice. Execute an allowed inspection/probe action next, using existing source evidence. Do not claim unverified findings. /no_think"});
+            continue;
+          }
+          if(!workflow && emptyFinals>2)throw new Error("Ollama returned empty final response after two corrective retries");
+          if(workflow && emptyFinalRecoveryCycles>3)throw new Error("Ollama returned repeated empty final responses despite investigative recovery");
           const rejected=messages.at(-1)!;
           rejected.content="Empty final answer rejected.";
           messages.push(fitAuditToolOutput(messages.slice(0,2),rejected,"final_validation",
@@ -452,6 +470,10 @@ export async function runLocalAudit(
         invalidReviewFinals=0;
         finalAnswer=message.content;stoppingReason="Validated final answer";
         return message.content;
+      }
+      if(requireInvestigationAfterEmpty && message.tool_calls?.length) {
+        requireInvestigationAfterEmpty=false;
+        emptyFinals=0;
       }
       for (const call of message.tool_calls.slice(0, 8)) {
         controller.signal.throwIfAborted();
