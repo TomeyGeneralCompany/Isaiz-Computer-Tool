@@ -509,8 +509,10 @@ export async function runLocalAudit(
           // Honor a reread after compaction instead of penalizing our own prompt.
           if (previous?.response && !messages.includes(previous.response)) {
             await appendFile(logFile,"[CONTEXT_REREAD] "+JSON.stringify({tool:name,path,offset})+"\n");
-            // Keep the cursor even if the previous message was compacted away.
-            // Compaction must not reset pagination or erase completed-read history.
+            // In a compacted prompt a completed page may be replayed once for
+            // genuine context recovery. Never reset a live pagination cursor,
+            // and never permit unlimited identical recovery reads.
+            if(previous.nextOffset===null && (sourceReadCounts.get(actionKey)||0)<2)previous=undefined;
           }
           // Recover a repeated page request using the tool's actual cursor.
           // Stay on the same action/path/query and record the effective span.
