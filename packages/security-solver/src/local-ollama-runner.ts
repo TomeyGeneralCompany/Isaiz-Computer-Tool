@@ -439,7 +439,7 @@ export async function runLocalAudit(
           // Coverage validator can name the next inspected candidate. Make the
           // next source read deterministic instead of asking a small model to
           // infer another path from an already rejected conclusion.
-          const requiredNextSource=feedback.match(/Suggested next file:\\s*([^\\s.]+\\.(?:sol|java|ts|tsx|js|jsx|py))/i)?.[1];
+          const requiredNextSource=feedback.match(/Suggested next file:\s*(\S+?\.(?:sol|java|ts|tsx|js|jsx|py))\b/i)?.[1];
           if(requiredNextSource && workflow)workflow.requireSource(requiredNextSource);
           const rejected=messages.at(-1)!;
           rejected.content="Previous final answer rejected; follow the validation feedback.";
