@@ -436,6 +436,11 @@ export async function runLocalAudit(
           // the inspection checkpoint and reopen an unconditional read loop.
           // Retain read-action history: rejecting a final answer does not make prior pages new evidence.
           stalledActions=0;workflow?.finalRejected(feedback);
+          // Coverage validator can name the next inspected candidate. Make the
+          // next source read deterministic instead of asking a small model to
+          // infer another path from an already rejected conclusion.
+          const requiredNextSource=feedback.match(/Suggested next file:\\s*([^\\s.]+\\.(?:sol|java|ts|tsx|js|jsx|py))/i)?.[1];
+          if(requiredNextSource && workflow)workflow.requireSource(requiredNextSource);
           const rejected=messages.at(-1)!;
           rejected.content="Previous final answer rejected; follow the validation feedback.";
           await appendFile(logFile, "[FINAL_REJECTED] " + feedback + "\n");
