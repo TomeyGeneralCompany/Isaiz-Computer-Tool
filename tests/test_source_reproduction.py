@@ -181,13 +181,13 @@ class LanguageTests(unittest.TestCase):
         self.probe("Render.java", 'public class Render { public static String render(String x) { return x.replace("<", "&lt;"); }}',
                    function="Render.render", observed=False)
 
-    def test_java_missing_dependency_is_failure(self):
+    def test_java_missing_dependency_is_unsupported(self):
         with tempfile.TemporaryDirectory() as directory:
             repo = Path(directory)
             (repo/"Render.java").write_text('import absent.Dependency; public class Render { public static String render(String x) { return x; }}')
             result = driver.run_probe(repo, {"file":"Render.java", "function":"Render.render",
                 "kind":"html_reflection", "nonce":"a"*32})
-            self.assertEqual(result["status"], "probe_failed", result)
+            self.assertEqual(result["status"], "unsupported_dependencies", result)
             self.assertFalse(result["behavior_observed"])
 
     def test_commonjs(self):
