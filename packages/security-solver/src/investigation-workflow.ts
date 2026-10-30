@@ -52,7 +52,7 @@ export class InvestigationWorkflow {
     if(this.pageTurns>=8)this.state.inspections=Math.max(6,this.state.inspections);
     this.state=await graph.invoke(this.state);
     if(this.requiredSource)return {action:['read_file'],path:[this.requiredSource]};
-    if(this.duplicateProbeRejections>=2 && !this.state.pending)return {action:['read_file','read_solidity','outline_solidity','search_files','list_files','continue_inspection','final']};
+    if(this.duplicateProbeRejections>=2 && !this.state.pending)return {action:['read_file','read_solidity','outline_solidity','search_files','list_files','plan_probe','continue_inspection','final']};
     if(this.state.pending) {
       const p=this.state.pending;
       return {action:['verify_source'],path:[p.path],query:[p.query],answer:[p.answer]};
