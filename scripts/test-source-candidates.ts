@@ -24,6 +24,11 @@ try {
   assert.equal(nav.snapshot().next.find(item=>item.path===paths[199])?.offset,result.locations[0].offset+156,'Chunk continuation remains active');
   const fallback=await prioritizeSourceCandidates(root,paths,paths.slice(8,16),[]);
   assert.deepEqual(fallback.paths,paths.slice(8,16));
+  // A probe-compatible Java method outranks equally prioritized callback-only files.
+  await writeFile(join(root,'Callback.java'),'public class Callback { public void onUpdate(int x) {} }');
+  await writeFile(join(root,'Compatible.java'),'public class Compatible { public static String reflect(String input) { return input; } }');
+  const javaRank=await prioritizeSourceCandidates(root,['Callback.java','Compatible.java'],['Callback.java','Compatible.java'],[]);
+  assert.equal(javaRank.paths[0],'Compatible.java','rank a compatible signature before unsupported callbacks');
   const focused=await prioritizeSourceCandidates(root,paths,[],[{path:paths[199],line:102}],paths[5]);
   assert.equal(focused.paths[0],paths[5]);
   await symlink('/etc/passwd',join(root,'outside.py'));
