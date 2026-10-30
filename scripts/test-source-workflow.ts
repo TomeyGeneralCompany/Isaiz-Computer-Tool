@@ -170,6 +170,6 @@ try {
 // Integration regression: compaction may discard model-visible pages but must not
 // discard pagination cursors, and the 2,000-character source chunk cap remains.
 assert.ok(controllerText.includes('sourceReadCounts'), 'repeated source reads must survive compaction');
-assert.ok(controllerText.includes('Keep the cursor even if the previous message was compacted away'), 'evicted pages must preserve pagination');
+assert.ok(controllerText.includes('never permit unlimited identical recovery reads'), 'evicted pages must preserve pagination');
 assert.ok(controllerText.includes('[PROBE_RESULT]'), 'probe outcomes must be observable in hunt logs');
 assert.ok(controllerText.includes('Math.min(2000'), 'CPU-friendly file chunking must remain active');
