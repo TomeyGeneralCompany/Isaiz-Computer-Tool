@@ -134,6 +134,8 @@ export async function runLocalAudit(
     catch {await appendFile(logFile,'[MEMORY] Checkpoint write failed; investigation continues\n');}
   };
   const recentActions = new Map<string, {turn:number; nextOffset?:number|null; response?:Message}>();
+  // Independent of context compaction: an evicted source page is not an unread page.
+  const sourceReadCounts = new Map<string,number>();
   let stalledActions = 0;
   const missingRequests=new Map<string,number>();
   const fixedSize=JSON.stringify(messages).length+JSON.stringify(structured ? actionSchema : availableTools).length;
@@ -505,10 +507,12 @@ export async function runLocalAudit(
           let previous = recentActions.get(actionKey);
           // An evicted tool result cannot be used as evidence by the model.
           // Honor a reread after compaction instead of penalizing our own prompt.
-          if (previous?.response && !messages.includes(previous.response) &&
-              (call.function.arguments?.offset !== undefined || previous.nextOffset == null)) {
+          if (previous?.response && !messages.includes(previous.response)) {
             await appendFile(logFile,"[CONTEXT_REREAD] "+JSON.stringify({tool:name,path,offset})+"\n");
-            previous=undefined;
+            // In a compacted prompt a completed page may be replayed once for
+            // genuine context recovery. Never reset a live pagination cursor,
+            // and never permit unlimited identical recovery reads.
+            if(previous.nextOffset===null && (sourceReadCounts.get(actionKey)||0)<2)previous=undefined;
           }
           // Recover a repeated page request using the tool's actual cursor.
           // Stay on the same action/path/query and record the effective span.
@@ -520,7 +524,8 @@ export async function runLocalAudit(
             call.function.arguments.offset=offset;
             await appendFile(logFile,"[PAGE_ADVANCE] "+JSON.stringify({tool:name,path,requestedOffset,offset})+"\n");
           }
-          if(inspection && previous && (turn-previous.turn<=8 || previous.nextOffset===null)) {
+          const repeatCount=sourceReadCounts.get(actionKey)||0;
+          if(inspection && previous && (turn-previous.turn<=8 || previous.nextOffset===null || repeatCount>=2)) {
             stalledActions++;
             const instruction = previous.nextOffset != null
               ? `Continue at offset ${previous.nextOffset}, or choose a different file/search.`
@@ -593,6 +598,7 @@ export async function runLocalAudit(
             let nextOffset:number|null|undefined;
             try {nextOffset=JSON.parse(output).nextOffset;}catch{}
             recentActions.set(actionKey,{turn,nextOffset});
+            sourceReadCounts.set(actionKey,(sourceReadCounts.get(actionKey)||0)+1);
             completedActionKey=actionKey;
             // Bounded by maxTurns; keep cursor chains after history compaction.
           }
@@ -612,7 +618,11 @@ export async function runLocalAudit(
           sequence:call.function.arguments?.sequence},output);
         let probeStatus:string|undefined;
         if(["verify_source","verify_python"].includes(call.function.name)){
-          try {probeStatus=String(JSON.parse(output).status || "unknown").slice(0,100);}catch{}
+          try {
+            const probeResult=JSON.parse(output);
+            probeStatus=String(probeResult.status || "unknown").slice(0,100);
+            await appendFile(logFile,"[PROBE_RESULT] "+JSON.stringify({path:call.function.arguments?.path,function:call.function.arguments?.query,kind:call.function.arguments?.kind,status:probeStatus,evidenceFile:probeResult.evidenceFile,detail:String(probeResult.detail||probeResult.reason||probeResult.error||"").slice(0,400)})+"\n");
+          }catch{}
         }
         await recordToolActivity(logFile,{phase:output.startsWith("Tool error:")?"failed":"completed",
           tool:call.function.name,path:String(call.function.arguments?.path ?? ".").slice(0,500),
