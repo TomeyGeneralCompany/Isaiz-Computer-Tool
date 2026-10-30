@@ -145,7 +145,7 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
       const paths=c.sourcePaths.filter(p=>p.length<=512);
       const pass=Number.isSafeInteger(tracking.inspectionPass) ? tracking.inspectionPass : 0;
       const start=paths.length ? (Math.max(0,pass)*8)%paths.length : 0;
-      return [...paths.slice(start),...paths.slice(0,start)].slice(0,8)
+      return [...paths.slice(start),...paths.slice(0,start)].slice(0,48)
         .map(p=>relative(root,join(repo.directory,p)).split(sep).join("/"));
     });
     const eligiblePaths=capabilities.filter(c=>!c.blocked).flatMap(c=>{
