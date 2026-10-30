@@ -461,7 +461,13 @@ export async function runLocalAudit(
           // next source read deterministic instead of asking a small model to
           // infer another path from an already rejected conclusion.
           const requiredNextSource=feedback.match(/Suggested next file:\s*(\S+?\.(?:sol|java|ts|tsx|js|jsx|py))\b/i)?.[1];
-          if(requiredNextSource && workflow)workflow.requireSource(requiredNextSource);
+          if(requiredNextSource && workflow) {
+            workflow.requireSource(requiredNextSource);
+            // A typed-final retry must not trap the model in final-only mode
+            // when source coverage requires a new concrete tool action.
+            requireInvestigationAfterEmpty=true;
+            emptyFinals=0;
+          }
           const rejected=messages.at(-1)!;
           rejected.content="Previous final answer rejected; follow the validation feedback.";
           await appendFile(logFile, "[FINAL_REJECTED] " + feedback + "\n");
