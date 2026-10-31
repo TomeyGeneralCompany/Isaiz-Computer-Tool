@@ -275,8 +275,14 @@ export async function runLocalAudit(
         const recordedIds=[...new Set((workflow?.snapshot().observations || [])
           .map(o=>o.caseId).filter((id):id is string=>typeof id==='string'&&/^[a-f0-9]{64}$/.test(id)))];
         const item=strictResult.properties?.findings?.items;
-        if(recordedIds.length && item?.properties?.caseId)
+        if(!recordedIds.length && strictResult.properties?.findings) {
+          // A model cannot cite a reproduction before the controller has
+          // registered one. Keep a legitimate scoped negative result possible.
+          strictResult.properties.findings={...strictResult.properties.findings,maxItems:0};
+          await appendFile(logFile,'[FINAL_UNVERIFIED_FINDINGS_BLOCKED] No recorded reproduction case\\n');
+        } else if(item?.properties?.caseId) {
           item.properties.caseId={...item.properties.caseId,enum:recordedIds};
+        }
         requestSchema={...requestSchema,
           properties:{...requestSchema.properties,
             action:{type:'string',enum:['final']},
