@@ -119,6 +119,7 @@ export async function runLocalAudit(
     name:"verify_source",description:probePrompt,parameters:{type:"object",
       properties:{path:{type:"string"},query:{type:"string"},kind:{type:"string"},sequence:soliditySequenceJsonSchema},required:["path","query","kind"]},
   }}] : tools;
+  const recoveredFindingProbes=new Set<string>();
   let messages: Message[] = [
     { role: "system", content: (systemPrompt || "") + "\nPerform an offline source audit. Request exactly one tool call per response. Inspect actual files. Never invent findings or observations. No target network requests are available." + (limits.verifyPython ? probePrompt : " No source execution is available.") + (structured ? auditProtocolPrompt.replace(JSON.stringify(auditActionSchema),'Use action, path, query, answer; offset and sequence are optional. Example: {"action":"read_file","path":"file.py","query":"","answer":"","offset":0}. The response format enforces the full schema.') : "") },
     { role: "user", content: prompt + "\n/no_think" },
@@ -362,6 +363,33 @@ export async function runLocalAudit(
           // planning and duplicate detection; they are unused by these probes.
           delete action.sequence;
           await appendFile(logFile,'[UNUSED_SEQUENCE_IGNORED] '+JSON.stringify({action:action.action,path:action.path,kind:action.answer})+'\n');
+        }
+        // A speculative final cannot skip a compatible source reproduction.
+        if(workflow && action.action==='final') {
+          let proposed:any;
+          try { proposed=JSON.parse(action.answer || (action.result ? JSON.stringify(action.result) : '')); }catch{}
+          const observationIds=new Set((workflow.snapshot().observations || []).map(o=>o.caseId).filter(Boolean));
+          if(!observationIds.size && Array.isArray(proposed?.findings) && proposed.findings.length) {
+            const candidate=proposed.findings[0];
+            const path=String(candidate?.callerFile || '');
+            const narrative=[candidate?.title,candidate?.ratingReason,candidate?.impact].filter(x=>typeof x==='string').join(' ');
+            const selector=narrative.match(/\\b([A-Za-z_$][\\w$]*\\.[A-Za-z_$][\\w$]*)\\b/)?.[1];
+            const kind=/path.construction|path traversal|directory traversal/i.test(narrative)?'path_construction':
+              /html.reflection|html injection|html output/i.test(narrative)?'html_reflection':null;
+            if(workflow.snapshot().readPaths.includes(path) && selector && kind && /\\.(?:java|py|js|mjs|cjs|sol)$/.test(path)) {
+              let declared=false;
+              try {const full=await safePath(path);declared=path.endsWith('.sol')?
+                await solidityIndex.hasFunction(full,selector):await declaredProbeTarget(full,selector);}catch{}
+              const recoveryKey=JSON.stringify([path,selector,kind]);
+              if(declared && !recoveredFindingProbes.has(recoveryKey)) {
+                recoveredFindingProbes.add(recoveryKey);
+                workflow.requireProbe(path,selector,kind);
+                await appendFile(logFile,'[PROBE_RECOVERY_REQUIRED] '+recoveryKey+'\\n');
+                messages.push({role:'user',content:'An unverified finding referred to an inspected declared function. Your NEXT action must be plan_probe with path='+path+', query='+selector+', answer='+kind+', and a hypothesis with a falsification condition. The controller then requires verify_source. Do not invent case IDs. /no_think'});
+                continue;
+              }
+            }
+          }
         }
         const workflowError=workflow?.validate(action);
         if(workflowError) {
