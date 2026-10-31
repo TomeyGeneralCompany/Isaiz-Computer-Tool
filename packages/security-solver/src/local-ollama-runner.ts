@@ -400,6 +400,8 @@ export async function runLocalAudit(
           consecutiveWorkflowRejections=lastWorkflowRejection===workflowError?consecutiveWorkflowRejections+1:1;
           lastWorkflowRejection=workflowError;
           await appendFile(logFile,'[WORKFLOW_REJECTED] '+workflowError+'\n');
+          if(action.action==='plan_probe' && workflow!.rejectedRequiredProbePlan())
+            await appendFile(logFile,'[REQUIRED_PROBE_PLAN_RELEASED] Repeated invalid plans; reopen investigation\n');
           messages.push({role:'user',content:'Controller rejected the last action: '+workflowError+
             '. Do not repeat the rejected probe. Inspect a new call site, use recorded evidence, or give an evidence-based final finding or incomplete outcome. /no_think'});
           continue;
@@ -434,6 +436,8 @@ export async function runLocalAudit(
               const feedback='No matching source function declaration for '+action.query+'; no probe was run.'+suffix;
               workflow.feedback(feedback);
               await appendFile(logFile,'[PLAN_REJECTED] '+feedback+'\n');
+              if(workflow.rejectedRequiredProbePlan())
+                await appendFile(logFile,'[REQUIRED_PROBE_PLAN_RELEASED] Repeated undeclared plans; reopen investigation\n');
               messages.push({role:'user',content:feedback+' /no_think'});
               continue;
             }
