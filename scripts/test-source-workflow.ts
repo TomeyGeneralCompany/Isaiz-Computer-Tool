@@ -99,6 +99,14 @@ assert.deepEqual(await requiredTestWorkflow.constraints(),
   "a selected probe must transition into verification");
 requiredTestWorkflow.observe({...selectedProbe,action:"verify_source"},JSON.stringify({status:"behavior_not_observed",behavior_observed:false}));
 assert.ok((await requiredTestWorkflow.constraints()).action.includes("final"),"verified probe must release final action");
+const rejectedPlanningWorkflow=new InvestigationWorkflow();
+rejectedPlanningWorkflow.read("owned/render.py");
+rejectedPlanningWorkflow.requireProbePlanning("owned/render.py:render");
+assert.equal(rejectedPlanningWorkflow.rejectedRequiredProbePlan(),false,"first invalid plan keeps bounded recovery active");
+assert.deepEqual(await rejectedPlanningWorkflow.constraints(),{action:["plan_probe"]},"first invalid plan must still request a probe");
+assert.equal(rejectedPlanningWorkflow.rejectedRequiredProbePlan(),true,"second invalid plan releases forced planning");
+assert.ok((await rejectedPlanningWorkflow.constraints()).action.includes("final"),"repeated invalid plans must not deadlock the controller");
+assert.ok(controllerText.includes("[REQUIRED_PROBE_PLAN_RELEASED]"),"controller must record escape from invalid probe planning");
 
 assert.ok(controllerText.includes("snapshot.readPaths"),"recovery must rely on inspected source");
 assert.ok(workflowText.includes("if(this.recoveryProbe)return {action:['plan_probe']"),"probe recovery must constrain action to plan_probe");
