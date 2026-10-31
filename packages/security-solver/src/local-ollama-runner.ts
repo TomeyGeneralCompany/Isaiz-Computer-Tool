@@ -405,7 +405,7 @@ export async function runLocalAudit(
             else {
               const grounded=workflow!.snapshot().readPaths.slice(-8);
               workflow!.feedback('That candidate path does not exist. Use an EXACT path already read: '+grounded.join(', ')+'. Do not reconstruct filenames from memory.');
-              await appendFile(logFile,'[INVALID_PROBE_PATH_RECOVERY] '+JSON.stringify({rejected:action.path,readPaths:grounded})+'\\n');
+              await appendFile(logFile,'[INVALID_PROBE_PATH_RECOVERY] '+JSON.stringify({rejected:action.path,readPaths:grounded})+'\n');
             }
           }
           else if(action.action==='plan_probe' && workflowError==='This probe already finished or was attempted. Use its observation; choose a different candidate or conclude with the permitted incomplete outcome.')workflow!.rejectedDuplicateProbe();
