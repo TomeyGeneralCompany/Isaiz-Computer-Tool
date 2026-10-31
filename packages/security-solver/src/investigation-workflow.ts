@@ -17,6 +17,7 @@ export class InvestigationWorkflow {
   private state:typeof State.State={stage:'inspect',inspections:0,pending:null,tested:[]};
   private readPaths=new Set<string>();
   private requiredSource:string|null=null;
+  private recoveryProbe:{path:string;query:string;kind:string}|null=null;
   private duplicateProbeRejections=0;
   private observations:Array<{path:string;function:string;kind:string;status:string;caseId?:string;evidenceFile?:string;behaviorObserved?:boolean}>=[];
   private lastFeedback='';
@@ -53,6 +54,7 @@ export class InvestigationWorkflow {
     if(this.pageTurns>=8)this.state.inspections=Math.max(6,this.state.inspections);
     this.state=await graph.invoke(this.state);
     if(this.requiredSource)return {action:['read_file'],path:[this.requiredSource]};
+    if(this.recoveryProbe)return {action:['plan_probe'],path:[this.recoveryProbe.path],query:[this.recoveryProbe.query],answer:[this.recoveryProbe.kind]};
     if(this.duplicateProbeRejections>=2 && !this.state.pending)return {action:['read_file','read_solidity','outline_solidity','search_files','list_files','plan_probe','continue_inspection','final']};
     if(this.state.pending) {
       const p=this.state.pending;
@@ -74,6 +76,11 @@ export class InvestigationWorkflow {
     if(JSON.stringify(note).length>1800){note.unansweredQuestion=undefined;note.feedback=note.feedback.slice(0,100);}
     return JSON.stringify(note);
   }
+  requireProbe(path:string,query:string,kind:string) {
+    this.recoveryProbe={path,query,kind};
+    this.feedback('Unverified proposed finding: plan this inspected declared function with a concrete disproof condition, then execute verify_source. If the probe is unsupported, continue with another candidate.');
+  }
+  clearProbeRecovery() {this.recoveryProbe=null;}
   rejectedDuplicateProbe() {this.duplicateProbeRejections++;this.feedback('The already attempted probe cannot be repeated. Return outcome=no_testable_candidate with a specific reason and findings=[]; do not claim an unverified vulnerability.');}
   requireSource(path:string) {this.requiredSource=path;this.feedback('Read '+path+' before planning its test.',true);}
   validate(action:Action):string|null {
@@ -101,7 +108,7 @@ export class InvestigationWorkflow {
       return 'Execute the exact planned probe, including its sequence. No changed test was executed.';
     return null;
   }
-  plan(action:Action) { this.state.pending=action;this.duplicateProbeRejections=0;this.lastFeedback=''; }
+  plan(action:Action) { this.recoveryProbe=null;this.state.pending=action;this.duplicateProbeRejections=0;this.lastFeedback=''; }
   read(path:string) { this.readPaths.add(path); if(path===this.requiredSource)this.requiredSource=null; }
   observe(action:Action,output:string) {
     if(action.action==='verify_source') {

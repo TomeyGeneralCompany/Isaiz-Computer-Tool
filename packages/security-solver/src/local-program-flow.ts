@@ -216,7 +216,8 @@ Do not claim production testing, JavaScript execution, file access or other effe
               await appendFile(logFile,'[UNRECORDED_CASES_DROPPED] '+JSON.stringify({count:proposed.findings.length})+'\\n');
               proposed.findings=[];
               proposed.outcome='no_testable_candidate';
-              proposed.reason='This bounded pass has no recorded reproduction case. Model-proposed identifiers are not evidence; continue candidate coverage as required.';
+              proposed.reason='No reproduction was recorded. If the inspected source has a compatible declared function, first use plan_probe then verify_source; otherwise inspect the next eligible candidate and record a scoped incomplete result.';
+              await appendFile(logFile,'[PROBE_REQUIRED_FOR_FINDING] No recorded case ID; plan a compatible source probe before claiming a vulnerability\\n');
             }
             // Small local models sometimes select the contradictory outcome
             // no_testable_candidate while also supplying reproduced findings.
