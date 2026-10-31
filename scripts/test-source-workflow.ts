@@ -81,6 +81,9 @@ const controllerText=await readFile(join(process.cwd(),"packages/security-solver
 assert.ok(controllerText.includes("[CONTEXT_RECOVERY]"),"repeated completed source pages must recover rather than end a production hunt");
 assert.ok(controllerText.includes("maxItems:0"),"without recorded case IDs, typed final schema must prohibit invented findings");
 assert.ok(controllerText.includes("[PROBE_RECOVERY_REQUIRED]"),"an invented case with a declared compatible candidate must require probe planning");
+assert.ok(controllerText.includes("[REJECTED_FINAL_PROBE_HANDOFF]"),"required-test final rejections must guide a declared probe");
+assert.ok(controllerText.includes("rejectedRequiredProbeFinals>=2"),"ordinary single premature final must not force a probe");
+assert.ok(controllerText.includes("snapshot.readPaths"),"recovery must rely on inspected source");
 assert.ok(workflowText.includes("if(this.recoveryProbe)return {action:['plan_probe']"),"probe recovery must constrain action to plan_probe");
 assert.ok(workflowText.includes("return {action:['verify_source']"),"a planned probe must constrain follow-up execution to verify_source");
 assert.ok(controllerText.includes("enum:recordedIds"),"with recorded cases, the model must select only verifier-issued case IDs");
