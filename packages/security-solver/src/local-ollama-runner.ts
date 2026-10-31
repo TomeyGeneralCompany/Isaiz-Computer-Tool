@@ -396,7 +396,18 @@ export async function runLocalAudit(
         }
         const workflowError=workflow?.validate(action);
         if(workflowError) {
-          if(action.action==='plan_probe' && workflowError==='Read the candidate source before planning its test.')workflow!.requireSource(action.path);
+          if(action.action==='plan_probe' && workflowError==='Read the candidate source before planning its test.') {
+            // Do not pin the workflow to a model-typed path that does not exist.
+            // This used to force an invalid read_file repeatedly until AUDIT_STALLED.
+            let exists=false;
+            try {await safePath(action.path);exists=true;}catch{}
+            if(exists)workflow!.requireSource(action.path);
+            else {
+              const grounded=workflow!.snapshot().readPaths.slice(-8);
+              workflow!.feedback('That candidate path does not exist. Use an EXACT path already read: '+grounded.join(', ')+'. Do not reconstruct filenames from memory.');
+              await appendFile(logFile,'[INVALID_PROBE_PATH_RECOVERY] '+JSON.stringify({rejected:action.path,readPaths:grounded})+'\n');
+            }
+          }
           else if(action.action==='plan_probe' && workflowError==='This probe already finished or was attempted. Use its observation; choose a different candidate or conclude with the permitted incomplete outcome.')workflow!.rejectedDuplicateProbe();
           else workflow!.feedback(workflowError);
           consecutiveWorkflowRejections=lastWorkflowRejection===workflowError?consecutiveWorkflowRejections+1:1;
