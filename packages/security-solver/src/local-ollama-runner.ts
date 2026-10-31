@@ -36,6 +36,8 @@ export interface LocalAuditLimits {
   maxTurns: number;
   finalSchema?: Record<string,unknown>;
   productionWorkflow?: boolean;
+  /** An explicit task contract may require one specific local probe kind. */
+  requiredProbeKind?: 'html_reflection'|'path_construction';
   dynamicAllowance?: boolean;
   /** Pre-read only authorized source pages for read-only independent review. */
   prefetchReadOnly?: boolean;
@@ -529,7 +531,10 @@ export async function runLocalAudit(
             rejectedRequiredProbeFinals++;
             if(rejectedRequiredProbeFinals>=2) {
               const snapshot=workflow.snapshot();
-              const attempted=new Set(snapshot.observations.map(o=>JSON.stringify([o.path,o.function])));
+              const attempted=new Set(snapshot.observations.filter(o=>
+                (o.status==='behavior_observed'||o.status==='behavior_not_observed') &&
+                (!limits.requiredProbeKind||o.kind===limits.requiredProbeKind))
+                .map(o=>JSON.stringify([o.path,o.function])));
               const candidates:string[]=[];
               for(const path of snapshot.readPaths) {
                 if(!/\.(?:py|js|mjs|cjs|java)$/.test(path))continue;
@@ -544,7 +549,7 @@ export async function runLocalAudit(
                 if(candidates.length>=12)break;
               }
               if(candidates.length) {
-                workflow.requireProbePlanning(candidates.join(', '));
+                workflow.requireProbePlanning(candidates.join(', '),limits.requiredProbeKind);
                 await appendFile(logFile,'[REJECTED_FINAL_PROBE_HANDOFF] '+JSON.stringify({candidates})+'\n');
               }
             }
