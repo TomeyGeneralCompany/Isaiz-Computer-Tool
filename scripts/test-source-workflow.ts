@@ -84,6 +84,8 @@ assert.ok(controllerText.includes("[PROBE_RECOVERY_REQUIRED]"),"an invented case
 assert.ok(controllerText.includes("[REJECTED_FINAL_PROBE_HANDOFF]"),"required-test final rejections must guide a declared probe");
 const workflowText=await readFile(join(process.cwd(),'packages/security-solver/src/investigation-workflow.ts'),'utf8');
 assert.ok(workflowText.includes("this.nextOffsets.values()].some(offset=>offset!==null)"),'hypothesis-stage source navigation must retain unfinished page access');
+assert.ok(workflowText.includes("action.path.endsWith('.sol') && action.answer!=='solidity_sequence'"),'Solidity must reject incompatible web probe kinds before handoff');
+assert.ok(workflowText.includes("!action.path.endsWith('.sol') && action.answer==='solidity_sequence'"),'Solidity sequence must not be offered on Java/Python/JS files');
 assert.ok(controllerText.includes("[INVALID_PROBE_PATH_RECOVERY]"),"nonexistent source paths in probe plans must be recovered without forced invalid reads");
 assert.ok(controllerText.includes("if(exists)workflow!.requireSource(action.path)"),"only existing source paths may become required reads");
 assert.ok(controllerText.includes("workflow!.snapshot().readPaths.slice(-8)"),"source-path recovery must suggest exactly inspected, grounded paths");
