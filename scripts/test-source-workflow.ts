@@ -13,6 +13,14 @@ assert.ok(recoveryRegexSource.includes(String.raw/`\.(?:java|py|js|mjs|cjs|sol)$
 assert.equal("ERC1155Upgradeable.sol".match(/\.(?:java|py|js|mjs|cjs|sol)$/)?.[0], ".sol");
 assert.equal("Vault.deposit".match(/\b([A-Za-z_$][\w$]*\.[A-Za-z_$][\w$]*)\b/)?.[1], "Vault.deposit");
 
+
+// Completed Solidity pagination must hand model exact indexed declarations rather
+// than leave it inventing Contract.function targets or repeating final actions.
+assert.ok(recoveryRegexSource.includes("page.nextOffset===null"),"guide only after last page");
+assert.ok(recoveryRegexSource.includes("solidityIndex.outline(full,0,1200)"),"use real indexed declarations");
+assert.ok(recoveryRegexSource.includes("[SOLIDITY_DECLARATIONS_GUIDED]"),"log successful handoff");
+assert.ok(recoveryRegexSource.includes("Choose only a supported, declared probe target"),"retain probe eligibility gate");
+
 const root=await mkdtemp(join(tmpdir(),"tomey-workflow-"));
 const originalPath=process.env.PATH;
 process.env.PROJECT_ROOT=root;
