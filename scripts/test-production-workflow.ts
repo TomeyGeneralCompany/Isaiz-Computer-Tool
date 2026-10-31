@@ -160,11 +160,31 @@ try {
   if(!live&&prematureFinal){assert.equal(calls,8);assert.match(await readFile(join(evidence,'audit.log'),'utf8'),/FINAL_REJECTED/);}
   for(const f of fixtures)assert.equal(result.files.find((r:any)=>r.path===f.path).rawMarkup,f.raw);
   const summary=JSON.parse(await readFile(join(evidence,'audit.log.summary.json'),'utf8'));
-  assert.equal(summary.workflow.observations.length,2);
-  for(const observation of summary.workflow.observations) {
+  // A real model can try an unsupported probe before selecting the proper
+  // kind. Preserve tool_error observations in the audit trail, but require
+  // exactly one valid HTML-reflection observation for each owned fixture.
+  const recorded=summary.workflow.observations as Array<{
+    path:string;function:string;kind:string;status:string;
+    evidenceFile?:string;behaviorObserved?:boolean;
+  }>;
+  const verified=recorded.filter(o=>
+    o.kind==='html_reflection' &&
+    ['behavior_observed','behavior_not_observed'].includes(o.status));
+  assert.equal(verified.length,fixtures.length,
+    'Expected one supported HTML-reflection observation per fixture');
+  for(const f of fixtures) {
+    const matches=verified.filter(o=>o.path===f.path && o.function===f.fn);
+    assert.equal(matches.length,1,'Missing or repeated supported fixture observation: '+f.path);
+    const observation=matches[0];
     assert.ok(observation.evidenceFile);
+    assert.equal(observation.behaviorObserved,f.raw);
+    assert.equal(observation.status,f.raw?'behavior_observed':'behavior_not_observed');
     const saved=JSON.parse(await readFile(join(root,observation.evidenceFile),'utf8'));
-    assert.equal(saved.result.behavior_observed,observations.get(observation.path));
+    assert.equal(saved.result.behavior_observed,f.raw);
+  }
+  for(const observation of recorded.filter(o=>o.status==='tool_error')) {
+    assert.ok(!verified.includes(observation),
+      'A failed tool attempt must not count as a verified observation');
   }
   await writeFile(join(evidence,'result.json'),JSON.stringify({passed:true,mocked:!live,mockedProbes:mockProbes,productionWorkflow:true,variant,profile:modelProfile().name,result},null,2));
   console.log(`Production workflow passed (${live?'real model':(mockProbes?'scripted model and probes':'scripted model; real Python probes')}). Evidence: ${evidence}`);
