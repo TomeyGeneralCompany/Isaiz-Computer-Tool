@@ -29,7 +29,8 @@ const recoveryServer=createServer(async(req,res)=>{
   let raw='';for await(const chunk of req)raw+=chunk;
   const body=JSON.parse(raw);
   const i=recoveryCalls++;
-  if(i===2)recoveryFeedback=String(body.messages.at(-1)?.content||'');
+  if(i===2)recoveryFeedback=body.messages.map((entry:{content?:string})=>String(entry.content||''))
+    .find((content:string)=>content.includes('Exact successfully read source paths'))||'';
   const actions=[
     {action:'read_file',path:'c63115ff54.py',query:'',answer:'',offset:0},
     {action:'read_file',path:'c6315ff54.py',query:'',answer:'',offset:0},
