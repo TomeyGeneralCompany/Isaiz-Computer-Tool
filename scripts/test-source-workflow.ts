@@ -90,6 +90,15 @@ requiredTestWorkflow.read("owned/render.py");
 assert.ok((await requiredTestWorkflow.constraints()).action.includes("final"),"ordinary final remains available");
 requiredTestWorkflow.finalRejected("Test both inspected modules before classifying them.");
 requiredTestWorkflow.requireProbePlanning("owned/render.py:render");
+const kindLimitedWorkflow=new InvestigationWorkflow();
+kindLimitedWorkflow.read("owned/render.py");
+kindLimitedWorkflow.requireProbePlanning("owned/render.py:render","html_reflection");
+assert.deepEqual(await kindLimitedWorkflow.constraints(),{action:["plan_probe"],answer:["html_reflection"]},
+  "a fixture requiring HTML reflection must not permit path construction");
+assert.equal(kindLimitedWorkflow.rejectedRequiredProbePlan(),false);
+assert.equal(kindLimitedWorkflow.rejectedRequiredProbePlan(),true);
+assert.ok((await kindLimitedWorkflow.constraints()).action.includes("final"),
+  "invalid plans release the kind constraint without an infinite loop");
 assert.deepEqual(await requiredTestWorkflow.constraints(),{action:["plan_probe"]},"explicit missing-test recovery must block another final");
 const selectedProbe={action:"plan_probe",path:"owned/render.py",query:"render",answer:"html_reflection",
   hypothesis:"Markup might survive in the output; escaped markup would disprove it."} as any;
@@ -109,6 +118,11 @@ assert.ok((await rejectedPlanningWorkflow.constraints()).action.includes("final"
 assert.ok(controllerText.includes("[REQUIRED_PROBE_PLAN_RELEASED]"),"controller must record escape from invalid probe planning");
 
 assert.ok(controllerText.includes("snapshot.readPaths"),"recovery must rely on inspected source");
+assert.ok(controllerText.includes("o.status==='behavior_observed'||o.status==='behavior_not_observed'"),
+  "unsupported probe attempts must not consume the declared recovery candidate");
+assert.ok(controllerText.includes("o.kind===limits.requiredProbeKind"),
+  "wrong-kind observation cannot satisfy the required task probe kind");
+
 assert.ok(workflowText.includes("if(this.recoveryProbe)return {action:['plan_probe']"),"probe recovery must constrain action to plan_probe");
 assert.ok(workflowText.includes("return {action:['verify_source']"),"a planned probe must constrain follow-up execution to verify_source");
 assert.ok(controllerText.includes("enum:recordedIds"),"with recorded cases, the model must select only verifier-issued case IDs");

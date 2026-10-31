@@ -126,6 +126,7 @@ try {
   const answer=await runLocalAudit((largeContext?'Owned production-sized instructions. '.repeat(160):'')+`Inspect these owned Python modules: ${fixtures.map(f=>f.path).join(', ')}. They should put ordinary user text inside a paragraph while escaping supplied HTML. Choose each function from source, formulate a disprovable hypothesis, test it, and classify whether user markup survives. Return JSON {"files":[{"path":"...","rawMarkup":true or false}]}. This is an owned fixture, not a real vulnerability report.`,
     join(evidence,'audit.log'),live?(process.argv.includes('--host-timeout')?hostModelTimeout():1800000):30000,root,live?(process.env.LOCAL_OLLAMA_MODEL||'qwen3:4b'):'mock',undefined,{
       checkpointPath:largeContext?checkpointPath:undefined,productionWorkflow:true,
+       ...(live?{requiredProbeKind:'html_reflection' as const}:{}),
       initialSourcePaths:prefetch?(live?fixtures.map(f=>f.path):[fixtures[0].path]):undefined,
       initialSourceLocations:prefetch?(live?fixtures.map(f=>({path:f.path,offset:0})):[{path:fixtures[0].path,offset:0}]):undefined,numCtx:8192,numThreads:4,numPredict:largeContext?4096:1024,maxTurns:40,
       verifyPython:async(path,fn,kind)=>{
