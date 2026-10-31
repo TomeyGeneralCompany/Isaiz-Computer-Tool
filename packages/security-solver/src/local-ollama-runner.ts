@@ -76,6 +76,7 @@ export async function runLocalAudit(
   if(!['ollama','qwen-agent'].includes(adapter))throw new Error('Unknown LOCAL_MODEL_ADAPTER');
   if(adapter==='qwen-agent'&&!structured)throw new Error('Qwen-Agent adapter requires JSON action protocol');
   let successfulReads = 0;
+  let rejectedRequiredProbeFinals = 0;
   let generationBudget = settings.numPredict;
   const root = await realpath(cwd);
   const controller = new AbortController();
@@ -515,6 +516,32 @@ export async function runLocalAudit(
           // Retain read-action history: rejecting a final answer does not make prior pages new evidence.
           if(!workflow)recentActions.clear(); // Legacy no-workflow repair may explicitly require a fresh source read.
           stalledActions=0;workflow?.finalRejected(feedback);
+          // An evidence-coverage validator can require an actual local test.
+          // After repeated rejected conclusions, offer an inspected, declared
+          // function to the existing plan -> verify workflow. This is deliberately
+          // different from ordinary per-file final attempts or a valid incomplete
+          // bounty investigation: only an explicit testing requirement triggers it.
+          if(workflow && /\\btest\\b.*\\bbefore\\b.*\\bclassif/i.test(feedback)) {
+            rejectedRequiredProbeFinals++;
+            if(rejectedRequiredProbeFinals>=2) {
+              const snapshot=workflow.snapshot();
+              const observed=new Set(snapshot.observations.map(o=>o.path));
+              for(const path of snapshot.readPaths) {
+                if(observed.has(path) || !/\\.(?:py|js|mjs|cjs|java)$/.test(path))continue;
+                try {
+                  const full=await safePath(path);
+                  for(const selector of await sourceDeclarationHints(full)) {
+                    if(!await declaredProbeTarget(full,selector))continue;
+                    workflow.requireProbe(path,selector,'html_reflection');
+                    await appendFile(logFile,'[REJECTED_FINAL_PROBE_HANDOFF] '+JSON.stringify({path,selector})+'\\n');
+                    break;
+                  }
+                }catch{}
+                if((await workflow.constraints()).action.length===1 &&
+                   (await workflow.constraints()).action[0]==='plan_probe')break;
+              }
+            }
+          } else rejectedRequiredProbeFinals=0;
           // Coverage validator can name the next inspected candidate. Make the
           // next source read deterministic instead of asking a small model to
           // infer another path from an already rejected conclusion.
