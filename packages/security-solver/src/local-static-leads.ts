@@ -24,7 +24,15 @@ export async function collectStaticLeads(root:string,repositories:Array<{directo
       signal.throwIfAborted();
       try {
         const {stdout}=await exec('python3',[resolve(app,'scripts/source-static.py'),'--repository',repo.directory,'--engine',engine,...(engine==='slither'?['--target',solidity!]:[])],{signal,timeout:110000,maxBuffer:128000,cwd:app});
-        const value=JSON.parse(stdout);runs.push({repository:repo.url,engine,status:value.status,reason:value.reason,coverage:value.coverage});
+        const value=JSON.parse(stdout);
+        // source-static.py already captures a bounded subprocess diagnostic. Keep it
+        // in the private local run record so an invalid-JSON failure is actionable.
+        // Do not add scanner stderr to lead content or public reports.
+        const failureDetail=value.status==='failed' ? {
+          exitCode:Number.isInteger(value.exitCode)?value.exitCode:undefined,
+          diagnostic:typeof value.diagnostic==='string'?value.diagnostic.replace(/[\r\n\t]+/g,' ').slice(0,512):undefined,
+        } : {};
+        runs.push({repository:repo.url,engine,status:value.status,reason:value.reason,coverage:value.coverage,...failureDetail});
         for(const lead of (Array.isArray(value.leads)?value.leads:[]).slice(0,64)) {
           if(typeof lead.path!=='string'||!Number.isSafeInteger(lead.line)||lead.line<1)continue;
           const full=resolve(repo.directory,lead.path),local=relative(repo.directory,full);
