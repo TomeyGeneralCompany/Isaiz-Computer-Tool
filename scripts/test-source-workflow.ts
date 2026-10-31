@@ -128,7 +128,7 @@ try {
     const request=JSON.parse(raw);
     // Production progress is appended separately; inspect the last actual tool result.
     const latestTool=()=>[...request.messages].reverse().find((m:any)=>m.content?.startsWith("TOOL_RESULT "));
-    const latestResult=()=>{try{return JSON.parse(latestTool()?.content.split("\\n")[0].slice("TOOL_RESULT ".length) || "null");}catch{return null;}};
+    const latestResult=()=>{try{return JSON.parse(latestTool()?.content.split("\n")[0].slice("TOOL_RESULT ".length) || "null");}catch{return null;}};
     assert.ok(JSON.stringify(request.messages).length+JSON.stringify(request.format).length <= (8192-request.options.num_predict-512)*3,'Every production request fits its declared budget');
     if(!reviewMode && !policyDone) {
       const last=latestTool();
