@@ -82,10 +82,27 @@ assert.ok(controllerText.includes("[CONTEXT_RECOVERY]"),"repeated completed sour
 assert.ok(controllerText.includes("maxItems:0"),"without recorded case IDs, typed final schema must prohibit invented findings");
 assert.ok(controllerText.includes("[PROBE_RECOVERY_REQUIRED]"),"an invented case with a declared compatible candidate must require probe planning");
 assert.ok(controllerText.includes("[REJECTED_FINAL_PROBE_HANDOFF]"),"required-test final rejections must guide a declared probe");
-const workflowText=await readFile(join(process.cwd(),'packages/security-solver/src/investigation-workflow.ts'),'utf8');
 assert.ok(workflowText.includes("this.nextOffsets.values()].some(offset=>offset!==null)"),'hypothesis-stage source navigation must retain unfinished page access');
 assert.ok(workflowText.includes("action.path.endsWith('.sol') && action.answer!=='solidity_sequence'"),'Solidity must reject incompatible web probe kinds before handoff');
 assert.ok(workflowText.includes("!action.path.endsWith('.sol') && action.answer==='solidity_sequence'"),'Solidity sequence must not be offered on Java/Python/JS files');
+
+const incompleteWorkflow=new InvestigationWorkflow();
+incompleteWorkflow.read('source-1/Incomplete.java');
+incompleteWorkflow.observe({action:'read_file',path:'source-1/Incomplete.java',query:'',answer:'',offset:0} as any,
+  JSON.stringify({start:0,end:4000,nextOffset:4000}));
+for(let i=0;i<6;i++)incompleteWorkflow.observe({action:'list_files',path:'.',query:'',answer:'',offset:0} as any,
+  JSON.stringify({files:[]}));
+const incompleteConstraints=await incompleteWorkflow.constraints();
+assert.ok(incompleteConstraints.action.includes('read_file'),
+  'hypothesis stage must retain reading access to incomplete source');
+assert.ok(incompleteConstraints.action.includes('plan_probe'),
+  'hypothesis stage must preserve probe planning');
+const incompatibleWorkflow=new InvestigationWorkflow();
+incompatibleWorkflow.read('source-1/Fixture.sol');
+assert.match(incompatibleWorkflow.validate({action:'plan_probe',path:'source-1/Fixture.sol',query:'Vault.deposit',answer:'html_reflection',hypothesis:'Input reflection could occur and a literal output would disprove it'} as any)||'',/Solidity source requires a solidity_sequence/);
+incompatibleWorkflow.read('source-1/Fixture.java');
+assert.match(incompatibleWorkflow.validate({action:'plan_probe',path:'source-1/Fixture.java',query:'Fixture.deposit',answer:'solidity_sequence',hypothesis:'State mutation might occur and an unchanged state would disprove it'} as any)||'',/solidity_sequence requires a .sol/);
+
 assert.ok(controllerText.includes("[INVALID_PROBE_PATH_RECOVERY]"),"nonexistent source paths in probe plans must be recovered without forced invalid reads");
 assert.ok(controllerText.includes("if(exists)workflow!.requireSource(action.path)"),"only existing source paths may become required reads");
 assert.ok(controllerText.includes("workflow!.snapshot().readPaths.slice(-8)"),"source-path recovery must suggest exactly inspected, grounded paths");
