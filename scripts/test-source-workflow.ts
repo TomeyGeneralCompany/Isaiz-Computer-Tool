@@ -5,6 +5,10 @@ import {execFileSync} from "node:child_process";
 import {mkdtemp,writeFile,readFile,mkdir,rm,chmod} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
+// Solidity source-reading must lead to declaration discovery before repeated premature finals.
+const workflowGuideText=await readFile(new URL("../packages/security-solver/src/investigation-workflow.ts",import.meta.url),"utf8");
+assert.ok(workflowGuideText.includes("return {action:['outline_solidity'],path:[this.latestSolidityPath]}"),"paginate-to-outline guidance must be present");
+assert.ok(workflowGuideText.includes("this.attemptedOutlines.add(this.latestSolidityPath)"),"parse failures must not trap outline retries");
 const root=await mkdtemp(join(tmpdir(),"tomey-workflow-"));
 const originalPath=process.env.PATH;
 process.env.PROJECT_ROOT=root;
