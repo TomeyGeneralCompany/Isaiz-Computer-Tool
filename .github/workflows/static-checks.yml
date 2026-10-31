@@ -49,7 +49,9 @@ jobs:
           npx tsx scripts/test-ollama-gate.ts
       - name: Exercise direct Ollama agent with mock server
         run: npx tsx scripts/test-mock-agent.ts
-      - name: Preserve offline scanner failure diagnostics\n        run: npx tsx scripts/test-static-scanner-diagnostics.ts\n      - name: Verify hunt capability, reachability and context management
+      - name: Preserve offline scanner failure diagnostics
+        run: npx tsx scripts/test-static-scanner-diagnostics.ts
+      - name: Verify hunt capability, reachability and context management
         run: |
           npx tsx scripts/test-missing-source-loop.ts
           npx tsx scripts/test-investigation-records.ts
