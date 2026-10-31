@@ -21,6 +21,10 @@ assert.ok(recoveryRegexSource.includes("solidityIndex.outline(full,0,1200)"),"us
 assert.ok(recoveryRegexSource.includes("[SOLIDITY_DECLARATIONS_GUIDED]"),"log successful handoff");
 assert.ok(recoveryRegexSource.includes("Choose only a supported, declared probe target"),"retain probe eligibility gate");
 
+// Solidity source-reading must lead to declaration discovery before repeated premature finals.
+const workflowGuideText=await readFile(new URL("../packages/security-solver/src/investigation-workflow.ts",import.meta.url),"utf8");
+assert.ok(workflowGuideText.includes("return {action:['outline_solidity'],path:[this.latestSolidityPath]}"),"paginate-to-outline guidance must be present");
+assert.ok(workflowGuideText.includes("this.attemptedOutlines.add(this.latestSolidityPath)"),"parse failures must not trap outline retries");
 const root=await mkdtemp(join(tmpdir(),"tomey-workflow-"));
 const originalPath=process.env.PATH;
 process.env.PROJECT_ROOT=root;
@@ -33,6 +37,31 @@ process.env.AUTOHACK_AUTO_SOURCE_PREFETCH="false";
 process.env.LOCAL_HUNT_NUM_PREDICT="4096";
 const workflowText=await readFile(join(process.cwd(),"packages/security-solver/src/investigation-workflow.ts"),"utf8");
 assert.ok(workflowText.includes("Invalid Solidity probe target"),"placeholder Solidity method targets must be rejected before verification");
+
+const {InvestigationWorkflow}=await import("../packages/security-solver/src/investigation-workflow");
+const outlineWorkflow=new InvestigationWorkflow();
+outlineWorkflow.read("source-1/Fixture.sol");
+for(let i=0;i<6;i++)outlineWorkflow.observe({action:"read_file",path:"source-1/Fixture.sol",query:"",answer:"",offset:i*10} as any,
+  JSON.stringify({start:i*10,end:(i+1)*10,nextOffset:i===5?null:(i+1)*10}));
+assert.deepEqual(await outlineWorkflow.constraints(),{action:["outline_solidity"],path:["source-1/Fixture.sol"]},
+  "six Solidity source pages should request a declaration outline");
+assert.notDeepEqual(await outlineWorkflow.constraints(),{action:["outline_solidity"],path:["source-1/Fixture.sol"]},
+  "the same file must not force an endless outline loop");
+const evidenceWorkflow=new InvestigationWorkflow();
+for(let i=0;i<6;i++)evidenceWorkflow.observe({action:"read_file",path:"source-1/Example.java",query:"",answer:"",offset:i*10} as any,
+  JSON.stringify({start:i*10,end:(i+1)*10,nextOffset:i===5?null:(i+1)*10}));
+evidenceWorkflow.finalRejected("Read the tested source file and the claimed caller file before reporting.");
+assert.ok((await evidenceWorkflow.constraints()).action.includes("read_file"),
+  "missing caller evidence must reopen source reads after hypothesis stage");
+const mixedWorkflow=new InvestigationWorkflow();
+mixedWorkflow.read("source-1/Fixture.sol");
+mixedWorkflow.observe({action:"read_file",path:"source-1/Fixture.sol",query:"",answer:"",offset:0} as any,
+  JSON.stringify({start:0,end:10,nextOffset:null}));
+mixedWorkflow.read("source-1/Other.java");
+for(let i=0;i<5;i++)mixedWorkflow.observe({action:"read_file",path:"source-1/Other.java",query:"",answer:"",offset:i*10} as any,
+  JSON.stringify({start:i*10,end:(i+1)*10,nextOffset:i===4?null:(i+1)*10}));
+assert.notDeepEqual(await mixedWorkflow.constraints(),{action:["outline_solidity"],path:["source-1/Fixture.sol"]},
+  "later Java reads must not trigger an obsolete Solidity outline");
 const {declaredProbeTarget,sourceDeclarationHints}=await import("../packages/security-solver/src/probe-target-validation");
 const probeFixtures=join(root,"probe-declarations");await mkdir(probeFixtures);
 await writeFile(join(probeFixtures,"Target.java"),"public class Target { public static String actual(String input) { return input; } }");
@@ -87,6 +116,7 @@ try {
   await chmod(join(bin,"git"),0o700);process.env.PATH=bin+":"+originalPath;
   let policyOffset=0,policyDone=false;
   let turn=0, caseId="", source="", caller="", selector="", stateful=false,reviewMode=false,reviewIndex=0,reviewOffset=0;
+  let evidenceRepairReads:string[]=[];
   const reviewFiles=["source/Store.sol","evidence/report.txt","evidence/replay.json","evidence/policy.txt"];
   const sequence={constructorArgs:["5"],steps:[
     {operation:"call",function:"value()",args:[],expect:"5"},
@@ -98,6 +128,7 @@ try {
     const request=JSON.parse(raw);
     // Production progress is appended separately; inspect the last actual tool result.
     const latestTool=()=>[...request.messages].reverse().find((m:any)=>m.content?.startsWith("TOOL_RESULT "));
+    const latestResult=()=>{try{return JSON.parse(latestTool()?.content.split("\n")[0].slice("TOOL_RESULT ".length) || "null");}catch{return null;}};
     assert.ok(JSON.stringify(request.messages).length+JSON.stringify(request.format).length <= (8192-request.options.num_predict-512)*3,'Every production request fits its declared budget');
     if(!reviewMode && !policyDone) {
       const last=latestTool();
@@ -126,6 +157,24 @@ try {
         }
       }
     }
+    // A rejected final may require fresh source and caller evidence. The
+    // mock must follow the controller's feedback instead of parsing the
+    // plain-text final_validation response as a verifier case.
+    const lastResult=latestResult();
+    if(!reviewMode && lastResult?.name==="final_validation" &&
+       /Read the tested source file and the claimed caller file/.test(String(lastResult.output))) {
+      evidenceRepairReads=["source-1/"+source,"source-1/"+caller];
+    }
+    if(!reviewMode && evidenceRepairReads.length) {
+      if(lastResult?.name==="read_file") {
+        try {if(JSON.parse(lastResult.output).nextOffset===null)evidenceRepairReads.shift();}catch{}
+      }
+      if(evidenceRepairReads.length) {
+        res.end(JSON.stringify({message:{role:"assistant",content:JSON.stringify({
+          action:"read_file",path:evidenceRepairReads[0],offset:0,query:"",answer:""
+        })}}));return;
+      }
+    }
     turn++;
     if(reviewMode) {
       assert.ok(request.messages[1].content.length<7000,"Review prompt must not embed large policy/report");
@@ -140,6 +189,23 @@ try {
           ratingReason:"This synthetic fixture deliberately uses an incorrect expected value; it is not a vulnerability.",bet100:false,
           rubric:{exploitability:0,impactSeverity:0,evidenceQuality:3,novelty:0,scopeAlignment:3},issues:[],reasoning:"The supplied expectation is deliberately wrong; only report plumbing is under test."})};
       res.end(JSON.stringify({message:{role:"assistant",content:JSON.stringify(action)}}));return;
+    }
+    // The workflow may first require a Solidity declaration outline after
+    // paginated reads. The scripted model must honor that constrained action
+    // before returning to its probe plan; it must not bypass the controller.
+    if(!reviewMode && request.format.properties.action.enum.length===1 &&
+       request.format.properties.action.enum[0]==="outline_solidity") {
+      const lastSolidityRead=[...request.messages].reverse().map((m:any)=>{
+        try{return JSON.parse(m.content);}catch{return null;}
+      }).find((a:any)=>a?.action==="read_file" && typeof a.path==="string" && a.path.endsWith(".sol"));
+      assert.ok(lastSolidityRead?.path,"forced outline must follow a real Solidity source read");
+      // This is a controller-imposed navigation action, not one of the scripted
+      // investigation steps (source -> caller -> rejected plan -> valid plan).
+      turn--;
+      res.end(JSON.stringify({message:{role:"assistant",content:JSON.stringify({
+        action:"outline_solidity",path:lastSolidityRead.path,offset:0,query:"",answer:""
+      })}}));
+      return;
     }
     assert.ok(request.format.properties.action.enum.includes("plan_probe"));
     assert.ok(request.messages.some((m:any)=>m.content.includes("exported JavaScript")));
@@ -156,8 +222,12 @@ try {
       // The model receives the rejection through the controller; its exact prompt may be compacted.
       next=action("verify_source","source-1/"+source,selector,"html_reflection");
     } else {
-      const previous=JSON.parse((latestTool()?.content || "").split("\n")[0].slice("TOOL_RESULT ".length));
-      caseId=JSON.parse(previous.output).caseId;assert.ok(caseId);
+      if(!caseId) {
+        const previous=latestResult();
+        assert.equal(previous?.name,"verify_source","expected a verifier result before constructing a finding");
+        caseId=JSON.parse(previous.output).caseId;
+      }
+      assert.ok(caseId);
       next=action("final","","",JSON.stringify({findings:[{
         caseId,severity:"medium",confidence:0.7,title:stateful?"Owned fixture assertion discrepancy":"Owned fixture reflection",
         ratingReason:"Owned fixture preserves input; this test checks report plumbing only.",
@@ -183,7 +253,7 @@ try {
     {assetType:"SOURCE_CODE",eligibleForBounty:true,assetIdentifier:"https://github.com/fixture/owned"}
   ]})};
   for(const language of ["javascript","java","solidity","stateful_solidity"]) {
-    turn=0;policyOffset=0;policyDone=false;caseId="";stateful=language==="stateful_solidity";
+    turn=0;policyOffset=0;policyDone=false;caseId="";evidenceRepairReads=[];stateful=language==="stateful_solidity";
     source=language==="javascript"?"render.cjs":language==="java"?"Render.java":"Render.sol";
     caller=language==="javascript"?"caller.js":language==="java"?"Caller.java":"Caller.sol";
     selector=language==="javascript"?"render":"Render.render";
