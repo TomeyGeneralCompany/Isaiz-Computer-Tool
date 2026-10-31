@@ -19,11 +19,11 @@ try {
 
 
 // Regression for the real Qwen failure: it read c63115ff54.py successfully,
- // then dropped one digit and repeated c6315ff54.py after a rejected final.
- // The tool error must provide the exact verified path, without silently
- // substituting a guessed source or weakening the three-strike failure guard.
+// then dropped one digit and repeated c6315ff54.py after a rejected final.
+// The tool error must provide the exact verified path, without silently
+// substituting a guessed source or weakening the three-strike failure guard.
 const recoveryRoot=await mkdtemp(join(tmpdir(),'missing-source-recovery-'));
-await writeFile(join(recoveryRoot,'c63115ff54.py'),'def render_87b7476409(value):\\n    return value\\n');
+await writeFile(join(recoveryRoot,'c63115ff54.py'),'def render_87b7476409(value):\n    return value\n');
 let recoveryCalls=0,recoveryFeedback='';
 const recoveryServer=createServer(async(req,res)=>{
   let raw='';for await(const chunk of req)raw+=chunk;
@@ -48,9 +48,9 @@ try {
     });
   assert.equal(recoveryCalls,3);
   assert.match(recoveryFeedback,/Tool error:/);
-  assert.match(recoveryFeedback,/c6315ff54\\.py/);
+  assert.match(recoveryFeedback,/c6315ff54\.py/);
   assert.match(recoveryFeedback,/Exact successfully read source paths/);
-  assert.match(recoveryFeedback,/c63115ff54\\.py/);
+  assert.match(recoveryFeedback,/c63115ff54\.py/);
   assert.deepEqual(JSON.parse(answer),{ok:true});
   const summary=JSON.parse(await readFile(join(recoveryRoot,'audit.log.summary.json'),'utf8'));
   assert.equal(summary.successfulReads,1);
