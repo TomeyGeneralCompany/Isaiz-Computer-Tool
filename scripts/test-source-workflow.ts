@@ -123,6 +123,20 @@ try {
           rubric:{exploitability:0,impactSeverity:0,evidenceQuality:3,novelty:0,scopeAlignment:3},issues:[],reasoning:"The supplied expectation is deliberately wrong; only report plumbing is under test."})};
       res.end(JSON.stringify({message:{role:"assistant",content:JSON.stringify(action)}}));return;
     }
+    // The workflow may first require a Solidity declaration outline after
+    // paginated reads. The scripted model must honor that constrained action
+    // before returning to its probe plan; it must not bypass the controller.
+    if(!reviewMode && request.format.properties.action.enum.length===1 &&
+       request.format.properties.action.enum[0]==="outline_solidity") {
+      const lastSolidityRead=[...request.messages].reverse().map((m:any)=>{
+        try{return JSON.parse(m.content);}catch{return null;}
+      }).find((a:any)=>a?.action==="read_file" && typeof a.path==="string" && a.path.endsWith(".sol"));
+      assert.ok(lastSolidityRead?.path,"forced outline must follow a real Solidity source read");
+      res.end(JSON.stringify({message:{role:"assistant",content:JSON.stringify({
+        action:"outline_solidity",path:lastSolidityRead.path,offset:0,query:"",answer:""
+      })}}));
+      return;
+    }
     assert.ok(request.format.properties.action.enum.includes("plan_probe"));
     assert.ok(request.messages.some((m:any)=>m.content.includes("exported JavaScript")));
     const action=(name:string,path:string,query="",answer="")=>({action:name,path,query,answer});
