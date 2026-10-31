@@ -21,6 +21,8 @@ export class InvestigationWorkflow {
   private latestSolidityPath:string|null=null;
   private requiredSource:string|null=null;
   private recoveryProbe:{path:string;query:string;kind:string}|null=null;
+  private requiredProbePlanning=false;
+  private requiredProbePlanningRejections=0;
   private duplicateProbeRejections=0;
   private observations:Array<{path:string;function:string;kind:string;status:string;caseId?:string;evidenceFile?:string;behaviorObserved?:boolean}>=[];
   private lastFeedback='';
@@ -64,6 +66,7 @@ export class InvestigationWorkflow {
       return {action:['outline_solidity'],path:[this.latestSolidityPath]};
     }
     if(this.recoveryProbe)return {action:['plan_probe'],path:[this.recoveryProbe.path],query:[this.recoveryProbe.query],answer:[this.recoveryProbe.kind]};
+    if(this.requiredProbePlanning && !this.state.pending)return {action:['plan_probe']};
     if(this.duplicateProbeRejections>=2 && !this.state.pending)return {action:['read_file','read_solidity','outline_solidity','search_files','list_files','plan_probe','continue_inspection','final']};
     if(this.state.pending) {
       const p=this.state.pending;
@@ -90,6 +93,23 @@ export class InvestigationWorkflow {
     this.feedback('Unverified proposed finding: plan this inspected declared function with a concrete disproof condition, then execute verify_source. If the probe is unsupported, continue with another candidate.');
   }
   clearProbeRecovery() {this.recoveryProbe=null;}
+  requireProbePlanning(hints:string) {
+    // The validator explicitly requires a test; constrain the action, not an
+    // arbitrary function or probe kind. The model must select a relevant target.
+    this.requiredProbePlanning=true;
+    this.requiredProbePlanningRejections=0;
+    this.feedback('Testing required before classification. Select a relevant declared function and a supported probe kind from inspected source. Declarations: '+hints.slice(0,260));
+  }
+  rejectedRequiredProbePlan():boolean {
+    if(!this.requiredProbePlanning)return false;
+    if(++this.requiredProbePlanningRejections<2)return false;
+    // An invalid or invented plan must never trap the controller in a
+    // plan_probe-only state. Resume ordinary inspection/final choices.
+    this.requiredProbePlanning=false;
+    this.requiredProbePlanningRejections=0;
+    this.feedback('Required probe planning failed twice. Inspect a different eligible function or explain the incomplete evidence; do not invent a probe.');
+    return true;
+  }
   rejectedDuplicateProbe() {this.duplicateProbeRejections++;this.feedback('The already attempted probe cannot be repeated. Return outcome=no_testable_candidate with a specific reason and findings=[]; do not claim an unverified vulnerability.');}
   requireSource(path:string) {this.requiredSource=path;this.feedback('Read '+path+' before planning its test.',true);}
   validate(action:Action):string|null {
@@ -117,7 +137,7 @@ export class InvestigationWorkflow {
       return 'Execute the exact planned probe, including its sequence. No changed test was executed.';
     return null;
   }
-  plan(action:Action) { this.recoveryProbe=null;this.state.pending=action;this.duplicateProbeRejections=0;this.lastFeedback=''; }
+  plan(action:Action) { this.recoveryProbe=null;this.requiredProbePlanning=false;this.requiredProbePlanningRejections=0;this.state.pending=action;this.duplicateProbeRejections=0;this.lastFeedback=''; }
   read(path:string) { this.readPaths.add(path);this.latestSolidityPath=path.endsWith('.sol')?path:null; if(path===this.requiredSource)this.requiredSource=null; }
   observe(action:Action,output:string) {
     if(action.action==='outline_solidity')this.outlinedPaths.add(action.path);

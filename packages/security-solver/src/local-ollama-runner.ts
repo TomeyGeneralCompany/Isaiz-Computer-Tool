@@ -76,6 +76,7 @@ export async function runLocalAudit(
   if(!['ollama','qwen-agent'].includes(adapter))throw new Error('Unknown LOCAL_MODEL_ADAPTER');
   if(adapter==='qwen-agent'&&!structured)throw new Error('Qwen-Agent adapter requires JSON action protocol');
   let successfulReads = 0;
+  let rejectedRequiredProbeFinals = 0;
   let generationBudget = settings.numPredict;
   const root = await realpath(cwd);
   const controller = new AbortController();
@@ -399,6 +400,8 @@ export async function runLocalAudit(
           consecutiveWorkflowRejections=lastWorkflowRejection===workflowError?consecutiveWorkflowRejections+1:1;
           lastWorkflowRejection=workflowError;
           await appendFile(logFile,'[WORKFLOW_REJECTED] '+workflowError+'\n');
+          if(action.action==='plan_probe' && workflow!.rejectedRequiredProbePlan())
+            await appendFile(logFile,'[REQUIRED_PROBE_PLAN_RELEASED] Repeated invalid plans; reopen investigation\n');
           messages.push({role:'user',content:'Controller rejected the last action: '+workflowError+
             '. Do not repeat the rejected probe. Inspect a new call site, use recorded evidence, or give an evidence-based final finding or incomplete outcome. /no_think'});
           continue;
@@ -433,6 +436,8 @@ export async function runLocalAudit(
               const feedback='No matching source function declaration for '+action.query+'; no probe was run.'+suffix;
               workflow.feedback(feedback);
               await appendFile(logFile,'[PLAN_REJECTED] '+feedback+'\n');
+              if(workflow.rejectedRequiredProbePlan())
+                await appendFile(logFile,'[REQUIRED_PROBE_PLAN_RELEASED] Repeated undeclared plans; reopen investigation\n');
               messages.push({role:'user',content:feedback+' /no_think'});
               continue;
             }
@@ -457,6 +462,7 @@ export async function runLocalAudit(
             continue;
           }
           rejectedPlans=0;
+          rejectedRequiredProbeFinals=0;
           workflow.plan(action);
           await persistMemory();
           messages.push({role:"assistant",content:message.content});
@@ -515,6 +521,34 @@ export async function runLocalAudit(
           // Retain read-action history: rejecting a final answer does not make prior pages new evidence.
           if(!workflow)recentActions.clear(); // Legacy no-workflow repair may explicitly require a fresh source read.
           stalledActions=0;workflow?.finalRejected(feedback);
+          // A validator that explicitly requires a probe must not let a small
+          // model repeat unsupported final classifications indefinitely.
+          // Do not force the first declared function: that could be unrelated.
+          // Require the model to choose a relevant, declared probe target.
+          if(workflow && /\btest\b.*\bbefore\b.*\bclassif/i.test(feedback)) {
+            rejectedRequiredProbeFinals++;
+            if(rejectedRequiredProbeFinals>=2) {
+              const snapshot=workflow.snapshot();
+              const attempted=new Set(snapshot.observations.map(o=>JSON.stringify([o.path,o.function])));
+              const candidates:string[]=[];
+              for(const path of snapshot.readPaths) {
+                if(!/\.(?:py|js|mjs|cjs|java)$/.test(path))continue;
+                try {
+                  const full=await safePath(path);
+                  for(const selector of await sourceDeclarationHints(full)) {
+                    if(attempted.has(JSON.stringify([path,selector])))continue;
+                    if(await declaredProbeTarget(full,selector))candidates.push(path+':'+selector);
+                    if(candidates.length>=12)break;
+                  }
+                }catch{}
+                if(candidates.length>=12)break;
+              }
+              if(candidates.length) {
+                workflow.requireProbePlanning(candidates.join(', '));
+                await appendFile(logFile,'[REJECTED_FINAL_PROBE_HANDOFF] '+JSON.stringify({candidates})+'\n');
+              }
+            }
+          } else rejectedRequiredProbeFinals=0;
           // Coverage validator can name the next inspected candidate. Make the
           // next source read deterministic instead of asking a small model to
           // infer another path from an already rejected conclusion.

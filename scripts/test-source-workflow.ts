@@ -81,6 +81,34 @@ const controllerText=await readFile(join(process.cwd(),"packages/security-solver
 assert.ok(controllerText.includes("[CONTEXT_RECOVERY]"),"repeated completed source pages must recover rather than end a production hunt");
 assert.ok(controllerText.includes("maxItems:0"),"without recorded case IDs, typed final schema must prohibit invented findings");
 assert.ok(controllerText.includes("[PROBE_RECOVERY_REQUIRED]"),"an invented case with a declared compatible candidate must require probe planning");
+assert.ok(controllerText.includes("[REJECTED_FINAL_PROBE_HANDOFF]"),"required-test final rejections must guide a declared probe");
+assert.ok(controllerText.includes("rejectedRequiredProbeFinals>=2"),"ordinary single premature final must not force a probe");
+assert.ok(controllerText.includes(String.raw`/\btest\b.*\bbefore\b.*\bclassif/i`),"required-test matcher must use real word boundaries");
+assert.ok(!controllerText.includes(String.raw`/\\btest\\b`),"double-escaped regex must not disable recovery");
+const requiredTestWorkflow=new InvestigationWorkflow();
+requiredTestWorkflow.read("owned/render.py");
+assert.ok((await requiredTestWorkflow.constraints()).action.includes("final"),"ordinary final remains available");
+requiredTestWorkflow.finalRejected("Test both inspected modules before classifying them.");
+requiredTestWorkflow.requireProbePlanning("owned/render.py:render");
+assert.deepEqual(await requiredTestWorkflow.constraints(),{action:["plan_probe"]},"explicit missing-test recovery must block another final");
+const selectedProbe={action:"plan_probe",path:"owned/render.py",query:"render",answer:"html_reflection",
+  hypothesis:"Markup might survive in the output; escaped markup would disprove it."} as any;
+requiredTestWorkflow.plan(selectedProbe);
+assert.deepEqual(await requiredTestWorkflow.constraints(),
+  {action:["verify_source"],path:["owned/render.py"],query:["render"],answer:["html_reflection"]},
+  "a selected probe must transition into verification");
+requiredTestWorkflow.observe({...selectedProbe,action:"verify_source"},JSON.stringify({status:"behavior_not_observed",behavior_observed:false}));
+assert.ok((await requiredTestWorkflow.constraints()).action.includes("final"),"verified probe must release final action");
+const rejectedPlanningWorkflow=new InvestigationWorkflow();
+rejectedPlanningWorkflow.read("owned/render.py");
+rejectedPlanningWorkflow.requireProbePlanning("owned/render.py:render");
+assert.equal(rejectedPlanningWorkflow.rejectedRequiredProbePlan(),false,"first invalid plan keeps bounded recovery active");
+assert.deepEqual(await rejectedPlanningWorkflow.constraints(),{action:["plan_probe"]},"first invalid plan must still request a probe");
+assert.equal(rejectedPlanningWorkflow.rejectedRequiredProbePlan(),true,"second invalid plan releases forced planning");
+assert.ok((await rejectedPlanningWorkflow.constraints()).action.includes("final"),"repeated invalid plans must not deadlock the controller");
+assert.ok(controllerText.includes("[REQUIRED_PROBE_PLAN_RELEASED]"),"controller must record escape from invalid probe planning");
+
+assert.ok(controllerText.includes("snapshot.readPaths"),"recovery must rely on inspected source");
 assert.ok(workflowText.includes("if(this.recoveryProbe)return {action:['plan_probe']"),"probe recovery must constrain action to plan_probe");
 assert.ok(workflowText.includes("return {action:['verify_source']"),"a planned probe must constrain follow-up execution to verify_source");
 assert.ok(controllerText.includes("enum:recordedIds"),"with recorded cases, the model must select only verifier-issued case IDs");
