@@ -82,6 +82,9 @@ assert.ok(controllerText.includes("[CONTEXT_RECOVERY]"),"repeated completed sour
 assert.ok(controllerText.includes("maxItems:0"),"without recorded case IDs, typed final schema must prohibit invented findings");
 assert.ok(controllerText.includes("[PROBE_RECOVERY_REQUIRED]"),"an invented case with a declared compatible candidate must require probe planning");
 assert.ok(controllerText.includes("[REJECTED_FINAL_PROBE_HANDOFF]"),"required-test final rejections must guide a declared probe");
+assert.ok(controllerText.includes("[INVALID_PROBE_PATH_RECOVERY]"),"nonexistent source paths in probe plans must be recovered without forced invalid reads");
+assert.ok(controllerText.includes("if(exists)workflow!.requireSource(action.path)"),"only existing source paths may become required reads");
+assert.ok(controllerText.includes("workflow!.snapshot().readPaths.slice(-8)"),"source-path recovery must suggest exactly inspected, grounded paths");
 assert.ok(controllerText.includes("rejectedRequiredProbeFinals>=2"),"ordinary single premature final must not force a probe");
 assert.ok(controllerText.includes(String.raw`/\btest\b.*\bbefore\b.*\bclassif/i`),"required-test matcher must use real word boundaries");
 assert.ok(!controllerText.includes(String.raw`/\\btest\\b`),"double-escaped regex must not disable recovery");
