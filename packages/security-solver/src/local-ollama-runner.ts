@@ -373,10 +373,10 @@ export async function runLocalAudit(
             const candidate=proposed.findings[0];
             const path=String(candidate?.callerFile || '');
             const narrative=[candidate?.title,candidate?.ratingReason,candidate?.impact].filter(x=>typeof x==='string').join(' ');
-            const selector=narrative.match(/\\b([A-Za-z_$][\\w$]*\\.[A-Za-z_$][\\w$]*)\\b/)?.[1];
+            const selector=narrative.match(/\b([A-Za-z_$][\w$]*\.[A-Za-z_$][\w$]*)\b/)?.[1];
             const kind=/path.construction|path traversal|directory traversal/i.test(narrative)?'path_construction':
               /html.reflection|html injection|html output/i.test(narrative)?'html_reflection':null;
-            if(workflow.snapshot().readPaths.includes(path) && selector && kind && /\\.(?:java|py|js|mjs|cjs|sol)$/.test(path)) {
+            if(workflow.snapshot().readPaths.includes(path) && selector && kind && /\.(?:java|py|js|mjs|cjs|sol)$/.test(path)) {
               let declared=false;
               try {const full=await safePath(path);declared=path.endsWith('.sol')?
                 await solidityIndex.hasFunction(full,selector):await declaredProbeTarget(full,selector);}catch{}
@@ -711,6 +711,31 @@ export async function runLocalAudit(
         const fitted=fitOutput(output);
         const responseMessage=fitted.message;
         messages.push(responseMessage);
+        // Give the model actual indexed Solidity declarations after a completed
+        // paginated read. This does not plan or execute a probe: candidates still
+        // have to pass the existing declaration, workflow and verifier gates.
+        if(workflow && call.function.name==='read_file' && !output.startsWith('Tool error:')) {
+          try {
+            const page=JSON.parse(output);
+            const path=String(call.function.arguments?.path || '');
+            if(path.endsWith('.sol') && page.nextOffset===null) {
+              const full=await safePath(path);
+              const outline=await solidityIndex.outline(full,0,1200);
+              const declarations=JSON.stringify(outline);
+              const guidance='Completed Solidity source: '+path+
+                '. Indexed declarations (use exact Contract.function IDs where eligible): '+declarations+
+                '. Choose only a supported, declared probe target; otherwise inspect the next prioritized source. /no_think';
+              if(JSON.stringify(messages).length+guidance.length<messageBudget-800) {
+                messages.push({role:'user',content:guidance});
+                await appendFile(logFile,'[SOLIDITY_DECLARATIONS_GUIDED] '+JSON.stringify({path,characters:declarations.length})+'\\n');
+              } else {
+                await appendFile(logFile,'[SOLIDITY_DECLARATIONS_DEFERRED] Context budget; use outline_solidity explicitly\\n');
+              }
+            }
+          }catch(error) {
+            await appendFile(logFile,'[SOLIDITY_DECLARATIONS_UNAVAILABLE] '+String(error).slice(0,160)+'\\n');
+          }
+        }
         if(completedActionKey)recentActions.get(completedActionKey)!.response=responseMessage;
         await persistMemory();
         await renew(turn+1);
