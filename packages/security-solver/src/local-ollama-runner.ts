@@ -526,6 +526,7 @@ export async function runLocalAudit(
             if(rejectedRequiredProbeFinals>=2) {
               const snapshot=workflow.snapshot();
               const observed=new Set(snapshot.observations.map(o=>o.path));
+              let handedOff=false;
               for(const path of snapshot.readPaths) {
                 if(observed.has(path) || !/\\.(?:py|js|mjs|cjs|java)$/.test(path))continue;
                 try {
@@ -533,12 +534,12 @@ export async function runLocalAudit(
                   for(const selector of await sourceDeclarationHints(full)) {
                     if(!await declaredProbeTarget(full,selector))continue;
                     workflow.requireProbe(path,selector,'html_reflection');
+                    handedOff=true;
                     await appendFile(logFile,'[REJECTED_FINAL_PROBE_HANDOFF] '+JSON.stringify({path,selector})+'\\n');
                     break;
                   }
                 }catch{}
-                if((await workflow.constraints()).action.length===1 &&
-                   (await workflow.constraints()).action[0]==='plan_probe')break;
+                if(handedOff)break;
               }
             }
           } else rejectedRequiredProbeFinals=0;
