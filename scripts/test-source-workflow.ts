@@ -83,6 +83,23 @@ assert.ok(controllerText.includes("maxItems:0"),"without recorded case IDs, type
 assert.ok(controllerText.includes("[PROBE_RECOVERY_REQUIRED]"),"an invented case with a declared compatible candidate must require probe planning");
 assert.ok(controllerText.includes("[REJECTED_FINAL_PROBE_HANDOFF]"),"required-test final rejections must guide a declared probe");
 assert.ok(controllerText.includes("rejectedRequiredProbeFinals>=2"),"ordinary single premature final must not force a probe");
+assert.ok(controllerText.includes(String.raw`/\btest\b.*\bbefore\b.*\bclassif/i`),"required-test matcher must use real word boundaries");
+assert.ok(!controllerText.includes(String.raw`/\\btest\\b`),"double-escaped regex must not disable recovery");
+const requiredTestWorkflow=new InvestigationWorkflow();
+requiredTestWorkflow.read("owned/render.py");
+assert.ok((await requiredTestWorkflow.constraints()).action.includes("final"),"ordinary final remains available");
+requiredTestWorkflow.finalRejected("Test both inspected modules before classifying them.");
+requiredTestWorkflow.requireProbePlanning("owned/render.py:render");
+assert.deepEqual(await requiredTestWorkflow.constraints(),{action:["plan_probe"]},"explicit missing-test recovery must block another final");
+const selectedProbe={action:"plan_probe",path:"owned/render.py",query:"render",answer:"html_reflection",
+  hypothesis:"Markup might survive in the output; escaped markup would disprove it."} as any;
+requiredTestWorkflow.plan(selectedProbe);
+assert.deepEqual(await requiredTestWorkflow.constraints(),
+  {action:["verify_source"],path:["owned/render.py"],query:["render"],answer:["html_reflection"]},
+  "a selected probe must transition into verification");
+requiredTestWorkflow.observe({...selectedProbe,action:"verify_source"},JSON.stringify({status:"behavior_not_observed",behavior_observed:false}));
+assert.ok((await requiredTestWorkflow.constraints()).action.includes("final"),"verified probe must release final action");
+
 assert.ok(controllerText.includes("snapshot.readPaths"),"recovery must rely on inspected source");
 assert.ok(workflowText.includes("if(this.recoveryProbe)return {action:['plan_probe']"),"probe recovery must constrain action to plan_probe");
 assert.ok(workflowText.includes("return {action:['verify_source']"),"a planned probe must constrain follow-up execution to verify_source");
