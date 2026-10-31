@@ -9,7 +9,7 @@ import {join} from 'node:path';
 const flow=new InvestigationWorkflow();
 const action={action:'read_file',path:'large.py',query:'',answer:'',offset:0};
 for(let i=0;i<8;i++){flow.read(action.path);flow.observe({...action,offset:i*156},JSON.stringify({start:i*156,end:(i+1)*156,nextOffset:(i+1)*156}));}
-assert.deepEqual((await flow.constraints()).action,['plan_probe','continue_inspection','final']);
+assert.deepEqual((await flow.constraints()).action,['read_file','read_solidity','outline_solidity','plan_probe','continue_inspection','final']);
 const continuation={...action,action:'continue_inspection',offset:1248,hypothesis:'Need the return expression to determine whether input is escaped.'};
 assert.equal(flow.validate(continuation),null);flow.continueInspection(continuation);
 assert.ok((await flow.constraints()).action.includes('read_file'));
@@ -26,7 +26,7 @@ const rejected=new InvestigationWorkflow();
 rejected.read('large.py');
 rejected.observe(action,JSON.stringify({start:0,end:401,nextOffset:401}));
 rejected.finalRejected('Read the next page before drawing a conclusion.');
-assert.deepEqual((await rejected.constraints()).action,['plan_probe','continue_inspection','final']);
+assert.deepEqual((await rejected.constraints()).action,['read_file','read_solidity','outline_solidity','plan_probe','continue_inspection','final']);
 assert.equal(rejected.snapshot().pageTurns,1);
 assert.equal(rejected.snapshot().sourceProgress,1);
 assert.deepEqual(rejected.snapshot().readPaths,['large.py']);
