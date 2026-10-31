@@ -16,6 +16,9 @@ const key = (a:Action) => JSON.stringify([a.path,a.query,a.answer,a.sequence]);
 export class InvestigationWorkflow {
   private state:typeof State.State={stage:'inspect',inspections:0,pending:null,tested:[]};
   private readPaths=new Set<string>();
+  private outlinedPaths=new Set<string>();
+  private attemptedOutlines=new Set<string>();
+  private latestSolidityPath:string|null=null;
   private requiredSource:string|null=null;
   private recoveryProbe:{path:string;query:string;kind:string}|null=null;
   private duplicateProbeRejections=0;
@@ -54,6 +57,12 @@ export class InvestigationWorkflow {
     if(this.pageTurns>=8)this.state.inspections=Math.max(6,this.state.inspections);
     this.state=await graph.invoke(this.state);
     if(this.requiredSource)return {action:['read_file'],path:[this.requiredSource]};
+    // After a long paginated Solidity read, surface declarations before allowing
+    // another speculative final. Once attempted, never trap an unparseable file.
+    if(this.pageTurns>=6 && this.latestSolidityPath && !this.attemptedOutlines.has(this.latestSolidityPath) && !this.state.pending) {
+      this.attemptedOutlines.add(this.latestSolidityPath);
+      return {action:['outline_solidity'],path:[this.latestSolidityPath]};
+    }
     if(this.recoveryProbe)return {action:['plan_probe'],path:[this.recoveryProbe.path],query:[this.recoveryProbe.query],answer:[this.recoveryProbe.kind]};
     if(this.duplicateProbeRejections>=2 && !this.state.pending)return {action:['read_file','read_solidity','outline_solidity','search_files','list_files','plan_probe','continue_inspection','final']};
     if(this.state.pending) {
@@ -109,8 +118,9 @@ export class InvestigationWorkflow {
     return null;
   }
   plan(action:Action) { this.recoveryProbe=null;this.state.pending=action;this.duplicateProbeRejections=0;this.lastFeedback=''; }
-  read(path:string) { this.readPaths.add(path); if(path===this.requiredSource)this.requiredSource=null; }
+  read(path:string) { this.readPaths.add(path);if(path.endsWith('.sol'))this.latestSolidityPath=path; if(path===this.requiredSource)this.requiredSource=null; }
   observe(action:Action,output:string) {
+    if(action.action==='outline_solidity')this.outlinedPaths.add(action.path);
     if(action.action==='verify_source') {
       let result:any;try{result=JSON.parse(output);}catch{}
       this.observations.push({path:action.path,function:action.query,kind:action.answer,
@@ -143,5 +153,5 @@ export class InvestigationWorkflow {
     this.state.inspections=Math.max(6,this.state.inspections);
   }
   feedback(message:string,reopen=false) {this.lastFeedback=message.slice(0,400);if(reopen){this.state.inspections=0;this.pageTurns=0;}}
-  snapshot() {return {...this.state,pageTurns:this.pageTurns,sourceProgress:this.sourceProgress,decisions:this.decisions,priorNotes:this.priorNotes,readPaths:[...this.readPaths],observations:this.observations};}
+  snapshot() {return {outlinedPaths:[...this.outlinedPaths],...this.state,pageTurns:this.pageTurns,sourceProgress:this.sourceProgress,decisions:this.decisions,priorNotes:this.priorNotes,readPaths:[...this.readPaths],observations:this.observations};}
 }
