@@ -47,6 +47,12 @@ assert.deepEqual(await outlineWorkflow.constraints(),{action:["outline_solidity"
   "six Solidity source pages should request a declaration outline");
 assert.notDeepEqual(await outlineWorkflow.constraints(),{action:["outline_solidity"],path:["source-1/Fixture.sol"]},
   "the same file must not force an endless outline loop");
+const evidenceWorkflow=new InvestigationWorkflow();
+for(let i=0;i<6;i++)evidenceWorkflow.observe({action:"read_file",path:"source-1/Example.java",query:"",answer:"",offset:i*10} as any,
+  JSON.stringify({start:i*10,end:(i+1)*10,nextOffset:i===5?null:(i+1)*10}));
+evidenceWorkflow.finalRejected("Read the tested source file and the claimed caller file before reporting.");
+assert.ok((await evidenceWorkflow.constraints()).action.includes("read_file"),
+  "missing caller evidence must reopen source reads after hypothesis stage");
 const mixedWorkflow=new InvestigationWorkflow();
 mixedWorkflow.read("source-1/Fixture.sol");
 mixedWorkflow.observe({action:"read_file",path:"source-1/Fixture.sol",query:"",answer:"",offset:0} as any,
@@ -110,6 +116,7 @@ try {
   await chmod(join(bin,"git"),0o700);process.env.PATH=bin+":"+originalPath;
   let policyOffset=0,policyDone=false;
   let turn=0, caseId="", source="", caller="", selector="", stateful=false,reviewMode=false,reviewIndex=0,reviewOffset=0;
+  let evidenceRepairReads:string[]=[];
   const reviewFiles=["source/Store.sol","evidence/report.txt","evidence/replay.json","evidence/policy.txt"];
   const sequence={constructorArgs:["5"],steps:[
     {operation:"call",function:"value()",args:[],expect:"5"},
@@ -121,6 +128,7 @@ try {
     const request=JSON.parse(raw);
     // Production progress is appended separately; inspect the last actual tool result.
     const latestTool=()=>[...request.messages].reverse().find((m:any)=>m.content?.startsWith("TOOL_RESULT "));
+    const latestResult=()=>{try{return JSON.parse(latestTool()?.content.split("\\n")[0].slice("TOOL_RESULT ".length) || "null");}catch{return null;}};
     assert.ok(JSON.stringify(request.messages).length+JSON.stringify(request.format).length <= (8192-request.options.num_predict-512)*3,'Every production request fits its declared budget');
     if(!reviewMode && !policyDone) {
       const last=latestTool();
@@ -147,6 +155,24 @@ try {
             return;
           }
         }
+      }
+    }
+    // A rejected final may require fresh source and caller evidence. The
+    // mock must follow the controller's feedback instead of parsing the
+    // plain-text final_validation response as a verifier case.
+    const lastResult=latestResult();
+    if(!reviewMode && lastResult?.name==="final_validation" &&
+       /Read the tested source file and the claimed caller file/.test(String(lastResult.output))) {
+      evidenceRepairReads=["source-1/"+source,"source-1/"+caller];
+    }
+    if(!reviewMode && evidenceRepairReads.length) {
+      if(lastResult?.name==="read_file") {
+        try {if(JSON.parse(lastResult.output).nextOffset===null)evidenceRepairReads.shift();}catch{}
+      }
+      if(evidenceRepairReads.length) {
+        res.end(JSON.stringify({message:{role:"assistant",content:JSON.stringify({
+          action:"read_file",path:evidenceRepairReads[0],offset:0,query:"",answer:""
+        })}}));return;
       }
     }
     turn++;
@@ -193,8 +219,12 @@ try {
       // The model receives the rejection through the controller; its exact prompt may be compacted.
       next=action("verify_source","source-1/"+source,selector,"html_reflection");
     } else {
-      const previous=JSON.parse((latestTool()?.content || "").split("\n")[0].slice("TOOL_RESULT ".length));
-      caseId=JSON.parse(previous.output).caseId;assert.ok(caseId);
+      if(!caseId) {
+        const previous=latestResult();
+        assert.equal(previous?.name,"verify_source","expected a verifier result before constructing a finding");
+        caseId=JSON.parse(previous.output).caseId;
+      }
+      assert.ok(caseId);
       next=action("final","","",JSON.stringify({findings:[{
         caseId,severity:"medium",confidence:0.7,title:stateful?"Owned fixture assertion discrepancy":"Owned fixture reflection",
         ratingReason:"Owned fixture preserves input; this test checks report plumbing only.",
@@ -220,7 +250,7 @@ try {
     {assetType:"SOURCE_CODE",eligibleForBounty:true,assetIdentifier:"https://github.com/fixture/owned"}
   ]})};
   for(const language of ["javascript","java","solidity","stateful_solidity"]) {
-    turn=0;policyOffset=0;policyDone=false;caseId="";stateful=language==="stateful_solidity";
+    turn=0;policyOffset=0;policyDone=false;caseId="";evidenceRepairReads=[];stateful=language==="stateful_solidity";
     source=language==="javascript"?"render.cjs":language==="java"?"Render.java":"Render.sol";
     caller=language==="javascript"?"caller.js":language==="java"?"Caller.java":"Caller.sol";
     selector=language==="javascript"?"render":"Render.render";
