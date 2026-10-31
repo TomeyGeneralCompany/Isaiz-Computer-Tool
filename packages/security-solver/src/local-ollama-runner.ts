@@ -373,10 +373,10 @@ export async function runLocalAudit(
             const candidate=proposed.findings[0];
             const path=String(candidate?.callerFile || '');
             const narrative=[candidate?.title,candidate?.ratingReason,candidate?.impact].filter(x=>typeof x==='string').join(' ');
-            const selector=narrative.match(/\\b([A-Za-z_$][\\w$]*\\.[A-Za-z_$][\\w$]*)\\b/)?.[1];
+            const selector=narrative.match(/\b([A-Za-z_$][\w$]*\.[A-Za-z_$][\w$]*)\b/)?.[1];
             const kind=/path.construction|path traversal|directory traversal/i.test(narrative)?'path_construction':
               /html.reflection|html injection|html output/i.test(narrative)?'html_reflection':null;
-            if(workflow.snapshot().readPaths.includes(path) && selector && kind && /\\.(?:java|py|js|mjs|cjs|sol)$/.test(path)) {
+            if(workflow.snapshot().readPaths.includes(path) && selector && kind && /\.(?:java|py|js|mjs|cjs|sol)$/.test(path)) {
               let declared=false;
               try {const full=await safePath(path);declared=path.endsWith('.sol')?
                 await solidityIndex.hasFunction(full,selector):await declaredProbeTarget(full,selector);}catch{}
