@@ -5,6 +5,14 @@ import {execFileSync} from "node:child_process";
 import {mkdtemp,writeFile,readFile,mkdir,rm,chmod} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
+
+// Recovery regex regression: the source must use single-escaped regex tokens.
+const recoveryRegexSource = await readFile(new URL("../packages/security-solver/src/local-ollama-runner.ts", import.meta.url), "utf8");
+assert.ok(recoveryRegexSource.includes(String.raw/`\b([A-Za-z_$][\w$]*\.[A-Za-z_$][\w$]*)\b/`), "recovery must match real function selectors");
+assert.ok(recoveryRegexSource.includes(String.raw/`\.(?:java|py|js|mjs|cjs|sol)$/`), "recovery must match supported file extensions");
+assert.equal("ERC1155Upgradeable.sol".match(/\.(?:java|py|js|mjs|cjs|sol)$/)?.[0], ".sol");
+assert.equal("Vault.deposit".match(/\b([A-Za-z_$][\w$]*\.[A-Za-z_$][\w$]*)\b/)?.[1], "Vault.deposit");
+
 const root=await mkdtemp(join(tmpdir(),"tomey-workflow-"));
 const originalPath=process.env.PATH;
 process.env.PROJECT_ROOT=root;
