@@ -732,7 +732,15 @@ export async function runLocalAudit(
           if((error as any)?.code === "ENOENT") {
             const key=JSON.stringify([call.function.name,resolve(root,String(call.function.arguments?.path || "."))]);
             const count=(missingRequests.get(key)||0)+1;missingRequests.set(key,count);
-            output+=" This path does not exist. Do not repeat it. Use list_files on a known directory or select an existing source hint. "+navigation.hint();
+            // A generic navigation hint can be empty once all seeded pages have been read.
+            // Give the small model exact, successful source paths instead of asking
+            // it to reconstruct a long or random filename after an ENOENT.
+            const verifiedPaths=[...new Set((workflow?.snapshot().readPaths ||
+              navigation.snapshot().recent.filter(entry=>entry.action==='read_file' && typeof entry.path==='string')
+                .map(entry=>String(entry.path))).filter(path=>path.length<=512))].slice(-4);
+            output+=" This path does not exist. Do not repeat it. "+
+              (verifiedPaths.length ? "Exact successfully read source paths (copy exactly; no automatic substitution): "+JSON.stringify(verifiedPaths)+". " : "")+
+              "Use list_files on a known directory or select an existing source hint. "+navigation.hint();
             if(count>=3)fatalToolError="AUDIT_STALLED: repeated missing source path after corrective feedback; inspection incomplete";
           }
         }
