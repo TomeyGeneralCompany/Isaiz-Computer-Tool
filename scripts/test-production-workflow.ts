@@ -33,7 +33,7 @@ try {
   for(let i=0;i<6;i++)routing.observe(action('read_file','a.py'),JSON.stringify({nextOffset:100+i}));
   assert.ok((await routing.constraints()).action.includes('read_file'));
   for(let i=0;i<6;i++)routing.observe(action('search_files'),JSON.stringify({results:[]}));
-  assert.deepEqual((await routing.constraints()).action,['plan_probe','continue_inspection','final']);
+  assert.deepEqual((await routing.constraints()).action,['read_file','read_solidity','outline_solidity','plan_probe','continue_inspection','final']);
   assert.match(routing.validate({...action('plan_probe','missing.py','x','html_reflection'),hypothesis:'test'})!,/Read/);
   routing.read('a.py');const planned={...action('plan_probe','a.py','f','html_reflection'),hypothesis:'Markup may survive; escaping disproves it.'};
   assert.equal(routing.validate(planned),null);routing.plan(planned);

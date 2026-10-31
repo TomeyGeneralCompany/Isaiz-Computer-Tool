@@ -82,6 +82,19 @@ assert.ok(controllerText.includes("[CONTEXT_RECOVERY]"),"repeated completed sour
 assert.ok(controllerText.includes("maxItems:0"),"without recorded case IDs, typed final schema must prohibit invented findings");
 assert.ok(controllerText.includes("[PROBE_RECOVERY_REQUIRED]"),"an invented case with a declared compatible candidate must require probe planning");
 assert.ok(controllerText.includes("[REJECTED_FINAL_PROBE_HANDOFF]"),"required-test final rejections must guide a declared probe");
+assert.ok(workflowText.includes("this.nextOffsets.values()].some(offset=>offset!==null)"),'hypothesis-stage source navigation must retain unfinished page access');
+
+const incompleteWorkflow=new InvestigationWorkflow();
+incompleteWorkflow.read('source-1/Incomplete.java');
+incompleteWorkflow.observe({action:'read_file',path:'source-1/Incomplete.java',query:'',answer:'',offset:0} as any,
+  JSON.stringify({start:0,end:4000,nextOffset:4000}));
+for(let i=0;i<6;i++)incompleteWorkflow.observe({action:'list_files',path:'.',query:'',answer:'',offset:0} as any,
+  JSON.stringify({files:[]}));
+const incompleteConstraints=await incompleteWorkflow.constraints();
+assert.ok(incompleteConstraints.action.includes('read_file'),
+  'hypothesis stage must retain reading access to incomplete source');
+assert.ok(incompleteConstraints.action.includes('plan_probe'),
+  'hypothesis stage must preserve probe planning');
 assert.ok(controllerText.includes("[INVALID_PROBE_PATH_RECOVERY]"),"nonexistent source paths in probe plans must be recovered without forced invalid reads");
 assert.ok(controllerText.includes("if(exists)workflow!.requireSource(action.path)"),"only existing source paths may become required reads");
 assert.ok(controllerText.includes("workflow!.snapshot().readPaths.slice(-8)"),"source-path recovery must suggest exactly inspected, grounded paths");
