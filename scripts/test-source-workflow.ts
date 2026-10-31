@@ -21,6 +21,10 @@ assert.ok(recoveryRegexSource.includes("solidityIndex.outline(full,0,1200)"),"us
 assert.ok(recoveryRegexSource.includes("[SOLIDITY_DECLARATIONS_GUIDED]"),"log successful handoff");
 assert.ok(recoveryRegexSource.includes("Choose only a supported, declared probe target"),"retain probe eligibility gate");
 
+// Solidity source-reading must lead to declaration discovery before repeated premature finals.
+const workflowGuideText=await readFile(new URL("../packages/security-solver/src/investigation-workflow.ts",import.meta.url),"utf8");
+assert.ok(workflowGuideText.includes("return {action:['outline_solidity'],path:[this.latestSolidityPath]}"),"paginate-to-outline guidance must be present");
+assert.ok(workflowGuideText.includes("this.attemptedOutlines.add(this.latestSolidityPath)"),"parse failures must not trap outline retries");
 const root=await mkdtemp(join(tmpdir(),"tomey-workflow-"));
 const originalPath=process.env.PATH;
 process.env.PROJECT_ROOT=root;
@@ -33,6 +37,25 @@ process.env.AUTOHACK_AUTO_SOURCE_PREFETCH="false";
 process.env.LOCAL_HUNT_NUM_PREDICT="4096";
 const workflowText=await readFile(join(process.cwd(),"packages/security-solver/src/investigation-workflow.ts"),"utf8");
 assert.ok(workflowText.includes("Invalid Solidity probe target"),"placeholder Solidity method targets must be rejected before verification");
+
+const {InvestigationWorkflow}=await import("../packages/security-solver/src/investigation-workflow");
+const outlineWorkflow=new InvestigationWorkflow();
+outlineWorkflow.read("source-1/Fixture.sol");
+for(let i=0;i<6;i++)outlineWorkflow.observe({action:"read_file",path:"source-1/Fixture.sol",query:"",answer:"",offset:i*10} as any,
+  JSON.stringify({start:i*10,end:(i+1)*10,nextOffset:i===5?null:(i+1)*10}));
+assert.deepEqual(await outlineWorkflow.constraints(),{action:["outline_solidity"],path:["source-1/Fixture.sol"]},
+  "six Solidity source pages should request a declaration outline");
+assert.notDeepEqual(await outlineWorkflow.constraints(),{action:["outline_solidity"],path:["source-1/Fixture.sol"]},
+  "the same file must not force an endless outline loop");
+const mixedWorkflow=new InvestigationWorkflow();
+mixedWorkflow.read("source-1/Fixture.sol");
+mixedWorkflow.observe({action:"read_file",path:"source-1/Fixture.sol",query:"",answer:"",offset:0} as any,
+  JSON.stringify({start:0,end:10,nextOffset:null}));
+mixedWorkflow.read("source-1/Other.java");
+for(let i=0;i<5;i++)mixedWorkflow.observe({action:"read_file",path:"source-1/Other.java",query:"",answer:"",offset:i*10} as any,
+  JSON.stringify({start:i*10,end:(i+1)*10,nextOffset:i===4?null:(i+1)*10}));
+assert.notDeepEqual(await mixedWorkflow.constraints(),{action:["outline_solidity"],path:["source-1/Fixture.sol"]},
+  "later Java reads must not trigger an obsolete Solidity outline");
 const {declaredProbeTarget,sourceDeclarationHints}=await import("../packages/security-solver/src/probe-target-validation");
 const probeFixtures=join(root,"probe-declarations");await mkdir(probeFixtures);
 await writeFile(join(probeFixtures,"Target.java"),"public class Target { public static String actual(String input) { return input; } }");
@@ -140,6 +163,20 @@ try {
           ratingReason:"This synthetic fixture deliberately uses an incorrect expected value; it is not a vulnerability.",bet100:false,
           rubric:{exploitability:0,impactSeverity:0,evidenceQuality:3,novelty:0,scopeAlignment:3},issues:[],reasoning:"The supplied expectation is deliberately wrong; only report plumbing is under test."})};
       res.end(JSON.stringify({message:{role:"assistant",content:JSON.stringify(action)}}));return;
+    }
+    // The workflow may first require a Solidity declaration outline after
+    // paginated reads. The scripted model must honor that constrained action
+    // before returning to its probe plan; it must not bypass the controller.
+    if(!reviewMode && request.format.properties.action.enum.length===1 &&
+       request.format.properties.action.enum[0]==="outline_solidity") {
+      const lastSolidityRead=[...request.messages].reverse().map((m:any)=>{
+        try{return JSON.parse(m.content);}catch{return null;}
+      }).find((a:any)=>a?.action==="read_file" && typeof a.path==="string" && a.path.endsWith(".sol"));
+      assert.ok(lastSolidityRead?.path,"forced outline must follow a real Solidity source read");
+      res.end(JSON.stringify({message:{role:"assistant",content:JSON.stringify({
+        action:"outline_solidity",path:lastSolidityRead.path,offset:0,query:"",answer:""
+      })}}));
+      return;
     }
     assert.ok(request.format.properties.action.enum.includes("plan_probe"));
     assert.ok(request.messages.some((m:any)=>m.content.includes("exported JavaScript")));
