@@ -1,7 +1,7 @@
 import {modelProfile} from './model-profile';
 import { InvestigationWorkflow } from "./investigation-workflow";
 import {guidedSourceProbe} from './source-guided-probes';
-import {declaredProbeTarget} from './probe-target-validation';
+import {declaredProbeTarget, sourceDeclarationHints} from './probe-target-validation';
 import { postQwenAgentJson } from "./qwen-agent-transport";
 import { AuditAllowance } from "./audit-allowance";
 import { AuditNavigation } from "./audit-navigation";
@@ -423,7 +423,14 @@ export async function runLocalAudit(
                 await declaredProbeTarget(target,action.query);
             }catch{}
             if(!declared) {
-              const feedback='No matching source function declaration for '+action.query+'. Inspect a real exported/public method name in the source (outline_solidity for Solidity); no probe was run.';
+              let hints:string[]=[];
+              try {
+                const target=await safePath(action.path);
+                if(!action.path.endsWith('.sol'))hints=await sourceDeclarationHints(target);
+              }catch{}
+              const suffix=hints.length ? ' Declared method names in this file (eligibility not yet verified): '+hints.join(', ')+'. Select only an actually eligible signature.' :
+                ' Inspect actual declarations'+(action.path.endsWith('.sol')?' with outline_solidity':' in the source')+'; do not guess names.';
+              const feedback='No matching source function declaration for '+action.query+'; no probe was run.'+suffix;
               workflow.feedback(feedback);
               await appendFile(logFile,'[PLAN_REJECTED] '+feedback+'\n');
               messages.push({role:'user',content:feedback+' /no_think'});

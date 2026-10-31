@@ -33,7 +33,7 @@ process.env.AUTOHACK_AUTO_SOURCE_PREFETCH="false";
 process.env.LOCAL_HUNT_NUM_PREDICT="4096";
 const workflowText=await readFile(join(process.cwd(),"packages/security-solver/src/investigation-workflow.ts"),"utf8");
 assert.ok(workflowText.includes("Invalid Solidity probe target"),"placeholder Solidity method targets must be rejected before verification");
-const {declaredProbeTarget}=await import("../packages/security-solver/src/probe-target-validation");
+const {declaredProbeTarget,sourceDeclarationHints}=await import("../packages/security-solver/src/probe-target-validation");
 const probeFixtures=join(root,"probe-declarations");await mkdir(probeFixtures);
 await writeFile(join(probeFixtures,"Target.java"),"public class Target { public static String actual(String input) { return input; } }");
 await writeFile(join(probeFixtures,"target.py"),"def actual(value):\\n    return value\\n".replaceAll("\\\\n","\\n"));
@@ -42,6 +42,12 @@ for(const [file,actual,missing] of [["Target.java","Target.actual","Target.funct
   assert.equal(await declaredProbeTarget(join(probeFixtures,file),actual),true,"declared probe name in "+file);
   assert.equal(await declaredProbeTarget(join(probeFixtures,file),missing),false,"invented probe name in "+file);
 }
+assert.deepEqual(await sourceDeclarationHints(join(probeFixtures,"Target.java")),["Target.actual"],"Java hints must use real class methods");
+assert.deepEqual(await sourceDeclarationHints(join(probeFixtures,"target.py")),["actual"],"Python hints must use declared functions");
+assert.deepEqual(await sourceDeclarationHints(join(probeFixtures,"target.js")),[],"JS hint extraction must not invent methods for unsupported exports syntax");
+await writeFile(join(probeFixtures,"modern.js"),"export function actual(value) { return value; }");
+assert.deepEqual(await sourceDeclarationHints(join(probeFixtures,"modern.js")),["actual"],"JS exported function hints");
+assert.ok(recoveryRegexSource.includes("sourceDeclarationHints(target)"),"rejected probes must expose grounded source declarations");
 const controllerText=await readFile(join(process.cwd(),"packages/security-solver/src/local-ollama-runner.ts"),"utf8");
 assert.ok(controllerText.includes("[CONTEXT_RECOVERY]"),"repeated completed source pages must recover rather than end a production hunt");
 assert.ok(controllerText.includes("maxItems:0"),"without recorded case IDs, typed final schema must prohibit invented findings");

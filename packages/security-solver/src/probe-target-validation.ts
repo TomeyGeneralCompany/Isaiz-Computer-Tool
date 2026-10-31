@@ -20,3 +20,30 @@ export async function declaredProbeTarget(path:string,selector:string):Promise<b
     new RegExp('\\b'+escaped+'\\s*[:=(]\\s*(?:async\\s*)?(?:function|\\([^)]*\\)\\s*=>)').test(code));
   return false;
 }
+
+
+/**
+ * Provide evidence-backed declaration names after an invalid probe selector.
+ * Names are navigation hints, NOT claims that a method has an eligible runtime
+ * signature. The normal declaration preflight and isolated reproduction still
+ * decide eligibility and findings.
+ */
+export async function sourceDeclarationHints(path:string,limit=16):Promise<string[]> {
+  const text=await readFile(path,'utf8');
+  if(text.length>512000)return [];
+  const code=sourceCodeOnly(text);
+  const found=new Set<string>();
+  const add=(selector:string)=>{if(found.size<limit && selector.length<160)found.add(selector);};
+  if(path.endsWith('.java')) {
+    const cls=code.match(/\b(?:class|record|enum)\s+([A-Za-z_$][\w$]*)\b/)?.[1];
+    if(!cls)return [];
+    const re=/\b(?:public|protected)\s+(?:(?:static|final|synchronized|native|abstract|default)\s+)*(?:<[^>\n]+>\s*)?(?:[\w$<>,.?[\]]+\s+)+([A-Za-z_$][\w$]*)\s*\([^;{}]*\)\s*(?:throws\s+[\w.,\s]+)?\s*\{/g;
+    for(const m of code.matchAll(re))add(cls+'.'+m[1]);
+  } else if(path.endsWith('.py')) {
+    for(const m of code.matchAll(/(?:^|\n)\s*(?:async\s+)?def\s+([A-Za-z_$][\w$]*)\s*\(/g))add(m[1]);
+  } else if(/\.(?:js|mjs|cjs)$/.test(path)) {
+    for(const m of code.matchAll(/\b(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(/g))add(m[1]);
+    for(const m of code.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:function\b|\([^)]*\)\s*=>)/g))add(m[1]);
+  }
+  return [...found];
+}
