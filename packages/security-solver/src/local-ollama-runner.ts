@@ -458,6 +458,7 @@ export async function runLocalAudit(
             continue;
           }
           rejectedPlans=0;
+          rejectedRequiredProbeFinals=0;
           workflow.plan(action);
           await persistMemory();
           messages.push({role:"assistant",content:message.content});
@@ -516,30 +517,31 @@ export async function runLocalAudit(
           // Retain read-action history: rejecting a final answer does not make prior pages new evidence.
           if(!workflow)recentActions.clear(); // Legacy no-workflow repair may explicitly require a fresh source read.
           stalledActions=0;workflow?.finalRejected(feedback);
-          // An evidence-coverage validator can require an actual local test.
-          // After repeated rejected conclusions, offer an inspected, declared
-          // function to the existing plan -> verify workflow. This is deliberately
-          // different from ordinary per-file final attempts or a valid incomplete
-          // bounty investigation: only an explicit testing requirement triggers it.
-          if(workflow && /\\btest\\b.*\\bbefore\\b.*\\bclassif/i.test(feedback)) {
+          // A validator that explicitly requires a probe must not let a small
+          // model repeat unsupported final classifications indefinitely.
+          // Do not force the first declared function: that could be unrelated.
+          // Require the model to choose a relevant, declared probe target.
+          if(workflow && /\btest\b.*\bbefore\b.*\bclassif/i.test(feedback)) {
             rejectedRequiredProbeFinals++;
             if(rejectedRequiredProbeFinals>=2) {
               const snapshot=workflow.snapshot();
-              const observed=new Set(snapshot.observations.map(o=>o.path));
-              let handedOff=false;
+              const attempted=new Set(snapshot.observations.map(o=>JSON.stringify([o.path,o.function])));
+              const candidates:string[]=[];
               for(const path of snapshot.readPaths) {
-                if(observed.has(path) || !/\\.(?:py|js|mjs|cjs|java)$/.test(path))continue;
+                if(!/\.(?:py|js|mjs|cjs|java)$/.test(path))continue;
                 try {
                   const full=await safePath(path);
                   for(const selector of await sourceDeclarationHints(full)) {
-                    if(!await declaredProbeTarget(full,selector))continue;
-                    workflow.requireProbe(path,selector,'html_reflection');
-                    handedOff=true;
-                    await appendFile(logFile,'[REJECTED_FINAL_PROBE_HANDOFF] '+JSON.stringify({path,selector})+'\\n');
-                    break;
+                    if(attempted.has(JSON.stringify([path,selector])))continue;
+                    if(await declaredProbeTarget(full,selector))candidates.push(path+':'+selector);
+                    if(candidates.length>=12)break;
                   }
                 }catch{}
-                if(handedOff)break;
+                if(candidates.length>=12)break;
+              }
+              if(candidates.length) {
+                workflow.requireProbePlanning(candidates.join(', '));
+                await appendFile(logFile,'[REJECTED_FINAL_PROBE_HANDOFF] '+JSON.stringify({candidates})+'\n');
               }
             }
           } else rejectedRequiredProbeFinals=0;
