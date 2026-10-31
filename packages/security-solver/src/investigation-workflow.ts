@@ -150,7 +150,11 @@ export class InvestigationWorkflow {
     // Keep the inspection checkpoint after a rejected conclusion. The model can
     // plan a probe, request specific missing context, or correct its final answer.
     this.lastFeedback=(message+' Do not re-read already completed pages or repeat unsupported candidate findings; use a different eligible source or a supported test.').slice(0,400);
-    this.state.inspections=Math.max(6,this.state.inspections);
+    // Missing caller/source evidence requires a real read, even after the
+    // investigation reached its hypothesis stage. Keep read spans and history.
+    if(/Read the tested source file and the claimed caller file|Read the page containing the entire claimed caller line/.test(message)) {
+      this.state.inspections=0;this.pageTurns=0;
+    } else this.state.inspections=Math.max(6,this.state.inspections);
   }
   feedback(message:string,reopen=false) {this.lastFeedback=message.slice(0,400);if(reopen){this.state.inspections=0;this.pageTurns=0;}}
   snapshot() {return {outlinedPaths:[...this.outlinedPaths],...this.state,pageTurns:this.pageTurns,sourceProgress:this.sourceProgress,decisions:this.decisions,priorNotes:this.priorNotes,readPaths:[...this.readPaths],observations:this.observations};}
