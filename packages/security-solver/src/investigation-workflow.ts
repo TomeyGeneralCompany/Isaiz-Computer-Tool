@@ -73,7 +73,12 @@ export class InvestigationWorkflow {
       const p=this.state.pending;
       return {action:['verify_source'],path:[p.path],query:[p.query],answer:[p.answer]};
     }
-    return {action:this.state.stage==='hypothesize' ? ['plan_probe','continue_inspection','final'] :
+    return {action:this.state.stage==='hypothesize' ?
+      // Hypothesis stage must not hide inspection tools while selected sources
+      // still have unread pages: real Solidity reviews can span many pages.
+      (this.nextOffsets.size && [...this.nextOffsets.values()].some(offset=>offset!==null) ?
+        ['read_file','read_solidity','outline_solidity','plan_probe','continue_inspection','final'] :
+        ['plan_probe','continue_inspection','final']) :
       ['read_file','read_solidity','outline_solidity','search_files','list_files','plan_probe','final']};
   }
   note():string {
