@@ -35,7 +35,17 @@ export async function prioritizeSourceCandidates(root:string,eligible:string[],f
           /\bpublic\s+(?:(?:static|final|synchronized)\s+)*(?:String|byte\s*\[\s*\]|CharSequence|StringBuilder|StringBuffer|ByteBuffer|Path|File|URI)\s+\w+\s*\(\s*(?:final\s+)?(?:String|byte\s*\[\s*\]|CharSequence|StringBuilder|StringBuffer|ByteBuffer|Path|File|URI|Object)\s+\w+\s*\)/.test(source);
         const solidityCandidate=path.endsWith('.sol') &&
           /\bfunction\s+\w+\s*\(\s*string\b[^)]*\)\s+[^;{]*\b(?:pure|view)\b[^;{]*\breturns\s*\(\s*string\b/.test(source);
-        if(javaCandidate||solidityCandidate)signatureScores.set(path,1);
+        // Stateful Solidity contracts can be exercised by the declarative
+        // solidity_sequence adapter. Do not limit navigation to view/pure
+        // string-returning functions (the original lexical scoring did).
+        // Prefer concrete contracts with externally callable functions and
+        // primitive ABI parameters; never infer that this makes a probe valid.
+        const statefulSolidity=path.endsWith('.sol') &&
+          /\bcontract\s+[A-Za-z_]\w*\b(?:\s+is\s+[^\{]+)?\s*\{/.test(source) &&
+          /\bfunction\s+[A-Za-z_]\w*\s*\([^)]*\b(?:uint\d*|int\d*|address|bool|bytes\d*|string)\b[^)]*\)\s+[^;{]*\b(?:public|external)\b/.test(source) &&
+          !/\babstract\s+contract\b/.test(source);
+        if(javaCandidate||solidityCandidate||statefulSolidity)
+          signatureScores.set(path,statefulSolidity ? 2 : 1);
       }catch{}
     }
   }

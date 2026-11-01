@@ -26,5 +26,22 @@ try {
   assert.deepEqual(focused.paths,[eligible[0]],'an imported lead must remain the only target');
   const outside=await prioritizeSourceCandidates(root,eligible,eligible,[], 'source-1/src/main/java/org/example/NotEligible.java');
   assert.deepEqual(outside.paths,[], 'out-of-scope imported lead must not enter navigation');
+  // Regress 88mph-like Solidity source where state-changing functions are
+  // testable through solidity_sequence but there is no string view/pure method.
+  const solidityEligible:string[]=[];
+  await mkdir(join(root,'source-1/contracts/libs'),{recursive:true});
+  for(let i=0;i<18;i++) {
+    const path='source-1/contracts/libs/Utility'+String(i).padStart(2,'0')+'.sol';
+    solidityEligible.push(path);
+    await writeFile(join(root,path),'pragma solidity ^0.8.0; library Utility'+i+' { function helper() internal pure returns (uint) { return 1; } }');
+  }
+  const stateful='source-1/contracts/Vault.sol';
+  solidityEligible.push(stateful);
+  await writeFile(join(root,stateful),
+    'pragma solidity ^0.8.0; contract Vault { mapping(address => uint) public balances; function deposit(uint amount) external { balances[msg.sender] += amount; } }');
+  const solidityResult=await prioritizeSourceCandidates(root,solidityEligible,solidityEligible,[]);
+  assert.ok(solidityResult.paths.includes(stateful),
+    'concrete stateful Solidity function should reach bounded candidate list ahead of libraries');
+  assert.ok(solidityResult.paths.length<=8,'Solidity navigation must remain bounded');
   console.log('Candidate signature selection regression PASSED');
 }finally{await rm(root,{recursive:true,force:true});}
