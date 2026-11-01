@@ -59,6 +59,15 @@ const {fixtureArguments}=await import("../packages/security-solver/src/solidity-
 assert.deepEqual(fixtureArguments(["uint256","address","bool","string","bytes4"]),["7","$account1",true,"TOMEY_LOCAL_PROBE","0x41414141"]);
 assert.deepEqual(fixtureArguments(["uint256[2]"]),[["7","7"]]);
 assert.equal(fixtureArguments(["CustomContract"]),null);
+const {buildBaselineSequence}=await import("../packages/security-solver/src/solidity-probe-inputs");
+const baselinePlan=buildBaselineSequence([
+  {selector:"State.increment",operation:"send",inputs:["uint256"]},
+  {selector:"State.get",operation:"call",inputs:[]}
+],"State.increment");
+assert.deepEqual(baselinePlan?.constructorArgs,[]);
+assert.deepEqual(baselinePlan?.steps.map(step=>step.operation),["observe","send","observe"]);
+assert.deepEqual(baselinePlan?.steps[1].args,["7"]);
+assert.equal(buildBaselineSequence([{selector:"State.unknown",operation:"send",inputs:["Custom"]}],"State.unknown"),null);
 const {soliditySequenceSchema}=await import("../packages/security-solver/src/solidity-sequence");
 const observational=soliditySequenceSchema.parse({constructorArgs:[],steps:[
   {operation:"observe",function:"value()",args:[]},
