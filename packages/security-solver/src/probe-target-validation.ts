@@ -47,3 +47,21 @@ export async function sourceDeclarationHints(path:string,limit=16):Promise<strin
   }
   return [...found];
 }
+
+
+/** Report only Java declarations matching the one-argument text probe contract. */
+export async function supportedJavaProbeHints(path:string,limit=12):Promise<string[]> {
+  if(!path.endsWith('.java'))return [];
+  const text=await readFile(path,'utf8');
+  if(text.length>512000)return [];
+  const code=sourceCodeOnly(text);
+  const cls=code.match(/\bclass\s+([A-Za-z_$][\w$]*)\b/)?.[1];
+  if(!cls)return [];
+  const found=new Set<string>();
+  const re=/\bpublic\s+static\s+(String|byte\s*\[\s*\])\s+([A-Za-z_$][\w$]*)\s*\(\s*(?:final\s+)?(String|byte\s*\[\s*\])\s+[A-Za-z_$][\w$]*\s*\)\s*\{/g;
+  for(const m of code.matchAll(re)) {
+    found.add(cls+'.'+m[2]);
+    if(found.size>=limit)break;
+  }
+  return [...found];
+}
