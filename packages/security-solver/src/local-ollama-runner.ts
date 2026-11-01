@@ -518,7 +518,21 @@ export async function runLocalAudit(
           if(action.answer==='solidity_sequence') {
             const sequence=soliditySequenceSchema.safeParse(action.sequence);
             if(!sequence.success) {
-              const feedback='Provide a valid declarative Solidity sequence before planning its probe.';
+              let declarations:unknown[]=[];
+              try {
+                const full=await safePath(action.path);
+                const outline=await solidityIndex.outline(full,0,6000);
+                declarations=outline.items.filter((entry:any)=>entry.kind==='FunctionDefinition').map((entry:any)=>({
+                  contract:entry.contract,name:entry.name,signature:entry.signature,visibility:entry.visibility
+                })).slice(0,24);
+              }catch{}
+              const errors=sequence.error.issues.map(issue=>issue.path.join('.')+': '+issue.message).slice(0,6);
+              const feedback='Controller Solidity probe guidance: '+JSON.stringify({errors,declarations,
+                expectedStructure:{constructorArgs:[],steps:[
+                  {operation:'send',function:'stateChangingMethod(type)',args:[],sender:0},
+                  {operation:'call',function:'observableGetter()',args:[],expect:'actual_expected_value'}
+                ]}})+
+                '. Use source-derived ABI argument types and a justified expected value; do not invent a state assertion. Read the declaration/context when unknown.';
               workflow.feedback(feedback);
               await appendFile(logFile,'[PLAN_REJECTED] '+feedback+'\n');
               messages.push({role:'user',content:feedback+' /no_think'});
