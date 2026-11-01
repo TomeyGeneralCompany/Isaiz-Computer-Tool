@@ -105,7 +105,7 @@ export async function createProbeSession(program:SecurityProgram,workspace:strin
       throw error;
     }
     signal?.throwIfAborted();
-    if (["behavior_observed", "behavior_not_observed"].includes(result.status)) completedProbes++;
+    if (["behavior_observed", "behavior_not_observed", "observation_only"].includes(result.status)) completedProbes++;
     else if (["invalid_probe","unsupported_dependencies"].includes(result.status)) unsupportedProbes++;
     else if (["probe_failed","timeout"].includes(result.status)) failedProbes++;
     else {
