@@ -116,8 +116,8 @@ export async function runLocalAudit(
     }
   };
   const actionSchema = limits.verifyPython ? {...auditActionSchema,properties:{...auditActionSchema.properties,...(limits.finalSchema?{result:limits.finalSchema}:{}),sequence:soliditySequenceJsonSchema,
-    action:{type:"string",enum:[...auditActionSchema.properties.action.enum,"verify_source","verify_python",...(workflow?["plan_probe","continue_inspection"]:[])]}}} : {...auditActionSchema,properties:{...auditActionSchema.properties,...(limits.finalSchema?{result:limits.finalSchema}:{})}};
-  const probePrompt = limits.verifyPython ? "\nverify_source tests a named public/exported source function in an isolated runtime; path is .py/.js/.mjs/.cjs/.java/.sol, query is its function name (Class.method for Java, Contract.function for Solidity), and answer is html_reflection or path_construction. Java requires exactly one String/byte[]/CharSequence/StringBuilder/StringBuffer/ByteBuffer/Path/File/URI/Object argument and a supported text/byte/path return; an instance needs a public no-arg constructor. Do not probe void callbacks, interface instances, domain-object arguments, or multi-argument methods. An invalid/unsupported probe is not evidence: choose a different eligible method. Solidity supports constructors, local state-changing send steps, and view/pure call assertions through solidity_sequence. The controller validates the sequence schema; use actual source declarations and expected values grounded in inspected code, not guesses. No arbitrary commands or project build scripts; inspect actual observations and caller context before conclusions. " + soliditySequencePrompt : "";
+    action:{type:"string",enum:[...auditActionSchema.properties.action.enum,"verify_source","verify_python",...(workflow?["plan_probe","probe_intent","continue_inspection"]:[])]}}} : {...auditActionSchema,properties:{...auditActionSchema.properties,...(limits.finalSchema?{result:limits.finalSchema}:{})}};
+  const probePrompt = limits.verifyPython ? "\nPrefer probe_intent for source tests: supply inspected path, the behavior kind in answer, an optional exact function selector in query, and a specific hypothesis. The controller resolves compatible declarations, validates the request, and runs the existing isolated verifier without a second model turn. If several functions match, select one from the controller-provided probeMenu. verify_source tests a named public/exported source function in an isolated runtime; path is .py/.js/.mjs/.cjs/.java/.sol, query is its function name (Class.method for Java, Contract.function for Solidity), and answer is html_reflection or path_construction. Java requires exactly one String/byte[]/CharSequence/StringBuilder/StringBuffer/ByteBuffer/Path/File/URI/Object argument and a supported text/byte/path return; an instance needs a public no-arg constructor. Do not probe void callbacks, interface instances, domain-object arguments, or multi-argument methods. An invalid/unsupported probe is not evidence: choose a different eligible method. Solidity supports constructors, local state-changing send steps, and view/pure call assertions through solidity_sequence. The controller validates the sequence schema; use actual source declarations and expected values grounded in inspected code, not guesses. No arbitrary commands or project build scripts; inspect actual observations and caller context before conclusions. " + soliditySequencePrompt : "";
   const availableTools = limits.verifyPython ? [...tools,{type:"function",function:{
     name:"verify_source",description:probePrompt,parameters:{type:"object",
       properties:{path:{type:"string"},query:{type:"string"},kind:{type:"string"},sequence:soliditySequenceJsonSchema},required:["path","query","kind"]},
@@ -363,6 +363,22 @@ export async function runLocalAudit(
             }
           }
         }
+        const automaticProbe=action.action==='probe_intent';
+        if(automaticProbe) {
+          action.action='plan_probe';
+          if(!action.query.trim() && ['html_reflection','path_construction'].includes(action.answer)) {
+            try {
+              const full=await safePath(action.path);
+              const choices=full.endsWith('.java')
+                ? await supportedJavaProbeHints(full,24)
+                : (await probeChoices(full,action.answer as 'html_reflection'|'path_construction',24)).map(choice=>choice.selector);
+              if(choices.length===1) {
+                action.query=choices[0];
+                await appendFile(logFile,'[PROBE_INTENT_RESOLVED] '+JSON.stringify({path:action.path,query:action.query,kind:action.answer})+'\\n');
+              }
+            }catch{}
+          }
+        }
         if(constraints && Object.entries(constraints).some(([key,values])=>!values!.includes(action[key as "action"|"path"|"query"|"answer"]))) {
           await appendFile(logFile,"[ACTION_REJECTED] "+JSON.stringify({action,constraints})+"\n");
           messages.push({role:"user",content:"That action is not available in the current task stage. Use the current response schema and controller progress. No tool was executed. /no_think"});
@@ -549,10 +565,17 @@ export async function runLocalAudit(
           rejectedRequiredProbeFinals=0;
           workflow.plan(action);
           await persistMemory();
-          messages.push({role:"assistant",content:message.content});
           if(action.hypothesis)hypotheses.push({turn:turn+1,path:action.path,statement:action.hypothesis});
-          await appendFile(logFile,'[PROBE_PLANNED] '+JSON.stringify(action)+'\n');
-          continue;
+          await appendFile(logFile,'[PROBE_PLANNED] '+JSON.stringify(action)+'\\n');
+          if(!automaticProbe) {
+            messages.push({role:"assistant",content:message.content});
+            continue;
+          }
+          // Intent mode is one-step: the exact accepted plan becomes the verifier
+          // request, never a second Qwen-generated reconstruction.
+          action.action='verify_source';
+          message={role:'assistant',content:JSON.stringify(action)};
+          await appendFile(logFile,'[PROBE_INTENT_EXECUTE] '+JSON.stringify({path:action.path,query:action.query,kind:action.answer})+'\\n');
         }
         if(action.hypothesis)hypotheses.push({turn:turn+1,path:action.path,statement:action.hypothesis});
         await appendFile(logFile,"[MODEL_ACTION] "+JSON.stringify(action)+"\n");
