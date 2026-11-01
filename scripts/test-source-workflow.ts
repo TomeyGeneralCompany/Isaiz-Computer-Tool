@@ -67,6 +67,17 @@ const observational=soliditySequenceSchema.parse({constructorArgs:[],steps:[
 ]});
 assert.equal(observational.steps.length,3);
 
+const {SoliditySourceIndex}=await import("../packages/security-solver/src/solidity-source-index");
+const solidityProbeDir=await mkdtemp(join(tmpdir(),"autohack-solidity-intent-"));
+try {
+  const contract=join(solidityProbeDir,"State.sol");
+  await writeFile(contract,"pragma solidity ^0.8.20; contract State { uint256 private counter; function increment(uint256 value) public { counter += value; } function get() public view returns (uint256) { return counter; } }");
+  const index=new SoliditySourceIndex(solidityProbeDir);
+  const menu=await index.probeMenu(contract);
+  assert.ok(menu.some(item=>item.selector==="State.increment" && item.operation==="send" && item.inputs[0]==="uint256"));
+  assert.ok(menu.some(item=>item.selector==="State.get" && item.operation==="call" && item.inputs.length===0));
+} finally { await rm(solidityProbeDir,{recursive:true,force:true}); }
+
 // Shared controller choice menu must cover Python, JS, and Java source.
 const {probeChoices}=await import("../packages/security-solver/src/probe-target-validation");
 const choiceDir=await mkdtemp(join(tmpdir(),"autohack-probe-choice-"));
