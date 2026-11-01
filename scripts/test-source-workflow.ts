@@ -18,6 +18,28 @@ try {
   await writeFile(source,"public class ContractState { public long getTotalTronPowerWeight(){return 1L;} public static String normalize(String input){return input.trim();} }");
   assert.equal(await javaProbeSelectorCompatible(source,"ContractState.getTotalTronPowerWeight"),false,"unsupported getter must not reach verifier");
   assert.equal(await javaProbeSelectorCompatible(source,"ContractState.normalize"),true,"valid one-input text method should reach verifier");
+
+  const extended=join(javaProbeFixtureDir,"Extended.java");
+  await writeFile(extended,`public class Extended {
+    public Extended() {}
+    public static byte[] bytes(byte[] value) { return value; }
+    public static CharSequence buffer(ByteBuffer value) { return value.toString(); }
+    public StringBuilder format(StringBuilder value) { return value; }
+    public Object path(Path value) { return value.toString(); }
+    public URI uri(URI value) { return value; }
+    public long noArg() { return 0; }
+    public int number(String value) { return 1; }
+    private String hidden(String value) { return value; }
+  }`);
+  for(const name of ["bytes","buffer","format","path","uri"])
+    assert.equal(await javaProbeSelectorCompatible(extended,"Extended."+name),true,"supported verifier type: "+name);
+  for(const name of ["noArg","number","hidden"])
+    assert.equal(await javaProbeSelectorCompatible(extended,"Extended."+name),false,"unsupported verifier signature: "+name);
+  const nonConstructible=join(javaProbeFixtureDir,"NonConstructible.java");
+  await writeFile(nonConstructible,"public class NonConstructible { private NonConstructible(){} public String method(String value){return value;} public static String staticMethod(String value){return value;} }");
+  assert.equal(await javaProbeSelectorCompatible(nonConstructible,"NonConstructible.method"),false);
+  assert.equal(await javaProbeSelectorCompatible(nonConstructible,"NonConstructible.staticMethod"),true);
+
 } finally { await rm(javaProbeFixtureDir,{recursive:true,force:true}); }
 
 const corrected=decodeAuditAction(JSON.stringify({action:"plan_probe",file:"source-1/Fixture.java",method:"Fixture.normalize",kind:"html_reflection",hypothesis:"Check whether input is reflected and whether output is safely encoded."}),true);
