@@ -1,7 +1,7 @@
 import {modelProfile} from './model-profile';
 import { InvestigationWorkflow } from "./investigation-workflow";
 import {guidedSourceProbe} from './source-guided-probes';
-import {declaredProbeTarget, sourceDeclarationHints} from './probe-target-validation';
+import {declaredProbeTarget, sourceDeclarationHints, supportedJavaProbeHints} from './probe-target-validation';
 import { postQwenAgentJson } from "./qwen-agent-transport";
 import { AuditAllowance } from "./audit-allowance";
 import { AuditNavigation } from "./audit-navigation";
@@ -442,7 +442,7 @@ export async function runLocalAudit(
               let hints:string[]=[];
               try {
                 const target=await safePath(action.path);
-                if(!action.path.endsWith('.sol'))hints=await sourceDeclarationHints(target);
+                if(!action.path.endsWith('.sol'))hints=action.path.endsWith('.java') ? await supportedJavaProbeHints(target) : await sourceDeclarationHints(target);
               }catch{}
               const suffix=hints.length ? ' Declared method names in this file (eligibility not yet verified): '+hints.join(', ')+'. Select only an actually eligible signature.' :
                 ' Inspect actual declarations'+(action.path.endsWith('.sol')?' with outline_solidity':' in the source')+'; do not guess names.';
