@@ -22,3 +22,28 @@ export function fixtureArguments(types:string[]):unknown[]|null {
   }
   return values;
 }
+
+export interface SolidityProbeDeclaration {
+  selector:string;operation:'constructor'|'send'|'call';inputs:string[];
+}
+/** Construct a local baseline/transition test from declarations, not imagined
+ * state expectations. Unresolved ABI setup returns null. */
+export function buildBaselineSequence(menu:SolidityProbeDeclaration[],selectedSelector:string) {
+  const selected=menu.find(entry=>entry.selector===selectedSelector && entry.operation==='send');
+  if(!selected)return null;
+  const contract=selectedSelector.split('.')[0];
+  const declarations=menu.filter(entry=>entry.selector.startsWith(contract+'.'));
+  const constructors=declarations.filter(entry=>entry.operation==='constructor');
+  if(constructors.length>1)return null;
+  const constructorArgs=constructors.length?fixtureArguments(constructors[0].inputs):[];
+  const sendArgs=fixtureArguments(selected.inputs);
+  const read=declarations.find(entry=>entry.operation==='call' && fixtureArguments(entry.inputs)!==null);
+  const readArgs=read?fixtureArguments(read.inputs):null;
+  if(!read || !constructorArgs || !sendArgs || !readArgs)return null;
+  const signature=(entry:SolidityProbeDeclaration)=>entry.selector.split('.').at(-1)+'('+entry.inputs.join(',')+')';
+  return {constructorArgs,steps:[
+    {operation:'observe' as const,function:signature(read),args:readArgs},
+    {operation:'send' as const,function:signature(selected),args:sendArgs},
+    {operation:'observe' as const,function:signature(read),args:readArgs}
+  ]};
+}
