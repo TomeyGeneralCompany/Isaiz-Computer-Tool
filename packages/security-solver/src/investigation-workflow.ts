@@ -30,6 +30,7 @@ export class InvestigationWorkflow {
   private decisions:Array<{path:string;question:string;offset:number}>=[];
   private priorNotes:string[]=[];
   private pageTurns=0;
+  private repeatedCompletedReads=0;
   private continuations=new Map<string,number>();
   private readSpans=new Set<string>();
   private sourceProgress=0;
@@ -56,7 +57,16 @@ export class InvestigationWorkflow {
     this.decisions=this.decisions.slice(-32);
     this.state.inspections=0;this.pageTurns=0;this.lastFeedback='';
   }
+  repeatedCompletedRead() {
+    // After repeated requests for already completed pages, stop offering the
+    // same inspection tools. The model must give a scoped, evidence-based final
+    // answer; the final validator still rejects unsupported findings.
+    this.repeatedCompletedReads++;
+    this.feedback('Repeated completed source pages add no evidence. Conclude with a scoped incomplete outcome and findings=[] unless a recorded verified probe supports a finding.');
+  }
   async constraints() {
+    if(this.repeatedCompletedReads>=8 && !this.state.pending && !this.requiredSource)
+      return {action:['final']};
     if(this.pageTurns>=8)this.state.inspections=Math.max(6,this.state.inspections);
     this.state=await graph.invoke(this.state);
     if(this.requiredSource)return {action:['read_file'],path:[this.requiredSource]};
@@ -167,7 +177,7 @@ export class InvestigationWorkflow {
         for(const span of spans) {
           if(typeof span.path!=='string'||!Number.isSafeInteger(span.start)||!Number.isSafeInteger(span.end)||span.end<=span.start)continue;
           const id=JSON.stringify([span.path,span.start,span.end]);
-          if(!this.readSpans.has(id)){this.readSpans.add(id);this.sourceProgress++;}
+          if(!this.readSpans.has(id)){this.readSpans.add(id);this.sourceProgress++;this.repeatedCompletedReads=0;}
         }
       }
       if(output.includes('Repeated inspection action'))this.state.inspections=6;
@@ -185,5 +195,5 @@ export class InvestigationWorkflow {
     } else this.state.inspections=Math.max(6,this.state.inspections);
   }
   feedback(message:string,reopen=false) {this.lastFeedback=message.slice(0,400);if(reopen){this.state.inspections=0;this.pageTurns=0;}}
-  snapshot() {return {outlinedPaths:[...this.outlinedPaths],...this.state,pageTurns:this.pageTurns,sourceProgress:this.sourceProgress,decisions:this.decisions,priorNotes:this.priorNotes,readPaths:[...this.readPaths],observations:this.observations};}
+  snapshot() {return {repeatedCompletedReads:this.repeatedCompletedReads,outlinedPaths:[...this.outlinedPaths],...this.state,pageTurns:this.pageTurns,sourceProgress:this.sourceProgress,decisions:this.decisions,priorNotes:this.priorNotes,readPaths:[...this.readPaths],observations:this.observations};}
 }
