@@ -6,6 +6,9 @@ import {mkdtemp,writeFile,readFile,mkdir,rm,chmod} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 
+// Exercise compatible candidate ranking during the existing workflow acceptance suite.
+await import("./test-source-candidate-selection");
+
 // Recovery regex regression: the source must use single-escaped regex tokens.
 const recoveryRegexSource = await readFile(new URL("../packages/security-solver/src/local-ollama-runner.ts", import.meta.url), "utf8");
 assert.ok(recoveryRegexSource.includes(String.raw`/\b([A-Za-z_$][\w$]*\.[A-Za-z_$][\w$]*)\b/`), "recovery must match real function selectors");
