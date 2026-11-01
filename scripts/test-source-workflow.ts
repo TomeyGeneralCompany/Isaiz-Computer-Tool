@@ -90,6 +90,7 @@ const controllerText=await readFile(join(process.cwd(),"packages/security-solver
 assert.ok(controllerText.includes("[CONTEXT_RECOVERY]"),"repeated completed source pages must recover rather than end a production hunt");
 assert.ok(controllerText.includes("maxItems:0"),"without recorded case IDs, typed final schema must prohibit invented findings");
 assert.ok(controllerText.includes("[PROBE_RECOVERY_REQUIRED]"),"an invented case with a declared compatible candidate must require probe planning");
+assert.ok(controllerText.includes("[JAVA_PROBE_ELIGIBLE_HINTS]"),"invalid Java probes should yield compatible signature hints");
 assert.ok(controllerText.includes("[REJECTED_FINAL_PROBE_HANDOFF]"),"required-test final rejections must guide a declared probe");
 assert.ok(workflowText.includes("this.nextOffsets.values()].some(offset=>offset!==null)"),'hypothesis-stage source navigation must retain unfinished page access');
 
