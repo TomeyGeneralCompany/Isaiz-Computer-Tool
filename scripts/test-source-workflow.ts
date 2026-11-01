@@ -49,6 +49,11 @@ assert.equal(corrected.answer,"html_reflection");
 const incomplete=decodeAuditAction(JSON.stringify({action:"plan_probe",file:"source-1/Fixture.java",method:"Fixture.normalize",kind:"html_reflection"}),true);
 assert.equal(incomplete.hypothesis,"","missing hypothesis must remain visible to workflow validation");
 assert.throws(()=>decodeAuditAction(JSON.stringify({action:"plan_probe",file:"source-1/Fixture.java",method:"Fixture.normalize",kind:"html_reflection",shell:"unsafe"}),true));
+const intent=decodeAuditAction(JSON.stringify({action:"probe_intent",file:"source-1/Fixture.java",kind:"html_reflection",hypothesis:"Check whether input remains unescaped in HTML output."}),true);
+assert.equal(intent.action,"probe_intent");
+assert.equal(intent.path,"source-1/Fixture.java");
+assert.equal(intent.answer,"html_reflection");
+
 
 // Shared controller choice menu must cover Python, JS, and Java source.
 const {probeChoices}=await import("../packages/security-solver/src/probe-target-validation");
@@ -68,6 +73,7 @@ try {
 const revisedRunner=await readFile(new URL("../packages/security-solver/src/local-ollama-runner.ts",import.meta.url),"utf8");
 assert.ok(revisedRunner.includes("[PROBE_INTENT_MENU]"));
 assert.ok(revisedRunner.includes("Controller Solidity probe guidance:"));
+assert.ok(revisedRunner.includes("[PROBE_INTENT_EXECUTE]"),"controller should perform accepted probe without a second model turn");
 
 // Recovery regex regression: the source must use single-escaped regex tokens.
 const recoveryRegexSource = await readFile(new URL("../packages/security-solver/src/local-ollama-runner.ts", import.meta.url), "utf8");
@@ -369,7 +375,7 @@ try {
         falsification:"No production exploitability is claimed; only owned fixture behavior was measured."
       }]}));
     }
-    if(next.action==='verify_source')next={...next,action:'plan_probe',hypothesis:'Owned fixture behavior may violate the stated requirement; an escaped value or matching assertion would disprove it.'};
+    if(next.action==='verify_source')next={...next,action:turn===4 && source.endsWith('.cjs')?'probe_intent':'plan_probe',hypothesis:'Owned fixture behavior may violate the stated requirement; an escaped value or matching assertion would disprove it.'};
     res.setHeader("Content-Type","application/json");
     res.end(JSON.stringify({message:{role:"assistant",content:JSON.stringify(next)}}));
   });
