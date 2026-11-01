@@ -400,7 +400,7 @@ try {
         falsification:"No production exploitability is claimed; only owned fixture behavior was measured."
       }]}));
     }
-    if(next.action==='verify_source')next={...next,action:'plan_probe',hypothesis:'Owned fixture behavior may violate the stated requirement; an escaped value or matching assertion would disprove it.'};
+    if(next.action==='verify_source')next={...next,action:turn===4 && source==='render.cjs'?'probe_intent':'plan_probe',hypothesis:'Owned fixture behavior may violate the stated requirement; an escaped value or matching assertion would disprove it.'};
     res.setHeader("Content-Type","application/json");
     res.end(JSON.stringify({message:{role:"assistant",content:JSON.stringify(next)}}));
   });
