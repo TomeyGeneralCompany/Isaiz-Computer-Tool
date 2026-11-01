@@ -55,6 +55,14 @@ assert.equal(intent.path,"source-1/Fixture.java");
 assert.equal(intent.answer,"html_reflection");
 
 
+const {soliditySequenceSchema}=await import("../packages/security-solver/src/solidity-sequence");
+const observational=soliditySequenceSchema.parse({constructorArgs:[],steps:[
+  {operation:"observe",function:"value()",args:[]},
+  {operation:"send",function:"increment()",args:[]},
+  {operation:"observe",function:"value()",args:[]}
+]});
+assert.equal(observational.steps.length,3);
+
 // Shared controller choice menu must cover Python, JS, and Java source.
 const {probeChoices}=await import("../packages/security-solver/src/probe-target-validation");
 const choiceDir=await mkdtemp(join(tmpdir(),"autohack-probe-choice-"));
