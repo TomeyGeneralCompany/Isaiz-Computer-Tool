@@ -83,3 +83,21 @@ export async function javaProbeSelectorCompatible(path:string,selector:string):P
   if(!path.endsWith('.java'))return false;
   return (await supportedJavaProbeHints(path,256)).includes(selector);
 }
+
+
+export type ProbeChoice={selector:string;kind:'html_reflection'|'path_construction'|'solidity_sequence';format:string};
+/** Shared source-derived probe menu. A choice describes a supported request;
+ * only the isolated verifier determines whether it executes successfully. */
+export async function probeChoices(path:string,kind:'html_reflection'|'path_construction'|'solidity_sequence',limit=24):Promise<ProbeChoice[]> {
+  if(kind==='solidity_sequence')return [];
+  const names=path.endsWith('.java') ? await supportedJavaProbeHints(path,limit) : await sourceDeclarationHints(path,limit);
+  const eligible:string[]=[];
+  for(const name of names) {
+    if(path.endsWith('.java') || await declaredProbeTarget(path,name))eligible.push(name);
+    if(eligible.length>=limit)break;
+  }
+  return eligible.map(selector=>({selector,kind,format:JSON.stringify({
+    action:'plan_probe',path:'<inspected workspace path>',query:selector,answer:kind,
+    hypothesis:'Specific suspected behavior and a disconfirming observation'
+  })}));
+}
