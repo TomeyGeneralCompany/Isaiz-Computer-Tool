@@ -1,5 +1,5 @@
 import {modelProfile} from './model-profile';
-import {fixtureArguments} from './solidity-probe-inputs';
+import {buildBaselineSequence} from './solidity-probe-inputs';
 import { InvestigationWorkflow } from "./investigation-workflow";
 import {guidedSourceProbe} from './source-guided-probes';
 import {declaredProbeTarget, sourceDeclarationHints, supportedJavaProbeHints, javaProbeSelectorCompatible, probeChoices} from './probe-target-validation';
@@ -375,25 +375,10 @@ export async function runLocalAudit(
             try {
               const full=await safePath(action.path);
               const menu=await solidityIndex.probeMenu(full,64);
-              const selected=menu.find(entry=>entry.selector===action.query && entry.operation==='send');
-              const contract=selected?.selector.split('.')[0];
-              const declarations=menu.filter(entry=>entry.selector.startsWith(contract+'.'));
-              const constructors=declarations.filter(entry=>entry.operation==='constructor');
-              const read=declarations.find(entry=>entry.operation==='call' && fixtureArguments(entry.inputs)!==null);
-              const constructorArgs=constructors.length===1?fixtureArguments(constructors[0].inputs)
-                : constructors.length===0?[]:null;
-              const sendArgs=selected?fixtureArguments(selected.inputs):null;
-              const readArgs=read?fixtureArguments(read.inputs):null;
-              // Build local observational transactions only when every ABI
-              // parameter has a deterministic, bounded offline test value.
-              if(selected && read && constructorArgs && sendArgs && readArgs) {
-                const fn=read.selector.split('.').at(-1)!+'('+read.inputs.join(',')+')';
-                action.sequence={constructorArgs,steps:[
-                  {operation:'observe',function:fn,args:readArgs},
-                  {operation:'send',function:selected.selector.split('.').at(-1)!+'('+selected.inputs.join(',')+')',args:sendArgs},
-                  {operation:'observe',function:fn,args:readArgs}
-                ]};
-                await appendFile(logFile,'[PROBE_BASELINE_CONSTRUCTED] '+JSON.stringify({path:action.path,query:action.query,read:read.selector})+'\\n');
+              const baseline=buildBaselineSequence(menu,action.query);
+              if(baseline) {
+                action.sequence=baseline;
+                await appendFile(logFile,'[PROBE_BASELINE_CONSTRUCTED] '+JSON.stringify({path:action.path,query:action.query,read:baseline.steps[0].function})+'\\n');
               }
             }catch{}
           }
