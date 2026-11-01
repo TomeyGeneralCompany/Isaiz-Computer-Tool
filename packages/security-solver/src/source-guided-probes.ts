@@ -9,6 +9,7 @@
 export type GuidedProbe={path:string;functionName:string;kind:'html_reflection';hypothesis:string};
 export function guidedSourceProbe(path:string,code:string):GuidedProbe|null {
   if(path.endsWith('.java') && code.length<=256000) {
+    // Only offer methods matching the isolated Java text probe's one-input contract.
     const className=path.split('/').at(-1)!.replace(/\.java$/,'');
     const declaration=/\bpublic\s+(?:static\s+)?(?:java\.lang\.)?String\s+([A-Za-z][A-Za-z0-9_]{0,79})\s*\(\s*(?:final\s+)?(?:java\.lang\.)?String\s+[A-Za-z_$][\w$]*\s*\)\s*\{/g;
     for(const match of code.matchAll(declaration)) {

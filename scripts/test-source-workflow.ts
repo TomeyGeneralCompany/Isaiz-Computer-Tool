@@ -75,6 +75,12 @@ for(const [file,actual,missing] of [["Target.java","Target.actual","Target.funct
   assert.equal(await declaredProbeTarget(join(probeFixtures,file),missing),false,"invented probe name in "+file);
 }
 assert.deepEqual(await sourceDeclarationHints(join(probeFixtures,"Target.java")),["Target.actual"],"Java hints must use real class methods");
+const {supportedJavaProbeHints}=await import("../packages/security-solver/src/probe-target-validation");
+await writeFile(join(probeFixtures,"Signatures.java"),
+  "public class Signatures { public long getTotalTronPowerWeight() { return 1L; } public static String normalize(String input) { return input.trim(); } }");
+assert.deepEqual(await supportedJavaProbeHints(join(probeFixtures,"Signatures.java")),
+  ["Signatures.normalize"],"Java probe handoff must exclude incompatible zero-argument methods");
+
 assert.deepEqual(await sourceDeclarationHints(join(probeFixtures,"target.py")),["actual"],"Python hints must use declared functions");
 assert.deepEqual(await sourceDeclarationHints(join(probeFixtures,"target.js")),[],"JS hint extraction must not invent methods for unsupported exports syntax");
 await writeFile(join(probeFixtures,"modern.js"),"export function actual(value) { return value; }");
@@ -84,6 +90,7 @@ const controllerText=await readFile(join(process.cwd(),"packages/security-solver
 assert.ok(controllerText.includes("[CONTEXT_RECOVERY]"),"repeated completed source pages must recover rather than end a production hunt");
 assert.ok(controllerText.includes("maxItems:0"),"without recorded case IDs, typed final schema must prohibit invented findings");
 assert.ok(controllerText.includes("[PROBE_RECOVERY_REQUIRED]"),"an invented case with a declared compatible candidate must require probe planning");
+assert.ok(controllerText.includes("[JAVA_PROBE_ELIGIBLE_HINTS]"),"invalid Java probes should yield compatible signature hints");
 assert.ok(controllerText.includes("[REJECTED_FINAL_PROBE_HANDOFF]"),"required-test final rejections must guide a declared probe");
 assert.ok(workflowText.includes("this.nextOffsets.values()].some(offset=>offset!==null)"),'hypothesis-stage source navigation must retain unfinished page access');
 

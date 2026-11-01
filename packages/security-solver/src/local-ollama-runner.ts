@@ -1,7 +1,7 @@
 import {modelProfile} from './model-profile';
 import { InvestigationWorkflow } from "./investigation-workflow";
 import {guidedSourceProbe} from './source-guided-probes';
-import {declaredProbeTarget, sourceDeclarationHints} from './probe-target-validation';
+import {declaredProbeTarget, sourceDeclarationHints, supportedJavaProbeHints} from './probe-target-validation';
 import { postQwenAgentJson } from "./qwen-agent-transport";
 import { AuditAllowance } from "./audit-allowance";
 import { AuditNavigation } from "./audit-navigation";
@@ -442,7 +442,7 @@ export async function runLocalAudit(
               let hints:string[]=[];
               try {
                 const target=await safePath(action.path);
-                if(!action.path.endsWith('.sol'))hints=await sourceDeclarationHints(target);
+                if(!action.path.endsWith('.sol'))hints=action.path.endsWith('.java') ? await supportedJavaProbeHints(target) : await sourceDeclarationHints(target);
               }catch{}
               const suffix=hints.length ? ' Declared method names in this file (eligibility not yet verified): '+hints.join(', ')+'. Select only an actually eligible signature.' :
                 ' Inspect actual declarations'+(action.path.endsWith('.sol')?' with outline_solidity':' in the source')+'; do not guess names.';
@@ -776,6 +776,16 @@ export async function runLocalAudit(
         const fitted=fitOutput(output);
         const responseMessage=fitted.message;
         messages.push(responseMessage);
+        if(workflow && probeStatus==='invalid_probe' && String(call.function.arguments?.path || '').endsWith('.java')) {
+          try {
+            const full=await safePath(String(call.function.arguments?.path));
+            const eligible=await supportedJavaProbeHints(full);
+            if(eligible.length) {
+              messages.push({role:'user',content:'The previous Java probe signature was rejected by the isolated verifier. Compatible one-input text/byte methods declared in this same file: '+eligible.join(', ')+'. Select a relevant method and supported probe kind only if its source behavior warrants a test; otherwise continue source inspection. /no_think'});
+              await appendFile(logFile,'[JAVA_PROBE_ELIGIBLE_HINTS] '+JSON.stringify({path:call.function.arguments?.path,selectors:eligible})+'\\n');
+            }
+          }catch{}
+        }
         // Give the model actual indexed Solidity declarations after a completed
         // paginated read. This does not plan or execute a probe: candidates still
         // have to pass the existing declaration, workflow and verifier gates.
