@@ -349,6 +349,20 @@ export async function runLocalAudit(
           }
           throw new Error("Ollama did not return a valid read-only JSON action; no tool was executed");
         }
+        // The workflow owns the exact pending verifier request. Do not ask
+        // Qwen to reconstruct it after a correct plan has been accepted.
+        if(workflow && action.action==='verify_source') {
+          const pending=workflow.snapshot().pending;
+          if(pending) {
+            const changed=action.path!==pending.path || action.query!==pending.query ||
+              action.answer!==pending.answer || JSON.stringify(action.sequence)!==JSON.stringify(pending.sequence);
+            if(changed) {
+              action.path=pending.path;action.query=pending.query;
+              action.answer=pending.answer;action.sequence=pending.sequence;
+              await appendFile(logFile,'[PROBE_REQUEST_CANONICALIZED] '+JSON.stringify({path:action.path,query:action.query,kind:action.answer})+'\\n');
+            }
+          }
+        }
         if(constraints && Object.entries(constraints).some(([key,values])=>!values!.includes(action[key as "action"|"path"|"query"|"answer"]))) {
           await appendFile(logFile,"[ACTION_REJECTED] "+JSON.stringify({action,constraints})+"\n");
           messages.push({role:"user",content:"That action is not available in the current task stage. Use the current response schema and controller progress. No tool was executed. /no_think"});
@@ -415,8 +429,10 @@ export async function runLocalAudit(
           await appendFile(logFile,'[WORKFLOW_REJECTED] '+workflowError+'\n');
           if(action.action==='plan_probe' && workflow!.rejectedRequiredProbePlan())
             await appendFile(logFile,'[REQUIRED_PROBE_PLAN_RELEASED] Repeated invalid plans; reopen investigation\n');
-          messages.push({role:'user',content:'Controller rejected the last action: '+workflowError+
-            '. Do not repeat the rejected probe. Inspect a new call site, use recorded evidence, or give an evidence-based final finding or incomplete outcome. /no_think'});
+          const template=action.action==='plan_probe' ?
+            ' Correct probe format: '+JSON.stringify({action:'plan_probe',path:action.path,query:action.query,answer:action.answer,hypothesis:'Describe suspected behavior and the observation that would disprove it.'})+'.' : '';
+          messages.push({role:'user',content:'Controller rejected the last action: '+workflowError+template+
+            ' Do not repeat the rejected probe. Inspect a new call site, use recorded evidence, or give an evidence-based final finding or incomplete outcome. /no_think'});
           continue;
         }
         consecutiveWorkflowRejections=0;
