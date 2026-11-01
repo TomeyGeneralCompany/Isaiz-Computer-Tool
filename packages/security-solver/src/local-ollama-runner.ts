@@ -583,7 +583,7 @@ export async function runLocalAudit(
           rejectedRequiredProbeFinals=0;
           workflow.plan({...action});
           await persistMemory();
-          if(action.hypothesis)hypotheses.push({turn:turn+1,path:action.path,statement:action.hypothesis});
+          if(!automaticProbe && action.hypothesis)hypotheses.push({turn:turn+1,path:action.path,statement:action.hypothesis});
           await appendFile(logFile,'[PROBE_PLANNED] '+JSON.stringify(action)+'\\n');
           if(!automaticProbe) {
             messages.push({role:"assistant",content:message.content});
