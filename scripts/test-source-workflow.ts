@@ -50,6 +50,25 @@ const incomplete=decodeAuditAction(JSON.stringify({action:"plan_probe",file:"sou
 assert.equal(incomplete.hypothesis,"","missing hypothesis must remain visible to workflow validation");
 assert.throws(()=>decodeAuditAction(JSON.stringify({action:"plan_probe",file:"source-1/Fixture.java",method:"Fixture.normalize",kind:"html_reflection",shell:"unsafe"}),true));
 
+// Shared controller choice menu must cover Python, JS, and Java source.
+const {probeChoices}=await import("../packages/security-solver/src/probe-target-validation");
+const choiceDir=await mkdtemp(join(tmpdir(),"autohack-probe-choice-"));
+try {
+  const py=join(choiceDir,"sample.py");
+  await writeFile(py,"def format_text(value):\n    return '<p>'+value+'</p>'\n");
+  const js=join(choiceDir,"sample.js");
+  await writeFile(js,"export function formatText(value) { return value; }\n");
+  const java=join(choiceDir,"Sample.java");
+  await writeFile(java,"public class Sample { public static String formatText(String value) { return value; } }");
+  assert.ok((await probeChoices(py,"html_reflection")).some(candidate=>candidate.selector==="format_text"));
+  assert.ok((await probeChoices(js,"html_reflection")).some(candidate=>candidate.selector==="formatText"));
+  assert.ok((await probeChoices(java,"html_reflection")).some(candidate=>candidate.selector==="Sample.formatText"));
+  assert.deepEqual(await probeChoices(js,"solidity_sequence"),[]);
+} finally { await rm(choiceDir,{recursive:true,force:true}); }
+const revisedRunner=await readFile(new URL("../packages/security-solver/src/local-ollama-runner.ts",import.meta.url),"utf8");
+assert.ok(revisedRunner.includes("[PROBE_INTENT_MENU]"));
+assert.ok(revisedRunner.includes("Controller Solidity probe guidance:"));
+
 // Recovery regex regression: the source must use single-escaped regex tokens.
 const recoveryRegexSource = await readFile(new URL("../packages/security-solver/src/local-ollama-runner.ts", import.meta.url), "utf8");
 assert.ok(recoveryRegexSource.includes(String.raw`/\b([A-Za-z_$][\w$]*\.[A-Za-z_$][\w$]*)\b/`), "recovery must match real function selectors");
