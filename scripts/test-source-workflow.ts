@@ -372,7 +372,7 @@ try {
     } else {
       if(!caseId) {
         const previous=latestResult();
-        assert.equal(previous?.name,"verify_source","expected a verifier result before constructing a finding");
+        assert.equal(previous?.name,"verify_source","expected a verifier result before constructing a finding, source="+source+" turn="+turn+" recent="+JSON.stringify(request.messages.slice(-5)).slice(0,2500));
         caseId=JSON.parse(previous.output).caseId;
       }
       assert.ok(caseId);
