@@ -554,7 +554,7 @@ export async function runLocalAudit(
           }
           // A single controller-facing handoff for all supported source probes.
           // Unlike model prompts, these choices derive from actual declarations.
-          if(action.answer!=='solidity_sequence' && !action.path.endsWith('.java')) {
+          if(action.answer!=='solidity_sequence' && !action.path.endsWith('.java') && !action.path.endsWith('.sol')) {
             let valid=false;
             let menu:Awaited<ReturnType<typeof probeChoices>>=[];
             try {
