@@ -37,7 +37,18 @@ export function buildBaselineSequence(menu:SolidityProbeDeclaration[],selectedSe
   if(constructors.length>1)return null;
   const constructorArgs=constructors.length?fixtureArguments(constructors[0].inputs):[];
   const sendArgs=fixtureArguments(selected.inputs);
-  const read=declarations.find(entry=>entry.operation==='call' && fixtureArguments(entry.inputs)!==null);
+  const reads=declarations.filter(entry=>entry.operation==='call' && fixtureArguments(entry.inputs)!==null);
+  // A zero-input getter is preferable to an unrelated parameterized read;
+  // these are observations, not invented assertions about correctness.
+  reads.sort((a,b)=>{
+    const rank=(entry:SolidityProbeDeclaration)=>{
+      const name=entry.selector.split('.').at(-1)||'';
+      const getter=/^(?:get[A-Z]|value$|balanceOf$|totalSupply$|owner$|count$|stored$|current)/.test(name);
+      return (entry.inputs.length?4:0)+(getter?0:1);
+    };
+    return rank(a)-rank(b);
+  });
+  const read=reads[0];
   const readArgs=read?fixtureArguments(read.inputs):null;
   if(!read || !constructorArgs || !sendArgs || !readArgs)return null;
   const signature=(entry:SolidityProbeDeclaration)=>entry.selector.split('.').at(-1)+'('+entry.inputs.join(',')+')';
