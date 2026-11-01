@@ -55,6 +55,10 @@ assert.equal(intent.path,"source-1/Fixture.java");
 assert.equal(intent.answer,"html_reflection");
 
 
+const {fixtureArguments}=await import("../packages/security-solver/src/solidity-probe-inputs");
+assert.deepEqual(fixtureArguments(["uint256","address","bool","string","bytes4"]),["7","$account1",true,"TOMEY_LOCAL_PROBE","0x41414141"]);
+assert.deepEqual(fixtureArguments(["uint256[2]"]),[["7","7"]]);
+assert.equal(fixtureArguments(["CustomContract"]),null);
 const {soliditySequenceSchema}=await import("../packages/security-solver/src/solidity-sequence");
 const observational=soliditySequenceSchema.parse({constructorArgs:[],steps:[
   {operation:"observe",function:"value()",args:[]},
