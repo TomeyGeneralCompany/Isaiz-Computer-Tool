@@ -349,6 +349,11 @@ try {
       // Declaration preflight rejects invented function names before the verifier.
       // The model receives the rejection through the controller; its exact prompt may be compacted.
       next=action("verify_source","source-1/"+source,selector,"html_reflection");
+    } else if(stateful && !caseId && latestResult()?.name==='outline_solidity') {
+      // An AST outline is navigation, not a verifier observation. Retry the
+      // declared stateful plan and still require a real verify_source result.
+      next={...action("plan_probe","source-1/"+source,selector,"solidity_sequence"),sequence,
+        hypothesis:"Check whether stored state changes as expected; a differing getter value disproves the expectation."};
     } else {
       if(!caseId) {
         const previous=latestResult();
