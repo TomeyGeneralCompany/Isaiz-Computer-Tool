@@ -1,7 +1,7 @@
 import {modelProfile} from './model-profile';
 import { InvestigationWorkflow } from "./investigation-workflow";
 import {guidedSourceProbe} from './source-guided-probes';
-import {declaredProbeTarget, sourceDeclarationHints, supportedJavaProbeHints, javaProbeSelectorCompatible} from './probe-target-validation';
+import {declaredProbeTarget, sourceDeclarationHints, supportedJavaProbeHints, javaProbeSelectorCompatible, probeChoices} from './probe-target-validation';
 import { postQwenAgentJson } from "./qwen-agent-transport";
 import { AuditAllowance } from "./audit-allowance";
 import { AuditNavigation } from "./audit-navigation";
@@ -491,6 +491,26 @@ export async function runLocalAudit(
                   hypothesis:'Suspected behavior and the observation that would disprove it.'});
               workflow.feedback(feedback);
               await appendFile(logFile,'[PROBE_COMPATIBILITY_REJECTED] '+JSON.stringify({path:action.path,query:action.query,choices})+'\\n');
+              messages.push({role:'user',content:feedback+' /no_think'});
+              continue;
+            }
+          }
+          // A single controller-facing handoff for all supported source probes.
+          // Unlike model prompts, these choices derive from actual declarations.
+          if(action.answer!=='solidity_sequence' && !action.path.endsWith('.java')) {
+            let valid=false;
+            let menu:Awaited<ReturnType<typeof probeChoices>>=[];
+            try {
+              const full=await safePath(action.path);
+              valid=await declaredProbeTarget(full,action.query);
+              if(!valid)menu=await probeChoices(full,action.answer as 'html_reflection'|'path_construction');
+            }catch{}
+            if(!valid) {
+              const feedback='Controller source probe menu: '+JSON.stringify(menu)+
+                '. Choose a selector whose behavior matches your hypothesis, or inspect another function. '+
+                'Do not invent a function or report an unexecuted probe.';
+              workflow.feedback(feedback);
+              await appendFile(logFile,'[PROBE_INTENT_MENU] '+JSON.stringify({path:action.path,kind:action.answer,menu})+'\\n');
               messages.push({role:'user',content:feedback+' /no_think'});
               continue;
             }
