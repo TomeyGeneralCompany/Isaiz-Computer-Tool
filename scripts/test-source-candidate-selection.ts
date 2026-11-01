@@ -24,5 +24,7 @@ try {
   assert.ok(result.paths.length<=8,'retain bounded eight-file navigation');
   const focused=await prioritizeSourceCandidates(root,eligible,eligible,[],eligible[0]);
   assert.deepEqual(focused.paths,[eligible[0]],'an imported lead must remain the only target');
+  const outside=await prioritizeSourceCandidates(root,eligible,eligible,[], 'source-1/src/main/java/org/example/NotEligible.java');
+  assert.deepEqual(outside.paths,[], 'out-of-scope imported lead must not enter navigation');
   console.log('Candidate signature selection regression PASSED');
 }finally{await rm(root,{recursive:true,force:true});}
