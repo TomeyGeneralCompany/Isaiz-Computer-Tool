@@ -50,6 +50,22 @@ assert.deepEqual(await outlineWorkflow.constraints(),{action:["outline_solidity"
   "six Solidity source pages should request a declaration outline");
 assert.notDeepEqual(await outlineWorkflow.constraints(),{action:["outline_solidity"],path:["source-1/Fixture.sol"]},
   "the same file must not force an endless outline loop");
+// PR #88 live TRON DAO regression: repeated completed-page requests were
+// allowed to burn the remaining turns even after source was fully read.
+const repeatWorkflow=new InvestigationWorkflow();
+repeatWorkflow.read('source-1/Large.java');
+repeatWorkflow.observe({action:'read_file',path:'source-1/Large.java',query:'',answer:'',offset:0} as any,
+  JSON.stringify({start:0,end:2000,nextOffset:null}));
+for(let i=0;i<7;i++)repeatWorkflow.repeatedCompletedRead();
+assert.ok((await repeatWorkflow.constraints()).action.includes('read_file'),
+  'a few repeated pages must not preempt valid inspection');
+repeatWorkflow.repeatedCompletedRead();
+assert.deepEqual(await repeatWorkflow.constraints(),{action:['final']},
+  'eight repeated completed reads force a bounded evidence-based final');
+repeatWorkflow.observe({action:'read_file',path:'source-1/Novel.java',query:'',answer:'',offset:0} as any,
+  JSON.stringify({start:0,end:2000,nextOffset:null}));
+assert.ok((await repeatWorkflow.constraints()).action.includes('read_file'),
+  'novel source evidence reopens inspection');
 const evidenceWorkflow=new InvestigationWorkflow();
 for(let i=0;i<6;i++)evidenceWorkflow.observe({action:"read_file",path:"source-1/Example.java",query:"",answer:"",offset:i*10} as any,
   JSON.stringify({start:i*10,end:(i+1)*10,nextOffset:i===5?null:(i+1)*10}));
