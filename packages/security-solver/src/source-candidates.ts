@@ -30,9 +30,9 @@ export async function prioritizeSourceCandidates(root:string,eligible:string[],f
         const source=await readFile(full,'utf8');
         // Match exactly one supported argument and a supported return type;
         // avoid ranking ByteString setters and getters without arguments as probe targets.
-        // Permits ordinary Java modifiers and optional final on the parameter.
+        // Permits concrete Java modifiers and optional final on the parameter.
         const javaCandidate=path.endsWith('.java') &&
-          /\bpublic\s+(?:(?:static|final|synchronized|abstract)\s+)*(?:String|byte\s*\[\s*\]|CharSequence|StringBuilder|StringBuffer|ByteBuffer|Path|File|URI)\s+\w+\s*\(\s*(?:final\s+)?(?:String|byte\s*\[\s*\]|CharSequence|StringBuilder|StringBuffer|ByteBuffer|Path|File|URI|Object)\s+\w+\s*\)/.test(source);
+          /\bpublic\s+(?:(?:static|final|synchronized)\s+)*(?:String|byte\s*\[\s*\]|CharSequence|StringBuilder|StringBuffer|ByteBuffer|Path|File|URI)\s+\w+\s*\(\s*(?:final\s+)?(?:String|byte\s*\[\s*\]|CharSequence|StringBuilder|StringBuffer|ByteBuffer|Path|File|URI|Object)\s+\w+\s*\)/.test(source);
         const solidityCandidate=path.endsWith('.sol') &&
           /\bfunction\s+\w+\s*\(\s*string\b[^)]*\)\s+[^;{]*\b(?:pure|view)\b[^;{]*\breturns\s*\(\s*string\b/.test(source);
         if(javaCandidate||solidityCandidate)signatureScores.set(path,1);
