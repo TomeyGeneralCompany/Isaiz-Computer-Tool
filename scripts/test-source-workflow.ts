@@ -9,6 +9,16 @@ import {join} from "node:path";
 // Exercise compatible candidate ranking during the existing workflow acceptance suite.
 await import("./test-source-candidate-selection");
 
+// Normalize formatting without allowing guessed targets to bypass validation.
+const {decodeAuditAction}=await import("../packages/security-solver/src/local-audit-protocol");
+const corrected=decodeAuditAction(JSON.stringify({action:"plan_probe",file:"source-1/Fixture.java",method:"Fixture.normalize",kind:"html_reflection",hypothesis:"Check whether input is reflected and whether output is safely encoded."}),true);
+assert.equal(corrected.path,"source-1/Fixture.java");
+assert.equal(corrected.query,"Fixture.normalize");
+assert.equal(corrected.answer,"html_reflection");
+const incomplete=decodeAuditAction(JSON.stringify({action:"plan_probe",file:"source-1/Fixture.java",method:"Fixture.normalize",kind:"html_reflection"}),true);
+assert.equal(incomplete.hypothesis,"","missing hypothesis must remain visible to workflow validation");
+assert.throws(()=>decodeAuditAction(JSON.stringify({action:"plan_probe",file:"source-1/Fixture.java",method:"Fixture.normalize",kind:"html_reflection",shell:"unsafe"}),true));
+
 // Recovery regex regression: the source must use single-escaped regex tokens.
 const recoveryRegexSource = await readFile(new URL("../packages/security-solver/src/local-ollama-runner.ts", import.meta.url), "utf8");
 assert.ok(recoveryRegexSource.includes(String.raw`/\b([A-Za-z_$][\w$]*\.[A-Za-z_$][\w$]*)\b/`), "recovery must match real function selectors");
