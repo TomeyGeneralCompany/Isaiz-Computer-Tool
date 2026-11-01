@@ -65,3 +65,20 @@ export async function supportedJavaProbeHints(path:string,limit=12):Promise<stri
   }
   return [...found];
 }
+
+
+/** Preflight the exact Java method signature before scheduling a supported
+ * one-input reproduction. Unknown signatures remain unapproved, not findings. */
+export async function javaProbeSelectorCompatible(path:string,selector:string):Promise<boolean> {
+  if(!path.endsWith('.java'))return false;
+  const text=await readFile(path,'utf8');
+  if(text.length>512000)return false;
+  const code=sourceCodeOnly(text);
+  const [cls,name,extra]=selector.split('.');
+  if(extra || !cls || !name || !/^[A-Za-z_$][\w$]*$/.test(name))return false;
+  if(!new RegExp('\\bclass\\s+'+cls+'\\b').test(code))return false;
+  const safeName=name.replace(/[$]/g,'\\$&');
+  const declaration=new RegExp('\\bpublic\\s+static\\s+(?:String|byte\\s*\\[\\s*\\])\\s+'+
+    safeName+'\\s*\\(\\s*(?:final\\s+)?(?:String|byte\\s*\\[\\s*\\])\\s+[A-Za-z_$][\\w$]*\\s*\\)\\s*\\{');
+  return declaration.test(code);
+}
