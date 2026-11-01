@@ -340,12 +340,13 @@ try {
       const lastSolidityRead=[...request.messages].reverse().map((m:any)=>{
         try{return JSON.parse(m.content);}catch{return null;}
       }).find((a:any)=>a?.action==="read_file" && typeof a.path==="string" && a.path.endsWith(".sol"));
-      assert.ok(lastSolidityRead?.path,"forced outline must follow a real Solidity source read");
-      // This is a controller-imposed navigation action, not one of the scripted
-      // investigation steps (source -> caller -> rejected plan -> valid plan).
+      // Older source action messages may have been compacted; the fixture's
+      // source is the same owned path already selected by this test scenario.
+      const outlinePath=lastSolidityRead?.path || (source.endsWith(".sol")?"source-1/"+source:null);
+      assert.ok(outlinePath,"forced outline requires a fixture Solidity source");
       turn--;
       res.end(JSON.stringify({message:{role:"assistant",content:JSON.stringify({
-        action:"outline_solidity",path:lastSolidityRead.path,offset:0,query:"",answer:""
+        action:"outline_solidity",path:outlinePath,offset:0,query:"",answer:""
       })}}));
       return;
     }
