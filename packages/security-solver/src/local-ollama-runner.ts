@@ -776,6 +776,16 @@ export async function runLocalAudit(
         const fitted=fitOutput(output);
         const responseMessage=fitted.message;
         messages.push(responseMessage);
+        if(workflow && probeStatus==='invalid_probe' && String(call.function.arguments?.path || '').endsWith('.java')) {
+          try {
+            const full=await safePath(String(call.function.arguments?.path));
+            const eligible=await supportedJavaProbeHints(full);
+            if(eligible.length) {
+              messages.push({role:'user',content:'The previous Java probe signature was rejected by the isolated verifier. Compatible one-input text/byte methods declared in this same file: '+eligible.join(', ')+'. Select a relevant method and supported probe kind only if its source behavior warrants a test; otherwise continue source inspection. /no_think'});
+              await appendFile(logFile,'[JAVA_PROBE_ELIGIBLE_HINTS] '+JSON.stringify({path:call.function.arguments?.path,selectors:eligible})+'\\n');
+            }
+          }catch{}
+        }
         // Give the model actual indexed Solidity declarations after a completed
         // paginated read. This does not plan or execute a probe: candidates still
         // have to pass the existing declaration, workflow and verifier gates.
