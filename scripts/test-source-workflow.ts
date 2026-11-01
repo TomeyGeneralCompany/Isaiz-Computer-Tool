@@ -416,6 +416,22 @@ try {
   const program:any={id:"owned",provider:"immunefi",name:"Owned fixture",scopeSummary:JSON.stringify({policy:"Owned fixture policy; local tests only. ".repeat(300),scopes:[
     {assetType:"SOURCE_CODE",eligibleForBounty:true,assetIdentifier:"https://github.com/fixture/owned"}
   ]})};
+  // Run a real isolated baseline -> send -> observation without fabricated
+  // assertions; observations are evidence but not a reportable discrepancy.
+  const {createProbeSession}=await import("../packages/security-solver/src/source-reproduction");
+  const baselineSession=await createProbeSession(program,fixture,[{directory:fixture,url:"https://github.com/fixture/owned"}]);
+  const baseline=JSON.parse(await baselineSession.probe("Store.sol","Store.set","solidity_sequence",{
+    constructorArgs:["5"],steps:[
+      {operation:"observe",function:"value()",args:[]},
+      {operation:"send",function:"set(uint256)",args:["7"]},
+      {operation:"observe",function:"value()",args:[]}
+    ]
+  }));
+  assert.equal(baseline.status,"observation_only");
+  assert.deepEqual(baseline.observations.steps.filter((step:any)=>step.operation==="observe").map((step:any)=>step.actual),["5","7"]);
+  assert.equal(baseline.caseId,undefined);
+  assert.equal(baselineSession.completedProbes,1);
+
   for(const language of ["javascript","java","solidity","stateful_solidity"]) {
     turn=0;policyOffset=0;policyDone=false;caseId="";evidenceRepairReads=[];stateful=language==="stateful_solidity";
     source=language==="javascript"?"render.cjs":language==="java"?"Render.java":"Render.sol";
