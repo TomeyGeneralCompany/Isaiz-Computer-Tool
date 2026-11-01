@@ -370,6 +370,29 @@ export async function runLocalAudit(
         const automaticProbe=action.action==='probe_intent';
         if(automaticProbe) {
           action.action='plan_probe';
+          if(action.answer==='solidity_sequence' && action.path.endsWith('.sol') && !action.sequence) {
+            try {
+              const full=await safePath(action.path);
+              const menu=await solidityIndex.probeMenu(full,64);
+              const selected=menu.find(entry=>entry.selector===action.query && entry.operation==='send');
+              const contract=selected?.selector.split('.')[0];
+              const declarations=menu.filter(entry=>entry.selector.startsWith(contract+'.'));
+              const constructors=declarations.filter(entry=>entry.operation==='constructor');
+              const read=declarations.find(entry=>entry.operation==='call' && entry.inputs.length===0);
+              // An observational probe is safe to construct without inventing
+              // assertions only when deployment and invocation need no arguments.
+              if(selected && selected.inputs.length===0 && read &&
+                  (constructors.length===0 || constructors.every(entry=>entry.inputs.length===0))) {
+                const fn=read.selector.split('.').at(-1)!+'()';
+                action.sequence={constructorArgs:[],steps:[
+                  {operation:'observe',function:fn,args:[]},
+                  {operation:'send',function:selected.selector.split('.').at(-1)!+'()',args:[]},
+                  {operation:'observe',function:fn,args:[]}
+                ]};
+                await appendFile(logFile,'[PROBE_BASELINE_CONSTRUCTED] '+JSON.stringify({path:action.path,query:action.query,read:read.selector})+'\\n');
+              }
+            }catch{}
+          }
           if(!action.query.trim() && action.answer==='solidity_sequence' && action.path.endsWith('.sol') && action.sequence && typeof action.sequence==='object') {
             try {
               const full=await safePath(action.path);
