@@ -11,6 +11,15 @@ await import("./test-source-candidate-selection");
 
 // Normalize formatting without allowing guessed targets to bypass validation.
 const {decodeAuditAction}=await import("../packages/security-solver/src/local-audit-protocol");
+const {javaProbeSelectorCompatible}=await import("../packages/security-solver/src/probe-target-validation");
+const javaProbeFixtureDir=await mkdtemp(join(tmpdir(),"autohack-java-probe-intent-"));
+try {
+  const source=join(javaProbeFixtureDir,"ContractState.java");
+  await writeFile(source,"public class ContractState { public long getTotalTronPowerWeight(){return 1L;} public static String normalize(String input){return input.trim();} }");
+  assert.equal(await javaProbeSelectorCompatible(source,"ContractState.getTotalTronPowerWeight"),false,"unsupported getter must not reach verifier");
+  assert.equal(await javaProbeSelectorCompatible(source,"ContractState.normalize"),true,"valid one-input text method should reach verifier");
+} finally { await rm(javaProbeFixtureDir,{recursive:true,force:true}); }
+
 const corrected=decodeAuditAction(JSON.stringify({action:"plan_probe",file:"source-1/Fixture.java",method:"Fixture.normalize",kind:"html_reflection",hypothesis:"Check whether input is reflected and whether output is safely encoded."}),true);
 assert.equal(corrected.path,"source-1/Fixture.java");
 assert.equal(corrected.query,"Fixture.normalize");
