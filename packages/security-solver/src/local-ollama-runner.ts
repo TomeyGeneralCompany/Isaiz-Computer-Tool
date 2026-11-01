@@ -641,6 +641,7 @@ export async function runLocalAudit(
           const repeatCount=sourceReadCounts.get(actionKey)||0;
           if(inspection && previous && (turn-previous.turn<=8 || previous.nextOffset===null || repeatCount>=2)) {
             stalledActions++;
+            workflow?.repeatedCompletedRead();
             const instruction = previous.nextOffset != null
               ? `Continue at offset ${previous.nextOffset}, or choose a different file/search.`
               : "This action is complete. Choose a different file/search or proceed to a supported test or evidence-based final answer.";
