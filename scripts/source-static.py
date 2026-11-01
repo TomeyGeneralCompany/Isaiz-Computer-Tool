@@ -11,11 +11,46 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parent.parent
 
+def user_thread_count(proc=Path('/proc'), uid=None):
+    """Linux RLIMIT_NPROC counts *all* threads of the real UID, not sandbox children."""
+    uid = os.getuid() if uid is None else uid
+    total = 0
+    try:
+        for process in proc.iterdir():
+            if not process.name.isdecimal():
+                continue
+            try:
+                status = (process / 'status').read_text()
+                fields = dict(line.split(':', 1) for line in status.splitlines() if ':' in line)
+                real_uid = int(fields['Uid'].split()[0])
+                if real_uid == uid:
+                    total += max(1, int(fields['Threads'].strip()))
+            except (OSError, ValueError, KeyError):
+                # Processes may exit during /proc enumeration.
+                continue
+    except OSError:
+        return None
+    return total or None
+
+
+def scanner_nproc_limit():
+    """Allow 64 scanner tasks beyond the current UID load, respecting host limits."""
+    soft, hard = resource.getrlimit(resource.RLIMIT_NPROC)
+    existing = user_thread_count()
+    desired = max(64, existing + 64 if existing is not None else 512)
+    # Do not raise a limit imposed by the host or operator.
+    for inherited in (soft, hard):
+        if inherited != resource.RLIM_INFINITY:
+            desired = min(desired, inherited)
+    return desired
+
+
 def limits():
     resource.setrlimit(resource.RLIMIT_CPU, (45, 45))
     resource.setrlimit(resource.RLIMIT_AS, (2 * 1024**3, 2 * 1024**3))
     resource.setrlimit(resource.RLIMIT_FSIZE, (8 * 1024**2, 8 * 1024**2))
-    resource.setrlimit(resource.RLIMIT_NPROC, (64, 64))
+    nproc = scanner_nproc_limit()
+    resource.setrlimit(resource.RLIMIT_NPROC, (nproc, nproc))
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
 
 def analyze(repository, engine, target=None):
