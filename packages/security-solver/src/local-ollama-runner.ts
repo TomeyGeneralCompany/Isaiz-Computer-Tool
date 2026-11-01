@@ -255,8 +255,12 @@ export async function runLocalAudit(
         constraints={...constraints,action:constraints.action.filter(name=>name!=='final')};
         await appendFile(logFile,'[EMPTY_FINAL_INVESTIGATE] Require a concrete tool action before another conclusion\n');
       }
+      // A stage permitting plan_probe also permits its controller-executed
+      // equivalent, without changing the underlying workflow validation.
+      if(workflow && constraints?.action?.includes('plan_probe') && !constraints.action.includes('probe_intent'))
+        constraints={...constraints,action:[...constraints.action,'probe_intent']};
       if(workflow && consecutiveWorkflowRejections>=2 && constraints?.action?.includes('plan_probe')) {
-        const otherActions=constraints.action.filter(name=>name!=='plan_probe');
+        const otherActions=constraints.action.filter(name=>name!=='plan_probe' && name!=='probe_intent');
         if(otherActions.length)constraints={...constraints,action:otherActions};
       }
       if(constraints && (JSON.stringify(constraints).length>3000 || Object.entries(constraints).some(([key,values])=>
