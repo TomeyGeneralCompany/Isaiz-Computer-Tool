@@ -1,7 +1,7 @@
 import {modelProfile} from './model-profile';
 import { InvestigationWorkflow } from "./investigation-workflow";
 import {guidedSourceProbe} from './source-guided-probes';
-import {declaredProbeTarget, sourceDeclarationHints, supportedJavaProbeHints} from './probe-target-validation';
+import {declaredProbeTarget, sourceDeclarationHints, supportedJavaProbeHints, javaProbeSelectorCompatible} from './probe-target-validation';
 import { postQwenAgentJson } from "./qwen-agent-transport";
 import { AuditAllowance } from "./audit-allowance";
 import { AuditNavigation } from "./audit-navigation";
@@ -467,6 +467,30 @@ export async function runLocalAudit(
               await appendFile(logFile,'[PLAN_REJECTED] '+feedback+'\n');
               if(workflow.rejectedRequiredProbePlan())
                 await appendFile(logFile,'[REQUIRED_PROBE_PLAN_RELEASED] Repeated undeclared plans; reopen investigation\n');
+              messages.push({role:'user',content:feedback+' /no_think'});
+              continue;
+            }
+          }
+          if(action.path.endsWith('.java')) {
+            let compatible=false;
+            let alternatives:string[]=[];
+            try {
+              const target=await safePath(action.path);
+              compatible=await javaProbeSelectorCompatible(target,action.query);
+              if(!compatible)alternatives=await supportedJavaProbeHints(target);
+            }catch{}
+            if(!compatible) {
+              const choices=alternatives.filter(selector=>selector!==action.query);
+              const feedback='Controller probe compatibility: '+action.query+
+                ' does not have a supported public static one-input text/byte signature. '+
+                (choices.length?'Compatible signatures declared in this file: '+choices.join(', ')+'. ':
+                  'No compatible method was found in this file. Inspect another source candidate. ')+
+                'Only select an alternative if its code matches the behavior you intend to investigate. '+
+                'Valid request shape: '+JSON.stringify({action:'plan_probe',path:action.path,
+                  query:choices[0]||'Class.method',answer:action.answer,
+                  hypothesis:'Suspected behavior and the observation that would disprove it.'});
+              workflow.feedback(feedback);
+              await appendFile(logFile,'[PROBE_COMPATIBILITY_REJECTED] '+JSON.stringify({path:action.path,query:action.query,choices})+'\\n');
               messages.push({role:'user',content:feedback+' /no_think'});
               continue;
             }

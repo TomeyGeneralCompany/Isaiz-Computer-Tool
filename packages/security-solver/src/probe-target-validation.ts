@@ -49,19 +49,37 @@ export async function sourceDeclarationHints(path:string,limit=16):Promise<strin
 }
 
 
-/** Report only Java declarations matching the one-argument text probe contract. */
-export async function supportedJavaProbeHints(path:string,limit=12):Promise<string[]> {
+/** Java declarations eligible for the fixed reproduction adapter's one-input API.
+ * Runtime compilation and reflection remain authoritative.
+ * This inspects source; it never executes the target. */
+export async function supportedJavaProbeHints(path:string,limit=32):Promise<string[]> {
   if(!path.endsWith('.java'))return [];
   const text=await readFile(path,'utf8');
-  if(text.length>512000)return [];
+  if(text.length>256000)return [];
   const code=sourceCodeOnly(text);
-  const cls=code.match(/\bclass\s+([A-Za-z_$][\w$]*)\b/)?.[1];
-  if(!cls)return [];
-  const found=new Set<string>();
-  const re=/\bpublic\s+static\s+(String|byte\s*\[\s*\])\s+([A-Za-z_$][\w$]*)\s*\(\s*(?:final\s+)?(String|byte\s*\[\s*\])\s+[A-Za-z_$][\w$]*\s*\)\s*\{/g;
-  for(const m of code.matchAll(re)) {
-    found.add(cls+'.'+m[2]);
-    if(found.size>=limit)break;
+  const cls=path.split(/[\\/]/).at(-1)!.slice(0,-5);
+  if(!/^[A-Za-z_$][\w$]*$/.test(cls))return [];
+  if(!new RegExp('\\bpublic\\s+(?:(?:final|abstract)\\s+)?class\\s+'+cls+'\\b').test(code))return [];
+  const types='(?:String|byte\\s*\\[\\s*\\]|CharSequence|StringBuilder|StringBuffer|ByteBuffer|Path|File|URI|Object)';
+  // Reflection only selects public one-parameter methods. Match the same
+  // declared input and output types as java-probe.py's runtime adapter.
+  const re=new RegExp('\\bpublic\\s+((?:(?:static|final|synchronized)\\s+)*)('+types+')\\s+([A-Za-z_$][\\w$]*)\\s*\\(\\s*(?:final\\s+)?'+types+'\\s+[A-Za-z_$][\\w$]*\\s*\\)\\s*(?:throws\\s+[\\w.,\\s]+)?\\s*\\{','g');
+  const constructors=[...code.matchAll(new RegExp('\\b(?:public|protected|private)\\s+'+cls+'\\s*\\(', 'g'))];
+  const hasExplicitConstructor=constructors.length>0;
+  const hasPublicNoArg=!hasExplicitConstructor || new RegExp('\\bpublic\\s+'+cls+'\\s*\\(\\s*\\)').test(code);
+  const eligible:string[]=[];
+  for(const match of code.matchAll(re)) {
+    const isStatic=/\bstatic\b/.test(match[1]);
+    if(!isStatic && !hasPublicNoArg)continue;
+    const selector=cls+'.'+match[3];
+    if(!eligible.includes(selector))eligible.push(selector);
+    if(eligible.length>=limit)break;
   }
-  return [...found];
+  return eligible;
+}
+
+/** Same compatibility rules feed both suggestions and preflight. */
+export async function javaProbeSelectorCompatible(path:string,selector:string):Promise<boolean> {
+  if(!path.endsWith('.java'))return false;
+  return (await supportedJavaProbeHints(path,256)).includes(selector);
 }
