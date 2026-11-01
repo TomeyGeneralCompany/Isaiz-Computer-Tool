@@ -533,7 +533,7 @@ export async function runLocalAudit(
             try {
               const full=await safePath(action.path);
               valid=await declaredProbeTarget(full,action.query);
-              if(!valid)menu=await probeChoices(full,action.answer as 'html_reflection'|'path_construction');
+              if(!valid)menu=await probeChoices(full,action.answer as 'html_reflection'|'path_construction',24,action.path);
             }catch{}
             if(!valid) {
               const feedback='Controller source probe menu: '+JSON.stringify(menu)+
@@ -577,7 +577,7 @@ export async function runLocalAudit(
           }
           rejectedPlans=0;
           rejectedRequiredProbeFinals=0;
-          workflow.plan(action);
+          workflow.plan({...action});
           await persistMemory();
           if(action.hypothesis)hypotheses.push({turn:turn+1,path:action.path,statement:action.hypothesis});
           await appendFile(logFile,'[PROBE_PLANNED] '+JSON.stringify(action)+'\\n');
