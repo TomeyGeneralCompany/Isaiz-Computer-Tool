@@ -23,6 +23,7 @@ const specSchema = z.object({file:z.string().min(1).max(4096),function:z.string(
 const sequenceObservations = z.object({contract:z.string(),accounts:z.array(z.string()).length(3),deploymentGasUsed:z.string(),
   steps:z.array(z.union([
     z.object({operation:z.literal("call"),function:z.string(),sender:z.number(),actual:z.unknown(),expected:z.unknown(),passed:z.boolean()}),
+    z.object({operation:z.literal("observe"),function:z.string(),sender:z.number(),actual:z.unknown()}),
     z.object({operation:z.literal("send"),function:z.string(),sender:z.number(),valueWei:z.string(),reverted:z.boolean(),gasUsed:z.string(),passed:z.boolean()}),
   ])).min(1).max(16)});
 const resultSchema = z.object({status:z.string(),behavior_observed:z.boolean(),source_sha256:digest.optional(),
