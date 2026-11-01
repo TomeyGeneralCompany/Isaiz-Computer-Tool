@@ -24,6 +24,25 @@ export function decodeAuditAction(raw: string, allowProbe = false): {action:stri
   const value: unknown = JSON.parse(raw);
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Expected a JSON action object");
   const record = value as Record<string,unknown>;
+  // Normalize unambiguous aliases only for probe actions. Keep every
+  // required semantic field subject to the existing workflow validator.
+  if(['plan_probe','verify_source','verify_python'].includes(String(record.action)) && allowProbe) {
+    const aliases:Record<string,string[]> = {
+      path:['file','source_path'], query:['function','method','selector'],
+      answer:['kind','probe_kind']
+    };
+    for(const [canonical,names] of Object.entries(aliases)) {
+      if(record[canonical]===undefined) {
+        const present=names.filter(name=>typeof record[name]==='string');
+        if(present.length===1)record[canonical]=record[present[0]];
+      }
+      for(const name of names)delete record[name];
+    }
+    if(record.path===undefined)record.path='';
+    if(record.query===undefined)record.query='';
+    if(record.answer===undefined)record.answer='';
+    if(record.action==='plan_probe' && record.hypothesis===undefined)record.hypothesis='';
+  }
   if (Object.keys(record).some(key=>!["action","path","query","answer","offset","sequence","hypothesis","result"].includes(key))
       || !["action","path","query","answer"].every(key=>typeof record[key] === "string")
       || !["read_file","list_files","search_files","outline_solidity","read_solidity","final",...(allowProbe ? ["verify_source","verify_python","plan_probe","continue_inspection"] : [])].includes(String(record.action)))
