@@ -6,6 +6,9 @@ on:
       - 'scripts/test-production-workflow.ts'
       - 'scripts/test-real-program-hunt.ts'
       - 'packages/security-solver/src/**'
+      - 'scripts/source-static.py'
+      - 'scripts/test-static-leads.py'
+      - 'tests/test_static_process_limits.py'
 jobs:
   qwen3-production-controller:
     runs-on: ubuntu-latest
