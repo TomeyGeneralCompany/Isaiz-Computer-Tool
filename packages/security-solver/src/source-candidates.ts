@@ -10,13 +10,13 @@ export async function prioritizeSourceCandidates(root:string,eligible:string[],f
   // contracts out of the eight-file navigation window. Prefer production
   // source consistently for detector hits and fallbacks, without discarding
   // eligible files or treating a detector hit as verified evidence.
-  const candidates=[...new Set([...(focus?[focus]:[]),...selected.map(lead=>lead.path),...fallback])].filter(path=>allowed.has(path));
+  const candidates=[...new Set([...(focus?[focus]:[]),...selected.map(lead=>lead.path),...fallback,...eligible])].filter(path=>allowed.has(path));
   // Rank a bounded navigation pool by demonstrably probe-compatible signatures.
   // Lexical hints are not evidence; an actual source read and isolated probe
   // still determine whether any candidate is testable or vulnerable.
   const ranked=candidates.sort((a,b)=>sourcePriority(b)-sourcePriority(a) ||
     (a.endsWith('.sol')? -1:0) - (b.endsWith('.sol')? -1:0));
-  const rankedPool=focus ? ranked.slice(0,8) : ranked.slice(0,48);
+  const rankedPool=focus ? ranked.slice(0,8) : ranked.slice(0,192);
   const signatureScores=new Map<string,number>();
   if(!focus) {
     let examinedBytes=0;
@@ -25,11 +25,14 @@ export async function prioritizeSourceCandidates(root:string,eligible:string[],f
         const full=await realpath(resolve(base,path)),local=relative(base,full);
         if(local==='..'||local.startsWith('..'+sep))continue;
         const size=(await stat(full)).size;
-        if(size>128000 || examinedBytes+size>1500000)continue;
+        if(size>128000 || examinedBytes+size>4000000)continue;
         examinedBytes+=size;
         const source=await readFile(full,'utf8');
+        // Match exactly one supported argument and a supported return type;
+        // avoid ranking ByteString setters and getters without arguments as probe targets.
+        // Permits ordinary Java modifiers and optional final on the parameter.
         const javaCandidate=path.endsWith('.java') &&
-          /\bpublic\s+(?:(?:static|final|synchronized)\s+)*(?:String|byte\s*\[\s*\]|CharSequence|StringBuilder|StringBuffer|ByteBuffer|Path|File|URI)\s+\w+\s*\(\s*(?:final\s+)?(?:String|byte\s*\[\s*\]|CharSequence|StringBuilder|StringBuffer|ByteBuffer|Path|File|URI|Object)\s+\w+\s*\)/.test(source);
+          /\bpublic\s+(?:(?:static|final|synchronized|abstract)\s+)*(?:String|byte\s*\[\s*\]|CharSequence|StringBuilder|StringBuffer|ByteBuffer|Path|File|URI)\s+\w+\s*\(\s*(?:final\s+)?(?:String|byte\s*\[\s*\]|CharSequence|StringBuilder|StringBuffer|ByteBuffer|Path|File|URI|Object)\s+\w+\s*\)/.test(source);
         const solidityCandidate=path.endsWith('.sol') &&
           /\bfunction\s+\w+\s*\(\s*string\b[^)]*\)\s+[^;{]*\b(?:pure|view)\b[^;{]*\breturns\s*\(\s*string\b/.test(source);
         if(javaCandidate||solidityCandidate)signatureScores.set(path,1);
