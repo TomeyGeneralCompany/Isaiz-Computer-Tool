@@ -366,6 +366,20 @@ export async function runLocalAudit(
         const automaticProbe=action.action==='probe_intent';
         if(automaticProbe) {
           action.action='plan_probe';
+          if(!action.query.trim() && action.answer==='solidity_sequence' && action.path.endsWith('.sol') && action.sequence && typeof action.sequence==='object') {
+            try {
+              const full=await safePath(action.path);
+              const menu=await solidityIndex.probeMenu(full,64);
+              const steps=Array.isArray((action.sequence as any).steps)?(action.sequence as any).steps:[];
+              const declared=menu.filter(choice=>steps.some((step:any)=>typeof step.function==='string' &&
+                (step.function===choice.selector.split('.').at(-1) ||
+                 step.function.split('(')[0]===choice.selector.split('.').at(-1))));
+              if(declared.length===1) {
+                action.query=declared[0].selector;
+                await appendFile(logFile,'[PROBE_INTENT_RESOLVED] '+JSON.stringify({path:action.path,query:action.query,kind:action.answer})+'\\n');
+              }
+            }catch{}
+          }
           if(!action.query.trim() && ['html_reflection','path_construction'].includes(action.answer)) {
             try {
               const full=await safePath(action.path);
