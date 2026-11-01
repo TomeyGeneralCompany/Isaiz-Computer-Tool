@@ -521,10 +521,7 @@ export async function runLocalAudit(
               let declarations:unknown[]=[];
               try {
                 const full=await safePath(action.path);
-                const outline=await solidityIndex.outline(full,0,6000);
-                declarations=outline.items.filter((entry:any)=>entry.kind==='FunctionDefinition').map((entry:any)=>({
-                  contract:entry.contract,name:entry.name,signature:entry.signature,visibility:entry.visibility
-                })).slice(0,24);
+                declarations=await solidityIndex.probeMenu(full,24);
               }catch{}
               const errors=sequence.error.issues.map(issue=>issue.path.join('.')+': '+issue.message).slice(0,6);
               const feedback='Controller Solidity probe guidance: '+JSON.stringify({errors,declarations,
@@ -787,6 +784,25 @@ export async function runLocalAudit(
             workflow?.read(relative(root,full).split(sep).join("/"));
             limits.onRead?.(relative(root,full).split(sep).join("/"),{start:page.start,end:page.end});
             await appendFile(logFile, "[READ_OK] " + relative(root,full) + ` offset=${page.start} end=${page.end} nextOffset=${page.nextOffset}\n`);
+            // Present grounded choices as soon as a file's last page is read,
+            // before Qwen needs to invent a probe target or a Solidity sequence.
+            if(workflow && page.nextOffset===null && ['.sol','.py','.js','.mjs','.cjs','.java'].some(ext=>full.endsWith(ext))) {
+              try {
+                const menu=full.endsWith('.sol')
+                  ? await solidityIndex.probeMenu(full,16)
+                  : await probeChoices(full,'html_reflection',12);
+                if(menu.length) {
+                  const original=JSON.parse(output);
+                  original.probeMenu=menu;
+                  original.probeMenuNote=full.endsWith('.sol')
+                    ? 'Select actual contract methods. Send means state-changing transaction, call means read assertion. A valid sequence needs grounded constructor arguments and an expected call value.'
+                    : 'These are source-derived function selectors, not proven vulnerabilities. Choose a probe kind matching inspected behavior.';
+                  output=JSON.stringify(original);
+                  await appendFile(logFile,'[PROBE_INTENT_MENU] '+JSON.stringify({path:relative(root,full),count:menu.length})+'\\n');
+                }
+              }catch{}
+            }
+
           } else throw new Error("Unknown tool");
           output=fitOutput(output).output;
           try {navigation.observe(name,relative(root,full).split(sep).join("/") || ".",offset,String(call.function.arguments?.query || ""),JSON.parse(output));}catch{}
