@@ -16,7 +16,7 @@ export async function prioritizeSourceCandidates(root:string,eligible:string[],f
   // still determine whether any candidate is testable or vulnerable.
   const ranked=candidates.sort((a,b)=>sourcePriority(b)-sourcePriority(a) ||
     (a.endsWith('.sol')? -1:0) - (b.endsWith('.sol')? -1:0));
-  const rankedPool=focus ? ranked.slice(0,8) : ranked.slice(0,192);
+  const rankedPool=focus ? [focus] : ranked.slice(0,192);
   const signatureScores=new Map<string,number>();
   if(!focus) {
     let examinedBytes=0;
