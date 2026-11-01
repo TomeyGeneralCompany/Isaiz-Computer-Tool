@@ -124,6 +124,7 @@ export async function runLocalAudit(
       properties:{path:{type:"string"},query:{type:"string"},kind:{type:"string"},sequence:soliditySequenceJsonSchema},required:["path","query","kind"]},
   }}] : tools;
   const recoveredFindingProbes=new Set<string>();
+  const finalCallerRecoveries=new Set<string>();
   let messages: Message[] = [
     { role: "system", content: (systemPrompt || "") + "\nPerform an offline source audit. Request exactly one tool call per response. Inspect actual files. Never invent findings or observations. No target network requests are available." + (limits.verifyPython ? probePrompt : " No source execution is available.") + (structured ? auditProtocolPrompt.replace(JSON.stringify(auditActionSchema),'Use action, path, query, answer; offset and sequence are optional. Example: {"action":"read_file","path":"file.py","query":"","answer":"","offset":0}. The response format enforces the full schema.') : "") },
     { role: "user", content: prompt + "\n/no_think" },
@@ -692,6 +693,24 @@ export async function runLocalAudit(
           // Coverage validator can name the next inspected candidate. Make the
           // next source read deterministic instead of asking a small model to
           // infer another path from an already rejected conclusion.
+          // A recorded probe can be real while its caller context has fallen
+          // out of Qwen's compacted conversation. Force one source-backed caller
+          // read before letting repeated incomplete finals burn the time budget.
+          if(workflow && /no testable candidate|no probes/i.test(feedback) &&
+             workflow.snapshot().observations.some(o=>o.status==='behavior_observed')) {
+            const inspected=new Set(workflow.snapshot().readPaths);
+            const paths=(limits.initialSourcePaths||[]).filter(path=>
+              path.startsWith('source-') && /\\.(?:py|js|mjs|cjs|java|sol)$/.test(path));
+            const next=paths.find(path=>!finalCallerRecoveries.has(path) &&
+              (/(?:caller|handler|route|controller|entry|server)/i.test(path) || !inspected.has(path)));
+            if(next) {
+              finalCallerRecoveries.add(next);
+              workflow.requireSource(next);
+              requireInvestigationAfterEmpty=true;
+              emptyFinals=0;
+              await appendFile(logFile,'[CALLER_CONTEXT_RECOVERY] '+JSON.stringify({path:next})+'\\n');
+            }
+          }
           const requiredNextSource=feedback.match(/Suggested next file:\s*(\S+?\.(?:sol|java|ts|tsx|js|jsx|py))\b/i)?.[1];
           if(requiredNextSource && workflow) {
             workflow.requireSource(requiredNextSource);
