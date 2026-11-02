@@ -123,6 +123,7 @@ assert.ok(revisedRunner.includes("Controller Solidity probe guidance:"));
 assert.ok(revisedRunner.includes("[PROBE_INTENT_EXECUTE]"),"controller should perform accepted probe without a second model turn");
 assert.ok(revisedRunner.includes("[POST_PROBE_CALLER_REQUIRED]"),"verified probes must require caller analysis before finalization");
 assert.ok(revisedRunner.includes("[PROBE_CAPABILITY_GAP]"),"unsupported Java signatures must be represented as a capability gap");
+assert.ok(revisedRunner.includes("[JAVA_SEQUENCE_GUIDED]"),"incompatible Java text signature must route to executable java_sequence rather than irrelevant methods");
 assert.ok(revisedRunner.includes("PROBE_UNSUPPORTED_NOT_HYPOTHESIS_REJECTED"),"unsupported verifier signatures cannot disprove a source hypothesis");
 assert.ok(!revisedRunner.includes("query:choices[0]||'Class.method'"),"unrelated compatible Java functions must never be substituted for the tested method");
 assert.ok(revisedRunner.includes("alreadyRead:workflow.snapshot().readPaths.includes(paths[0])"),
