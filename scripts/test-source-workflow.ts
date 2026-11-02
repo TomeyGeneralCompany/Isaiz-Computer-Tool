@@ -111,6 +111,10 @@ assert.ok(revisedRunner.includes("alreadyRead:workflow.snapshot().readPaths.incl
   "prefetched callers must not be forced into redundant reread loops");
 assert.ok(revisedRunner.includes("[MODEL_PATH_CANONICALIZED]"),
   "model absolute paths inside the owned workspace must normalize before workflow validation");
+assert.ok(revisedRunner.includes("[REPEATED_READ_BLOCKED]"),
+  "completed-page repetition must change the next allowed action rather than reset its warning counter");
+assert.ok(revisedRunner.includes("blockCompletedReadsUntil=Math.max(blockCompletedReadsUntil,turn+4)"),
+  "recovery must bound repeated page requests while leaving other actions available");
 assert.ok(revisedRunner.includes(String.raw`p!==path && /\.(?:py|js|mjs|cjs|java|sol)$/.test(p)`),
   "post-probe caller discovery must recognize actual source file extensions");
 assert.ok(!revisedRunner.includes(String.raw`p!==path && /\\.(?:py|js|mjs|cjs|java|sol)$/.test(p)`),
