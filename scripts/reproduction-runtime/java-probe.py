@@ -39,8 +39,19 @@ if sequence_mode:
             raise ValueError('TOMEY_INVALID_JAVA_PROBE: invalid Java step')
         if not isinstance(step.get('args', []), list) or len(step.get('args', [])) > 8:
             raise ValueError('TOMEY_INVALID_JAVA_PROBE: invalid Java arguments')
+    def valid_java_value(value, depth=0):
+        if depth > 2:
+            return False
+        if value is None or type(value) in (str, int, float, bool):
+            return len(str(value)) <= 2048
+        if type(value) is dict and set(value) == {'mock'} and type(value['mock']) is dict:
+            methods = value['mock']
+            return len(methods) <= 16 and all(
+                re.fullmatch(r'[A-Za-z_$][A-Za-z0-9_$]{0,79}', name) and
+                valid_java_value(result, depth + 1) for name, result in methods.items())
+        return False
     for value in [*constructor, *(v for step in steps for v in step.get('args', []))]:
-        if type(value) not in (str, int, float, bool) or len(str(value)) > 2048:
+        if not valid_java_value(value):
             raise ValueError('TOMEY_INVALID_JAVA_PROBE: unsupported argument')
 method_name = re.escape(parts[1])
 declaration = re.search(
@@ -173,6 +184,28 @@ import java.util.Base64;
 public class TomeyJavaProbe {
   static Object parse(String encoded, Class<?> type) {
     String value=new String(Base64.getDecoder().decode(encoded),StandardCharsets.UTF_8);
+    if(value.equals("__NULL__"))return null;
+    if(value.startsWith("__MOCK__")) {
+      if(!type.isInterface())throw new IllegalArgumentException("Mock requires interface: "+type.getName());
+      java.util.Map<String,String> responses=new java.util.HashMap<>();
+      String body=value.substring("__MOCK__".length());
+      if(!body.isEmpty())for(String entry:body.split(";")) {
+        int at=entry.indexOf('=');
+        if(at<=0)throw new IllegalArgumentException("Invalid mock entry");
+        responses.put(entry.substring(0,at),
+          new String(Base64.getDecoder().decode(entry.substring(at+1)),StandardCharsets.UTF_8));
+      }
+      return Proxy.newProxyInstance(type.getClassLoader(),new Class<?>[]{type},(proxy,method,args)->{
+        if(method.getDeclaringClass()==Object.class) {
+          if(method.getName().equals("toString"))return "TomeyJavaMock";
+          if(method.getName().equals("hashCode"))return 0;
+          if(method.getName().equals("equals"))return proxy==args[0];
+        }
+        String response=responses.get(method.getName());
+        if(response==null)throw new IllegalArgumentException("Unconfigured mock method: "+method.getName());
+        return parse(Base64.getEncoder().encodeToString(response.getBytes(StandardCharsets.UTF_8)),method.getReturnType());
+      });
+    }
     if(type==String.class)return value;
     if(type==int.class || type==Integer.class)return Integer.valueOf(value);
     if(type==long.class || type==Long.class)return Long.valueOf(value);
@@ -219,7 +252,8 @@ public class TomeyJavaProbe {
     String[] init=arguments(argv,cursor,constructorCount);cursor+=constructorCount;
     Object instance=null;
     if(constructorCount>0) {
-      Constructor<?> ctor=(Constructor<?>)match(cls.getConstructors(),"constructor",init);
+      Constructor<?> ctor=(Constructor<?>)match(cls.getDeclaredConstructors(),"constructor",init);
+      ctor.setAccessible(true);
       instance=ctor.newInstance(values(ctor,init));
     }
     int stepCount=Integer.parseInt(argv[cursor++]);
@@ -230,7 +264,8 @@ public class TomeyJavaProbe {
       String[] encoded=arguments(argv,cursor,length);cursor+=length;
       Method method=(Method)match(cls.getMethods(),name,encoded);
       if(!Modifier.isStatic(method.getModifiers()) && instance==null) {
-        Constructor<?> ctor=cls.getConstructor();
+        Constructor<?> ctor=cls.getDeclaredConstructor();
+        ctor.setAccessible(true);
         instance=ctor.newInstance();
       }
       Object actual=method.invoke(Modifier.isStatic(method.getModifiers())?null:instance,values(method,encoded));
@@ -248,8 +283,15 @@ subprocess.run(['/jdk/bin/javac', *['-J'+x for x in javac_jvm], '-proc:none', '-
                 '-classpath', str(classes), '-sourcepath', sourcepath, '-d', str(classes),
                 str(target), str(harness)], check=True, timeout=15)
 if sequence_mode:
+    def encode_value(value):
+        if value is None:
+            return '__NULL__'
+        if type(value) is dict:
+            return '__MOCK__' + ';'.join(name + '=' + base64.b64encode(
+                encode_value(result).encode()).decode() for name, result in value['mock'].items())
+        return str(value).lower() if type(value) is bool else str(value)
     def encode(value):
-        return base64.b64encode(str(value).lower().encode() if type(value) is bool else str(value).encode()).decode()
+        return base64.b64encode(encode_value(value).encode()).decode()
     argv = [(package + '.' if package else '') + parts[0],
             str(len(constructor)), *[encode(v) for v in constructor],
             str(len(steps))]
