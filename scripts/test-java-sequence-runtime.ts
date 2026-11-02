@@ -1,7 +1,7 @@
 /** Exercises constructor state and multiple method invocations in the real isolated Java verifier. */
 import assert from "node:assert/strict";
 import {execFileSync} from "node:child_process";
-import {mkdtemp,writeFile,rm} from "node:fs/promises";
+import {mkdtemp,mkdir,writeFile,rm} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 const root=await mkdtemp(join(tmpdir(),"autohack-java-sequence-"));
@@ -88,6 +88,35 @@ public class ProxyState {
   assert.equal(mocked.observations.steps[0].actual,"43");
   assert.equal(mocked.observations.steps[0].passed,true);
   console.log("Nested inferred Java interface mocks: PASSED");
+  // Real repositories use package-qualified classes under src/main/java.
+  const packageDir=join(root,"src","main","java","org","tron","core","vm","program");
+  await mkdir(packageDir,{recursive:true});
+  await writeFile(join(packageDir,"PackageState.java"),`
+package org.tron.core.vm.program;
+public class PackageState {
+  private int value;
+  public PackageState(int initial) { value=initial; }
+  public int increment(int by) { value+=by; return value; }
+  public int getValue() { return value; }
+}`);
+  await writeFile(spec,JSON.stringify({
+    file:"src/main/java/org/tron/core/vm/program/PackageState.java",
+    function:"PackageState.getValue",kind:"java_sequence",
+    nonce:"0123456789abcdef0123456789abcdef",
+    sequence:{constructor:[7],steps:[
+      {method:"increment",args:[3],expected:10},
+      {method:"getValue",args:[],expected:10}
+    ]}
+  }));
+  const packagedOutput=execFileSync("python3",["scripts/source-reproduction.py","--repository",root,"--spec",spec],
+    {encoding:"utf8",timeout:120000});
+  const packaged=JSON.parse(packagedOutput);
+  assert.equal(packaged.kind,"java_sequence",JSON.stringify(packaged));
+  assert.equal(packaged.status,"observation_only",JSON.stringify(packaged));
+  assert.deepEqual(packaged.observations.steps.map((x:any)=>x.actual),["10","10"]);
+  assert.ok(packaged.observations.steps.every((x:any)=>x.passed));
+  console.log("Package-qualified Java constructor and state sequence: PASSED");
+
   console.log("Java package-private constructor + nested interface collaborator proxy: PASSED");
   console.log("Stateful Java constructor + mutation + getter in real isolated verifier: PASSED");
 } finally {await rm(root,{recursive:true,force:true});}
