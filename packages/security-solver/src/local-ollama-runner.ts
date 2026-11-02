@@ -584,18 +584,17 @@ export async function runLocalAudit(
               const caller=nextPaths.find(p=>/(?:caller|handler|program|state|manager|service|controller)/i.test(p))||
                 nextPaths[0];
               const feedback='PROBE_UNSUPPORTED_NOT_HYPOTHESIS_REJECTED: '+action.query+
-                ' is not executable through the isolated one-argument Java text/byte adapter. '+
-                'This is NOT evidence that the method is safe, absent, or irrelevant. '+
-                'Do not replace it with '+(choices[0]||'an unrelated method')+
-                ' merely because that method has a compatible signature. '+
-                'Preserve the original hypothesis and investigate the state construction, call sites, '+
-                'input types, and test dependencies. '+(caller?'Next source to inspect: '+caller+'. ':'Locate a relevant source caller. ')+
-                'If no compatible stateful reproduction can be constructed, return a scoped incomplete '+
-                'investigation with this precise limitation; do not claim no testable candidate exists.';
-              if(caller) {
-                workflow.requireSource(caller);
-                requireInvestigationAfterEmpty=true;
-              } else workflow.feedback(feedback,true);
+                ' is not executable through the one-argument Java text adapter. '+
+                'Stateful Java execution IS available: use plan_probe with answer=java_sequence '+
+                'and a declarative sequence {constructor:[...],steps:[{method:"'+action.query.split('.').at(-1)+
+                '",args:[...]}]}, including the selected method. '+
+                'Read its constructor, call sites and initialization methods to derive concrete arguments. '+
+                'Use expected only when justified by source; an observation-only sequence is valid. '+
+                'Do not replace the method with '+(choices[0]||'another method')+
+                ' merely because that method supports a text probe. '+
+                'If required object/dependency construction remains unsupported, record the precise limitation.';
+              workflow.feedback(feedback,true);
+              await appendFile(logFile,'[JAVA_SEQUENCE_GUIDED] '+JSON.stringify({path:action.path,query:action.query})+'\\n');
               await appendFile(logFile,'[PROBE_CAPABILITY_GAP] '+JSON.stringify({
                 path:action.path,selector:action.query,kind:action.answer,
                 hypothesis:action.hypothesis,caller:caller||null,
