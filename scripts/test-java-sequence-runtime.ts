@@ -34,6 +34,8 @@ public class ContractState {
   assert.equal(result.kind,"java_sequence",JSON.stringify(result));
   assert.equal(result.status,"observation_only",JSON.stringify(result));
   assert.equal(result.behavior_observed,false);
+  assert.deepEqual(result.observations.constructor,[3]);
+  assert.ok(result.observations.steps.every((x:any)=>x.operation==="call"&&typeof x.function==="string"));
   assert.deepEqual(result.observations.steps.map((x:any)=>x.actual),["5","5"]);
   assert.ok(result.observations.steps.every((x:any)=>x.passed));
   console.log("Stateful Java constructor + mutation + getter in real isolated verifier: PASSED");
