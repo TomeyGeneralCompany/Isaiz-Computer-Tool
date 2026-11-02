@@ -21,6 +21,44 @@ if len(parts) != 2 or parts[0] != target.stem:
 # Preflight the fixed adapter's supported signature before invoking javac.
 # A void/interface callback with project-specific parameters is not a valid
 # String/byte/Path probe; compilation errors must not hide that fact.
+# A declarative stateful path: fixed reflection driver, no model-generated Java.
+# Only public constructors/methods and primitive/String parameters are accepted.
+sequence_mode = spec['kind'] == 'java_sequence'
+if sequence_mode:
+    sequence = spec.get('sequence')
+    if not isinstance(sequence, dict):
+        raise ValueError('TOMEY_INVALID_JAVA_PROBE: Java sequence required')
+    steps = sequence.get('steps')
+    constructor = sequence.get('constructor', [])
+    if not isinstance(steps, list) or not 1 <= len(steps) <= 12:
+        raise ValueError('TOMEY_INVALID_JAVA_PROBE: 1-12 Java steps required')
+    if not isinstance(constructor, list) or len(constructor) > 8:
+        raise ValueError('TOMEY_INVALID_JAVA_PROBE: constructor arguments invalid')
+    for step in steps:
+        if not isinstance(step, dict) or not re.fullmatch(r'[A-Za-z_$][A-Za-z0-9_$]{0,79}', str(step.get('method', ''))):
+            raise ValueError('TOMEY_INVALID_JAVA_PROBE: invalid Java step')
+        if not isinstance(step.get('args', []), list) or len(step.get('args', [])) > 8:
+            raise ValueError('TOMEY_INVALID_JAVA_PROBE: invalid Java arguments')
+    def valid_java_value(value, depth=0):
+        if depth > 2:
+            return False
+        if value is None or type(value) in (str, int, float, bool):
+            return len(str(value)) <= 2048
+        if type(value) is dict:
+            if set(value) == {'mock'}:
+                methods = value['mock']
+            elif set(value) == {'proxy', 'returns'} and type(value['proxy']) is str and re.fullmatch(
+                    r'[A-Za-z_$][A-Za-z0-9_$.]{0,159}', value['proxy']):
+                methods = value['returns']
+            else:
+                return False
+            return type(methods) is dict and len(methods) <= 16 and all(
+                re.fullmatch(r'[A-Za-z_$][A-Za-z0-9_$]{0,79}', name) and
+                valid_java_value(result, depth + 1) for name, result in methods.items())
+        return False
+    for value in [*constructor, *(v for step in steps for v in step.get('args', []))]:
+        if not valid_java_value(value):
+            raise ValueError('TOMEY_INVALID_JAVA_PROBE: unsupported argument')
 method_name = re.escape(parts[1])
 declaration = re.search(
     r'\b(?:public\s+)?(?:static\s+)?(?:final\s+)?'
@@ -30,7 +68,7 @@ declaration = re.search(
     r'\s+[A-Za-z_$][\w$]*\s*\)',
     code
 )
-if not declaration:
+if not declaration and not sequence_mode:
     raise ValueError('TOMEY_INVALID_JAVA_PROBE: no supported one-input/text-output declaration')
 if re.search(r'\binterface\s+' + re.escape(parts[0]) + r'\b', code) and not re.search(r'\bstatic\b', declaration.group(0)):
     raise ValueError('TOMEY_INVALID_JAVA_PROBE: interface instance method cannot be constructed')
@@ -142,6 +180,107 @@ public class TomeyJavaProbe {
  }
 }
 ''')
+
+if sequence_mode:
+    # The precompiled driver is constructed by this trusted adapter, not by Qwen.
+    harness.write_text(r'''
+import java.lang.reflect.*;
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
+public class TomeyJavaProbe {
+  static Object parse(String encoded, Class<?> type) {
+    String value=new String(Base64.getDecoder().decode(encoded),StandardCharsets.UTF_8);
+    if(value.equals("__NULL__"))return null;
+    if(value.startsWith("__MOCK__")) {
+      if(!type.isInterface())throw new IllegalArgumentException("Mock requires interface: "+type.getName());
+      java.util.Map<String,String> responses=new java.util.HashMap<>();
+      String body=value.substring("__MOCK__".length());
+      if(!body.isEmpty())for(String entry:body.split(";")) {
+        int at=entry.indexOf('=');
+        if(at<=0)throw new IllegalArgumentException("Invalid mock entry");
+        responses.put(entry.substring(0,at),
+          new String(Base64.getDecoder().decode(entry.substring(at+1)),StandardCharsets.UTF_8));
+      }
+      return Proxy.newProxyInstance(type.getClassLoader(),new Class<?>[]{type},(proxy,method,args)->{
+        if(method.getDeclaringClass()==Object.class) {
+          if(method.getName().equals("toString"))return "TomeyJavaMock";
+          if(method.getName().equals("hashCode"))return 0;
+          if(method.getName().equals("equals"))return proxy==args[0];
+        }
+        String response=responses.get(method.getName());
+        if(response==null)throw new IllegalArgumentException("Unconfigured mock method: "+method.getName());
+        return parse(Base64.getEncoder().encodeToString(response.getBytes(StandardCharsets.UTF_8)),method.getReturnType());
+      });
+    }
+    if(type==String.class)return value;
+    if(type==int.class || type==Integer.class)return Integer.valueOf(value);
+    if(type==long.class || type==Long.class)return Long.valueOf(value);
+    if(type==boolean.class || type==Boolean.class)return Boolean.valueOf(value);
+    if(type==double.class || type==Double.class)return Double.valueOf(value);
+    if(type==float.class || type==Float.class)return Float.valueOf(value);
+    if(type==short.class || type==Short.class)return Short.valueOf(value);
+    if(type==byte.class || type==Byte.class)return Byte.valueOf(value);
+    throw new IllegalArgumentException("Unsupported Java parameter type: "+type.getName());
+  }
+  static Executable match(Executable[] options,String method,String[] values) {
+    for(Executable candidate:options) {
+      if(candidate instanceof Method && !((Method)candidate).getName().equals(method))continue;
+      Class<?>[] types=candidate.getParameterTypes();
+      if(types.length!=values.length)continue;
+      try {
+        for(int i=0;i<types.length;i++)parse(values[i],types[i]);
+        return candidate;
+      }catch(IllegalArgumentException e){}
+    }
+    throw new IllegalArgumentException("No supported public overload: "+method);
+  }
+  static String[] arguments(String[] tokens,int from,int count) {
+    return java.util.Arrays.copyOfRange(tokens,from,from+count);
+  }
+  static Object[] values(Executable callable,String[] encoded) {
+    Class<?>[] types=callable.getParameterTypes();
+    Object[] result=new Object[types.length];
+    for(int i=0;i<types.length;i++)result[i]=parse(encoded[i],types[i]);
+    return result;
+  }
+  static String out(Object object) {
+    if(object==null)return "null";
+    if(object instanceof Number || object instanceof Boolean || object instanceof String || object instanceof Character)
+      return String.valueOf(object);
+    throw new IllegalArgumentException("Unsupported return type: "+object.getClass().getName());
+  }
+  public static void main(String[] argv) throws Exception {
+    java.io.PrintStream originalOutput=System.out;
+    System.setOut(new java.io.PrintStream(java.io.OutputStream.nullOutputStream()));
+    Class<?> cls=Class.forName(argv[0]);
+    int cursor=1;
+    int constructorCount=Integer.parseInt(argv[cursor++]);
+    String[] init=arguments(argv,cursor,constructorCount);cursor+=constructorCount;
+    Object instance=null;
+    if(constructorCount>0) {
+      Constructor<?> ctor=(Constructor<?>)match(cls.getDeclaredConstructors(),"constructor",init);
+      ctor.setAccessible(true);
+      instance=ctor.newInstance(values(ctor,init));
+    }
+    int stepCount=Integer.parseInt(argv[cursor++]);
+    String[] results=new String[stepCount];
+    for(int j=0;j<stepCount;j++) {
+      String name=argv[cursor++];
+      int length=Integer.parseInt(argv[cursor++]);
+      String[] encoded=arguments(argv,cursor,length);cursor+=length;
+      Method method=(Method)match(cls.getMethods(),name,encoded);
+      if(!Modifier.isStatic(method.getModifiers()) && instance==null) {
+        Constructor<?> ctor=cls.getDeclaredConstructor();
+        ctor.setAccessible(true);
+        instance=ctor.newInstance();
+      }
+      Object actual=method.invoke(Modifier.isStatic(method.getModifiers())?null:instance,values(method,encoded));
+      results[j]=Base64.getEncoder().encodeToString(out(actual).getBytes(StandardCharsets.UTF_8));
+    }
+    for(String result:results)originalOutput.println(result);
+  }
+}
+''')
 jvm = ['-Xmx128m', '-XX:ActiveProcessorCount=2', '-XX:+UseSerialGC']
 # javac on JDK 21 can exceed a 128 MiB heap while initializing compiler
 # modules; keep runtime probes tight, but give compilation bounded headroom.
@@ -149,6 +288,39 @@ javac_jvm = ['-Xmx512m', '-XX:ActiveProcessorCount=2', '-XX:+UseSerialGC']
 subprocess.run(['/jdk/bin/javac', *['-J'+x for x in javac_jvm], '-proc:none', '-encoding', 'UTF-8',
                 '-classpath', str(classes), '-sourcepath', sourcepath, '-d', str(classes),
                 str(target), str(harness)], check=True, timeout=15)
+if sequence_mode:
+    def encode_value(value):
+        if value is None:
+            return '__NULL__'
+        if type(value) is dict:
+            return '__MOCK__' + ';'.join(name + '=' + base64.b64encode(
+                encode_value(result).encode()).decode() for name, result in (value['mock'] if 'mock' in value else value['returns']).items())
+        return str(value).lower() if type(value) is bool else str(value)
+    def encode(value):
+        return base64.b64encode(encode_value(value).encode()).decode()
+    argv = [(package + '.' if package else '') + parts[0],
+            str(len(constructor)), *[encode(v) for v in constructor],
+            str(len(steps))]
+    for step in steps:
+        argv += [step['method'], str(len(step.get('args', [])))]
+        argv += [encode(v) for v in step.get('args', [])]
+    outcome = subprocess.run(['/jdk/bin/java', *jvm, '-cp', str(classes),
+                              'TomeyJavaProbe', *argv], check=True,
+                             stdout=subprocess.PIPE, timeout=8)
+    lines = outcome.stdout.decode().splitlines()
+    if len(lines) != len(steps):
+        raise ValueError('Invalid Java stateful sequence output')
+    observations = []
+    for step, encoded in zip(steps, lines):
+        actual = base64.b64decode(encoded, validate=True).decode('utf8')
+        expected = step.get('expected')
+        observations.append(dict(operation='call', function=step['method'],
+                                 actual=actual, expected=expected,
+                                 passed=(expected is None or actual == str(expected).lower()
+                                         if type(expected) is bool else
+                                         expected is None or actual == str(expected))))
+    print(json.dumps(dict(steps=observations, constructor=constructor)))
+    raise SystemExit(0)
 control = 'TOMEY_CONTROL_' + spec['nonce']
 attack = ('<em data-tomey="'+spec['nonce']+'">TOMEY_PROBE</em>'
           if spec['kind'] == 'html_reflection' else '../../TOMEY_ESCAPE_'+spec['nonce'])

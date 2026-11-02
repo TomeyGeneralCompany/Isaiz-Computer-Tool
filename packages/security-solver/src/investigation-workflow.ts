@@ -136,7 +136,7 @@ export class InvestigationWorkflow {
     if(action.action==='plan_probe') {
       if(action.path.length>512)return 'Choose a workspace-relative source path of at most 512 characters.';
       if(!this.readPaths.has(action.path))return 'Read the candidate source before planning its test.';
-      if(!action.query || !['html_reflection','path_construction','solidity_sequence'].includes(action.answer))return 'Select a function from the inspected source and a supported probe kind.';
+      if(!action.query || !['html_reflection','path_construction','solidity_sequence','java_sequence'].includes(action.answer))return 'Select a function from the inspected source and a supported probe kind.';
       // Reject placeholder or invented probe targets before they consume an
       // expensive model turn or enter the dependency preparation sandbox.
       // A Solidity query must name a real Contract.function (or constructor).

@@ -1,4 +1,6 @@
 import {modelProfile} from './model-profile';
+import {z} from "zod";
+import {javaSequenceSchema, type JavaSequence} from "./java-sequence";
 import {buildBaselineSequence} from './solidity-probe-inputs';
 import { InvestigationWorkflow } from "./investigation-workflow";
 import {guidedSourceProbe} from './source-guided-probes';
@@ -57,7 +59,7 @@ export interface LocalAuditLimits {
   actionConstraints?: () => Partial<Record<"action"|"path"|"query"|"answer",string[]>>;
   signal?: AbortSignal;
   onRead?: (path:string, span:ReadSpan) => void;
-  verifyPython?: (path:string,functionName:string,kind:string,sequence?:SoliditySequence) => Promise<string>;
+  verifyPython?: (path:string,functionName:string,kind:string,sequence?:SoliditySequence | JavaSequence) => Promise<string>;
 }
 export async function runLocalAudit(
   prompt: string, logFile: string, timeoutMs: number, cwd: string,
@@ -124,9 +126,17 @@ export async function runLocalAudit(
       await limits.onAllowance?.(allowance.deadline);
     }
   };
-  const actionSchema = limits.verifyPython ? {...auditActionSchema,properties:{...auditActionSchema.properties,...(limits.finalSchema?{result:limits.finalSchema}:{}),sequence:soliditySequenceJsonSchema,
+  const actionSchema = limits.verifyPython ? {...auditActionSchema,properties:{...auditActionSchema.properties,...(limits.finalSchema?{result:limits.finalSchema}:{}),sequence:{type:"object",properties:{
+      constructorArgs:{type:"array",items:{type:"string"}},
+      constructor:{type:"array",items:{}},
+      steps:{type:"array",items:{type:"object",properties:{
+        operation:{type:"string"},function:{type:"string"},method:{type:"string"},
+        args:{type:"array",items:{}},sender:{type:"integer"},
+        expect:{type:"string"},expected:{},valueWei:{type:"string"}
+      }}}
+    },required:["steps"]},
     action:{type:"string",enum:[...auditActionSchema.properties.action.enum,"verify_source","verify_python",...(workflow?["plan_probe","probe_intent","continue_inspection"]:[])]}}} : {...auditActionSchema,properties:{...auditActionSchema.properties,...(limits.finalSchema?{result:limits.finalSchema}:{})}};
-  const probePrompt = limits.verifyPython ? "\\nUse probe_intent with inspected path, exact query (or blank for a unique candidate), supported answer kind, hypothesis and optional sequence. The controller validates and executes the accepted request. Python top-level and exported JavaScript functions require one string input and string output. Java supports one String/byte/CharSequence/Path/File/URI/Object-like input and text/byte/path output; public instance methods need a public zero-arg constructor. Solidity accepts state-changing sends and read assertions in a local EVM. Do not invent method names, expected values, or findings. " : "";
+  const probePrompt = limits.verifyPython ? "\\nUse probe_intent with inspected path, exact query (or blank for a unique candidate), supported answer kind, hypothesis and optional sequence. The controller validates and executes the accepted request. Python top-level and exported JavaScript functions require one string input and string output. Java text probes support one text/byte argument. For Java methods with primitive/String args, use java_sequence with sequence with constructor args and method steps; calls share one instance. Do not use html_reflection for Java numeric/state methods. Solidity accepts state-changing sends and read assertions in a local EVM. Do not invent method names, expected values, or findings. " : "";
   const availableTools = limits.verifyPython ? [...tools,{type:"function",function:{
     name:"verify_source",description:probePrompt,parameters:{type:"object",
       properties:{path:{type:"string"},query:{type:"string"},kind:{type:"string"},sequence:soliditySequenceJsonSchema},required:["path","query","kind"]},
@@ -467,7 +477,7 @@ export async function runLocalAudit(
           await appendFile(logFile,'[JAVA_QUERY_NORMALIZED] '+JSON.stringify({path:action.path,query:action.query})+'\n');
         }
         if(['plan_probe','verify_source','verify_python'].includes(action.action) &&
-            action.answer!=='solidity_sequence' && action.sequence!==undefined) {
+            !['solidity_sequence','java_sequence'].includes(action.answer) && action.sequence!==undefined) {
           // Normalize optional structured-output fields before validation,
           // planning and duplicate detection; they are unused by these probes.
           delete action.sequence;
@@ -563,7 +573,7 @@ export async function runLocalAudit(
               continue;
             }
           }
-          if(action.path.endsWith('.java')) {
+          if(action.path.endsWith('.java') && action.answer!=='java_sequence') {
             let compatible=false;
             let alternatives:string[]=[];
             try {
@@ -572,17 +582,32 @@ export async function runLocalAudit(
               if(!compatible)alternatives=await supportedJavaProbeHints(target);
             }catch{}
             if(!compatible) {
+              // Probe eligibility belongs to the verifier; investigation eligibility
+              // does not. Preserve the suspected method instead of laundering an
+              // unrelated compatible method into the next probe.
               const choices=alternatives.filter(selector=>selector!==action.query);
-              const feedback='Controller probe compatibility: '+action.query+
-                ' does not have a supported public static one-input text/byte signature. '+
-                (choices.length?'Compatible signatures declared in this file: '+choices.join(', ')+'. ':
-                  'No compatible method was found in this file. Inspect another source candidate. ')+
-                'Only select an alternative if its code matches the behavior you intend to investigate. '+
-                'Valid request shape: '+JSON.stringify({action:'plan_probe',path:action.path,
-                  query:choices[0]||'Class.method',answer:action.answer,
-                  hypothesis:'Suspected behavior and the observation that would disprove it.'});
-              workflow.feedback(feedback);
-              await appendFile(logFile,'[PROBE_COMPATIBILITY_REJECTED] '+JSON.stringify({path:action.path,query:action.query,choices})+'\\n');
+              const nextPaths=(limits.initialSourcePaths||[]).filter(p=>
+                p.startsWith('source-') && p!==action.path &&
+                /\\.(?:java|sol|py|js|mjs|cjs)$/.test(p));
+              const caller=nextPaths.find(p=>/(?:caller|handler|program|state|manager|service|controller)/i.test(p))||
+                nextPaths[0];
+              const feedback='PROBE_UNSUPPORTED_NOT_HYPOTHESIS_REJECTED: '+action.query+
+                ' is not executable through the one-argument Java text adapter. '+
+                'Stateful Java execution IS available: use plan_probe with answer=java_sequence '+
+                'and a declarative sequence {constructor:[...],steps:[{method:"'+action.query.split('.').at(-1)+
+                '",args:[...]}]}, including the selected method. '+
+                'Read its constructor, call sites and initialization methods to derive concrete arguments. '+
+                'Use expected only when justified by source; an observation-only sequence is valid. '+
+                'Do not replace the method with '+(choices[0]||'another method')+
+                ' merely because that method supports a text probe. '+
+                'If required object/dependency construction remains unsupported, record the precise limitation.';
+              workflow.feedback(feedback,true);
+              await appendFile(logFile,'[JAVA_SEQUENCE_GUIDED] '+JSON.stringify({path:action.path,query:action.query})+'\\n');
+              await appendFile(logFile,'[PROBE_CAPABILITY_GAP] '+JSON.stringify({
+                path:action.path,selector:action.query,kind:action.answer,
+                hypothesis:action.hypothesis,caller:caller||null,
+                supportedAlternativesNotSubstituted:choices
+              })+'\\n');
               messages.push({role:'user',content:feedback+' /no_think'});
               continue;
             }
@@ -603,6 +628,19 @@ export async function runLocalAudit(
                 'Do not invent a function or report an unexecuted probe.';
               workflow.feedback(feedback);
               await appendFile(logFile,'[PROBE_INTENT_MENU] '+JSON.stringify({path:action.path,kind:action.answer,menu})+'\n');
+              messages.push({role:'user',content:feedback+' /no_think'});
+              continue;
+            }
+          }
+          if(action.answer==='java_sequence') {
+            const sequence=javaSequenceSchema.safeParse(action.sequence);
+            if(!action.path.endsWith('.java') || !sequence.success ||
+               !sequence.data?.steps.some(step=>step.method===action.query.split('.').at(-1))) {
+              const feedback='Java stateful probe requires a Java Class.method and a source-derived sequence '+
+                'with constructor arguments and steps naming public primitive/String methods, '+
+                'including the selected method. Example: {constructor:[],steps:[{method:"getCount",args:[],expected:0}]}.';
+              workflow.feedback(feedback);
+              await appendFile(logFile,'[JAVA_SEQUENCE_INVALID] '+JSON.stringify({path:action.path,query:action.query})+'\\n');
               messages.push({role:'user',content:feedback+' /no_think'});
               continue;
             }
@@ -725,7 +763,7 @@ export async function runLocalAudit(
             }
             const guidance='Verified probe (not automatically a vulnerability): '+
               JSON.stringify(observed)+'. Remaining requirements: establish caller reachability, input provenance, mitigations and impact from source before reporting. '+
-              (known.length?'Read caller candidate '+known[0]+' and cite its exact relevant lines. ':'Identify a concrete missing caller source. ')+
+              (known.length?'Inspect caller candidate '+known[0]+' and cite its exact relevant lines. Caller methods of classes (such as do_GET) are NOT top-level functions and must not be submitted to the single-argument source verifier; inspect their call expressions and user-input flow from source instead. ':'Identify a concrete missing caller source. ')+
               'Allowed conclusions must cite actual recorded caseId/evidenceFile and caller evidence; otherwise explicitly state which requirement remains unverified. Never claim there was no testable candidate.';
             workflow!.feedback(guidance,true);
             await appendFile(logFile,'[POST_PROBE_EVIDENCE_GUIDANCE] '+guidance+'\n');
@@ -903,8 +941,8 @@ export async function runLocalAudit(
           if((name === "verify_source" || name === "verify_python") && limits.verifyPython) {
             const kind=String(call.function.arguments?.kind || "");
             const rawSequence=call.function.arguments?.sequence;
-            if(kind!=="solidity_sequence" && rawSequence!==undefined)throw new Error("Sequence requires solidity_sequence kind");
-            const sequence=kind==="solidity_sequence"?soliditySequenceSchema.parse(rawSequence):undefined;
+            if(!["solidity_sequence","java_sequence"].includes(kind) && rawSequence!==undefined)throw new Error("Sequence requires a sequence kind");
+            const sequence=kind==="solidity_sequence"?soliditySequenceSchema.parse(rawSequence):kind==="java_sequence"?javaSequenceSchema.parse(rawSequence):undefined;
             output=await limits.verifyPython(path,String(call.function.arguments?.query || ""),kind,sequence);
             try {
               const result=JSON.parse(output);

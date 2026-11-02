@@ -50,7 +50,7 @@ function validReachability(candidate:z.infer<typeof candidateSchema>,record:Sour
   if(candidate.reachability === "direct_transaction") {
     const name=record.spec.function.split(".").at(-1);
     return record.spec.kind === "solidity_sequence" && callerRelative === record.spec.file &&
-      !!record.spec.sequence?.steps.some(step=>step.operation === "send" && step.function.split("(")[0] === name) &&
+      !!record.spec.sequence?.steps.some(step=>"operation" in step && step.operation === "send" && "function" in step && step.function.split("(")[0] === name) &&
       transactionEntryLine(text,candidate.callerLine,record.spec.function);
   }
   return callerLineReferences(text,candidate.callerLine,record.spec.function);
@@ -234,8 +234,12 @@ Do not claim production testing, JavaScript execution, file access or other effe
               if(session.completedProbes) {
                 const known=[...session.cases].slice(0,5).map(([caseId,c])=>({caseId,file:c.spec.file,
                   function:c.spec.function,status:c.result.status,behaviorObserved:c.result.behavior_observed}));
-                return "A supported source probe HAS completed in this hunt. Do not claim no testable candidate or no probes. Recorded observations: "+
-                  JSON.stringify(known)+". If no reportable vulnerability is supported after inspecting real callers, return outcome=inspected with findings=[], not no_testable_candidate.";
+                return "A supported source probe HAS completed. Recorded evidence: "+JSON.stringify(known)+
+                  ". The next decision is whether a caller makes this behavior reachable. Inspect the existing caller source and its line numbers. "+
+                  "If a source-backed caller path exists, return outcome=inspected and a findings entry containing the REAL caseId, callerFile, callerLine, severity, confidence, ratingReason, title, impact and falsification. "+
+                  "Do not require a second probe of a class method: caller methods provide reachability evidence, not standalone probe targets. "+
+                  "Only return findings=[] with outcome=inspected when evidence cannot establish a reportable issue. "+
+                  "No new security finding may be inferred solely from the successful probe.";
               }
               // A partial conclusion cannot skip unexamined selected candidates.
               // Bound this pass to the selected batch; never require all 1,531

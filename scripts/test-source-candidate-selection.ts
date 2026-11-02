@@ -4,6 +4,7 @@ import {mkdtemp,mkdir,writeFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {prioritizeSourceCandidates} from '../packages/security-solver/src/source-candidates';
+import {declaredProbeTarget,sourceDeclarationHints} from '../packages/security-solver/src/probe-target-validation';
 
 const root=await mkdtemp(join(tmpdir(),'lotus-probe-selection-'));
 try {
@@ -43,5 +44,11 @@ try {
   assert.ok(solidityResult.paths.includes(stateful),
     'concrete stateful Solidity function should reach bounded candidate list ahead of libraries');
   assert.ok(solidityResult.paths.length<=8,'Solidity navigation must remain bounded');
+  // Python class methods are caller evidence, not top-level executable targets.
+  const py=join(root,'source-1/caller.py');
+  await writeFile(py,'def render(value):\\n    return value\\nclass Handler:\\n    def do_GET(self):\\n        return render(self.path)\\n');
+  assert.equal(await declaredProbeTarget(py,'render'),true);
+  assert.equal(await declaredProbeTarget(py,'do_GET'),false);
+  assert.deepEqual(await sourceDeclarationHints(py),['render']);
   console.log('Candidate signature selection regression PASSED');
 }finally{await rm(root,{recursive:true,force:true});}

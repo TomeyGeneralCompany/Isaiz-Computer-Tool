@@ -22,6 +22,19 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from source_dependencies import prepare_dependencies, DependencyError
 
+SUPPORTED_EXECUTION_STATUS = {
+    'behavior_observed',
+    'behavior_not_observed',
+    'observation_only',
+    'unsupported_execution',
+    'unsupported_dependencies',
+    'invalid_probe',
+    'probe_failed',
+    'timeout',
+    'blocked_no_runtime',
+    'blocked_no_sandbox',
+}
+
 PROBE = r'''
 import contextlib, importlib.util, io, json, os, pathlib, sys, resource
 resource.setrlimit(resource.RLIMIT_NPROC,(0,0))
@@ -43,6 +56,58 @@ if not isinstance(normal,str) or not isinstance(observed,str): raise ValueError(
 if len(normal)>16000 or len(observed)>16000: raise ValueError('Probe output too large')
 print(json.dumps({'control_input':control,'control_output':normal,'attack_input':attack,'attack_output':observed}))
 '''
+
+
+def execution_capability(repository: Path, file: str, function: str, kind: str) -> tuple[bool, str | None]:
+    """Allow the implementation to execute the kinds it can actually construct.
+
+    The repo now supports source-derived constructor/method sequences for Java and
+    contract sequences for Solidity. Anything outside those supported execution
+    families is reported as unsupported_execution rather than as a generic failed
+    reproduction.
+    """
+    target = (repository / file).resolve(strict=True)
+    if not target.is_relative_to(repository):
+        return False, 'Probe source escapes repository'
+    if not target.is_file() or target.stat().st_size > 256000:
+        return False, 'Probe source is missing or too large'
+    source = target.read_text(errors='replace')
+    if file.endswith('.java'):
+        parts = function.split('.')
+        if len(parts) != 2:
+            return False, f'Java probe target {function} must be Class.method'
+        class_name, method_name = parts
+        if kind == 'java_sequence':
+            if not re.search(rf'\bclass\s+{re.escape(class_name)}\b', source):
+                return False, f'Java class {class_name} is not declared in {file}'
+            if not re.search(rf'\b(?:public|protected|private)?\s*(?:static\s+)?[A-Za-z0-9_<>,\[\]\s]+\s+{re.escape(method_name)}\s*\(', source):
+                return False, f'Java method {method_name} is not declared in {file}'
+            return True, None
+        if not re.search(
+            r'\b(?:public\s+)?(?:static\s+)?(?:final\s+)?'
+            r'(?:String|byte\[\]|CharSequence|StringBuilder|StringBuffer|ByteBuffer|Path|File|URI|Object)\s+'
+            + re.escape(method_name) + r'\s*\(\s*(?:final\s+)?'
+            r'(?:String|byte\[\]|CharSequence|StringBuilder|StringBuffer|ByteBuffer|Path|File|URI|Object)'
+            r'\s+[A-Za-z_$][\w$]*\s*\)',
+            source,
+            re.M,
+        ):
+            return False, f'Java method {function} is not supported by the current execution adapter'
+        return True, None
+    if file.endswith('.sol'):
+        if kind == 'solidity_sequence':
+            parts = function.split('.')
+            if len(parts) != 2:
+                return False, f'Solidity probe target {function} must be Contract.function'
+            contract_name, method_name = parts
+            if not re.search(rf'\bcontract\s+{re.escape(contract_name)}\b', source):
+                return False, f'Solidity contract {contract_name} is not declared in {file}'
+            if not re.search(rf'\bfunction\s+{re.escape(method_name)}\s*\(', source):
+                return False, f'Solidity function {method_name} is not declared in {file}'
+            return True, None
+        return True, None
+    return True, None
+
 
 class MarkupMarker(HTMLParser):
     """Recognize the nonce-bearing probe element, not its byte-for-byte spelling."""
@@ -115,7 +180,7 @@ def run_probe(repository: Path, specification: dict, _dependency_round: int = 0)
     target=(repository/file).resolve(strict=True)
     if not target.is_relative_to(repository) or not target.is_file() or target.stat().st_size>256000: raise ValueError('Source outside repository or too large')
     if not isinstance(function,str) or not re.fullmatch(r'[A-Za-z][A-Za-z0-9_]{0,79}(?:\.[A-Za-z][A-Za-z0-9_]{0,79})?',function): raise ValueError('Public top-level function name required')
-    if kind not in ('html_reflection','path_construction','solidity_sequence'): raise ValueError('Unsupported probe kind')
+    if kind not in ('html_reflection','path_construction','solidity_sequence','java_sequence'): raise ValueError('Unsupported probe kind')
     if not isinstance(nonce,str) or not re.fullmatch(r'[a-f0-9]{32}',nonce): raise ValueError('Invalid probe nonce')
     language = 'python' if file.endswith('.py') else 'solidity' if file.endswith('.sol') else 'java' if file.endswith('.java') else 'javascript'
     if language not in ('solidity','java') and '.' in function: raise ValueError('Top-level function name required')
@@ -123,14 +188,25 @@ def run_probe(repository: Path, specification: dict, _dependency_round: int = 0)
         if language != 'solidity' or '.' not in function: raise ValueError('Solidity Contract.function required')
         sequence = specification.get('sequence')
         if not isinstance(sequence,dict) or len(json.dumps(sequence)) > 16000: raise ValueError('Invalid Solidity sequence')
-    elif 'sequence' in specification: raise ValueError('Sequence requires solidity_sequence kind')
+    elif kind == 'java_sequence':
+        if language != 'java' or '.' not in function: raise ValueError('Java Class.method required')
+        sequence = specification.get('sequence')
+        if not isinstance(sequence,dict) or len(json.dumps(sequence)) > 16000: raise ValueError('Invalid Java sequence')
+        steps = sequence.get('steps')
+        if not isinstance(steps,list) or not 1 <= len(steps) <= 12 or not any(
+            isinstance(step,dict) and step.get('method') == function.split('.')[1] for step in steps):
+            raise ValueError('Java sequence must invoke selected method')
+    elif 'sequence' in specification: raise ValueError('Sequence requires sequence probe kind')
+
+    supported, detail = execution_capability(repository, file, function, kind)
+    if not supported:
+        return {'status': 'unsupported_execution', 'behavior_observed': False, 'detail': detail or 'Target is not expressible by the current execution environment'}
+
     runtime = Path(__file__).resolve().parent / 'reproduction-runtime'
     node = shutil.which('node') if language in ('javascript','solidity') else None
     java_home = Path(shutil.which('javac')).resolve().parent.parent if shutil.which('javac') else None
     java_config_binds = []
     if language == 'java' and java_home:
-        # Debian/Ubuntu JDKs symlink conf/security/java.security into /etc.
-        # Bind only the resolved JDK configuration directory, read-only.
         security_link = java_home / 'conf/security/java.security'
         if security_link.is_symlink():
             resolved_security = security_link.resolve()
@@ -150,7 +226,6 @@ def run_probe(repository: Path, specification: dict, _dependency_round: int = 0)
         try: prepare_dependencies(repository)
         except (DependencyError, OSError, ValueError) as error:
             return {'status':'unsupported_dependencies','behavior_observed':False,'detail':str(error)[:1000]}
-    # Compiler configuration comes from the checked-out project, never tool input.
     specification = {**specification, 'compilerSettings': {}}
     if language == 'solidity' and (repository/'foundry.toml').is_file():
         try:
@@ -171,7 +246,7 @@ def run_probe(repository: Path, specification: dict, _dependency_round: int = 0)
     source_hash=hashlib.sha256(target.read_bytes()).hexdigest()
     with tempfile.TemporaryDirectory(prefix='autohack-reproduction-') as temporary:
         work=Path(temporary)
-        (work/'probe.py').write_text((runtime/'java-probe.py').read_text() if language == 'java' else PROBE)
+        (work/'probe.py').write_text((runtime/('java-sequence.py' if kind == 'java_sequence' else 'java-probe.py')).read_text() if language == 'java' else PROBE)
         (work/'spec.json').write_text(json.dumps(specification))
         runtime_binds = ['--ro-bind',str(java_home),'/jdk',*java_config_binds,'--ro-bind',str(runtime),'/runtime'] if language == 'java' else [] if language == 'python' else [
             '--ro-bind',str(Path(node).resolve()),'/probe-node',
@@ -196,8 +271,6 @@ def run_probe(repository: Path, specification: dict, _dependency_round: int = 0)
                 try: os.killpg(process.pid,signal.SIGKILL)
                 except ProcessLookupError: pass
         if code and language == 'solidity' and _dependency_round < 8:
-            # Compiler import callbacks identify actual missing imports. A Solidity
-            # file with no external imports never needs the project's JS toolchain.
             diagnostic = (work/'stderr').read_text(errors='replace')
             try: missing = json.loads(diagnostic.rsplit('TOMEY_ERROR ', 1)[1]).get('missingImports', [])
             except (IndexError, ValueError): missing = []
@@ -226,12 +299,25 @@ def run_probe(repository: Path, specification: dict, _dependency_round: int = 0)
             observational_only = not any(step.get('operation') == 'call' for step in data['steps'])
             return {'status':'observation_only' if observational_only else ('behavior_observed' if mismatch else 'behavior_not_observed'),
                     'behavior_observed':mismatch,'source_sha256':source_hash,'kind':kind,'observations':data,
-                    'limitation':'A discrepancy from a supplied test expectation is not by itself a vulnerability. Constructor setup, expected results, real call-site reachability, policy and impact require independent review. All transactions used a fresh local EVM, not a live chain.'}
+                    'limitation':'A discrepancy from a supplied test expectation is not by itself a vulnerability. Constructor setup, expected results, real call-site reachability, policy and impact require independent review.'}
+        if kind == 'java_sequence':
+            steps=data.get('steps')
+            if not isinstance(steps,list) or not steps or not all(
+                isinstance(step,dict) and type(step.get('passed')) is bool for step in steps):
+                raise ValueError('Invalid Java sequence observations')
+            # Important: a mismatched expected value is only a test observation.
+            # It is not a validated security finding and must never be classified as
+            # a successful reproduction of a vulnerability.
+            return {'status':'observation_only',
+                    'behavior_observed':False,
+                    'source_sha256':source_hash,
+                    'kind':kind,
+                    'observations':data,
+                    'limitation':'Only bounded Java constructor and method calls were executed. Expected-value mismatches are observations, not validated security findings.'}
         normal,observed=data['control_output'],data['attack_output']
         if kind=='html_reflection':
             matches=reflected_markup(data, nonce)
         else:
-            # Path construction alone is not proof of an exploitable file operation.
             base=Path(os.path.normpath(normal)).parent
             attack_path=Path(os.path.normpath(observed))
             matches=normal.endswith(data['control_input']) and attack_path.name=='TOMEY_ESCAPE_'+nonce and not attack_path.is_relative_to(base)
