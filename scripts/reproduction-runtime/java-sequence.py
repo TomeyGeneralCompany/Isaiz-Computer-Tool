@@ -40,10 +40,10 @@ public class TomeyJavaSequence {
   String raw=new String(Base64.getDecoder().decode(encoded.substring(2)),StandardCharsets.UTF_8);
   char tag=encoded.charAt(0);
   if(tag=='z' && !type.isPrimitive())return null;
-  if(tag=='p') {
+  if(tag=='p'||tag=='m') {
    String[] lines=raw.split("\n",-1);
    if(lines.length<2)throw new IllegalArgumentException("invalid proxy record");
-   Class<?> iface=Class.forName(lines[0]);
+   Class<?> iface=tag=='m'?type:Class.forName(lines[0]);
    if(!iface.isInterface()||!type.isAssignableFrom(iface))
      throw new IllegalArgumentException("proxy must implement expected interface");
    int count=Integer.parseInt(lines[1]);
@@ -146,13 +146,13 @@ def token(value):
     elif isinstance(value,(int,float)):tag='n';text=str(value)
     elif isinstance(value,str):tag='s';text=value
     elif value is None:tag='z';text=''
-    elif isinstance(value,dict) and set(value)=={'proxy','returns'}:
-        returns=value['returns']
+    elif isinstance(value,dict) and (set(value)=={'proxy','returns'} or set(value)=={'mock'}):
+        returns=value['returns'] if 'returns' in value else value['mock']
         if not isinstance(returns,dict) or len(returns)>16:
             raise ValueError('TOMEY_INVALID_JAVA_PROBE: invalid bounded proxy')
         entries=[name+':'+base64.b64encode(token(arg).encode()).decode()
                  for name,arg in sorted(returns.items())]
-        tag='p';text='\n'.join([value['proxy'],str(len(entries)),*entries])
+        tag='p' if 'proxy' in value else 'm';text='\n'.join([value.get('proxy',''),str(len(entries)),*entries])
     else:raise ValueError('TOMEY_INVALID_JAVA_PROBE: invalid argument')
     return tag+':'+base64.b64encode(text.encode()).decode()
 ctor=[token(x) for x in sequence.get('constructor',[])]
