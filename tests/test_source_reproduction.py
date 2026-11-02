@@ -95,9 +95,9 @@ class LanguageTests(unittest.TestCase):
                               "void onStoragePut(DataWord key, DataWord value); }")
             result = driver.run_probe(repo, {"file":str(target.relative_to(repo)),
                 "function":"ProgramListener.onMemoryWrite", "kind":"html_reflection", "nonce":"a"*32})
-            self.assertEqual(result["status"], "invalid_probe", result)
+            self.assertEqual(result["status"], "unsupported_execution", result)
             self.assertFalse(result["behavior_observed"])
-            self.assertIn("one-input/text-output", result["detail"])
+            self.assertIn("not supported by the current execution adapter", result["detail"])
 
     def test_java_missing_dependency_is_not_false_reproduction(self):
         with tempfile.TemporaryDirectory() as directory:
