@@ -50,7 +50,7 @@ function validReachability(candidate:z.infer<typeof candidateSchema>,record:Sour
   if(candidate.reachability === "direct_transaction") {
     const name=record.spec.function.split(".").at(-1);
     return record.spec.kind === "solidity_sequence" && callerRelative === record.spec.file &&
-      !!record.spec.sequence?.steps.some(step=>step.operation === "send" && step.function.split("(")[0] === name) &&
+      !!record.spec.sequence?.steps.some(step=>"operation" in step && step.operation === "send" && "function" in step && step.function.split("(")[0] === name) &&
       transactionEntryLine(text,candidate.callerLine,record.spec.function);
   }
   return callerLineReferences(text,candidate.callerLine,record.spec.function);
