@@ -104,6 +104,34 @@ export class SoliditySourceIndex {
     }
     return false;
   }
+  /** Source-derived Solidity probe menu, including state-changing entry points.
+   * Never synthesizes expected values or asserts that a contract is deployable. */
+  async probeMenu(path:string,limit=24) {
+    const unit=await this.load(path);
+    const entries:Array<{selector:string;signature:string;operation:'send'|'call'|'constructor';visibility:string;inputs:string[]}>=[];
+    for(const node of unit.ast.children) {
+      if(node.type!=='ContractDefinition')continue;
+      for(const member of node.subNodes) {
+        if(member.type!=='FunctionDefinition')continue;
+        const fn=member as FunctionDefinition;
+        const visibility=String(fn.visibility||'default');
+        if(!fn.isConstructor && !['public','external'].includes(visibility))continue;
+        const mutability=String((fn as any).stateMutability||
+          ((fn as any).isView?'view':(fn as any).isPure?'pure':(fn as any).isPayable?'payable':'nonpayable'));
+        const inputs=(fn.parameters||[]).map((p:any)=>{
+          try{return unit.text.slice(...bounds(p.typeName)).replace(/\s+/g,' ').slice(0,120);}
+          catch{return '?';}
+        });
+        const operation: 'send'|'call'|'constructor'=fn.isConstructor?'constructor':
+          ['view','pure'].includes(mutability)?'call':'send';
+        const [start]=bounds(fn);
+        const header=unit.text.slice(start,fn.body?bounds(fn.body)[0]:Math.min(start+200,unit.text.length)).replace(/\s+/g,' ').slice(0,240);
+        entries.push({selector:node.name+'.'+label(fn),signature:header,operation,visibility,inputs});
+        if(entries.length>=limit)return entries;
+      }
+    }
+    return entries;
+  }
   async outline(path:string,offset:number,budget:number) {
     const unit=await this.load(path);
     const items:Array<Record<string,unknown>>=[];

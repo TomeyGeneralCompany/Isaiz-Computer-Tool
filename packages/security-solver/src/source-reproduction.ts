@@ -23,6 +23,7 @@ const specSchema = z.object({file:z.string().min(1).max(4096),function:z.string(
 const sequenceObservations = z.object({contract:z.string(),accounts:z.array(z.string()).length(3),deploymentGasUsed:z.string(),
   steps:z.array(z.union([
     z.object({operation:z.literal("call"),function:z.string(),sender:z.number(),actual:z.unknown(),expected:z.unknown(),passed:z.boolean()}),
+    z.object({operation:z.literal("observe"),function:z.string(),sender:z.number(),actual:z.unknown()}),
     z.object({operation:z.literal("send"),function:z.string(),sender:z.number(),valueWei:z.string(),reverted:z.boolean(),gasUsed:z.string(),passed:z.boolean()}),
   ])).min(1).max(16)});
 const resultSchema = z.object({status:z.string(),behavior_observed:z.boolean(),source_sha256:digest.optional(),
@@ -104,7 +105,7 @@ export async function createProbeSession(program:SecurityProgram,workspace:strin
       throw error;
     }
     signal?.throwIfAborted();
-    if (["behavior_observed", "behavior_not_observed"].includes(result.status)) completedProbes++;
+    if (["behavior_observed", "behavior_not_observed", "observation_only"].includes(result.status)) completedProbes++;
     else if (["invalid_probe","unsupported_dependencies"].includes(result.status)) unsupportedProbes++;
     else if (["probe_failed","timeout"].includes(result.status)) failedProbes++;
     else {

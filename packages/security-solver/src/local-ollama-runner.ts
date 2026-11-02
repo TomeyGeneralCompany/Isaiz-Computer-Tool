@@ -1,13 +1,14 @@
 import {modelProfile} from './model-profile';
+import {buildBaselineSequence} from './solidity-probe-inputs';
 import { InvestigationWorkflow } from "./investigation-workflow";
 import {guidedSourceProbe} from './source-guided-probes';
-import {declaredProbeTarget, sourceDeclarationHints, supportedJavaProbeHints, javaProbeSelectorCompatible} from './probe-target-validation';
+import {declaredProbeTarget, sourceDeclarationHints, supportedJavaProbeHints, javaProbeSelectorCompatible, probeChoices} from './probe-target-validation';
 import { postQwenAgentJson } from "./qwen-agent-transport";
 import { AuditAllowance } from "./audit-allowance";
 import { AuditNavigation } from "./audit-navigation";
 import { SoliditySourceIndex } from "./solidity-source-index";
 import { allocateAuditContext, compactAuditContext, auditCheckpoint, fitAuditToolOutput } from "./audit-context";
-import { soliditySequenceSchema, soliditySequenceJsonSchema, soliditySequencePrompt, type SoliditySequence } from "./solidity-sequence";
+import { soliditySequenceSchema, soliditySequenceJsonSchema, type SoliditySequence } from "./solidity-sequence";
 import { readSourcePage, searchSourcePage, listSourcePage, pageOffset, type ReadSpan } from "./source-inspection";
 import { postOllamaChat } from "../../core/src/ollama-chat";
 import { auditActionSchema, auditProtocolPrompt, decodeAuditAction } from "./local-audit-protocol";
@@ -102,6 +103,14 @@ export async function runLocalAudit(
   let emptyFinalRecoveryCycles=0;
   let requireInvestigationAfterEmpty=false;
   let invalidReviewFinals=0;
+  // Preserve the verifier's facts independently of Qwen's compacted chat.
+  let lastRejectedConclusion='';
+  let repeatedRejectedConclusions=0;
+  let postProbeRecoveryReads=0;
+  // Repeated completed-page requests must change the next model action,
+  // not merely receive another warning that Qwen can ignore.
+  let blockCompletedReadsUntil=0;
+
   let rejectedPlans=0;
   let consecutiveWorkflowRejections=0;
   let lastWorkflowRejection='';
@@ -116,13 +125,14 @@ export async function runLocalAudit(
     }
   };
   const actionSchema = limits.verifyPython ? {...auditActionSchema,properties:{...auditActionSchema.properties,...(limits.finalSchema?{result:limits.finalSchema}:{}),sequence:soliditySequenceJsonSchema,
-    action:{type:"string",enum:[...auditActionSchema.properties.action.enum,"verify_source","verify_python",...(workflow?["plan_probe","continue_inspection"]:[])]}}} : {...auditActionSchema,properties:{...auditActionSchema.properties,...(limits.finalSchema?{result:limits.finalSchema}:{})}};
-  const probePrompt = limits.verifyPython ? "\nverify_source tests a named public/exported source function in an isolated runtime; path is .py/.js/.mjs/.cjs/.java/.sol, query is its function name (Class.method for Java, Contract.function for Solidity), and answer is html_reflection or path_construction. Java requires exactly one String/byte[]/CharSequence/StringBuilder/StringBuffer/ByteBuffer/Path/File/URI/Object argument and a supported text/byte/path return; an instance needs a public no-arg constructor. Do not probe void callbacks, interface instances, domain-object arguments, or multi-argument methods. An invalid/unsupported probe is not evidence: choose a different eligible method. Solidity needs a deployable constructor and an appropriate public view/pure method on the local EVM. No arbitrary commands or project build scripts; inspect actual observations and caller context before conclusions. " + soliditySequencePrompt : "";
+    action:{type:"string",enum:[...auditActionSchema.properties.action.enum,"verify_source","verify_python",...(workflow?["plan_probe","probe_intent","continue_inspection"]:[])]}}} : {...auditActionSchema,properties:{...auditActionSchema.properties,...(limits.finalSchema?{result:limits.finalSchema}:{})}};
+  const probePrompt = limits.verifyPython ? "\\nUse probe_intent with inspected path, exact query (or blank for a unique candidate), supported answer kind, hypothesis and optional sequence. The controller validates and executes the accepted request. Python top-level and exported JavaScript functions require one string input and string output. Java supports one String/byte/CharSequence/Path/File/URI/Object-like input and text/byte/path output; public instance methods need a public zero-arg constructor. Solidity accepts state-changing sends and read assertions in a local EVM. Do not invent method names, expected values, or findings. " : "";
   const availableTools = limits.verifyPython ? [...tools,{type:"function",function:{
     name:"verify_source",description:probePrompt,parameters:{type:"object",
       properties:{path:{type:"string"},query:{type:"string"},kind:{type:"string"},sequence:soliditySequenceJsonSchema},required:["path","query","kind"]},
   }}] : tools;
   const recoveredFindingProbes=new Set<string>();
+  const finalCallerRecoveries=new Set<string>();
   let messages: Message[] = [
     { role: "system", content: (systemPrompt || "") + "\nPerform an offline source audit. Request exactly one tool call per response. Inspect actual files. Never invent findings or observations. No target network requests are available." + (limits.verifyPython ? probePrompt : " No source execution is available.") + (structured ? auditProtocolPrompt.replace(JSON.stringify(auditActionSchema),'Use action, path, query, answer; offset and sequence are optional. Example: {"action":"read_file","path":"file.py","query":"","answer":"","offset":0}. The response format enforces the full schema.') : "") },
     { role: "user", content: prompt + "\n/no_think" },
@@ -228,6 +238,24 @@ export async function runLocalAudit(
           const output=JSON.stringify(result);
           const verify={action:'verify_source',path,query:hint.functionName,answer:hint.kind};
           workflow.observe(verify as any,output);
+          if(result.status==='behavior_observed') {
+            const paths=(limits.initialSourcePaths||[]).filter(p=>p.startsWith('source-') &&
+              p!==path && /\.(?:py|js|mjs|cjs|java|sol)$/.test(p));
+            paths.sort((a,b)=>Number(/(?:caller|handler|route|controller|entry|server)/i.test(b))-
+              Number(/(?:caller|handler|route|controller|entry|server)/i.test(a)));
+            if(paths[0]) {
+              // Prefetch already supplies the caller text and records its read.
+              // Do not force the model to reread an exhausted source page.
+              if(!workflow.snapshot().readPaths.includes(paths[0]))workflow.requireSource(paths[0]);
+              else workflow.feedback('Probe reproduced in '+path+'. Caller '+paths[0]+
+                ' was already read. Evaluate caller reachability and impact using the recorded source and probe evidence; reread only if context was evicted.');
+              await appendFile(logFile,'[POST_PROBE_CALLER_REQUIRED] '+JSON.stringify({
+                testedPath:path,caller:paths[0],guided:true,
+                alreadyRead:workflow.snapshot().readPaths.includes(paths[0])
+              })+'\n');
+            }
+          }
+
           if(['behavior_observed','behavior_not_observed'].includes(result.status))
             allowance.probe(JSON.stringify([path,hint.functionName,hint.kind,undefined]),0);
           const record:Message={role:'assistant',content:JSON.stringify(verify)};
@@ -256,8 +284,19 @@ export async function runLocalAudit(
         constraints={...constraints,action:constraints.action.filter(name=>name!=='final')};
         await appendFile(logFile,'[EMPTY_FINAL_INVESTIGATE] Require a concrete tool action before another conclusion\n');
       }
+      // A stage permitting plan_probe also permits its controller-executed
+      // equivalent, without changing the underlying workflow validation.
+      if(workflow && constraints?.action?.includes('plan_probe') && !constraints.action.includes('probe_intent'))
+        constraints={...constraints,action:[...constraints.action,'probe_intent']};
+      if(workflow && turn<blockCompletedReadsUntil && constraints?.action?.includes('read_file')) {
+        const alternatives=constraints.action.filter(name=>name!=='read_file');
+        if(alternatives.length) {
+          constraints={...constraints,action:alternatives};
+          await appendFile(logFile,'[REPEATED_READ_BLOCKED] '+JSON.stringify({turn:turn+1,actions:alternatives})+'\n');
+        }
+      }
       if(workflow && consecutiveWorkflowRejections>=2 && constraints?.action?.includes('plan_probe')) {
-        const otherActions=constraints.action.filter(name=>name!=='plan_probe');
+        const otherActions=constraints.action.filter(name=>name!=='plan_probe' && name!=='probe_intent');
         if(otherActions.length)constraints={...constraints,action:otherActions};
       }
       if(constraints && (JSON.stringify(constraints).length>3000 || Object.entries(constraints).some(([key,values])=>
@@ -349,6 +388,18 @@ export async function runLocalAudit(
           }
           throw new Error("Ollama did not return a valid read-only JSON action; no tool was executed");
         }
+        // Model-visible tool paths may be absolute after a source reread.
+        // Normalize existing authorized paths before workflow constraints and
+        // read-history checks; never normalize an outside-workspace path.
+        if(action.path.startsWith('/')) {
+          try {
+            const normalized=relative(root,await safePath(action.path)).split(sep).join('/');
+            if(normalized!==action.path) {
+              await appendFile(logFile,'[MODEL_PATH_CANONICALIZED] '+JSON.stringify({from:action.path,to:normalized})+'\n');
+              action.path=normalized;
+            }
+          } catch {}
+        }
         // The workflow owns the exact pending verifier request. Do not ask
         // Qwen to reconstruct it after a correct plan has been accepted.
         if(workflow && action.action==='verify_source') {
@@ -361,6 +412,47 @@ export async function runLocalAudit(
               action.answer=pending.answer;action.sequence=pending.sequence;
               await appendFile(logFile,'[PROBE_REQUEST_CANONICALIZED] '+JSON.stringify({path:action.path,query:action.query,kind:action.answer})+'\\n');
             }
+          }
+        }
+        const automaticProbe=action.action==='probe_intent';
+        if(automaticProbe) {
+          action.action='plan_probe';
+          if(action.answer==='solidity_sequence' && action.path.endsWith('.sol') && !action.sequence) {
+            try {
+              const full=await safePath(action.path);
+              const menu=await solidityIndex.probeMenu(full,64);
+              const baseline=buildBaselineSequence(menu,action.query);
+              if(baseline) {
+                action.sequence=baseline;
+                await appendFile(logFile,'[PROBE_BASELINE_CONSTRUCTED] '+JSON.stringify({path:action.path,query:action.query,read:baseline.steps[0].function})+'\n');
+              }
+            }catch{}
+          }
+          if(!action.query.trim() && action.answer==='solidity_sequence' && action.path.endsWith('.sol') && action.sequence && typeof action.sequence==='object') {
+            try {
+              const full=await safePath(action.path);
+              const menu=await solidityIndex.probeMenu(full,64);
+              const steps=Array.isArray((action.sequence as any).steps)?(action.sequence as any).steps:[];
+              const declared=menu.filter(choice=>steps.some((step:any)=>typeof step.function==='string' &&
+                (step.function===choice.selector.split('.').at(-1) ||
+                 step.function.split('(')[0]===choice.selector.split('.').at(-1))));
+              if(declared.length===1) {
+                action.query=declared[0].selector;
+                await appendFile(logFile,'[PROBE_INTENT_RESOLVED] '+JSON.stringify({path:action.path,query:action.query,kind:action.answer})+'\n');
+              }
+            }catch{}
+          }
+          if(!action.query.trim() && ['html_reflection','path_construction'].includes(action.answer)) {
+            try {
+              const full=await safePath(action.path);
+              const choices=full.endsWith('.java')
+                ? await supportedJavaProbeHints(full,24)
+                : (await probeChoices(full,action.answer as 'html_reflection'|'path_construction',24)).map(choice=>choice.selector);
+              if(choices.length===1) {
+                action.query=choices[0];
+                await appendFile(logFile,'[PROBE_INTENT_RESOLVED] '+JSON.stringify({path:action.path,query:action.query,kind:action.answer})+'\n');
+              }
+            }catch{}
           }
         }
         if(constraints && Object.entries(constraints).some(([key,values])=>!values!.includes(action[key as "action"|"path"|"query"|"answer"]))) {
@@ -495,10 +587,41 @@ export async function runLocalAudit(
               continue;
             }
           }
+          // A single controller-facing handoff for all supported source probes.
+          // Unlike model prompts, these choices derive from actual declarations.
+          if(action.answer!=='solidity_sequence' && !action.path.endsWith('.java') && !action.path.endsWith('.sol')) {
+            let valid=false;
+            let menu:Awaited<ReturnType<typeof probeChoices>>=[];
+            try {
+              const full=await safePath(action.path);
+              valid=await declaredProbeTarget(full,action.query);
+              if(!valid)menu=await probeChoices(full,action.answer as 'html_reflection'|'path_construction',24,action.path);
+            }catch{}
+            if(!valid) {
+              const feedback='Controller source probe menu: '+JSON.stringify(menu)+
+                '. Choose a selector whose behavior matches your hypothesis, or inspect another function. '+
+                'Do not invent a function or report an unexecuted probe.';
+              workflow.feedback(feedback);
+              await appendFile(logFile,'[PROBE_INTENT_MENU] '+JSON.stringify({path:action.path,kind:action.answer,menu})+'\n');
+              messages.push({role:'user',content:feedback+' /no_think'});
+              continue;
+            }
+          }
           if(action.answer==='solidity_sequence') {
             const sequence=soliditySequenceSchema.safeParse(action.sequence);
             if(!sequence.success) {
-              const feedback='Provide a valid declarative Solidity sequence before planning its probe.';
+              let declarations:unknown[]=[];
+              try {
+                const full=await safePath(action.path);
+                declarations=await solidityIndex.probeMenu(full,24);
+              }catch{}
+              const errors=sequence.error.issues.map(issue=>issue.path.join('.')+': '+issue.message).slice(0,6);
+              const feedback='Controller Solidity probe guidance: '+JSON.stringify({errors,declarations,
+                expectedStructure:{constructorArgs:[],steps:[
+                  {operation:'send',function:'stateChangingMethod(type)',args:[],sender:0},
+                  {operation:'call',function:'observableGetter()',args:[],expect:'actual_expected_value'}
+                ]}})+
+                '. Use source-derived ABI argument types and a justified expected value; do not invent a state assertion. Read the declaration/context when unknown.';
               workflow.feedback(feedback);
               await appendFile(logFile,'[PLAN_REJECTED] '+feedback+'\n');
               messages.push({role:'user',content:feedback+' /no_think'});
@@ -516,12 +639,19 @@ export async function runLocalAudit(
           }
           rejectedPlans=0;
           rejectedRequiredProbeFinals=0;
-          workflow.plan(action);
+          workflow.plan({...action});
           await persistMemory();
-          messages.push({role:"assistant",content:message.content});
-          if(action.hypothesis)hypotheses.push({turn:turn+1,path:action.path,statement:action.hypothesis});
+          if(!automaticProbe && action.hypothesis)hypotheses.push({turn:turn+1,path:action.path,statement:action.hypothesis});
           await appendFile(logFile,'[PROBE_PLANNED] '+JSON.stringify(action)+'\n');
-          continue;
+          if(!automaticProbe) {
+            messages.push({role:"assistant",content:message.content});
+            continue;
+          }
+          // Intent mode is one-step: the exact accepted plan becomes the verifier
+          // request, never a second Qwen-generated reconstruction.
+          action.action='verify_source';
+          message={role:'assistant',content:JSON.stringify(action)};
+          await appendFile(logFile,'[PROBE_INTENT_EXECUTE] '+JSON.stringify({path:action.path,query:action.query,kind:action.answer})+'\n');
         }
         if(action.hypothesis)hypotheses.push({turn:turn+1,path:action.path,statement:action.hypothesis});
         await appendFile(logFile,"[MODEL_ACTION] "+JSON.stringify(action)+"\n");
@@ -565,6 +695,44 @@ export async function runLocalAudit(
         emptyFinals=0;
         const feedback = await limits.validateFinal?.(message.content);
         if (feedback) {
+          const observations=workflow?.snapshot().observations.filter(o=>o.status==='behavior_observed')||[];
+          if(observations.length) {
+            const normalizedConclusion=message.content.replace(/\s+/g,' ').trim().slice(0,1000);
+            repeatedRejectedConclusions=normalizedConclusion===lastRejectedConclusion
+              ? repeatedRejectedConclusions+1 : 1;
+            lastRejectedConclusion=normalizedConclusion;
+            const observed=observations.at(-1)!;
+            const known=(limits.initialSourcePaths||[]).filter(p=>
+              p.startsWith('source-') && /\.(?:py|js|mjs|cjs|java|sol)$/.test(p) && p!==observed.path);
+            known.sort((a,b)=>Number(/(?:caller|handler|route|controller|entry|server)/i.test(b))-
+              Number(/(?:caller|handler|route|controller|entry|server)/i.test(a)));
+            if(repeatedRejectedConclusions>=2 && known.length && postProbeRecoveryReads<2) {
+              const required=known[postProbeRecoveryReads%known.length];
+              postProbeRecoveryReads++;
+              workflow!.requireSource(required);
+              requireInvestigationAfterEmpty=true;
+              emptyFinals=0;
+              await appendFile(logFile,'[POST_PROBE_RECOVERY] '+JSON.stringify({
+                path:required,observation:observed,repeatedRejectedConclusions
+              })+'\\n');
+            }
+            if(repeatedRejectedConclusions>=4) {
+              await appendFile(logFile,'[AUDIT_INCOMPLETE_POST_PROBE] '+JSON.stringify({
+                reason:'Repeated rejected conclusions despite reproduced behavior',
+                observation:observed,attempts:repeatedRejectedConclusions
+              })+'\\n');
+              throw new Error('AUDIT_INCOMPLETE_POST_PROBE: probe evidence preserved, but the model could not produce a supported conclusion after bounded recovery; see audit log');
+            }
+            const guidance='Verified probe (not automatically a vulnerability): '+
+              JSON.stringify(observed)+'. Remaining requirements: establish caller reachability, input provenance, mitigations and impact from source before reporting. '+
+              (known.length?'Read caller candidate '+known[0]+' and cite its exact relevant lines. ':'Identify a concrete missing caller source. ')+
+              'Allowed conclusions must cite actual recorded caseId/evidenceFile and caller evidence; otherwise explicitly state which requirement remains unverified. Never claim there was no testable candidate.';
+            workflow!.feedback(guidance,true);
+            await appendFile(logFile,'[POST_PROBE_EVIDENCE_GUIDANCE] '+guidance+'\n');
+          } else {
+            repeatedRejectedConclusions=0;
+            lastRejectedConclusion='';
+          }
           // Escalate only repeated output-format failures; evidence-coverage failures
           // must remain free to request more source pages.
           invalidReviewFinals = !workflow && feedback.startsWith('Return the requested review JSON')
@@ -574,6 +742,15 @@ export async function runLocalAudit(
           // Retain read-action history: rejecting a final answer does not make prior pages new evidence.
           if(!workflow)recentActions.clear(); // Legacy no-workflow repair may explicitly require a fresh source read.
           stalledActions=0;workflow?.finalRejected(feedback);
+          if(workflow?.snapshot().observations.some(o=>o.status==='behavior_observed')) {
+            const observed=workflow.snapshot().observations.filter(o=>o.status==='behavior_observed').at(-1)!;
+            const required=(limits.initialSourcePaths||[]).find(p=>p.startsWith('source-') &&
+              /(?:caller|handler|route|controller|entry|server)/i.test(p));
+            workflow.feedback('Verified observation '+JSON.stringify(observed)+
+              '. Caller reachability and impact still require independent source support. '+
+              (required?'Reinspect '+required+'. ':'Locate caller source. ')+
+              'Use recorded evidence identifiers; do not claim no testable candidate.');
+          }
           // A validator that explicitly requires a probe must not let a small
           // model repeat unsupported final classifications indefinitely.
           // Do not force the first declared function: that could be unrelated.
@@ -608,6 +785,24 @@ export async function runLocalAudit(
           // Coverage validator can name the next inspected candidate. Make the
           // next source read deterministic instead of asking a small model to
           // infer another path from an already rejected conclusion.
+          // A recorded probe can be real while its caller context has fallen
+          // out of Qwen's compacted conversation. Force one source-backed caller
+          // read before letting repeated incomplete finals burn the time budget.
+          if(workflow && /A supported source probe HAS completed|no testable candidate|no probes/i.test(feedback) &&
+             workflow.snapshot().observations.some(o=>o.status==='behavior_observed')) {
+            const inspected=new Set(workflow.snapshot().readPaths);
+            const paths=(limits.initialSourcePaths||[]).filter(path=>
+              path.startsWith('source-') && /\\.(?:py|js|mjs|cjs|java|sol)$/.test(path));
+            const next=paths.find(path=>!finalCallerRecoveries.has(path) &&
+              (/(?:caller|handler|route|controller|entry|server)/i.test(path) || !inspected.has(path)));
+            if(next) {
+              finalCallerRecoveries.add(next);
+              workflow.requireSource(next);
+              requireInvestigationAfterEmpty=true;
+              emptyFinals=0;
+              await appendFile(logFile,'[CALLER_CONTEXT_RECOVERY] '+JSON.stringify({path:next})+'\\n');
+            }
+          }
           const requiredNextSource=feedback.match(/Suggested next file:\s*(\S+?\.(?:sol|java|ts|tsx|js|jsx|py))\b/i)?.[1];
           if(requiredNextSource && workflow) {
             workflow.requireSource(requiredNextSource);
@@ -619,7 +814,9 @@ export async function runLocalAudit(
           const rejected=messages.at(-1)!;
           rejected.content="Previous final answer rejected; follow the validation feedback.";
           await appendFile(logFile, "[FINAL_REJECTED] " + feedback + "\n");
-          messages.push(fitAuditToolOutput(messages.slice(0,2),rejected,"final_validation",feedback + "\nRe-read the source when necessary. /no_think",exchangeBudget,true).message);
+          messages.push(fitAuditToolOutput(messages.slice(0,2),rejected,"final_validation",feedback +
+            (workflow?.snapshot().observations.some(o=>o.status==='behavior_observed') ? "\n"+workflow.note() : "") +
+            "\nRe-read the specified source when necessary. /no_think",exchangeBudget,true).message);
           continue;
         }
         controller.signal.throwIfAborted();
@@ -691,6 +888,8 @@ export async function runLocalAudit(
               // recoverable navigation feedback, not a fatal hunt failure.
               // Keep the finite turn allowance as the ultimate bound.
               await appendFile(logFile,"[CONTEXT_RECOVERY] "+JSON.stringify({tool:name,path,offset,attempt:stalledActions})+"\\n");
+              blockCompletedReadsUntil=Math.max(blockCompletedReadsUntil,turn+4);
+              workflow.feedback('This exact source page is already recorded and rereading it produced no new evidence. Next choose an evidence-backed final, a different eligible probe, or a specific continuation. Do not reread this completed page.');
               stalledActions=0;
               throw new Error("Completed source page is already recorded. Choose another selected source or use the saved observation; do not request this completed page again. "+navigation.hint());
             }
@@ -753,6 +952,25 @@ export async function runLocalAudit(
             workflow?.read(relative(root,full).split(sep).join("/"));
             limits.onRead?.(relative(root,full).split(sep).join("/"),{start:page.start,end:page.end});
             await appendFile(logFile, "[READ_OK] " + relative(root,full) + ` offset=${page.start} end=${page.end} nextOffset=${page.nextOffset}\n`);
+            // Present grounded choices as soon as a file's last page is read,
+            // before Qwen needs to invent a probe target or a Solidity sequence.
+            if(workflow && page.nextOffset===null && ['.sol','.py','.js','.mjs','.cjs','.java'].some(ext=>full.endsWith(ext))) {
+              try {
+                const menu=full.endsWith('.sol')
+                  ? await solidityIndex.probeMenu(full,16)
+                  : await probeChoices(full,'html_reflection',12);
+                if(menu.length) {
+                  const original=JSON.parse(output);
+                  original.probeMenu=menu;
+                  original.probeMenuNote=full.endsWith('.sol')
+                    ? 'Select actual contract methods. Send means state-changing transaction, call means read assertion. A valid sequence needs grounded constructor arguments and an expected call value.'
+                    : 'These are source-derived function selectors, not proven vulnerabilities. Choose a probe kind matching inspected behavior.';
+                  output=JSON.stringify(original);
+                  await appendFile(logFile,'[PROBE_INTENT_MENU] '+JSON.stringify({path:relative(root,full),count:menu.length})+'\n');
+                }
+              }catch{}
+            }
+
           } else throw new Error("Unknown tool");
           output=fitOutput(output).output;
           try {navigation.observe(name,relative(root,full).split(sep).join("/") || ".",offset,String(call.function.arguments?.query || ""),JSON.parse(output));}catch{}
@@ -792,6 +1010,27 @@ export async function runLocalAudit(
           try {
             const probeResult=JSON.parse(output);
             probeStatus=String(probeResult.status || "unknown").slice(0,100);
+            // A successful reproduction is not the end of the investigation:
+            // require independently inspected caller/reachability evidence now,
+            // before the model can spend 80 turns on empty conclusions.
+            if(workflow && probeStatus==='behavior_observed') {
+              const testedPath=String(call.function.arguments?.path||'');
+              const readPaths=new Set(workflow.snapshot().readPaths);
+              const candidates=(limits.initialSourcePaths||[]).filter(p=>
+                p.startsWith('source-') && p!==testedPath &&
+                /\.(?:py|js|mjs|cjs|java|sol)$/.test(p));
+              candidates.sort((a,b)=>
+                Number(/(?:caller|handler|route|controller|entry|server)/i.test(b))-
+                Number(/(?:caller|handler|route|controller|entry|server)/i.test(a)));
+              const caller=candidates[0];
+              if(caller) {
+                workflow.requireSource(caller);
+                requireInvestigationAfterEmpty=true;
+                emptyFinals=0;
+                await appendFile(logFile,'[POST_PROBE_CALLER_REQUIRED] '+JSON.stringify({testedPath,caller})+'\n');
+              }
+            }
+
             await appendFile(logFile,"[PROBE_RESULT] "+JSON.stringify({path:call.function.arguments?.path,function:call.function.arguments?.query,kind:call.function.arguments?.kind,status:probeStatus,evidenceFile:probeResult.evidenceFile,detail:String(probeResult.detail||probeResult.reason||probeResult.error||"").slice(0,400)})+"\n");
           }catch{}
         }

@@ -17,6 +17,7 @@ function validateSequence(s) {
   if(JSON.stringify(s).length>16000 || !Array.isArray(s.steps) || !s.steps.length || s.steps.length>16)throw new Error('Invalid sequence length');
   for(const step of s.steps) {
     if(step?.operation==='call')object(step,['operation','function','args','expect'],['operation','function','args','expect','sender']);
+    else if(step?.operation==='observe')object(step,['operation','function','args'],['operation','function','args','sender']);
     else if(step?.operation==='send')object(step,['operation','function','args'],['operation','function','args','sender','valueWei','expectRevert']);
     else throw new Error('Unknown sequence operation');
     if(typeof step.function!=='string'||step.function.length>200||!/^[A-Za-z_][A-Za-z0-9_]*(?:\([A-Za-z0-9_,()[\]]*\))?$/.test(step.function))throw new Error('Invalid ABI function selector');
@@ -25,7 +26,7 @@ function validateSequence(s) {
     if(step.operation==='call')value(step.expect);
     else {wei(step.valueWei);if(step.expectRevert!==undefined&&typeof step.expectRevert!=='boolean')throw new Error('Invalid revert expectation');}
   }
-  if(!s.steps.some(step=>step.operation==='call'))throw new Error('Include a read assertion');
+  if(!s.steps.some(step=>step.operation==='call'||step.operation==='observe'))throw new Error('Include a read observation');
   return s;
 }
 function normalize(v) {
@@ -64,13 +65,15 @@ async function runSequence(artifact, sequence, transport) {
       const args=step.args.map(resolve);
       // Encode first: ABI/selector/setup failures must not count as expected reverts.
       contract.interface.encodeFunctionData(fragment,args);
-      if(step.operation==='call') {
+      if(step.operation==='call' || step.operation==='observe') {
         if(!['view','pure'].includes(fragment.stateMutability))throw new Error('call requires a view/pure function');
         const result=await fn.staticCallResult(...args,{gasLimit:1000000});
         const actual=normalize(fragment.outputs.length===1?result[0]:result);
-        const expected=normalize(resolve(step.expect));
-        steps.push({operation:'call',function:fragment.format('sighash'),sender:step.sender??0,
-          actual,expected,passed:JSON.stringify(actual)===JSON.stringify(expected)});
+        if(step.operation==='call') {
+          const expected=normalize(resolve(step.expect));
+          steps.push({operation:'call',function:fragment.format('sighash'),sender:step.sender??0,
+            actual,expected,passed:JSON.stringify(actual)===JSON.stringify(expected)});
+        } else steps.push({operation:'observe',function:fragment.format('sighash'),sender:step.sender??0,actual});
       } else {
         if(!['nonpayable','payable'].includes(fragment.stateMutability))throw new Error('send requires a state-changing function');
         if(fragment.stateMutability!=='payable' && BigInt(step.valueWei||'0')!==0n)throw new Error('Nonpayable function cannot receive value');
