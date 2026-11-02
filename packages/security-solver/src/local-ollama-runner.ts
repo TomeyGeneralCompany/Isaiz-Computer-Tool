@@ -126,7 +126,15 @@ export async function runLocalAudit(
       await limits.onAllowance?.(allowance.deadline);
     }
   };
-  const actionSchema = limits.verifyPython ? {...auditActionSchema,properties:{...auditActionSchema.properties,...(limits.finalSchema?{result:limits.finalSchema}:{}),sequence:{...soliditySequenceJsonSchema,required:["steps"],properties:{...soliditySequenceJsonSchema.properties,constructor:(z.toJSONSchema(javaSequenceSchema).properties?.constructor as any),steps:{type:"array",items:{anyOf:[(soliditySequenceJsonSchema.properties.steps as any).items,(z.toJSONSchema(javaSequenceSchema).properties?.steps as any)?.items]}}}},
+  const actionSchema = limits.verifyPython ? {...auditActionSchema,properties:{...auditActionSchema.properties,...(limits.finalSchema?{result:limits.finalSchema}:{}),sequence:{type:"object",properties:{
+      constructorArgs:{type:"array",items:{type:"string"}},
+      constructor:{type:"array",items:{}},
+      steps:{type:"array",items:{type:"object",properties:{
+        operation:{type:"string"},function:{type:"string"},method:{type:"string"},
+        args:{type:"array",items:{}},sender:{type:"integer"},
+        expect:{type:"string"},expected:{},valueWei:{type:"string"}
+      }}}
+    },required:["steps"]},
     action:{type:"string",enum:[...auditActionSchema.properties.action.enum,"verify_source","verify_python",...(workflow?["plan_probe","probe_intent","continue_inspection"]:[])]}}} : {...auditActionSchema,properties:{...auditActionSchema.properties,...(limits.finalSchema?{result:limits.finalSchema}:{})}};
   const probePrompt = limits.verifyPython ? "\\nUse probe_intent with inspected path, exact query (or blank for a unique candidate), supported answer kind, hypothesis and optional sequence. The controller validates and executes the accepted request. Python top-level and exported JavaScript functions require one string input and string output. Java text probes support one text/byte argument. For Java methods with primitive/String args, use java_sequence with sequence with constructor args and method steps; calls share one instance. Do not use html_reflection for Java numeric/state methods. Solidity accepts state-changing sends and read assertions in a local EVM. Do not invent method names, expected values, or findings. " : "";
   const availableTools = limits.verifyPython ? [...tools,{type:"function",function:{
