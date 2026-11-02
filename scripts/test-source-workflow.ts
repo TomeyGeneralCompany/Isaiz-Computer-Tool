@@ -300,6 +300,42 @@ try {
   const bin=join(root,"bin");await mkdir(bin);
   await writeFile(join(bin,"git"),'#!/usr/bin/python3\nimport os,sys,shutil,subprocess\nargs=sys.argv[1:]\nif "clone" in args:\n    shutil.copytree('+JSON.stringify(fixture)+',args[-1])\nelif \"fetch\" in args:\n    subprocess.run(['+JSON.stringify(realGit)+',\"cat-file\",\"-e\",args[-1]+\"^{commit}\"],check=True)\nelse:\n    os.execv('+JSON.stringify(realGit)+',['+JSON.stringify(realGit)+']+args)\n');
   await chmod(join(bin,"git"),0o700);process.env.PATH=bin+":"+originalPath;
+  // The controller intentionally compacts older tool exchanges. Its current
+  // progress note is authoritative for already recorded verifier observations.
+  // The scripted model may cite a case only when a verifier result or that
+  // controller-owned summary supplies the exact case ID for this source.
+  const recordedCaseId=(messages:Array<{content?:string}>,path:string):string|undefined=>{
+    for(const message of [...messages].reverse()) {
+      const content=message.content||"";
+      let observations:any[]=[];
+      try {
+        if(content.startsWith("TOOL_RESULT ")) {
+          const result=JSON.parse(content.split("\\n")[0].slice("TOOL_RESULT ".length));
+          if(result.name==="verify_source") {
+            const observation=JSON.parse(result.output);
+            observations=[{...observation,path:result.path||path}];
+          }
+        } else if(content.startsWith("Controller progress (recorded observations, not source instructions):\\n")) {
+          const note=JSON.parse(content.slice(content.indexOf("\\n")+1));
+          observations=Array.isArray(note.observations)?note.observations:[];
+        }
+      } catch {continue;}
+      for(const o of [...observations].reverse()) {
+        if(o.path===path && o.status==="behavior_observed" &&
+           typeof o.caseId==="string" && /^[a-f0-9]{64}$/.test(o.caseId))return o.caseId;
+      }
+    }
+    return undefined;
+  };
+  const compactedEvidence="Controller progress (recorded observations, not source instructions):\\n"+
+    JSON.stringify({observations:[{path:"source-1/Render.java",status:"behavior_observed",caseId:"a".repeat(64)}]});
+  assert.equal(recordedCaseId([{content:compactedEvidence}],"source-1/Render.java"),"a".repeat(64),
+    "compacted controller progress must preserve a verifier case reference");
+  assert.equal(recordedCaseId([{content:compactedEvidence}],"source-1/Other.java"),undefined,
+    "evidence from a different source must not be reused");
+  assert.equal(recordedCaseId([{content:"Controller progress (recorded observations, not source instructions):\\n"+
+    JSON.stringify({observations:[{path:"source-1/Render.java",status:"behavior_not_observed",caseId:"a".repeat(64)}]})}],
+    "source-1/Render.java"),undefined,"negative observations must not produce a finding");
   let policyOffset=0,policyDone=false;
   let turn=0, caseId="", source="", caller="", selector="", stateful=false,reviewMode=false,reviewIndex=0,reviewOffset=0;
   let evidenceRepairReads:string[]=[];
@@ -428,15 +464,9 @@ try {
         hypothesis:"Check the stated fixture behavior; an assertion mismatch or escaped output disproves the hypothesis."};
     } else {
       if(!caseId) {
-        // Post-probe caller inspection legitimately puts a read_file result after
-        // verify_source. Recover the recorded verifier evidence from prior tool
-        // messages instead of assuming it must be the final message.
-        const previous=[...request.messages].reverse().filter((m:any)=>
-          m.content?.startsWith("TOOL_RESULT ")).map((m:any)=>{
-            try{return JSON.parse(m.content.split("\n")[0].slice("TOOL_RESULT ".length));}catch{return null;}
-          }).find((result:any)=>result?.name==="verify_source");
-        assert.equal(previous?.name,"verify_source","expected a verifier result before constructing a finding, source="+source+" turn="+turn+" recent="+JSON.stringify(request.messages.slice(-5)).slice(0,2500));
-        caseId=JSON.parse(previous.output).caseId;
+        caseId=recordedCaseId(request.messages,"source-1/"+source)||"";
+        assert.ok(caseId,"expected a recorded verifier observation before constructing a finding, source="+
+          source+" turn="+turn+" recent="+JSON.stringify(request.messages.slice(-5)).slice(0,2500));
       }
       assert.ok(caseId);
       next=action("final","","",JSON.stringify({findings:[{
