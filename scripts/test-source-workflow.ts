@@ -107,6 +107,11 @@ assert.ok(revisedRunner.includes("[PROBE_INTENT_MENU]"));
 assert.ok(revisedRunner.includes("Controller Solidity probe guidance:"));
 assert.ok(revisedRunner.includes("[PROBE_INTENT_EXECUTE]"),"controller should perform accepted probe without a second model turn");
 assert.ok(revisedRunner.includes("[POST_PROBE_CALLER_REQUIRED]"),"verified probes must require caller analysis before finalization");
+assert.ok(revisedRunner.includes(String.raw`p!==path && /\.(?:py|js|mjs|cjs|java|sol)$/.test(p)`),
+  "post-probe caller discovery must recognize actual source file extensions");
+assert.ok(!revisedRunner.includes(String.raw`p!==path && /\\.(?:py|js|mjs|cjs|java|sol)$/.test(p)`),
+  "post-probe caller discovery must not match a literal backslash");
+
 assert.ok(revisedRunner.includes("[POST_PROBE_RECOVERY]"),"repeated invalid conclusions should trigger source rereading");
 assert.ok(revisedRunner.includes("[AUDIT_INCOMPLETE_POST_PROBE]"),"persistent invalid conclusions must terminate with truthful incomplete status");
 assert.ok(revisedRunner.includes("[POST_PROBE_EVIDENCE_GUIDANCE]"),"recorded probe evidence must guide the model after rejection");
