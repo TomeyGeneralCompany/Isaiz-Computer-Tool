@@ -43,7 +43,7 @@ public class TomeyJavaSequence {
   if(tag=='p'||tag=='m') {
    String[] lines=raw.split("\n",-1);
    if(lines.length<2)throw new IllegalArgumentException("invalid proxy record");
-   Class<?> iface=tag=='m'?type:Class.forName(lines[0]);
+   Class<?> iface=(tag=='m'||lines[0].equals(type.getSimpleName())||lines[0].equals(type.getName()))?type:Class.forName(lines[0]);
    if(!iface.isInterface()||!type.isAssignableFrom(iface))
      throw new IllegalArgumentException("proxy must implement expected interface");
    int count=Integer.parseInt(lines[1]);
