@@ -12,6 +12,18 @@ const graph = new StateGraph(State)
   .addNode('route', state => ({stage: state.pending ? 'test' as const :
     state.inspections >= 6 ? 'hypothesize' as const : state.tested.length ? 'review' as const : 'inspect' as const}))
   .addEdge(START, 'route').addEdge('route', END).compile();
+/** Reject only explicit contradictions between a hypothesis and its chosen probe.
+ * Ambiguous hypotheses remain eligible for ordinary source/runtime validation. */
+export function probeHypothesisMismatch(kind:string,hypothesis:string):string|null {
+  const h=hypothesis.toLowerCase();
+  const path= /\\b(?:path traversal|directory traversal|directory escape|filesystem path traversal)\\b/.test(h);
+  const html= /\\b(?:html reflection|html injection|cross.site scripting|\\bxss\\b|unescaped html|html escaping)\\b/.test(h);
+  if(path && !html && kind==='html_reflection')
+    return 'Hypothesis concerns path traversal, but html_reflection tests HTML output. Inspect a compatible path-building function and use path_construction, or revise the hypothesis from source evidence.';
+  if(html && !path && kind==='path_construction')
+    return 'Hypothesis concerns HTML output, but path_construction tests filesystem paths. Use html_reflection on a compatible text-producing function, or revise the hypothesis from source evidence.';
+  return null;
+}
 const key = (a:Action) => JSON.stringify([a.path,a.query,a.answer,a.sequence]);
 export class InvestigationWorkflow {
   private state:typeof State.State={stage:'inspect',inspections:0,pending:null,tested:[]};
@@ -143,6 +155,8 @@ export class InvestigationWorkflow {
       if(action.path.endsWith('.sol') && !/^[A-Za-z_$][\w$]*\.(?:[A-Za-z_$][\w$]*|constructor)$/.test(action.query))
         return 'Invalid Solidity probe target: query must be Contract.function using a declaration returned by outline_solidity. Do not use function, method, or guessed names.';
       if(!action.hypothesis?.trim())return 'State the suspected behavior and what observation would disprove it in hypothesis.';
+      const mismatch=probeHypothesisMismatch(action.answer,action.hypothesis);
+      if(mismatch)return mismatch;
       if(this.state.tested.includes(key(action)))return 'This probe already finished or was attempted. Use its observation; choose a different candidate or conclude with the permitted incomplete outcome.';
     }
     if(action.action==='verify_source' && this.state.pending && (action.path!==this.state.pending.path || action.query!==this.state.pending.query || action.answer!==this.state.pending.answer || !isDeepStrictEqual(action.sequence,this.state.pending.sequence)))
