@@ -30,8 +30,8 @@ const action=(name:string,path='',query='',answer='')=>({action:name,path,query,
 try {
   // The same routing implementation production uses: errors never become observations.
   // Controller must not execute a test unrelated to an explicit hypothesis.
-  assert.match(probeHypothesisMismatch('html_reflection','This method may permit path traversal using byte inputs') || '',/path traversal/);
-  assert.match(probeHypothesisMismatch('path_construction','Unescaped HTML injection may occur') || '',/HTML output/);
+  assert.match(probeHypothesisMismatch('html_reflection','This method may permit path traversal using byte inputs') || '',/Correct probe.*path_construction/);
+  assert.match(probeHypothesisMismatch('path_construction','Unescaped HTML injection may occur') || '',/Correct probe.*html_reflection/);
   assert.equal(probeHypothesisMismatch('path_construction','Potential directory traversal using user-provided path'),null);
   assert.equal(probeHypothesisMismatch('html_reflection','Potential unescaped HTML reflection'),null);
   assert.equal(probeHypothesisMismatch('java_sequence','Path traversal through state mutation'),null);
