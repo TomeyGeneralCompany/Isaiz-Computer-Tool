@@ -433,7 +433,7 @@ try {
         // messages instead of assuming it must be the final message.
         const previous=[...request.messages].reverse().filter((m:any)=>
           m.content?.startsWith("TOOL_RESULT ")).map((m:any)=>{
-            try{return JSON.parse(m.content.split("\\n")[0].slice("TOOL_RESULT ".length));}catch{return null;}
+            try{return JSON.parse(m.content.split("\n")[0].slice("TOOL_RESULT ".length));}catch{return null;}
           }).find((result:any)=>result?.name==="verify_source");
         assert.equal(previous?.name,"verify_source","expected a verifier result before constructing a finding, source="+source+" turn="+turn+" recent="+JSON.stringify(request.messages.slice(-5)).slice(0,2500));
         caseId=JSON.parse(previous.output).caseId;
