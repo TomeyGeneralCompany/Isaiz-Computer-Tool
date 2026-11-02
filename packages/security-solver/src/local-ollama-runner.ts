@@ -696,7 +696,7 @@ export async function runLocalAudit(
           // A recorded probe can be real while its caller context has fallen
           // out of Qwen's compacted conversation. Force one source-backed caller
           // read before letting repeated incomplete finals burn the time budget.
-          if(workflow && /no testable candidate|no probes/i.test(feedback) &&
+          if(workflow && /A supported source probe HAS completed|no testable candidate|no probes/i.test(feedback) &&
              workflow.snapshot().observations.some(o=>o.status==='behavior_observed')) {
             const inspected=new Set(workflow.snapshot().readPaths);
             const paths=(limits.initialSourcePaths||[]).filter(path=>
