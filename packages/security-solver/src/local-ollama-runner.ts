@@ -573,16 +573,28 @@ export async function runLocalAudit(
             }catch{}
             if(!compatible) {
               const choices=alternatives.filter(selector=>selector!==action.query);
-              const feedback='Controller probe compatibility: '+action.query+
-                ' does not have a supported public static one-input text/byte signature. '+
-                (choices.length?'Compatible signatures declared in this file: '+choices.join(', ')+'. ':
-                  'No compatible method was found in this file. Inspect another source candidate. ')+
-                'Only select an alternative if its code matches the behavior you intend to investigate. '+
-                'Valid request shape: '+JSON.stringify({action:'plan_probe',path:action.path,
-                  query:choices[0]||'Class.method',answer:action.answer,
-                  hypothesis:'Suspected behavior and the observation that would disprove it.'});
-              workflow.feedback(feedback);
-              await appendFile(logFile,'[PROBE_COMPATIBILITY_REJECTED] '+JSON.stringify({path:action.path,query:action.query,choices})+'\\n');
+              // Eligibility belongs to the isolated verifier, not to the
+              // hypothesis. Do not substitute an unrelated compatible method.
+              // Preserve the rejected target as a concrete investigation lead.
+              const declared=await (async()=>{try{
+                return (await sourceDeclarationHints(await safePath(action.path),64)).includes(action.query);
+              }catch{return false;}})();
+              const feedback='Probe execution unavailable for '+action.query+
+                ': the isolated Java adapter accepts public one-argument methods with supported text/byte input and output types and a constructible receiver. '+
+                (declared?'The target is declared; its hypothesis remains OPEN. ':
+                  'The requested selector was not confirmed in the parsed declarations; verify its spelling and source. ')+
+                'This is NOT evidence that the target is safe or that the hypothesis is false. '+
+                'Do not replace this target with '+(choices.length?choices.join(', '):'another unrelated method')+
+                ' merely to obtain a runnable probe. '+
+                'NEXT: inspect the original method and its callers, parameters, receiver construction and state dependencies; '+
+                'determine whether a valid isolated reproduction can be built. '+
+                'If the adapter cannot represent the required state, record an incomplete inspection and the exact missing setup. '+
+                'Do not claim no testable candidate exists merely because this verifier has no compatible signature.';
+              workflow.feedback(feedback,true);
+              await appendFile(logFile,'[PROBE_COMPATIBILITY_REJECTED] '+JSON.stringify({
+                path:action.path,query:action.query,choices,declared,
+                classification:'unsupported_adapter_signature_not_invalid_hypothesis'
+              })+'\\n');
               messages.push({role:'user',content:feedback+' /no_think'});
               continue;
             }

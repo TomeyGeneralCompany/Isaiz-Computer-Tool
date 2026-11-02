@@ -121,6 +121,9 @@ assert.ok(revisedRunner.includes("[PROBE_INTENT_MENU]"));
 assert.ok(revisedRunner.includes("Controller Solidity probe guidance:"));
 assert.ok(revisedRunner.includes("[PROBE_INTENT_EXECUTE]"),"controller should perform accepted probe without a second model turn");
 assert.ok(revisedRunner.includes("[POST_PROBE_CALLER_REQUIRED]"),"verified probes must require caller analysis before finalization");
+assert.ok(revisedRunner.includes("unsupported_adapter_signature_not_invalid_hypothesis"),"Java adapter mismatch must not erase the original hypothesis");
+assert.ok(revisedRunner.includes("The target is declared; its hypothesis remains OPEN"),"Java rejection must preserve a declared target");
+assert.ok(!revisedRunner.includes("query:choices[0]||'Class.method'"),"Java rejection must not propose unrelated methods as replacement targets");
 assert.ok(revisedRunner.includes("alreadyRead:workflow.snapshot().readPaths.includes(paths[0])"),
   "prefetched callers must not be forced into redundant reread loops");
 assert.ok(revisedRunner.includes("[MODEL_PATH_CANONICALIZED]"),
