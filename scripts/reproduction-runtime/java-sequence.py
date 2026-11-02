@@ -152,7 +152,7 @@ def token(value):
             raise ValueError('TOMEY_INVALID_JAVA_PROBE: invalid bounded proxy')
         entries=[name+':'+base64.b64encode(token(arg).encode()).decode()
                  for name,arg in sorted(returns.items())]
-        tag='p';text='\\n'.join([value['proxy'],str(len(entries)),*entries])
+        tag='p';text='\n'.join([value['proxy'],str(len(entries)),*entries])
     else:raise ValueError('TOMEY_INVALID_JAVA_PROBE: invalid argument')
     return tag+':'+base64.b64encode(text.encode()).decode()
 ctor=[token(x) for x in sequence.get('constructor',[])]
