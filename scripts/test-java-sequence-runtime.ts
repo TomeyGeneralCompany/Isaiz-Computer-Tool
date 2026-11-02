@@ -8,7 +8,8 @@ import {join} from "node:path";
 // An observation_only result is still a successful execution of the test harness.
 function runObservation(root:string,spec:string):string {
   try {
-    return execFileSync("python3",["scripts/source-reproduction.py","--repository",root,"--spec",spec],\n      {encoding:"utf8",timeout:120000});
+    return execFileSync("python3",["scripts/source-reproduction.py","--repository",root,"--spec",spec],
+      {encoding:"utf8",timeout:120000});
   } catch(error:any) {
     if(error.status===1 && typeof error.stdout==="string" && error.stdout.trim()) {
       const result=JSON.parse(error.stdout);
