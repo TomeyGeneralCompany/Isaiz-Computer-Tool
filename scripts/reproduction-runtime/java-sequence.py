@@ -14,7 +14,7 @@ steps=sequence['steps']
 if not any(step['method']==parts[1] for step in steps):
     raise ValueError('TOMEY_INVALID_JAVA_PROBE: selected method not invoked')
 source=target.read_text()
-package_match=re.search(r'\bpackage\s+([\\w.]+)\s*;',source)
+package_match=re.search(r'\bpackage\s+([\w.]+)\s*;',source)
 package=package_match[1] if package_match else ''
 root=target.parent
 for component in reversed(package.split('.') if package else []):
