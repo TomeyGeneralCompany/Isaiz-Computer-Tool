@@ -12,11 +12,7 @@ const execute = promisify(execFile);
 const driver = fileURLToPath(new URL("../../../scripts/source-reproduction.py",import.meta.url));
 const sha = (value:string | Buffer) => createHash("sha256").update(value).digest("hex");
 const digest = z.string().regex(/^[a-f0-9]{64}$/);
-const javaSequenceSchema = z.object({constructor:z.array(z.union([z.string().max(2048),z.number().finite(),z.boolean()])).max(8).default([]),
-  steps:z.array(z.object({method:z.string().regex(/^[A-Za-z_$][\\w$]{0,79}$/),
-    args:z.array(z.union([z.string().max(2048),z.number().finite(),z.boolean()])).max(8).default([]),
-    expected:z.union([z.string(),z.number(),z.boolean()]).optional()})).min(1).max(12)}).strict();
-export type JavaSequence = z.infer<typeof javaSequenceSchema>;
+import {javaSequenceSchema, type JavaSequence} from "./java-sequence";
 const specSchema = z.object({file:z.string().min(1).max(4096),function:z.string().regex(/^[A-Za-z][A-Za-z0-9_]{0,79}(?:\.[A-Za-z][A-Za-z0-9_]{0,79})?$/),
   kind:z.enum(["html_reflection","path_construction","solidity_sequence","java_sequence"]),sequence:z.union([soliditySequenceSchema,javaSequenceSchema]).optional(),nonce:z.string().regex(/^[a-f0-9]{32}$/)}).strict().superRefine((spec,ctx)=>{
     if(spec.kind === "solidity_sequence") {
