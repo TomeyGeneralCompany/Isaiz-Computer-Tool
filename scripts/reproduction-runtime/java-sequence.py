@@ -92,7 +92,7 @@ public class TomeyJavaSequence {
   }
   throw new IllegalArgumentException("unsupported argument type "+type.getName());
  }
- static Object[] bind(String[] encoded,Class<?>[] types) {
+ static Object[] bind(String[] encoded,Class<?>[] types) throws ClassNotFoundException {
   if(encoded.length!=types.length)throw new IllegalArgumentException("argument count");
   Object[] values=new Object[types.length];
   for(int i=0;i<types.length;i++)values[i]=arg(encoded[i],types[i]);
@@ -105,7 +105,7 @@ public class TomeyJavaSequence {
   }
   throw new IllegalArgumentException("no supported public constructor");
  }
- static Method method(Class<?> type,String name,String[] args) {
+ static Method method(Class<?> type,String name,String[] args) throws ClassNotFoundException {
   for(Method m:type.getMethods()) {
    if(!m.getName().equals(name))continue;
    try{bind(args,m.getParameterTypes());return m;}catch(IllegalArgumentException ignored){}
