@@ -70,6 +70,24 @@ public class ProxyState {
   assert.equal(proxied.status,"observation_only",JSON.stringify(proxied));
   assert.equal(proxied.observations.steps[0].actual,"42");
   assert.equal(proxied.observations.steps[0].passed,true);
+  // The schema also permits interface mocks without explicit class names.
+  // Resolve each nested mock against its Java formal parameter type.
+  await writeFile(spec,JSON.stringify({
+    file:"ProxyState.java",function:"ProxyState.getTotalTronPowerWeight",
+    kind:"java_sequence",nonce:"0123456789abcdef0123456789abcdef",
+    sequence:{constructor:[{mock:{
+      getDeposit:{mock:{getTotalTronPowerWeight:43}},
+      getContractAddress:null
+    }}],steps:[{method:"getTotalTronPowerWeight",args:[],expected:43}]}
+  }));
+  const mockOutput=execFileSync("python3",["scripts/source-reproduction.py","--repository",root,"--spec",spec],
+    {encoding:"utf8",timeout:120000});
+  const mocked=JSON.parse(mockOutput);
+  assert.equal(mocked.kind,"java_sequence",JSON.stringify(mocked));
+  assert.equal(mocked.status,"observation_only",JSON.stringify(mocked));
+  assert.equal(mocked.observations.steps[0].actual,"43");
+  assert.equal(mocked.observations.steps[0].passed,true);
+  console.log("Nested inferred Java interface mocks: PASSED");
   console.log("Java package-private constructor + nested interface collaborator proxy: PASSED");
   console.log("Stateful Java constructor + mutation + getter in real isolated verifier: PASSED");
 } finally {await rm(root,{recursive:true,force:true});}
