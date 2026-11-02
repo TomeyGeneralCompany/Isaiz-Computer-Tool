@@ -211,7 +211,7 @@ public class TomeyJavaProbe {
     throw new IllegalArgumentException("Unsupported return type: "+object.getClass().getName());
   }
   public static void main(String[] argv) throws Exception {
-    java.io.PrintStream out=System.out;
+    java.io.PrintStream originalOutput=System.out;
     System.setOut(new java.io.PrintStream(java.io.OutputStream.nullOutputStream()));
     Class<?> cls=Class.forName(argv[0]);
     int cursor=1;
@@ -236,7 +236,7 @@ public class TomeyJavaProbe {
       Object actual=method.invoke(Modifier.isStatic(method.getModifiers())?null:instance,values(method,encoded));
       results[j]=Base64.getEncoder().encodeToString(out(actual).getBytes(StandardCharsets.UTF_8));
     }
-    for(String result:results)out.println(result);
+    for(String result:results)originalOutput.println(result);
   }
 }
 ''')
