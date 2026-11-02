@@ -106,6 +106,7 @@ const revisedRunner=await readFile(new URL("../packages/security-solver/src/loca
 assert.ok(revisedRunner.includes("[PROBE_INTENT_MENU]"));
 assert.ok(revisedRunner.includes("Controller Solidity probe guidance:"));
 assert.ok(revisedRunner.includes("[PROBE_INTENT_EXECUTE]"),"controller should perform accepted probe without a second model turn");
+assert.ok(revisedRunner.includes("[POST_PROBE_CALLER_REQUIRED]"),"verified probes must require caller analysis before finalization");
 assert.ok(revisedRunner.includes('A supported source probe HAS completed|no testable candidate|no probes'),"completed-probe final rejection must trigger caller-context recovery");
 
 // Recovery regex regression: the source must use single-escaped regex tokens.
