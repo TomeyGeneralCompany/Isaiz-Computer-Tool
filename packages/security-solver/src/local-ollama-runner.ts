@@ -572,17 +572,33 @@ export async function runLocalAudit(
               if(!compatible)alternatives=await supportedJavaProbeHints(target);
             }catch{}
             if(!compatible) {
+              // Probe eligibility belongs to the verifier; investigation eligibility
+              // does not. Preserve the suspected method instead of laundering an
+              // unrelated compatible method into the next probe.
               const choices=alternatives.filter(selector=>selector!==action.query);
-              const feedback='Controller probe compatibility: '+action.query+
-                ' does not have a supported public static one-input text/byte signature. '+
-                (choices.length?'Compatible signatures declared in this file: '+choices.join(', ')+'. ':
-                  'No compatible method was found in this file. Inspect another source candidate. ')+
-                'Only select an alternative if its code matches the behavior you intend to investigate. '+
-                'Valid request shape: '+JSON.stringify({action:'plan_probe',path:action.path,
-                  query:choices[0]||'Class.method',answer:action.answer,
-                  hypothesis:'Suspected behavior and the observation that would disprove it.'});
-              workflow.feedback(feedback);
-              await appendFile(logFile,'[PROBE_COMPATIBILITY_REJECTED] '+JSON.stringify({path:action.path,query:action.query,choices})+'\\n');
+              const nextPaths=(limits.initialSourcePaths||[]).filter(p=>
+                p.startsWith('source-') && p!==action.path &&
+                /\\.(?:java|sol|py|js|mjs|cjs)$/.test(p));
+              const caller=nextPaths.find(p=>/(?:caller|handler|program|state|manager|service|controller)/i.test(p))||
+                nextPaths[0];
+              const feedback='PROBE_UNSUPPORTED_NOT_HYPOTHESIS_REJECTED: '+action.query+
+                ' is not executable through the isolated one-argument Java text/byte adapter. '+
+                'This is NOT evidence that the method is safe, absent, or irrelevant. '+
+                'Do not replace it with '+(choices[0]||'an unrelated method')+
+                ' merely because that method has a compatible signature. '+
+                'Preserve the original hypothesis and investigate the state construction, call sites, '+
+                'input types, and test dependencies. '+(caller?'Next source to inspect: '+caller+'. ':'Locate a relevant source caller. ')+
+                'If no compatible stateful reproduction can be constructed, return a scoped incomplete '+
+                'investigation with this precise limitation; do not claim no testable candidate exists.';
+              if(caller) {
+                workflow.requireSource(caller);
+                requireInvestigationAfterEmpty=true;
+              } else workflow.feedback(feedback,true);
+              await appendFile(logFile,'[PROBE_CAPABILITY_GAP] '+JSON.stringify({
+                path:action.path,selector:action.query,kind:action.answer,
+                hypothesis:action.hypothesis,caller:caller||null,
+                supportedAlternativesNotSubstituted:choices
+              })+'\\n');
               messages.push({role:'user',content:feedback+' /no_think'});
               continue;
             }
