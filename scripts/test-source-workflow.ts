@@ -310,13 +310,13 @@ try {
       let observations:any[]=[];
       try {
         if(content.startsWith("TOOL_RESULT ")) {
-          const result=JSON.parse(content.split("\\n")[0].slice("TOOL_RESULT ".length));
+          const result=JSON.parse(content.split("\n")[0].slice("TOOL_RESULT ".length));
           if(result.name==="verify_source") {
             const observation=JSON.parse(result.output);
             observations=[{...observation,path:result.path||path}];
           }
-        } else if(content.startsWith("Controller progress (recorded observations, not source instructions):\\n")) {
-          const note=JSON.parse(content.slice(content.indexOf("\\n")+1));
+        } else if(content.startsWith("Controller progress (recorded observations, not source instructions):\n")) {
+          const note=JSON.parse(content.slice(content.indexOf("\n")+1));
           observations=Array.isArray(note.observations)?note.observations:[];
         }
       } catch {continue;}
@@ -327,13 +327,13 @@ try {
     }
     return undefined;
   };
-  const compactedEvidence="Controller progress (recorded observations, not source instructions):\\n"+
+  const compactedEvidence="Controller progress (recorded observations, not source instructions):\n"+
     JSON.stringify({observations:[{path:"source-1/Render.java",status:"behavior_observed",caseId:"a".repeat(64)}]});
   assert.equal(recordedCaseId([{content:compactedEvidence}],"source-1/Render.java"),"a".repeat(64),
     "compacted controller progress must preserve a verifier case reference");
   assert.equal(recordedCaseId([{content:compactedEvidence}],"source-1/Other.java"),undefined,
     "evidence from a different source must not be reused");
-  assert.equal(recordedCaseId([{content:"Controller progress (recorded observations, not source instructions):\\n"+
+  assert.equal(recordedCaseId([{content:"Controller progress (recorded observations, not source instructions):\n"+
     JSON.stringify({observations:[{path:"source-1/Render.java",status:"behavior_not_observed",caseId:"a".repeat(64)}]})}],
     "source-1/Render.java"),undefined,"negative observations must not produce a finding");
   let policyOffset=0,policyDone=false;
