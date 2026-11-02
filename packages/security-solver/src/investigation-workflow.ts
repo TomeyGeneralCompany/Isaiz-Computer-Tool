@@ -87,11 +87,15 @@ export class InvestigationWorkflow {
       observations:this.observations.slice(-2).map(o=>({...o,path:o.path.slice(0,160)})),feedback:this.lastFeedback.slice(0,240),
       instruction:this.state.pending?'Execute the planned probe with exactly its path, function, kind and sequence.':
         'Read relevant source, then plan_probe with path, query=function, answer=probe kind, hypothesis=claim AND disproof condition. After six inspections or eight source pages, choose plan_probe, continue_inspection with a specific unanswered question in hypothesis and the next path/offset/query, or an incomplete final. Continue only to obtain that missing evidence; no forced unrelated test. A failed or unsupported verification is not proof of absence or presence. After inspecting recorded evidence, change candidate or request specific missing context; do not repeat completed evidence pages. Read recorded evidenceFile pages when an observation leaves context instead of repeating its probe. After testing inspect caller/mitigations before reporting; observations alone are not findings.'};
+    // Evidence is controller-owned and must survive conversation compaction.
+    // Discard navigation prose before dropping a verified reproduction record.
     while(JSON.stringify(note).length>1800 && note.priorNavigation.length)note.priorNavigation.shift();
     while(JSON.stringify(note).length>1800 && note.recentReadPaths.length)note.recentReadPaths.shift();
     while(JSON.stringify(note).length>1800 && note.nextUnreadPages.length)note.nextUnreadPages.shift();
-    while(JSON.stringify(note).length>1800 && note.observations.length)note.observations.shift();
-    if(JSON.stringify(note).length>1800){note.unansweredQuestion=undefined;note.feedback=note.feedback.slice(0,100);}
+    if(JSON.stringify(note).length>1800)note.instruction='Preserve recorded probe evidence. Inspect unresolved caller reachability and impact before reporting; do not repeat completed probes.';
+    if(JSON.stringify(note).length>1800)note.feedback=note.feedback.slice(0,100);
+    while(JSON.stringify(note).length>1800 && note.observations.length>1)note.observations.shift();
+    if(JSON.stringify(note).length>1800)note.unansweredQuestion=undefined;
     return JSON.stringify(note);
   }
   requireProbe(path:string,query:string,kind:string) {
