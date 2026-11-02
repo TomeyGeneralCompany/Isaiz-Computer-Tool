@@ -103,6 +103,11 @@ export async function runLocalAudit(
   let emptyFinalRecoveryCycles=0;
   let requireInvestigationAfterEmpty=false;
   let invalidReviewFinals=0;
+  // Preserve the verifier's facts independently of Qwen's compacted chat.
+  let lastRejectedConclusion='';
+  let repeatedRejectedConclusions=0;
+  let postProbeRecoveryReads=0;
+
   let rejectedPlans=0;
   let consecutiveWorkflowRejections=0;
   let lastWorkflowRejection='';
@@ -661,6 +666,44 @@ export async function runLocalAudit(
         emptyFinals=0;
         const feedback = await limits.validateFinal?.(message.content);
         if (feedback) {
+          const observations=workflow?.snapshot().observations.filter(o=>o.status==='behavior_observed')||[];
+          if(observations.length) {
+            const normalizedConclusion=message.content.replace(/\\s+/g,' ').trim().slice(0,1000);
+            repeatedRejectedConclusions=normalizedConclusion===lastRejectedConclusion
+              ? repeatedRejectedConclusions+1 : 1;
+            lastRejectedConclusion=normalizedConclusion;
+            const observed=observations.at(-1)!;
+            const known=(limits.initialSourcePaths||[]).filter(p=>
+              p.startsWith('source-') && /\\.(?:py|js|mjs|cjs|java|sol)$/.test(p) && p!==observed.path);
+            known.sort((a,b)=>Number(/(?:caller|handler|route|controller|entry|server)/i.test(b))-
+              Number(/(?:caller|handler|route|controller|entry|server)/i.test(a)));
+            if(repeatedRejectedConclusions>=2 && known.length && postProbeRecoveryReads<2) {
+              const required=known[postProbeRecoveryReads%known.length];
+              postProbeRecoveryReads++;
+              workflow!.requireSource(required);
+              requireInvestigationAfterEmpty=true;
+              emptyFinals=0;
+              await appendFile(logFile,'[POST_PROBE_RECOVERY] '+JSON.stringify({
+                path:required,observation:observed,repeatedRejectedConclusions
+              })+'\\n');
+            }
+            if(repeatedRejectedConclusions>=4) {
+              await appendFile(logFile,'[AUDIT_INCOMPLETE_POST_PROBE] '+JSON.stringify({
+                reason:'Repeated rejected conclusions despite reproduced behavior',
+                observation:observed,attempts:repeatedRejectedConclusions
+              })+'\\n');
+              throw new Error('AUDIT_INCOMPLETE_POST_PROBE: probe evidence preserved, but the model could not produce a supported conclusion after bounded recovery; see audit log');
+            }
+            const guidance='Verified probe (not automatically a vulnerability): '+
+              JSON.stringify(observed)+'. Remaining requirements: establish caller reachability, input provenance, mitigations and impact from source before reporting. '+
+              (known.length?'Read caller candidate '+known[0]+' and cite its exact relevant lines. ':'Identify a concrete missing caller source. ')+
+              'Allowed conclusions must cite actual recorded caseId/evidenceFile and caller evidence; otherwise explicitly state which requirement remains unverified. Never claim there was no testable candidate.';
+            workflow!.feedback(guidance,true);
+            await appendFile(logFile,'[POST_PROBE_EVIDENCE_GUIDANCE] '+guidance+'\\n');
+          } else {
+            repeatedRejectedConclusions=0;
+            lastRejectedConclusion='';
+          }
           // Escalate only repeated output-format failures; evidence-coverage failures
           // must remain free to request more source pages.
           invalidReviewFinals = !workflow && feedback.startsWith('Return the requested review JSON')
