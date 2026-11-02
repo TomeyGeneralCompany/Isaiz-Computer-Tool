@@ -173,7 +173,6 @@ process.env.LOCAL_HUNT_NUM_PREDICT="4096";
 const workflowText=await readFile(join(process.cwd(),"packages/security-solver/src/investigation-workflow.ts"),"utf8");
 assert.ok(workflowText.includes("Invalid Solidity probe target"),"placeholder Solidity method targets must be rejected before verification");
 
-const {InvestigationWorkflow}=await import("../packages/security-solver/src/investigation-workflow");
 const outlineWorkflow=new InvestigationWorkflow();
 outlineWorkflow.read("source-1/Fixture.sol");
 for(let i=0;i<6;i++)outlineWorkflow.observe({action:"read_file",path:"source-1/Fixture.sol",query:"",answer:"",offset:i*10} as any,
