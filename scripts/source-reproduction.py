@@ -179,7 +179,7 @@ def run_probe(repository: Path, specification: dict, _dependency_round: int = 0)
     source_hash=hashlib.sha256(target.read_bytes()).hexdigest()
     with tempfile.TemporaryDirectory(prefix='autohack-reproduction-') as temporary:
         work=Path(temporary)
-        (work/'probe.py').write_text((runtime/'java-probe.py').read_text() if language == 'java' else PROBE)
+        (work/'probe.py').write_text((runtime/('java-sequence.py' if kind == 'java_sequence' else 'java-probe.py')).read_text() if language == 'java' else PROBE)
         (work/'spec.json').write_text(json.dumps(specification))
         runtime_binds = ['--ro-bind',str(java_home),'/jdk',*java_config_binds,'--ro-bind',str(runtime),'/runtime'] if language == 'java' else [] if language == 'python' else [
             '--ro-bind',str(Path(node).resolve()),'/probe-node',
