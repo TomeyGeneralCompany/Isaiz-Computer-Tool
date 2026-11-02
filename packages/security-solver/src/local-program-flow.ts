@@ -281,7 +281,7 @@ Do not claim production testing, JavaScript execution, file access or other effe
               if(claimedValid)continue;
               const sites:{file:string,line:number}[]=[];
               for(const candidatePath of [...new Set([...sourceHints,...eligiblePaths])].slice(0,80)) {
-                if(sites.length>1)break;
+                if(sites.length>=8)break;
                 const candidateRepo=repos.find(r=>candidatePath.startsWith(relative(root,r.directory).split(sep).join('/')+'/'));
                 if(!candidateRepo || candidateRepo.url!==record.repositoryUrl)continue;
                 try {
@@ -291,6 +291,12 @@ Do not claim production testing, JavaScript execution, file access or other effe
                       sites.push({file:candidatePath,line});
                 }catch{}
               }
+              // Only a unique inspected call site may be reconciled automatically.
+              // Preserve multiple genuine sites for model disambiguation rather
+              // than treating the first syntactic hit as evidence of reachability.
+              if(sites.length>1)await appendFile(logFile,'[CALLER_CANDIDATES] '+JSON.stringify({
+                caseId:finding.caseId,sites:sites.slice(0,8),reason:'multiple inspected call sites require disambiguation'
+              })+'\\n');
               if(sites.length===1) {
                 finding.callerFile=sites[0].file;
                 finding.callerLine=sites[0].line;

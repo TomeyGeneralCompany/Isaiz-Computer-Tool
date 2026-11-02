@@ -512,6 +512,13 @@ try {
   const {referencesProbedFunction}=await import("../packages/security-solver/src/source-function-reference");
   assert.equal(referencesProbedFunction("renderer.render(input)","Render.render"),true);
   assert.equal(referencesProbedFunction("renderer.prerender(input)","Render.render"),false);
+  const {callerLineReferences}=await import("../packages/security-solver/src/source-function-reference");
+  assert.equal(callerLineReferences("long total = this.contract.getTotalTronPowerWeight();",1,"ContractState.getTotalTronPowerWeight"),true);
+  assert.equal(callerLineReferences("this.contract.\n  getTotalTronPowerWeight();",1,"ContractState.getTotalTronPowerWeight"),true,"inspected receiver continuation is equivalent evidence");
+  assert.equal(callerLineReferences("this.contract.getTotalTronPowerWeight\n  ();",1,"ContractState.getTotalTronPowerWeight"),true,"split call parenthesis is equivalent evidence");
+  assert.equal(callerLineReferences("other();\n  getTotalTronPowerWeight();",1,"ContractState.getTotalTronPowerWeight"),false,"unrelated preceding source line cannot borrow a call");
+  assert.equal(callerLineReferences("// contract.getTotalTronPowerWeight();",1,"ContractState.getTotalTronPowerWeight"),false,"comments are not caller evidence");
+  assert.equal(callerLineReferences("contract.getTotalTronPowerWeight();",2,"ContractState.getTotalTronPowerWeight"),false,"caller source location must remain inspected and exact");
   assert.equal(referencesProbedFunction("// render is declared here","Render.render"),false);
   const program:any={id:"owned",provider:"immunefi",name:"Owned fixture",scopeSummary:JSON.stringify({policy:"Owned fixture policy; local tests only. ".repeat(300),scopes:[
     {assetType:"SOURCE_CODE",eligibleForBounty:true,assetIdentifier:"https://github.com/fixture/owned"}

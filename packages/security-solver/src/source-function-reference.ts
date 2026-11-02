@@ -15,7 +15,19 @@ export function referencesProbedFunction(line:string, selector:string):boolean {
   return false;
 }
 export function callerLineReferences(text:string,line:number,selector:string):boolean {
-  return referencesProbedFunction(sourceCodeOnly(text).split("\n")[line-1] || "",selector);
+  const lines=sourceCodeOnly(text).split("\n");
+  if(line<1 || line>lines.length)return false;
+  // Prefer the exact inspected line. This keeps evidence tied to a real source
+  // location while tolerating whitespace and qualified call expressions.
+  if(referencesProbedFunction(lines[line-1],selector))return true;
+  // A receiver or function name may end a line before the opening parenthesis.
+  // Only join a bounded continuation explicitly marked by '.' or a call name;
+  // never borrow an unrelated call farther down the file.
+  const name=selector.split(".").at(-1)!;
+  const first=lines[line-1].trimEnd();
+  if(!new RegExp("(?:\\.|\\b"+name+")\\s*$").test(first))return false;
+  const continuation=lines.slice(line-1,Math.min(lines.length,line+2)).join("\n");
+  return referencesProbedFunction(continuation,selector);
 }
 /** The recorded mined send establishes ABI reachability; locate its declaration for review. */
 export function transactionEntryLine(text:string,line:number,selector:string):boolean {
