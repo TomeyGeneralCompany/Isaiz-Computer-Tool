@@ -64,7 +64,7 @@ class SetupVerification(unittest.TestCase):
                 (bin/name).write_text('#!/bin/sh\n'+body+'\n');(bin/name).chmod(0o700)
             # Fake package installation supplies all newly required executables.
             installer=bin/'sudo'
-            installer.write_text(installer.read_text().replace('fi', 'for exe in python3 java javac; do /bin/cp "'+str(bin/'bwrap')+'" "'+str(bin)+'/$exe"; done; fi'))
+            installer.write_text(installer.read_text().replace('; fi', '; for exe in python3 java javac; do /bin/cp "'+str(bin/'bwrap')+'" "'+str(bin)+'/$exe"; done; fi'))
             env={**os.environ,'PATH':str(bin),'AUTOHACK_NODE_BIN':str(bin/'node')}
             result=subprocess.run(['/bin/bash',str(base/'scripts/install-reproduction-runtime.sh')],env=env,capture_output=True,text=True)
             self.assertEqual(result.returncode,0,result.stderr)
