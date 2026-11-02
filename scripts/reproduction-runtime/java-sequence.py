@@ -123,5 +123,5 @@ for step,line in zip(steps,lines):
     actual=base64.b64decode(line,validate=True).decode()
     expected=step.get('expected')
     passed=(str(expected).lower() if isinstance(expected,bool) else str(expected))==actual if 'expected' in step else True
-    observed.append(dict(method=step['method'],actual=actual,**({'expected':expected} if 'expected' in step else {}),passed=passed))
-print(json.dumps({'steps':observed}))
+    observed.append(dict(operation='call',function=step['method'],actual=actual,**({'expected':expected} if 'expected' in step else {}),passed=passed))
+print(json.dumps({'constructor':sequence.get('constructor',[]),'steps':observed}))
