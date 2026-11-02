@@ -237,12 +237,12 @@ export async function runLocalAudit(
           workflow.observe(verify as any,output);
           if(result.status==='behavior_observed') {
             const paths=(limits.initialSourcePaths||[]).filter(p=>p.startsWith('source-') &&
-              p!==path && /\\.(?:py|js|mjs|cjs|java|sol)$/.test(p));
+              p!==path && /\.(?:py|js|mjs|cjs|java|sol)$/.test(p));
             paths.sort((a,b)=>Number(/(?:caller|handler|route|controller|entry|server)/i.test(b))-
               Number(/(?:caller|handler|route|controller|entry|server)/i.test(a)));
             if(paths[0]) {
               workflow.requireSource(paths[0]);
-              await appendFile(logFile,'[POST_PROBE_CALLER_REQUIRED] '+JSON.stringify({testedPath:path,caller:paths[0],guided:true})+'\\n');
+              await appendFile(logFile,'[POST_PROBE_CALLER_REQUIRED] '+JSON.stringify({testedPath:path,caller:paths[0],guided:true})+'\n');
             }
           }
 
@@ -395,7 +395,7 @@ export async function runLocalAudit(
               const baseline=buildBaselineSequence(menu,action.query);
               if(baseline) {
                 action.sequence=baseline;
-                await appendFile(logFile,'[PROBE_BASELINE_CONSTRUCTED] '+JSON.stringify({path:action.path,query:action.query,read:baseline.steps[0].function})+'\\n');
+                await appendFile(logFile,'[PROBE_BASELINE_CONSTRUCTED] '+JSON.stringify({path:action.path,query:action.query,read:baseline.steps[0].function})+'\n');
               }
             }catch{}
           }
@@ -409,7 +409,7 @@ export async function runLocalAudit(
                  step.function.split('(')[0]===choice.selector.split('.').at(-1))));
               if(declared.length===1) {
                 action.query=declared[0].selector;
-                await appendFile(logFile,'[PROBE_INTENT_RESOLVED] '+JSON.stringify({path:action.path,query:action.query,kind:action.answer})+'\\n');
+                await appendFile(logFile,'[PROBE_INTENT_RESOLVED] '+JSON.stringify({path:action.path,query:action.query,kind:action.answer})+'\n');
               }
             }catch{}
           }
@@ -421,7 +421,7 @@ export async function runLocalAudit(
                 : (await probeChoices(full,action.answer as 'html_reflection'|'path_construction',24)).map(choice=>choice.selector);
               if(choices.length===1) {
                 action.query=choices[0];
-                await appendFile(logFile,'[PROBE_INTENT_RESOLVED] '+JSON.stringify({path:action.path,query:action.query,kind:action.answer})+'\\n');
+                await appendFile(logFile,'[PROBE_INTENT_RESOLVED] '+JSON.stringify({path:action.path,query:action.query,kind:action.answer})+'\n');
               }
             }catch{}
           }
@@ -573,7 +573,7 @@ export async function runLocalAudit(
                 '. Choose a selector whose behavior matches your hypothesis, or inspect another function. '+
                 'Do not invent a function or report an unexecuted probe.';
               workflow.feedback(feedback);
-              await appendFile(logFile,'[PROBE_INTENT_MENU] '+JSON.stringify({path:action.path,kind:action.answer,menu})+'\\n');
+              await appendFile(logFile,'[PROBE_INTENT_MENU] '+JSON.stringify({path:action.path,kind:action.answer,menu})+'\n');
               messages.push({role:'user',content:feedback+' /no_think'});
               continue;
             }
@@ -613,7 +613,7 @@ export async function runLocalAudit(
           workflow.plan({...action});
           await persistMemory();
           if(!automaticProbe && action.hypothesis)hypotheses.push({turn:turn+1,path:action.path,statement:action.hypothesis});
-          await appendFile(logFile,'[PROBE_PLANNED] '+JSON.stringify(action)+'\\n');
+          await appendFile(logFile,'[PROBE_PLANNED] '+JSON.stringify(action)+'\n');
           if(!automaticProbe) {
             messages.push({role:"assistant",content:message.content});
             continue;
@@ -622,7 +622,7 @@ export async function runLocalAudit(
           // request, never a second Qwen-generated reconstruction.
           action.action='verify_source';
           message={role:'assistant',content:JSON.stringify(action)};
-          await appendFile(logFile,'[PROBE_INTENT_EXECUTE] '+JSON.stringify({path:action.path,query:action.query,kind:action.answer})+'\\n');
+          await appendFile(logFile,'[PROBE_INTENT_EXECUTE] '+JSON.stringify({path:action.path,query:action.query,kind:action.answer})+'\n');
         }
         if(action.hypothesis)hypotheses.push({turn:turn+1,path:action.path,statement:action.hypothesis});
         await appendFile(logFile,"[MODEL_ACTION] "+JSON.stringify(action)+"\n");
@@ -699,7 +699,7 @@ export async function runLocalAudit(
               (known.length?'Read caller candidate '+known[0]+' and cite its exact relevant lines. ':'Identify a concrete missing caller source. ')+
               'Allowed conclusions must cite actual recorded caseId/evidenceFile and caller evidence; otherwise explicitly state which requirement remains unverified. Never claim there was no testable candidate.';
             workflow!.feedback(guidance,true);
-            await appendFile(logFile,'[POST_PROBE_EVIDENCE_GUIDANCE] '+guidance+'\\n');
+            await appendFile(logFile,'[POST_PROBE_EVIDENCE_GUIDANCE] '+guidance+'\n');
           } else {
             repeatedRejectedConclusions=0;
             lastRejectedConclusion='';
@@ -935,7 +935,7 @@ export async function runLocalAudit(
                     ? 'Select actual contract methods. Send means state-changing transaction, call means read assertion. A valid sequence needs grounded constructor arguments and an expected call value.'
                     : 'These are source-derived function selectors, not proven vulnerabilities. Choose a probe kind matching inspected behavior.';
                   output=JSON.stringify(original);
-                  await appendFile(logFile,'[PROBE_INTENT_MENU] '+JSON.stringify({path:relative(root,full),count:menu.length})+'\\n');
+                  await appendFile(logFile,'[PROBE_INTENT_MENU] '+JSON.stringify({path:relative(root,full),count:menu.length})+'\n');
                 }
               }catch{}
             }
@@ -987,7 +987,7 @@ export async function runLocalAudit(
               const readPaths=new Set(workflow.snapshot().readPaths);
               const candidates=(limits.initialSourcePaths||[]).filter(p=>
                 p.startsWith('source-') && p!==testedPath &&
-                /\\.(?:py|js|mjs|cjs|java|sol)$/.test(p));
+                /\.(?:py|js|mjs|cjs|java|sol)$/.test(p));
               candidates.sort((a,b)=>
                 Number(/(?:caller|handler|route|controller|entry|server)/i.test(b))-
                 Number(/(?:caller|handler|route|controller|entry|server)/i.test(a)));
@@ -996,7 +996,7 @@ export async function runLocalAudit(
                 workflow.requireSource(caller);
                 requireInvestigationAfterEmpty=true;
                 emptyFinals=0;
-                await appendFile(logFile,'[POST_PROBE_CALLER_REQUIRED] '+JSON.stringify({testedPath,caller})+'\\n');
+                await appendFile(logFile,'[POST_PROBE_CALLER_REQUIRED] '+JSON.stringify({testedPath,caller})+'\n');
               }
             }
 
