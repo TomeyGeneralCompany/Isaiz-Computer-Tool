@@ -12,13 +12,22 @@ const execute = promisify(execFile);
 const driver = fileURLToPath(new URL("../../../scripts/source-reproduction.py",import.meta.url));
 const sha = (value:string | Buffer) => createHash("sha256").update(value).digest("hex");
 const digest = z.string().regex(/^[a-f0-9]{64}$/);
+const javaSequenceSchema = z.object({constructor:z.array(z.union([z.string().max(2048),z.number().finite(),z.boolean()])).max(8).default([]),
+  steps:z.array(z.object({method:z.string().regex(/^[A-Za-z_$][\\w$]{0,79}$/),
+    args:z.array(z.union([z.string().max(2048),z.number().finite(),z.boolean()])).max(8).default([]),
+    expected:z.union([z.string(),z.number(),z.boolean()]).optional()})).min(1).max(12)}).strict();
+export type JavaSequence = z.infer<typeof javaSequenceSchema>;
 const specSchema = z.object({file:z.string().min(1).max(4096),function:z.string().regex(/^[A-Za-z][A-Za-z0-9_]{0,79}(?:\.[A-Za-z][A-Za-z0-9_]{0,79})?$/),
-  kind:z.enum(["html_reflection","path_construction","solidity_sequence"]),sequence:soliditySequenceSchema.optional(),nonce:z.string().regex(/^[a-f0-9]{32}$/)}).strict().superRefine((spec,ctx)=>{
+  kind:z.enum(["html_reflection","path_construction","solidity_sequence","java_sequence"]),sequence:z.union([soliditySequenceSchema,javaSequenceSchema]).optional(),nonce:z.string().regex(/^[a-f0-9]{32}$/)}).strict().superRefine((spec,ctx)=>{
     if(spec.kind === "solidity_sequence") {
       if(!spec.file.endsWith(".sol") || !spec.function.includes(".") || !spec.sequence ||
          !spec.sequence.steps.some(step=>step.function.split("(")[0]===spec.function.split(".")[1]))
         ctx.addIssue({code:z.ZodIssueCode.custom,message:"Solidity sequence must exercise the selected Contract.function"});
-    } else if(spec.sequence)ctx.addIssue({code:z.ZodIssueCode.custom,message:"Sequence requires solidity_sequence kind"});
+    } else if(spec.kind === "java_sequence") {
+      if(!spec.file.endsWith(".java") || !spec.function.includes(".") || !javaSequenceSchema.safeParse(spec.sequence).success ||
+         !(spec.sequence as JavaSequence)?.steps?.some(step=>step.method===spec.function.split(".")[1]))
+        ctx.addIssue({code:z.ZodIssueCode.custom,message:"Java sequence must exercise selected Class.method"});
+    } else if(spec.sequence)ctx.addIssue({code:z.ZodIssueCode.custom,message:"Sequence requires sequence probe kind"});
   });
 const sequenceObservations = z.object({contract:z.string(),accounts:z.array(z.string()).length(3),deploymentGasUsed:z.string(),
   steps:z.array(z.union([
@@ -26,8 +35,9 @@ const sequenceObservations = z.object({contract:z.string(),accounts:z.array(z.st
     z.object({operation:z.literal("observe"),function:z.string(),sender:z.number(),actual:z.unknown()}),
     z.object({operation:z.literal("send"),function:z.string(),sender:z.number(),valueWei:z.string(),reverted:z.boolean(),gasUsed:z.string(),passed:z.boolean()}),
   ])).min(1).max(16)});
+const javaSequenceObservations=z.object({constructor:z.array(z.unknown()),steps:z.array(z.object({operation:z.literal("call"),function:z.string(),actual:z.string(),expected:z.unknown().optional(),passed:z.boolean()})).min(1).max(12)});
 const resultSchema = z.object({status:z.string(),behavior_observed:z.boolean(),source_sha256:digest.optional(),
-  kind:z.string().optional(),observations:z.union([z.object({control_input:z.string(),control_output:z.string(),attack_input:z.string(),attack_output:z.string()}),sequenceObservations]).optional(),
+  kind:z.string().optional(),observations:z.union([z.object({control_input:z.string(),control_output:z.string(),attack_input:z.string(),attack_output:z.string()}),sequenceObservations,javaSequenceObservations]).optional(),
   limitation:z.string().optional(),detail:z.string().optional(),exit_code:z.number().optional()});
 const caseSchema = z.object({version:z.literal(1),programId:z.string(),repositoryUrl:z.string(),commit:z.string().regex(/^[a-f0-9]{40}$/),
   sourceSha256:digest,spec:specSchema,result:resultSchema});
@@ -81,7 +91,7 @@ export async function createProbeSession(program:SecurityProgram,workspace:strin
   let unsupportedProbes = 0;
   let failedProbes = 0;
   const workspaceRoot=await realpath(workspace);
-  const probe=async(path:string,functionName:string,kind:string,sequence?:SoliditySequence):Promise<string> => {
+  const probe=async(path:string,functionName:string,kind:string,sequence?:SoliditySequence | JavaSequence):Promise<string> => {
     signal?.throwIfAborted();
     const file=await realpath(resolve(workspaceRoot,path));
     const repo = repositories.find(candidate => {
