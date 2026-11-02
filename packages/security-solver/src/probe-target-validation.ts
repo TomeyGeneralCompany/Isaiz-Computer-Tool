@@ -11,7 +11,7 @@ export async function declaredProbeTarget(path:string,selector:string):Promise<b
   if(!/^[A-Za-z_$][\w$]*$/.test(name) || ['function','method','unknown','test','probe'].includes(name.toLowerCase()))return false;
   const escaped=name;
   if(path.endsWith('.py'))return parts.length===1 &&
-    new RegExp('(?:^|\\n)\\s*(?:async\\s+)?def\\s+'+escaped+'\\s*\\(','m').test(code);
+    new RegExp('^(?:async[ \\t]+)?def[ \\t]+'+escaped+'[ \\t]*\\(','m').test(code);
   if(path.endsWith('.java'))return parts.length===2 &&
     new RegExp('\\b(?:class|interface|record|enum)\\s+'+parts[0]+'\\b').test(code) &&
     new RegExp('\\b'+escaped+'\\s*\\([^;{}]*\\)\\s*(?:throws\\s+[\\w.,\\s]+)?\\s*\\{').test(code);
@@ -40,7 +40,7 @@ export async function sourceDeclarationHints(path:string,limit=16):Promise<strin
     const re=/\b(?:public|protected)\s+(?:(?:static|final|synchronized|native|abstract|default)\s+)*(?:<[^>\n]+>\s*)?(?:[\w$<>,.?[\]]+\s+)+([A-Za-z_$][\w$]*)\s*\([^;{}]*\)\s*(?:throws\s+[\w.,\s]+)?\s*\{/g;
     for(const m of code.matchAll(re))add(cls+'.'+m[1]);
   } else if(path.endsWith('.py')) {
-    for(const m of code.matchAll(/(?:^|\n)\s*(?:async\s+)?def\s+([A-Za-z_$][\w$]*)\s*\(/g))add(m[1]);
+    for(const m of code.matchAll(/^(?:async[ \t]+)?def[ \t]+([A-Za-z_$][\w$]*)[ \t]*\(/gm))add(m[1]);
   } else if(/\.(?:js|mjs|cjs)$/.test(path)) {
     for(const m of code.matchAll(/\b(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(/g))add(m[1]);
     for(const m of code.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:function\b|\([^)]*\)\s*=>)/g))add(m[1]);
