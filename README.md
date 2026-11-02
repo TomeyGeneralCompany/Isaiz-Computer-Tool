@@ -1,8 +1,12 @@
-# autohack
+# LOTUS — Localized Offensive Testing and Understanding System
 
-**Operational status (2026-10-18):** The local model and complete live bounty workflow are **not yet verified end-to-end**. See [operator setup, verified cash accounting, safety controls and acceptance gates](docs/OPERATOR_RUNBOOK.md) and [readiness evidence](AUTONOMOUS_READINESS.md). The CI fixture only tests an owned synthetic target with an intercepted submission backend; it is not live-provider proof.
+**Operational status (updated 2026-11-02):** The local model and complete live bounty workflow are **not yet verified end-to-end**. See [operator setup, verified cash accounting, safety controls and acceptance gates](docs/OPERATOR_RUNBOOK.md) and [readiness evidence](AUTONOMOUS_READINESS.md). The CI fixture only tests an owned synthetic target with an intercepted submission backend; it is not live-provider proof.
 
-autohack is an autonomous security researcher for authorized bug bounty programs. It discovers programs, runs Claude sessions to hunt for vulnerabilities inside each program's declared scope, checks its own findings with a second adversarial model, drafts platform-ready reports, and submits behind a human approval gate.
+LOTUS (formerly AutoHack) is a local security research system for authorized bug bounty programs. It discovers programs, runs Claude sessions to hunt for vulnerabilities inside each program's declared scope, checks its own findings with a second adversarial model, drafts platform-ready reports, and submits behind a human approval gate.
+
+> **Naming and compatibility:** LOTUS is the current project; AutoHack is its predecessor. Existing commands, Linux directories, systemd unit names, environment variables, and historical log identifiers retain their `autohack` names during the compatibility transition. Do not rename an installed service or workspace solely to update branding. The canonical GitHub repository remains `TomeyGeneralCompany/Isaiz-Computer-Tool` until an explicit repository rename is coordinated with deployment.
+
+> **Current implementation:** The local source-investigation path uses Ollama/Qwen3, with source acquisition, chunked inspection, isolated reproduction, and independent review. Older README sections describing Claude-specific workflows document the original AutoHack architecture, not the entire current LOTUS system. A passing synthetic real-model acceptance test is not evidence of successful live bounty completion.
 
 ![autohack dashboard overview](docs/screenshots/dashboard-overview.png)
 
