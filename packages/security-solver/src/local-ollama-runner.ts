@@ -232,8 +232,7 @@ export async function runLocalAudit(
           workflow.observe(verify as any,output);
           if(result.status==='behavior_observed') {
             const paths=(limits.initialSourcePaths||[]).filter(p=>p.startsWith('source-') &&
-              p!==path && /\\.(?:py|js|mjs|cjs|java|sol)$/.test(p) &&
-              true);
+              p!==path && /\\.(?:py|js|mjs|cjs|java|sol)$/.test(p));
             paths.sort((a,b)=>Number(/(?:caller|handler|route|controller|entry|server)/i.test(b))-
               Number(/(?:caller|handler|route|controller|entry|server)/i.test(a)));
             if(paths[0]) {
@@ -934,8 +933,7 @@ export async function runLocalAudit(
               const readPaths=new Set(workflow.snapshot().readPaths);
               const candidates=(limits.initialSourcePaths||[]).filter(p=>
                 p.startsWith('source-') && p!==testedPath &&
-                /\\.(?:py|js|mjs|cjs|java|sol)$/.test(p) &&
-                true);
+                /\\.(?:py|js|mjs|cjs|java|sol)$/.test(p));
               candidates.sort((a,b)=>
                 Number(/(?:caller|handler|route|controller|entry|server)/i.test(b))-
                 Number(/(?:caller|handler|route|controller|entry|server)/i.test(a)));
