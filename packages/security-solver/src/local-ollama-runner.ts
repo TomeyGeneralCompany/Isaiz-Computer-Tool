@@ -668,13 +668,13 @@ export async function runLocalAudit(
         if (feedback) {
           const observations=workflow?.snapshot().observations.filter(o=>o.status==='behavior_observed')||[];
           if(observations.length) {
-            const normalizedConclusion=message.content.replace(/\\s+/g,' ').trim().slice(0,1000);
+            const normalizedConclusion=message.content.replace(/\s+/g,' ').trim().slice(0,1000);
             repeatedRejectedConclusions=normalizedConclusion===lastRejectedConclusion
               ? repeatedRejectedConclusions+1 : 1;
             lastRejectedConclusion=normalizedConclusion;
             const observed=observations.at(-1)!;
             const known=(limits.initialSourcePaths||[]).filter(p=>
-              p.startsWith('source-') && /\\.(?:py|js|mjs|cjs|java|sol)$/.test(p) && p!==observed.path);
+              p.startsWith('source-') && /\.(?:py|js|mjs|cjs|java|sol)$/.test(p) && p!==observed.path);
             known.sort((a,b)=>Number(/(?:caller|handler|route|controller|entry|server)/i.test(b))-
               Number(/(?:caller|handler|route|controller|entry|server)/i.test(a)));
             if(repeatedRejectedConclusions>=2 && known.length && postProbeRecoveryReads<2) {
@@ -713,6 +713,15 @@ export async function runLocalAudit(
           // Retain read-action history: rejecting a final answer does not make prior pages new evidence.
           if(!workflow)recentActions.clear(); // Legacy no-workflow repair may explicitly require a fresh source read.
           stalledActions=0;workflow?.finalRejected(feedback);
+          if(workflow?.snapshot().observations.some(o=>o.status==='behavior_observed')) {
+            const observed=workflow.snapshot().observations.filter(o=>o.status==='behavior_observed').at(-1)!;
+            const required=(limits.initialSourcePaths||[]).find(p=>p.startsWith('source-') &&
+              /(?:caller|handler|route|controller|entry|server)/i.test(p));
+            workflow.feedback('Verified observation '+JSON.stringify(observed)+
+              '. Caller reachability and impact still require independent source support. '+
+              (required?'Reinspect '+required+'. ':'Locate caller source. ')+
+              'Use recorded evidence identifiers; do not claim no testable candidate.');
+          }
           // A validator that explicitly requires a probe must not let a small
           // model repeat unsupported final classifications indefinitely.
           // Do not force the first declared function: that could be unrelated.
@@ -776,7 +785,9 @@ export async function runLocalAudit(
           const rejected=messages.at(-1)!;
           rejected.content="Previous final answer rejected; follow the validation feedback.";
           await appendFile(logFile, "[FINAL_REJECTED] " + feedback + "\n");
-          messages.push(fitAuditToolOutput(messages.slice(0,2),rejected,"final_validation",feedback + "\nRe-read the source when necessary. /no_think",exchangeBudget,true).message);
+          messages.push(fitAuditToolOutput(messages.slice(0,2),rejected,"final_validation",feedback +
+            (workflow?.snapshot().observations.some(o=>o.status==='behavior_observed') ? "\n"+workflow.note() : "") +
+            "\nRe-read the specified source when necessary. /no_think",exchangeBudget,true).message);
           continue;
         }
         controller.signal.throwIfAborted();
