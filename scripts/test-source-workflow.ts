@@ -107,6 +107,10 @@ assert.ok(revisedRunner.includes("[PROBE_INTENT_MENU]"));
 assert.ok(revisedRunner.includes("Controller Solidity probe guidance:"));
 assert.ok(revisedRunner.includes("[PROBE_INTENT_EXECUTE]"),"controller should perform accepted probe without a second model turn");
 assert.ok(revisedRunner.includes("[POST_PROBE_CALLER_REQUIRED]"),"verified probes must require caller analysis before finalization");
+assert.ok(revisedRunner.includes("alreadyRead:workflow.snapshot().readPaths.includes(paths[0])"),
+  "prefetched callers must not be forced into redundant reread loops");
+assert.ok(revisedRunner.includes("[MODEL_PATH_CANONICALIZED]"),
+  "model absolute paths inside the owned workspace must normalize before workflow validation");
 assert.ok(revisedRunner.includes(String.raw`p!==path && /\.(?:py|js|mjs|cjs|java|sol)$/.test(p)`),
   "post-probe caller discovery must recognize actual source file extensions");
 assert.ok(!revisedRunner.includes(String.raw`p!==path && /\\.(?:py|js|mjs|cjs|java|sol)$/.test(p)`),
@@ -383,6 +387,18 @@ try {
       turn--;
       res.end(JSON.stringify({message:{role:"assistant",content:JSON.stringify({
         action:"outline_solidity",path:outlinePath,offset:0,query:"",answer:""
+      })}}));
+      return;
+    }
+    // A caller not present in the initial context may be a mandatory read.
+    // The scripted model must honor that controller constraint, not invent a probe.
+    if(request.format.properties.action.enum.length===1 &&
+       request.format.properties.action.enum[0]==="read_file") {
+      const path=request.format.properties.path?.enum?.[0];
+      assert.ok(path?.startsWith("source-1/"),"forced read must target an owned source");
+      turn--;
+      res.end(JSON.stringify({message:{role:"assistant",content:JSON.stringify({
+        action:"read_file",path,offset:0,query:"",answer:""
       })}}));
       return;
     }
