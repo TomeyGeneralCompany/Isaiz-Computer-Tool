@@ -115,7 +115,7 @@ def run_probe(repository: Path, specification: dict, _dependency_round: int = 0)
     target=(repository/file).resolve(strict=True)
     if not target.is_relative_to(repository) or not target.is_file() or target.stat().st_size>256000: raise ValueError('Source outside repository or too large')
     if not isinstance(function,str) or not re.fullmatch(r'[A-Za-z][A-Za-z0-9_]{0,79}(?:\.[A-Za-z][A-Za-z0-9_]{0,79})?',function): raise ValueError('Public top-level function name required')
-    if kind not in ('html_reflection','path_construction','solidity_sequence'): raise ValueError('Unsupported probe kind')
+    if kind not in ('html_reflection','path_construction','solidity_sequence','java_sequence'): raise ValueError('Unsupported probe kind')
     if not isinstance(nonce,str) or not re.fullmatch(r'[a-f0-9]{32}',nonce): raise ValueError('Invalid probe nonce')
     language = 'python' if file.endswith('.py') else 'solidity' if file.endswith('.sol') else 'java' if file.endswith('.java') else 'javascript'
     if language not in ('solidity','java') and '.' in function: raise ValueError('Top-level function name required')
@@ -123,7 +123,15 @@ def run_probe(repository: Path, specification: dict, _dependency_round: int = 0)
         if language != 'solidity' or '.' not in function: raise ValueError('Solidity Contract.function required')
         sequence = specification.get('sequence')
         if not isinstance(sequence,dict) or len(json.dumps(sequence)) > 16000: raise ValueError('Invalid Solidity sequence')
-    elif 'sequence' in specification: raise ValueError('Sequence requires solidity_sequence kind')
+    elif kind == 'java_sequence':
+        if language != 'java' or '.' not in function: raise ValueError('Java Class.method required')
+        sequence = specification.get('sequence')
+        if not isinstance(sequence,dict) or len(json.dumps(sequence)) > 16000: raise ValueError('Invalid Java sequence')
+        steps = sequence.get('steps')
+        if not isinstance(steps,list) or not 1 <= len(steps) <= 12 or not any(
+            isinstance(step,dict) and step.get('method') == function.split('.')[1] for step in steps):
+            raise ValueError('Java sequence must invoke selected method')
+    elif 'sequence' in specification: raise ValueError('Sequence requires sequence probe kind')
     runtime = Path(__file__).resolve().parent / 'reproduction-runtime'
     node = shutil.which('node') if language in ('javascript','solidity') else None
     java_home = Path(shutil.which('javac')).resolve().parent.parent if shutil.which('javac') else None
@@ -227,6 +235,16 @@ def run_probe(repository: Path, specification: dict, _dependency_round: int = 0)
             return {'status':'observation_only' if observational_only else ('behavior_observed' if mismatch else 'behavior_not_observed'),
                     'behavior_observed':mismatch,'source_sha256':source_hash,'kind':kind,'observations':data,
                     'limitation':'A discrepancy from a supplied test expectation is not by itself a vulnerability. Constructor setup, expected results, real call-site reachability, policy and impact require independent review. All transactions used a fresh local EVM, not a live chain.'}
+        if kind == 'java_sequence':
+            steps=data.get('steps')
+            if not isinstance(steps,list) or not steps or not all(
+                isinstance(step,dict) and type(step.get('passed')) is bool for step in steps):
+                raise ValueError('Invalid Java sequence observations')
+            mismatch=any(not step['passed'] for step in steps)
+            return {'status':'behavior_observed' if mismatch else 'observation_only',
+                    'behavior_observed':mismatch,'source_sha256':source_hash,
+                    'kind':kind,'observations':data,
+                    'limitation':'Only bounded public primitive/String construction and method calls were executed. An expected-value mismatch alone is not evidence of a reportable vulnerability. Review the intended contract, call-site reachability and impact.'}
         normal,observed=data['control_output'],data['attack_output']
         if kind=='html_reflection':
             matches=reflected_markup(data, nonce)
