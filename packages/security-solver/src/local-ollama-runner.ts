@@ -107,6 +107,9 @@ export async function runLocalAudit(
   let lastRejectedConclusion='';
   let repeatedRejectedConclusions=0;
   let postProbeRecoveryReads=0;
+  // Repeated completed-page requests must change the next model action,
+  // not merely receive another warning that Qwen can ignore.
+  let blockCompletedReadsUntil=0;
 
   let rejectedPlans=0;
   let consecutiveWorkflowRejections=0;
@@ -285,6 +288,13 @@ export async function runLocalAudit(
       // equivalent, without changing the underlying workflow validation.
       if(workflow && constraints?.action?.includes('plan_probe') && !constraints.action.includes('probe_intent'))
         constraints={...constraints,action:[...constraints.action,'probe_intent']};
+      if(workflow && turn<blockCompletedReadsUntil && constraints?.action?.includes('read_file')) {
+        const alternatives=constraints.action.filter(name=>name!=='read_file');
+        if(alternatives.length) {
+          constraints={...constraints,action:alternatives};
+          await appendFile(logFile,'[REPEATED_READ_BLOCKED] '+JSON.stringify({turn:turn+1,actions:alternatives})+'\n');
+        }
+      }
       if(workflow && consecutiveWorkflowRejections>=2 && constraints?.action?.includes('plan_probe')) {
         const otherActions=constraints.action.filter(name=>name!=='plan_probe' && name!=='probe_intent');
         if(otherActions.length)constraints={...constraints,action:otherActions};
@@ -878,6 +888,8 @@ export async function runLocalAudit(
               // recoverable navigation feedback, not a fatal hunt failure.
               // Keep the finite turn allowance as the ultimate bound.
               await appendFile(logFile,"[CONTEXT_RECOVERY] "+JSON.stringify({tool:name,path,offset,attempt:stalledActions})+"\\n");
+              blockCompletedReadsUntil=Math.max(blockCompletedReadsUntil,turn+4);
+              workflow.feedback('This exact source page is already recorded and rereading it produced no new evidence. Next choose an evidence-backed final, a different eligible probe, or a specific continuation. Do not reread this completed page.');
               stalledActions=0;
               throw new Error("Completed source page is already recorded. Choose another selected source or use the saved observation; do not request this completed page again. "+navigation.hint());
             }
