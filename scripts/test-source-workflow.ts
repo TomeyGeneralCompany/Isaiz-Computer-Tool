@@ -55,6 +55,20 @@ assert.equal(intent.path,"source-1/Fixture.java");
 assert.equal(intent.answer,"html_reflection");
 
 
+const {InvestigationWorkflow}=await import("../packages/security-solver/src/investigation-workflow");
+const compactedWorkflow=new InvestigationWorkflow();
+compactedWorkflow.restore({version:1,notes:Array(12).fill("older navigation ".repeat(40))});
+compactedWorkflow.observe({action:"verify_source",path:"source-1/Render.java",
+  query:"Render.render",answer:"html_reflection"} as any,
+  JSON.stringify({status:"behavior_observed",behavior_observed:true,
+    caseId:"b".repeat(64),evidenceFile:".audit-evidence/1.json"}));
+compactedWorkflow.feedback("caller analysis required ".repeat(30));
+const compactedNote=JSON.parse(compactedWorkflow.note());
+assert.equal(compactedNote.observations.at(-1)?.caseId,"b".repeat(64),
+  "context compaction must preserve the most recent verified reproduction ID");
+assert.ok(JSON.stringify(compactedNote).length<=1800,
+  "controller evidence note must respect the reserved context budget");
+
 const {fixtureArguments}=await import("../packages/security-solver/src/solidity-probe-inputs");
 assert.deepEqual(fixtureArguments(["uint256","address","bool","string","bytes4"]),["7","$account1",true,"TOMEY_LOCAL_PROBE","0x41414141"]);
 assert.deepEqual(fixtureArguments(["uint256[2]"]),[["7","7"]]);
