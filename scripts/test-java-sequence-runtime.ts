@@ -116,6 +116,34 @@ public class PackageState {
   assert.deepEqual(packaged.observations.steps.map((x:any)=>x.actual),["10","10"]);
   assert.ok(packaged.observations.steps.every((x:any)=>x.passed));
   console.log("Package-qualified Java constructor and state sequence: PASSED");
+  // A package-qualified interface may be named by its simple source name
+  // in a declarative proxy; the harness resolves it from the formal type.
+  await writeFile(join(packageDir,"PackageProxyState.java"),`
+package org.tron.core.vm.program;
+interface PackageRepo { long getPower(); }
+interface PackageInvoke { PackageRepo getRepo(); }
+public class PackageProxyState {
+  private final PackageRepo repo;
+  PackageProxyState(PackageInvoke invoke) { repo=invoke.getRepo(); }
+  public long getPower() { return repo.getPower(); }
+}`);
+  await writeFile(spec,JSON.stringify({
+    file:"src/main/java/org/tron/core/vm/program/PackageProxyState.java",
+    function:"PackageProxyState.getPower",kind:"java_sequence",
+    nonce:"0123456789abcdef0123456789abcdef",
+    sequence:{constructor:[{proxy:"PackageInvoke",returns:{
+      getRepo:{proxy:"PackageRepo",returns:{getPower:51}}
+    }}],steps:[{method:"getPower",args:[],expected:51}]}
+  }));
+  const qualifiedProxyOutput=execFileSync("python3",["scripts/source-reproduction.py","--repository",root,"--spec",spec],
+    {encoding:"utf8",timeout:120000});
+  const qualifiedProxy=JSON.parse(qualifiedProxyOutput);
+  assert.equal(qualifiedProxy.kind,"java_sequence",JSON.stringify(qualifiedProxy));
+  assert.equal(qualifiedProxy.status,"observation_only",JSON.stringify(qualifiedProxy));
+  assert.equal(qualifiedProxy.observations.steps[0].actual,"51");
+  assert.equal(qualifiedProxy.observations.steps[0].passed,true);
+  console.log("Package-qualified nested Java interface proxies: PASSED");
+
 
   console.log("Java package-private constructor + nested interface collaborator proxy: PASSED");
   console.log("Stateful Java constructor + mutation + getter in real isolated verifier: PASSED");
