@@ -1,4 +1,5 @@
 import {modelProfile} from './model-profile';
+import {z} from "zod";
 import {javaSequenceSchema, type JavaSequence} from "./java-sequence";
 import {buildBaselineSequence} from './solidity-probe-inputs';
 import { InvestigationWorkflow } from "./investigation-workflow";
@@ -125,7 +126,7 @@ export async function runLocalAudit(
       await limits.onAllowance?.(allowance.deadline);
     }
   };
-  const actionSchema = limits.verifyPython ? {...auditActionSchema,properties:{...auditActionSchema.properties,...(limits.finalSchema?{result:limits.finalSchema}:{}),sequence:{anyOf:[soliditySequenceJsonSchema,javaSequenceSchema.toJSONSchema()]},
+  const actionSchema = limits.verifyPython ? {...auditActionSchema,properties:{...auditActionSchema.properties,...(limits.finalSchema?{result:limits.finalSchema}:{}),sequence:{anyOf:[soliditySequenceJsonSchema,z.toJSONSchema(javaSequenceSchema)]},
     action:{type:"string",enum:[...auditActionSchema.properties.action.enum,"verify_source","verify_python",...(workflow?["plan_probe","probe_intent","continue_inspection"]:[])]}}} : {...auditActionSchema,properties:{...auditActionSchema.properties,...(limits.finalSchema?{result:limits.finalSchema}:{})}};
   const probePrompt = limits.verifyPython ? "\\nUse probe_intent with inspected path, exact query (or blank for a unique candidate), supported answer kind, hypothesis and optional sequence. The controller validates and executes the accepted request. Python top-level and exported JavaScript functions require one string input and string output. Java text probes support one text/byte argument. For Java methods with primitive/String args, use java_sequence with sequence:{constructor:[],steps:[{method:"methodName",args:[1],expected:1}]}; calls share one instance. Do not use html_reflection for Java numeric/state methods. Solidity accepts state-changing sends and read assertions in a local EVM. Do not invent method names, expected values, or findings. " : "";
   const availableTools = limits.verifyPython ? [...tools,{type:"function",function:{
