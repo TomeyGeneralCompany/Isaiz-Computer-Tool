@@ -8,6 +8,7 @@ import {join} from "node:path";
 
 // Exercise compatible candidate ranking during the existing workflow acceptance suite.
 await import("./test-source-candidate-selection");
+await import("./test-java-sequence-runtime");
 
 // Normalize formatting without allowing guessed targets to bypass validation.
 const {decodeAuditAction}=await import("../packages/security-solver/src/local-audit-protocol");
