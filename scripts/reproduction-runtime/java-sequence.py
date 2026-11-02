@@ -39,6 +39,44 @@ public class TomeyJavaSequence {
  static Object arg(String encoded,Class<?> type) {
   String raw=new String(Base64.getDecoder().decode(encoded.substring(2)),StandardCharsets.UTF_8);
   char tag=encoded.charAt(0);
+  if(tag=='z' && !type.isPrimitive())return null;
+  if(tag=='p') {
+   String[] lines=raw.split("\n",-1);
+   if(lines.length<2)throw new IllegalArgumentException("invalid proxy record");
+   Class<?> iface=Class.forName(lines[0]);
+   if(!iface.isInterface()||!type.isAssignableFrom(iface))
+     throw new IllegalArgumentException("proxy must implement expected interface");
+   int count=Integer.parseInt(lines[1]);
+   if(count<0||count>16||lines.length!=count+2)
+     throw new IllegalArgumentException("invalid proxy methods");
+   Map<String,String> returns=new HashMap<>();
+   for(int i=0;i<count;i++) {
+    int sep=lines[i+2].indexOf(':');
+    if(sep<=0)throw new IllegalArgumentException("invalid proxy method");
+    returns.put(lines[i+2].substring(0,sep),lines[i+2].substring(sep+1));
+   }
+   return Proxy.newProxyInstance(iface.getClassLoader(),new Class<?>[]{iface},(proxy,m,args)->{
+    if(m.getDeclaringClass()==Object.class) {
+     if(m.getName().equals("toString"))return "BoundedTestProxy:"+iface.getName();
+     if(m.getName().equals("hashCode"))return System.identityHashCode(proxy);
+     if(m.getName().equals("equals"))return proxy==args[0];
+    }
+    String value=returns.get(m.getName());
+    if(value==null) {
+     Class<?> ret=m.getReturnType();
+     if(ret==boolean.class)return false;
+     if(ret==char.class)return (char)0;
+     if(ret==byte.class)return (byte)0;
+     if(ret==short.class)return (short)0;
+     if(ret==int.class)return 0;
+     if(ret==long.class)return 0L;
+     if(ret==float.class)return 0f;
+     if(ret==double.class)return 0d;
+     return null;
+    }
+    return arg(new String(Base64.getDecoder().decode(value),StandardCharsets.UTF_8),m.getReturnType());
+   });
+  }
   if(tag=='s') {
    if(type==String.class||type==CharSequence.class||type==Object.class)return raw;
    if(type==char.class||type==Character.class) {if(raw.length()!=1)throw new IllegalArgumentException("char");return raw.charAt(0);}
@@ -61,8 +99,8 @@ public class TomeyJavaSequence {
   return values;
  }
  static Object construct(Class<?> type,String[] args) throws Exception {
-  for(Constructor<?> c:type.getConstructors()) {
-   try{return c.newInstance(bind(args,c.getParameterTypes()));}
+  for(Constructor<?> c:type.getDeclaredConstructors()) {
+   try{Object[] values=bind(args,c.getParameterTypes());c.setAccessible(true);return c.newInstance(values);}
    catch(IllegalArgumentException ignored){}
   }
   throw new IllegalArgumentException("no supported public constructor");
@@ -107,6 +145,14 @@ def token(value):
     if isinstance(value,bool):tag='b';text=str(value).lower()
     elif isinstance(value,(int,float)):tag='n';text=str(value)
     elif isinstance(value,str):tag='s';text=value
+    elif value is None:tag='z';text=''
+    elif isinstance(value,dict) and set(value)=={'proxy','returns'}:
+        returns=value['returns']
+        if not isinstance(returns,dict) or len(returns)>16:
+            raise ValueError('TOMEY_INVALID_JAVA_PROBE: invalid bounded proxy')
+        entries=[name+':'+base64.b64encode(token(arg).encode()).decode()
+                 for name,arg in sorted(returns.items())]
+        tag='p';text='\\n'.join([value['proxy'],str(len(entries)),*entries])
     else:raise ValueError('TOMEY_INVALID_JAVA_PROBE: invalid argument')
     return tag+':'+base64.b64encode(text.encode()).decode()
 ctor=[token(x) for x in sequence.get('constructor',[])]
