@@ -230,6 +230,18 @@ export async function runLocalAudit(
           const output=JSON.stringify(result);
           const verify={action:'verify_source',path,query:hint.functionName,answer:hint.kind};
           workflow.observe(verify as any,output);
+          if(result.status==='behavior_observed') {
+            const paths=(limits.initialSourcePaths||[]).filter(p=>p.startsWith('source-') &&
+              p!==path && /\\.(?:py|js|mjs|cjs|java|sol)$/.test(p) &&
+              !workflow.snapshot().readPaths.includes(p));
+            paths.sort((a,b)=>Number(/(?:caller|handler|route|controller|entry|server)/i.test(b))-
+              Number(/(?:caller|handler|route|controller|entry|server)/i.test(a)));
+            if(paths[0]) {
+              workflow.requireSource(paths[0]);
+              await appendFile(logFile,'[POST_PROBE_CALLER_REQUIRED] '+JSON.stringify({testedPath:path,caller:paths[0],guided:true})+'\\n');
+            }
+          }
+
           if(['behavior_observed','behavior_not_observed'].includes(result.status))
             allowance.probe(JSON.stringify([path,hint.functionName,hint.kind,undefined]),0);
           const record:Message={role:'assistant',content:JSON.stringify(verify)};
