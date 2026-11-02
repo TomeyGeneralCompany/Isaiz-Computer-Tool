@@ -914,6 +914,28 @@ export async function runLocalAudit(
           try {
             const probeResult=JSON.parse(output);
             probeStatus=String(probeResult.status || "unknown").slice(0,100);
+            // A successful reproduction is not the end of the investigation:
+            // require independently inspected caller/reachability evidence now,
+            // before the model can spend 80 turns on empty conclusions.
+            if(workflow && probeStatus==='behavior_observed') {
+              const testedPath=String(call.function.arguments?.path||'');
+              const readPaths=new Set(workflow.snapshot().readPaths);
+              const candidates=(limits.initialSourcePaths||[]).filter(p=>
+                p.startsWith('source-') && p!==testedPath &&
+                /\\.(?:py|js|mjs|cjs|java|sol)$/.test(p) &&
+                !readPaths.has(p));
+              candidates.sort((a,b)=>
+                Number(/(?:caller|handler|route|controller|entry|server)/i.test(b))-
+                Number(/(?:caller|handler|route|controller|entry|server)/i.test(a)));
+              const caller=candidates[0];
+              if(caller) {
+                workflow.requireSource(caller);
+                requireInvestigationAfterEmpty=true;
+                emptyFinals=0;
+                await appendFile(logFile,'[POST_PROBE_CALLER_REQUIRED] '+JSON.stringify({testedPath,caller})+'\\n');
+              }
+            }
+
             await appendFile(logFile,"[PROBE_RESULT] "+JSON.stringify({path:call.function.arguments?.path,function:call.function.arguments?.query,kind:call.function.arguments?.kind,status:probeStatus,evidenceFile:probeResult.evidenceFile,detail:String(probeResult.detail||probeResult.reason||probeResult.error||"").slice(0,400)})+"\n");
           }catch{}
         }
