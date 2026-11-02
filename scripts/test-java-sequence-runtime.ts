@@ -38,5 +38,38 @@ public class ContractState {
   assert.ok(result.observations.steps.every((x:any)=>x.operation==="call"&&typeof x.function==="string"));
   assert.deepEqual(result.observations.steps.map((x:any)=>x.actual),["5","5"]);
   assert.ok(result.observations.steps.every((x:any)=>x.passed));
+
+  // Reproduces the actual ContractState dependency pattern: a nonpublic
+  // constructor receives ProgramInvoke and obtains a Repository collaborator.
+  await writeFile(join(root,"ProxyState.java"),`
+interface Repository { long getTotalTronPowerWeight(); }
+interface ProgramInvoke { Repository getDeposit(); Object getContractAddress(); }
+public class ProxyState {
+  private final Repository repository;
+  ProxyState(ProgramInvoke invoke) { repository=invoke.getDeposit(); }
+  public long getTotalTronPowerWeight() { return repository.getTotalTronPowerWeight(); }
+}`);
+  await writeFile(spec,JSON.stringify({
+    file:"ProxyState.java",function:"ProxyState.getTotalTronPowerWeight",
+    kind:"java_sequence",nonce:"0123456789abcdef0123456789abcdef",
+    sequence:{constructor:[{proxy:"ProgramInvoke",returns:{
+      getDeposit:{proxy:"Repository",returns:{getTotalTronPowerWeight:42}},
+      getContractAddress:null
+    }}],steps:[{method:"getTotalTronPowerWeight",args:[],expected:42}]}
+  }));
+  let proxyOutput="";
+  try {
+    proxyOutput=execFileSync("python3",["scripts/source-reproduction.py","--repository",root,"--spec",spec],
+      {encoding:"utf8",timeout:120000});
+  } catch(error:any) {
+    proxyOutput=String(error.stdout||"");
+    if(!proxyOutput)throw error;
+  }
+  const proxied=JSON.parse(proxyOutput);
+  assert.equal(proxied.kind,"java_sequence",JSON.stringify(proxied));
+  assert.equal(proxied.status,"observation_only",JSON.stringify(proxied));
+  assert.equal(proxied.observations.steps[0].actual,"42");
+  assert.equal(proxied.observations.steps[0].passed,true);
+  console.log("Java package-private constructor + nested interface collaborator proxy: PASSED");
   console.log("Stateful Java constructor + mutation + getter in real isolated verifier: PASSED");
 } finally {await rm(root,{recursive:true,force:true});}
