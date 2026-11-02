@@ -21,7 +21,8 @@ const specSchema = z.object({file:z.string().min(1).max(4096),function:z.string(
   kind:z.enum(["html_reflection","path_construction","solidity_sequence","java_sequence"]),sequence:z.union([soliditySequenceSchema,javaSequenceSchema]).optional(),nonce:z.string().regex(/^[a-f0-9]{32}$/)}).strict().superRefine((spec,ctx)=>{
     if(spec.kind === "solidity_sequence") {
       if(!spec.file.endsWith(".sol") || !spec.function.includes(".") || !spec.sequence ||
-         !spec.sequence.steps.some(step=>step.function.split("(")[0]===spec.function.split(".")[1]))
+         !soliditySequenceSchema.safeParse(spec.sequence).success ||
+         !(spec.sequence as SoliditySequence)?.steps?.some(step=>step.function.split("(")[0]===spec.function.split(".")[1]))
         ctx.addIssue({code:z.ZodIssueCode.custom,message:"Solidity sequence must exercise the selected Contract.function"});
     } else if(spec.kind === "java_sequence") {
       if(!spec.file.endsWith(".java") || !spec.function.includes(".") || !javaSequenceSchema.safeParse(spec.sequence).success ||
