@@ -36,7 +36,7 @@ import java.lang.reflect.*;
 import java.util.*;
 import java.nio.charset.StandardCharsets;
 public class TomeyJavaSequence {
- static Object arg(String encoded,Class<?> type) {
+ static Object arg(String encoded,Class<?> type) throws ClassNotFoundException {
   String raw=new String(Base64.getDecoder().decode(encoded.substring(2)),StandardCharsets.UTF_8);
   char tag=encoded.charAt(0);
   if(tag=='z' && !type.isPrimitive())return null;
