@@ -44,9 +44,15 @@ if sequence_mode:
             return False
         if value is None or type(value) in (str, int, float, bool):
             return len(str(value)) <= 2048
-        if type(value) is dict and set(value) == {'mock'} and type(value['mock']) is dict:
-            methods = value['mock']
-            return len(methods) <= 16 and all(
+        if type(value) is dict:
+            if set(value) == {'mock'}:
+                methods = value['mock']
+            elif set(value) == {'proxy', 'returns'} and type(value['proxy']) is str and re.fullmatch(
+                    r'[A-Za-z_$][A-Za-z0-9_$.]{0,159}', value['proxy']):
+                methods = value['returns']
+            else:
+                return False
+            return type(methods) is dict and len(methods) <= 16 and all(
                 re.fullmatch(r'[A-Za-z_$][A-Za-z0-9_$]{0,79}', name) and
                 valid_java_value(result, depth + 1) for name, result in methods.items())
         return False
@@ -288,7 +294,7 @@ if sequence_mode:
             return '__NULL__'
         if type(value) is dict:
             return '__MOCK__' + ';'.join(name + '=' + base64.b64encode(
-                encode_value(result).encode()).decode() for name, result in value['mock'].items())
+                encode_value(result).encode()).decode() for name, result in (value['mock'] if 'mock' in value else value['returns']).items())
         return str(value).lower() if type(value) is bool else str(value)
     def encode(value):
         return base64.b64encode(encode_value(value).encode()).decode()
