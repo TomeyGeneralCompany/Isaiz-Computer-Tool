@@ -241,8 +241,15 @@ export async function runLocalAudit(
             paths.sort((a,b)=>Number(/(?:caller|handler|route|controller|entry|server)/i.test(b))-
               Number(/(?:caller|handler|route|controller|entry|server)/i.test(a)));
             if(paths[0]) {
-              workflow.requireSource(paths[0]);
-              await appendFile(logFile,'[POST_PROBE_CALLER_REQUIRED] '+JSON.stringify({testedPath:path,caller:paths[0],guided:true})+'\n');
+              // Prefetch already supplies the caller text and records its read.
+              // Do not force the model to reread an exhausted source page.
+              if(!workflow.snapshot().readPaths.includes(paths[0]))workflow.requireSource(paths[0]);
+              else workflow.feedback('Probe reproduced in '+path+'. Caller '+paths[0]+
+                ' was already read. Evaluate caller reachability and impact using the recorded source and probe evidence; reread only if context was evicted.');
+              await appendFile(logFile,'[POST_PROBE_CALLER_REQUIRED] '+JSON.stringify({
+                testedPath:path,caller:paths[0],guided:true,
+                alreadyRead:workflow.snapshot().readPaths.includes(paths[0])
+              })+'\n');
             }
           }
 
@@ -370,6 +377,18 @@ export async function runLocalAudit(
             continue;
           }
           throw new Error("Ollama did not return a valid read-only JSON action; no tool was executed");
+        }
+        // Model-visible tool paths may be absolute after a source reread.
+        // Normalize existing authorized paths before workflow constraints and
+        // read-history checks; never normalize an outside-workspace path.
+        if(action.path.startsWith('/')) {
+          try {
+            const normalized=relative(root,await safePath(action.path)).split(sep).join('/');
+            if(normalized!==action.path) {
+              await appendFile(logFile,'[MODEL_PATH_CANONICALIZED] '+JSON.stringify({from:action.path,to:normalized})+'\n');
+              action.path=normalized;
+            }
+          } catch {}
         }
         // The workflow owns the exact pending verifier request. Do not ask
         // Qwen to reconstruct it after a correct plan has been accepted.
