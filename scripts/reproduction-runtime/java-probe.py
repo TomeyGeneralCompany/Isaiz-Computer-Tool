@@ -35,7 +35,7 @@ if sequence_mode:
     if not isinstance(constructor, list) or len(constructor) > 8:
         raise ValueError('TOMEY_INVALID_JAVA_PROBE: constructor arguments invalid')
     for step in steps:
-        if not isinstance(step, dict) or not re.fullmatch(r'[A-Za-z_$][\\w$]{0,79}', str(step.get('method', ''))):
+        if not isinstance(step, dict) or not re.fullmatch(r'[A-Za-z_$][A-Za-z0-9_$]{0,79}', str(step.get('method', ''))):
             raise ValueError('TOMEY_INVALID_JAVA_PROBE: invalid Java step')
         if not isinstance(step.get('args', []), list) or len(step.get('args', [])) > 8:
             raise ValueError('TOMEY_INVALID_JAVA_PROBE: invalid Java arguments')
