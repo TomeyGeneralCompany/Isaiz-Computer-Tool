@@ -220,10 +220,11 @@ def run_probe(repository: Path, specification: dict, _dependency_round: int = 0)
         if hashlib.sha256(target.read_bytes()).hexdigest()!=source_hash: raise ValueError('Source changed during probe')
         data=json.loads((work/'stdout').read_text())
         if kind == 'solidity_sequence':
-            if not isinstance(data.get('steps'),list) or not data['steps'] or any(type(step.get('passed')) is not bool for step in data['steps']):
+            if not isinstance(data.get('steps'),list) or not data['steps'] or any(type(step.get('passed')) is not bool for step in data['steps'] if step.get('operation') != 'observe'):
                 raise ValueError('Invalid transaction observations')
-            mismatch = any(not step['passed'] for step in data['steps'])
-            return {'status':'behavior_observed' if mismatch else 'behavior_not_observed',
+            mismatch = any(not step['passed'] for step in data['steps'] if step.get('operation') != 'observe')
+            observational_only = not any(step.get('operation') == 'call' for step in data['steps'])
+            return {'status':'observation_only' if observational_only else ('behavior_observed' if mismatch else 'behavior_not_observed'),
                     'behavior_observed':mismatch,'source_sha256':source_hash,'kind':kind,'observations':data,
                     'limitation':'A discrepancy from a supplied test expectation is not by itself a vulnerability. Constructor setup, expected results, real call-site reachability, policy and impact require independent review. All transactions used a fresh local EVM, not a live chain.'}
         normal,observed=data['control_output'],data['attack_output']

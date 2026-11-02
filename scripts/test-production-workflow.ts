@@ -81,7 +81,7 @@ try {
         chosen=[action('read_file',fixtures[0].path),action('read_file',fixtures[1].path),final,
           plan(fixtures[0]),probe(fixtures[0]),plan(fixtures[1]),probe(fixtures[1]),final][i];
         assert.ok(chosen,'Rejected final recovery used unexpected extra turns');
-        if(i===3)assert.deepEqual(request.format.properties.action.enum,['plan_probe','continue_inspection','final']);
+        if(i===3)assert.deepEqual(request.format.properties.action.enum,['plan_probe','continue_inspection','final','probe_intent']);
       }
       if(duplicateProbePlan) {
         const plan=(f:typeof fixtures[number])=>({...action('plan_probe',f.path,f.fn,'html_reflection'),

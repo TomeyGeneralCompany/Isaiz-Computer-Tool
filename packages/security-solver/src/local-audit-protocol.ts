@@ -26,7 +26,7 @@ export function decodeAuditAction(raw: string, allowProbe = false): {action:stri
   const record = value as Record<string,unknown>;
   // Normalize unambiguous aliases only for probe actions. Keep every
   // required semantic field subject to the existing workflow validator.
-  if(['plan_probe','verify_source','verify_python'].includes(String(record.action)) && allowProbe) {
+  if(['probe_intent','plan_probe','verify_source','verify_python'].includes(String(record.action)) && allowProbe) {
     const aliases:Record<string,string[]> = {
       path:['file','source_path'], query:['function','method','selector'],
       answer:['kind','probe_kind']
@@ -41,11 +41,11 @@ export function decodeAuditAction(raw: string, allowProbe = false): {action:stri
     if(record.path===undefined)record.path='';
     if(record.query===undefined)record.query='';
     if(record.answer===undefined)record.answer='';
-    if(record.action==='plan_probe' && record.hypothesis===undefined)record.hypothesis='';
+    if(['probe_intent','plan_probe'].includes(String(record.action)) && record.hypothesis===undefined)record.hypothesis='';
   }
   if (Object.keys(record).some(key=>!["action","path","query","answer","offset","sequence","hypothesis","result"].includes(key))
       || !["action","path","query","answer"].every(key=>typeof record[key] === "string")
-      || !["read_file","list_files","search_files","outline_solidity","read_solidity","final",...(allowProbe ? ["verify_source","verify_python","plan_probe","continue_inspection"] : [])].includes(String(record.action)))
+      || !["read_file","list_files","search_files","outline_solidity","read_solidity","final",...(allowProbe ? ["verify_source","verify_python","plan_probe","probe_intent","continue_inspection"] : [])].includes(String(record.action)))
     throw new Error("Invalid read-only JSON action");
   if(record.hypothesis !== undefined && (typeof record.hypothesis !== "string" || record.hypothesis.length>600))throw new Error("Invalid hypothesis");
   if (record.offset !== undefined && (!Number.isSafeInteger(record.offset) || Number(record.offset) < 0)) throw new Error("Invalid page offset");

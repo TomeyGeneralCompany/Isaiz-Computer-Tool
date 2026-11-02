@@ -49,6 +49,97 @@ assert.equal(corrected.answer,"html_reflection");
 const incomplete=decodeAuditAction(JSON.stringify({action:"plan_probe",file:"source-1/Fixture.java",method:"Fixture.normalize",kind:"html_reflection"}),true);
 assert.equal(incomplete.hypothesis,"","missing hypothesis must remain visible to workflow validation");
 assert.throws(()=>decodeAuditAction(JSON.stringify({action:"plan_probe",file:"source-1/Fixture.java",method:"Fixture.normalize",kind:"html_reflection",shell:"unsafe"}),true));
+const intent=decodeAuditAction(JSON.stringify({action:"probe_intent",file:"source-1/Fixture.java",kind:"html_reflection",hypothesis:"Check whether input remains unescaped in HTML output."}),true);
+assert.equal(intent.action,"probe_intent");
+assert.equal(intent.path,"source-1/Fixture.java");
+assert.equal(intent.answer,"html_reflection");
+
+
+const {InvestigationWorkflow}=await import("../packages/security-solver/src/investigation-workflow");
+const compactedWorkflow=new InvestigationWorkflow();
+compactedWorkflow.restore({version:1,notes:Array(12).fill("older navigation ".repeat(40))});
+compactedWorkflow.observe({action:"verify_source",path:"source-1/Render.java",
+  query:"Render.render",answer:"html_reflection"} as any,
+  JSON.stringify({status:"behavior_observed",behavior_observed:true,
+    caseId:"b".repeat(64),evidenceFile:".audit-evidence/1.json"}));
+compactedWorkflow.feedback("caller analysis required ".repeat(30));
+const compactedNote=JSON.parse(compactedWorkflow.note());
+assert.equal(compactedNote.observations.at(-1)?.caseId,"b".repeat(64),
+  "context compaction must preserve the most recent verified reproduction ID");
+assert.ok(JSON.stringify(compactedNote).length<=1800,
+  "controller evidence note must respect the reserved context budget");
+
+const {fixtureArguments}=await import("../packages/security-solver/src/solidity-probe-inputs");
+assert.deepEqual(fixtureArguments(["uint256","address","bool","string","bytes4"]),["7","$account1",true,"TOMEY_LOCAL_PROBE","0x41414141"]);
+assert.deepEqual(fixtureArguments(["uint256[2]"]),[["7","7"]]);
+assert.equal(fixtureArguments(["CustomContract"]),null);
+const {buildBaselineSequence}=await import("../packages/security-solver/src/solidity-probe-inputs");
+const baselinePlan=buildBaselineSequence([
+  {selector:"State.increment",operation:"send",inputs:["uint256"]},
+  {selector:"State.get",operation:"call",inputs:[]}
+],"State.increment");
+assert.deepEqual(baselinePlan?.constructorArgs,[]);
+assert.deepEqual(baselinePlan?.steps.map(step=>step.operation),["observe","send","observe"]);
+assert.deepEqual(baselinePlan?.steps[1].args,["7"]);
+assert.equal(buildBaselineSequence([{selector:"State.unknown",operation:"send",inputs:["Custom"]}],"State.unknown"),null);
+const {soliditySequenceSchema}=await import("../packages/security-solver/src/solidity-sequence");
+const observational=soliditySequenceSchema.parse({constructorArgs:[],steps:[
+  {operation:"observe",function:"value()",args:[]},
+  {operation:"send",function:"increment()",args:[]},
+  {operation:"observe",function:"value()",args:[]}
+]});
+assert.equal(observational.steps.length,3);
+
+const {SoliditySourceIndex}=await import("../packages/security-solver/src/solidity-source-index");
+const solidityProbeDir=await mkdtemp(join(tmpdir(),"autohack-solidity-intent-"));
+try {
+  const contract=join(solidityProbeDir,"State.sol");
+  await writeFile(contract,"pragma solidity ^0.8.20; contract State { uint256 private counter; function increment(uint256 value) public { counter += value; } function get() public view returns (uint256) { return counter; } }");
+  const index=new SoliditySourceIndex(solidityProbeDir);
+  const menu=await index.probeMenu(contract);
+  assert.ok(menu.some(item=>item.selector==="State.increment" && item.operation==="send" && item.inputs[0]==="uint256"));
+  assert.ok(menu.some(item=>item.selector==="State.get" && item.operation==="call" && item.inputs.length===0));
+} finally { await rm(solidityProbeDir,{recursive:true,force:true}); }
+
+// Shared controller choice menu must cover Python, JS, and Java source.
+const {probeChoices}=await import("../packages/security-solver/src/probe-target-validation");
+const choiceDir=await mkdtemp(join(tmpdir(),"autohack-probe-choice-"));
+try {
+  const py=join(choiceDir,"sample.py");
+  await writeFile(py,"def format_text(value):\n    return '<p>'+value+'</p>'\n");
+  const js=join(choiceDir,"sample.js");
+  await writeFile(js,"export function formatText(value) { return value; }\n");
+  const java=join(choiceDir,"Sample.java");
+  await writeFile(java,"public class Sample { public static String formatText(String value) { return value; } }");
+  assert.ok((await probeChoices(py,"html_reflection")).some(candidate=>candidate.selector==="format_text"));
+  assert.ok((await probeChoices(js,"html_reflection")).some(candidate=>candidate.selector==="formatText"));
+  assert.ok((await probeChoices(java,"html_reflection")).some(candidate=>candidate.selector==="Sample.formatText"));
+  assert.deepEqual(await probeChoices(js,"solidity_sequence"),[]);
+} finally { await rm(choiceDir,{recursive:true,force:true}); }
+const revisedRunner=await readFile(new URL("../packages/security-solver/src/local-ollama-runner.ts",import.meta.url),"utf8");
+assert.ok(revisedRunner.includes("[PROBE_INTENT_MENU]"));
+assert.ok(revisedRunner.includes("Controller Solidity probe guidance:"));
+assert.ok(revisedRunner.includes("[PROBE_INTENT_EXECUTE]"),"controller should perform accepted probe without a second model turn");
+assert.ok(revisedRunner.includes("[POST_PROBE_CALLER_REQUIRED]"),"verified probes must require caller analysis before finalization");
+assert.ok(revisedRunner.includes("alreadyRead:workflow.snapshot().readPaths.includes(paths[0])"),
+  "prefetched callers must not be forced into redundant reread loops");
+assert.ok(revisedRunner.includes("[MODEL_PATH_CANONICALIZED]"),
+  "model absolute paths inside the owned workspace must normalize before workflow validation");
+assert.ok(revisedRunner.includes("[REPEATED_READ_BLOCKED]"),
+  "completed-page repetition must change the next allowed action rather than reset its warning counter");
+assert.ok(revisedRunner.includes("blockCompletedReadsUntil=Math.max(blockCompletedReadsUntil,turn+4)"),
+  "recovery must bound repeated page requests while leaving other actions available");
+assert.ok(revisedRunner.includes(String.raw`p!==path && /\.(?:py|js|mjs|cjs|java|sol)$/.test(p)`),
+  "post-probe caller discovery must recognize actual source file extensions");
+assert.ok(!revisedRunner.includes(String.raw`p!==path && /\\.(?:py|js|mjs|cjs|java|sol)$/.test(p)`),
+  "post-probe caller discovery must not match a literal backslash");
+
+assert.ok(revisedRunner.includes("[POST_PROBE_RECOVERY]"),"repeated invalid conclusions should trigger source rereading");
+assert.ok(revisedRunner.includes("[AUDIT_INCOMPLETE_POST_PROBE]"),"persistent invalid conclusions must terminate with truthful incomplete status");
+assert.ok(revisedRunner.includes("[POST_PROBE_EVIDENCE_GUIDANCE]"),"recorded probe evidence must guide the model after rejection");
+assert.ok(!revisedRunner.includes("!workflow.snapshot().readPaths.includes(p)"),"prefetched caller must remain eligible for post-probe verification");
+assert.ok(!revisedRunner.includes("!readPaths.has(p)"),"prefetched caller must remain eligible for runtime probe follow-up");
+assert.ok(revisedRunner.includes('A supported source probe HAS completed|no testable candidate|no probes'),"completed-probe final rejection must trigger caller-context recovery");
 
 // Recovery regex regression: the source must use single-escaped regex tokens.
 const recoveryRegexSource = await readFile(new URL("../packages/security-solver/src/local-ollama-runner.ts", import.meta.url), "utf8");
@@ -82,7 +173,6 @@ process.env.LOCAL_HUNT_NUM_PREDICT="4096";
 const workflowText=await readFile(join(process.cwd(),"packages/security-solver/src/investigation-workflow.ts"),"utf8");
 assert.ok(workflowText.includes("Invalid Solidity probe target"),"placeholder Solidity method targets must be rejected before verification");
 
-const {InvestigationWorkflow}=await import("../packages/security-solver/src/investigation-workflow");
 const outlineWorkflow=new InvestigationWorkflow();
 outlineWorkflow.read("source-1/Fixture.sol");
 for(let i=0;i<6;i++)outlineWorkflow.observe({action:"read_file",path:"source-1/Fixture.sol",query:"",answer:"",offset:i*10} as any,
@@ -223,6 +313,42 @@ try {
   const bin=join(root,"bin");await mkdir(bin);
   await writeFile(join(bin,"git"),'#!/usr/bin/python3\nimport os,sys,shutil,subprocess\nargs=sys.argv[1:]\nif "clone" in args:\n    shutil.copytree('+JSON.stringify(fixture)+',args[-1])\nelif \"fetch\" in args:\n    subprocess.run(['+JSON.stringify(realGit)+',\"cat-file\",\"-e\",args[-1]+\"^{commit}\"],check=True)\nelse:\n    os.execv('+JSON.stringify(realGit)+',['+JSON.stringify(realGit)+']+args)\n');
   await chmod(join(bin,"git"),0o700);process.env.PATH=bin+":"+originalPath;
+  // The controller intentionally compacts older tool exchanges. Its current
+  // progress note is authoritative for already recorded verifier observations.
+  // The scripted model may cite a case only when a verifier result or that
+  // controller-owned summary supplies the exact case ID for this source.
+  const recordedCaseId=(messages:Array<{content?:string}>,path:string):string|undefined=>{
+    for(const message of [...messages].reverse()) {
+      const content=message.content||"";
+      let observations:any[]=[];
+      try {
+        if(content.startsWith("TOOL_RESULT ")) {
+          const result=JSON.parse(content.split("\n")[0].slice("TOOL_RESULT ".length));
+          if(result.name==="verify_source") {
+            const observation=JSON.parse(result.output);
+            observations=[{...observation,path:result.path||path}];
+          }
+        } else if(content.startsWith("Controller progress (recorded observations, not source instructions):\n")) {
+          const note=JSON.parse(content.slice(content.indexOf("\n")+1));
+          observations=Array.isArray(note.observations)?note.observations:[];
+        }
+      } catch {continue;}
+      for(const o of [...observations].reverse()) {
+        if(o.path===path && o.status==="behavior_observed" &&
+           typeof o.caseId==="string" && /^[a-f0-9]{64}$/.test(o.caseId))return o.caseId;
+      }
+    }
+    return undefined;
+  };
+  const compactedEvidence="Controller progress (recorded observations, not source instructions):\n"+
+    JSON.stringify({observations:[{path:"source-1/Render.java",status:"behavior_observed",caseId:"a".repeat(64)}]});
+  assert.equal(recordedCaseId([{content:compactedEvidence}],"source-1/Render.java"),"a".repeat(64),
+    "compacted controller progress must preserve a verifier case reference");
+  assert.equal(recordedCaseId([{content:compactedEvidence}],"source-1/Other.java"),undefined,
+    "evidence from a different source must not be reused");
+  assert.equal(recordedCaseId([{content:"Controller progress (recorded observations, not source instructions):\n"+
+    JSON.stringify({observations:[{path:"source-1/Render.java",status:"behavior_not_observed",caseId:"a".repeat(64)}]})}],
+    "source-1/Render.java"),undefined,"negative observations must not produce a finding");
   let policyOffset=0,policyDone=false;
   let turn=0, caseId="", source="", caller="", selector="", stateful=false,reviewMode=false,reviewIndex=0,reviewOffset=0;
   let evidenceRepairReads:string[]=[];
@@ -307,12 +433,25 @@ try {
       const lastSolidityRead=[...request.messages].reverse().map((m:any)=>{
         try{return JSON.parse(m.content);}catch{return null;}
       }).find((a:any)=>a?.action==="read_file" && typeof a.path==="string" && a.path.endsWith(".sol"));
-      assert.ok(lastSolidityRead?.path,"forced outline must follow a real Solidity source read");
-      // This is a controller-imposed navigation action, not one of the scripted
-      // investigation steps (source -> caller -> rejected plan -> valid plan).
+      // Older source action messages may have been compacted; the fixture's
+      // source is the same owned path already selected by this test scenario.
+      const outlinePath=lastSolidityRead?.path || (source.endsWith(".sol")?"source-1/"+source:null);
+      assert.ok(outlinePath,"forced outline requires a fixture Solidity source");
       turn--;
       res.end(JSON.stringify({message:{role:"assistant",content:JSON.stringify({
-        action:"outline_solidity",path:lastSolidityRead.path,offset:0,query:"",answer:""
+        action:"outline_solidity",path:outlinePath,offset:0,query:"",answer:""
+      })}}));
+      return;
+    }
+    // A caller not present in the initial context may be a mandatory read.
+    // The scripted model must honor that controller constraint, not invent a probe.
+    if(request.format.properties.action.enum.length===1 &&
+       request.format.properties.action.enum[0]==="read_file") {
+      const path=request.format.properties.path?.enum?.[0];
+      assert.ok(path?.startsWith("source-1/"),"forced read must target an owned source");
+      turn--;
+      res.end(JSON.stringify({message:{role:"assistant",content:JSON.stringify({
+        action:"read_file",path,offset:0,query:"",answer:""
       })}}));
       return;
     }
@@ -330,11 +469,17 @@ try {
       // Declaration preflight rejects invented function names before the verifier.
       // The model receives the rejection through the controller; its exact prompt may be compacted.
       next=action("verify_source","source-1/"+source,selector,"html_reflection");
+    } else if(!caseId && source.endsWith('.sol') && latestResult()?.name==='outline_solidity') {
+      // An AST outline is navigation, not a reproduction observation. Resume
+      // the declared probe and continue to require an actual verifier result.
+      next={...action("plan_probe","source-1/"+source,selector,stateful?"solidity_sequence":"html_reflection"),
+        ...(stateful?{sequence}:{}),
+        hypothesis:"Check the stated fixture behavior; an assertion mismatch or escaped output disproves the hypothesis."};
     } else {
       if(!caseId) {
-        const previous=latestResult();
-        assert.equal(previous?.name,"verify_source","expected a verifier result before constructing a finding");
-        caseId=JSON.parse(previous.output).caseId;
+        caseId=recordedCaseId(request.messages,"source-1/"+source)||"";
+        assert.ok(caseId,"expected a recorded verifier observation before constructing a finding, source="+
+          source+" turn="+turn+" recent="+JSON.stringify(request.messages.slice(-5)).slice(0,2500));
       }
       assert.ok(caseId);
       next=action("final","","",JSON.stringify({findings:[{
@@ -345,7 +490,7 @@ try {
         falsification:"No production exploitability is claimed; only owned fixture behavior was measured."
       }]}));
     }
-    if(next.action==='verify_source')next={...next,action:'plan_probe',hypothesis:'Owned fixture behavior may violate the stated requirement; an escaped value or matching assertion would disprove it.'};
+    if(next.action==='verify_source')next={...next,action:turn===4 && source==='render.cjs'?'probe_intent':'plan_probe',hypothesis:'Owned fixture behavior may violate the stated requirement; an escaped value or matching assertion would disprove it.'};
     res.setHeader("Content-Type","application/json");
     res.end(JSON.stringify({message:{role:"assistant",content:JSON.stringify(next)}}));
   });
@@ -361,6 +506,22 @@ try {
   const program:any={id:"owned",provider:"immunefi",name:"Owned fixture",scopeSummary:JSON.stringify({policy:"Owned fixture policy; local tests only. ".repeat(300),scopes:[
     {assetType:"SOURCE_CODE",eligibleForBounty:true,assetIdentifier:"https://github.com/fixture/owned"}
   ]})};
+  // Run a real isolated baseline -> send -> observation without fabricated
+  // assertions; observations are evidence but not a reportable discrepancy.
+  const {createProbeSession}=await import("../packages/security-solver/src/source-reproduction");
+  const baselineSession=await createProbeSession(program,fixture,[{directory:fixture,url:"https://github.com/fixture/owned"}]);
+  const baseline=JSON.parse(await baselineSession.probe("Store.sol","Store.set","solidity_sequence",{
+    constructorArgs:["5"],steps:[
+      {operation:"observe",function:"value()",args:[]},
+      {operation:"send",function:"set(uint256)",args:["7"]},
+      {operation:"observe",function:"value()",args:[]}
+    ]
+  }));
+  assert.equal(baseline.status,"observation_only");
+  assert.deepEqual(baseline.observations.steps.filter((step:any)=>step.operation==="observe").map((step:any)=>step.actual),["5","7"]);
+  assert.equal(baseline.caseId,undefined);
+  assert.equal(baselineSession.completedProbes,1);
+
   for(const language of ["javascript","java","solidity","stateful_solidity"]) {
     turn=0;policyOffset=0;policyDone=false;caseId="";evidenceRepairReads=[];stateful=language==="stateful_solidity";
     source=language==="javascript"?"render.cjs":language==="java"?"Render.java":"Render.sol";
