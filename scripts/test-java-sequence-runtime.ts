@@ -4,6 +4,19 @@ import {execFileSync} from "node:child_process";
 import {mkdtemp,mkdir,writeFile,rm} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
+// The driver intentionally exits 1 when no security behavior was observed.
+// An observation_only result is still a successful execution of the test harness.
+function runObservation(root:string,spec:string):string {
+  try {
+    return execFileSync("python3",["scripts/source-reproduction.py","--repository",root,"--spec",spec],\n      {encoding:"utf8",timeout:120000});
+  } catch(error:any) {
+    if(error.status===1 && typeof error.stdout==="string" && error.stdout.trim()) {
+      const result=JSON.parse(error.stdout);
+      if(result.status==="observation_only" || result.status==="behavior_not_observed")return error.stdout;
+    }
+    throw error;
+  }
+}
 const root=await mkdtemp(join(tmpdir(),"autohack-java-sequence-"));
 try {
   await writeFile(join(root,"ContractState.java"),`
@@ -24,8 +37,7 @@ public class ContractState {
   }));
   let output="";
   try {
-    output=execFileSync("python3",["scripts/source-reproduction.py","--repository",root,"--spec",spec],
-      {encoding:"utf8",timeout:120000});
+    output=runObservation(root,spec);
   } catch(error:any) {
     output=String(error.stdout||"");
     if(!output)throw error;
@@ -59,8 +71,7 @@ public class ProxyState {
   }));
   let proxyOutput="";
   try {
-    proxyOutput=execFileSync("python3",["scripts/source-reproduction.py","--repository",root,"--spec",spec],
-      {encoding:"utf8",timeout:120000});
+    proxyOutput=runObservation(root,spec);
   } catch(error:any) {
     proxyOutput=String(error.stdout||"");
     if(!proxyOutput)throw error;
@@ -80,8 +91,7 @@ public class ProxyState {
       getContractAddress:null
     }}],steps:[{method:"getTotalTronPowerWeight",args:[],expected:43}]}
   }));
-  const mockOutput=execFileSync("python3",["scripts/source-reproduction.py","--repository",root,"--spec",spec],
-    {encoding:"utf8",timeout:120000});
+  const mockOutput=runObservation(root,spec);
   const mocked=JSON.parse(mockOutput);
   assert.equal(mocked.kind,"java_sequence",JSON.stringify(mocked));
   assert.equal(mocked.status,"observation_only",JSON.stringify(mocked));
@@ -108,8 +118,7 @@ public class PackageState {
       {method:"getValue",args:[],expected:10}
     ]}
   }));
-  const packagedOutput=execFileSync("python3",["scripts/source-reproduction.py","--repository",root,"--spec",spec],
-    {encoding:"utf8",timeout:120000});
+  const packagedOutput=runObservation(root,spec);
   const packaged=JSON.parse(packagedOutput);
   assert.equal(packaged.kind,"java_sequence",JSON.stringify(packaged));
   assert.equal(packaged.status,"observation_only",JSON.stringify(packaged));
@@ -135,8 +144,7 @@ public class PackageProxyState {
       getRepo:{proxy:"PackageRepo",returns:{getPower:51}}
     }}],steps:[{method:"getPower",args:[],expected:51}]}
   }));
-  const qualifiedProxyOutput=execFileSync("python3",["scripts/source-reproduction.py","--repository",root,"--spec",spec],
-    {encoding:"utf8",timeout:120000});
+  const qualifiedProxyOutput=runObservation(root,spec);
   const qualifiedProxy=JSON.parse(qualifiedProxyOutput);
   assert.equal(qualifiedProxy.kind,"java_sequence",JSON.stringify(qualifiedProxy));
   assert.equal(qualifiedProxy.status,"observation_only",JSON.stringify(qualifiedProxy));
