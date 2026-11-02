@@ -763,7 +763,7 @@ export async function runLocalAudit(
             }
             const guidance='Verified probe (not automatically a vulnerability): '+
               JSON.stringify(observed)+'. Remaining requirements: establish caller reachability, input provenance, mitigations and impact from source before reporting. '+
-              (known.length?'Read caller candidate '+known[0]+' and cite its exact relevant lines. ':'Identify a concrete missing caller source. ')+
+              (known.length?'Inspect caller candidate '+known[0]+' and cite its exact relevant lines. Caller methods of classes (such as do_GET) are NOT top-level functions and must not be submitted to the single-argument source verifier; inspect their call expressions and user-input flow from source instead. ':'Identify a concrete missing caller source. ')+
               'Allowed conclusions must cite actual recorded caseId/evidenceFile and caller evidence; otherwise explicitly state which requirement remains unverified. Never claim there was no testable candidate.';
             workflow!.feedback(guidance,true);
             await appendFile(logFile,'[POST_PROBE_EVIDENCE_GUIDANCE] '+guidance+'\n');
