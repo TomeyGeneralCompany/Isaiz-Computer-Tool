@@ -83,8 +83,6 @@ def execution_capability(repository: Path, file: str, function: str, kind: str) 
             if not re.search(rf'\b(?:public|protected|private)?\s*(?:static\s+)?[A-Za-z0-9_<>,\[\]\s]+\s+{re.escape(method_name)}\s*\(', source):
                 return False, f'Java method {method_name} is not declared in {file}'
             return True, None
-        # The legacy one-string adapter is intentionally narrow; Java methods that
-        # require constructor setup or stateful sequences must use java_sequence.
         if not re.search(
             r'\b(?:public\s+)?(?:static\s+)?(?:final\s+)?'
             r'(?:String|byte\[\]|CharSequence|StringBuilder|StringBuffer|ByteBuffer|Path|File|URI|Object)\s+'
@@ -307,11 +305,15 @@ def run_probe(repository: Path, specification: dict, _dependency_round: int = 0)
             if not isinstance(steps,list) or not steps or not all(
                 isinstance(step,dict) and type(step.get('passed')) is bool for step in steps):
                 raise ValueError('Invalid Java sequence observations')
-            mismatch=any(not step['passed'] for step in steps)
-            return {'status':'behavior_observed' if mismatch else 'observation_only',
-                    'behavior_observed':mismatch,'source_sha256':source_hash,
-                    'kind':kind,'observations':data,
-                    'limitation':'Only bounded public primitive/String construction and method calls were executed. An expected-value mismatch alone is not evidence of a reportable vulnerability.'}
+            # Important: a mismatched expected value is only a test observation.
+            # It is not a validated security finding and must never be classified as
+            # a successful reproduction of a vulnerability.
+            return {'status':'observation_only',
+                    'behavior_observed':False,
+                    'source_sha256':source_hash,
+                    'kind':kind,
+                    'observations':data,
+                    'limitation':'Only bounded Java constructor and method calls were executed. Expected-value mismatches are observations, not validated security findings.'}
         normal,observed=data['control_output'],data['attack_output']
         if kind=='html_reflection':
             matches=reflected_markup(data, nonce)
