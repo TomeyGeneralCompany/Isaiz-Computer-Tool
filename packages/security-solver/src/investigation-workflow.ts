@@ -19,11 +19,12 @@ export function probeHypothesisMismatch(kind:string,hypothesis:string):string|nu
   const path= /\\b(?:path traversal|directory traversal|directory escape|filesystem path traversal)\\b/.test(h);
   const html= /\\b(?:html reflection|html injection|cross.site scripting|\\bxss\\b|unescaped html|html escaping)\\b/.test(h);
   if(path && !html && kind==='html_reflection')
-    return 'Hypothesis concerns path traversal, but html_reflection tests HTML output. Inspect a compatible path-building function and use path_construction, or revise the hypothesis from source evidence.';
+    return 'Wrong probe: html_reflection measures HTML output. Correct probe for this path-traversal hypothesis: path_construction. Set answer="path_construction" and inspect whether the method constructs a filesystem path before planning. If it does not, this hypothesis is unsupported by the available probe; do not test an unrelated method.';
   if(html && !path && kind==='path_construction')
-    return 'Hypothesis concerns HTML output, but path_construction tests filesystem paths. Use html_reflection on a compatible text-producing function, or revise the hypothesis from source evidence.';
+    return 'Wrong probe: path_construction measures filesystem path behavior. Correct probe for this HTML-output hypothesis: html_reflection. Set answer="html_reflection" and ensure the inspected method returns compatible text before planning. If it does not, this hypothesis is unsupported by the available probe.';
   return null;
 }
+
 const key = (a:Action) => JSON.stringify([a.path,a.query,a.answer,a.sequence]);
 export class InvestigationWorkflow {
   private state:typeof State.State={stage:'inspect',inspections:0,pending:null,tested:[]};
