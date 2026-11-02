@@ -79,15 +79,23 @@ else:
   console.log('Actual Qwen3:4b scoped program hunt, source probe, report, replay and independent review PASSED');
 } finally {
   process.env.PATH=originalPath;
-  // Preserve reviewer turn/action logs before deleting the isolated fixture workspace.
+  // Preserve model turns, activity, and reviewer diagnostics before deleting the isolated fixture workspace.
   // Without this, a review timeout leaves only the generic 720-second CI error.
   try {
     const sourceLogs=join(root,'data','logs');
-    const destination=join(process.cwd(),'data','production-workflow-tests','review-diagnostics');
+    const destination=join(process.cwd(),'data','production-workflow-tests','investigation-diagnostics');
     for(const name of await readdir(sourceLogs).catch(()=>[])) {
-      if(!name.startsWith('local-review-') || !(name.endsWith('.log') || name.endsWith('.summary.json')))continue;
+      if(!/^local-(?:review|hunt|audit)-/.test(name) || !/\.(?:log|json|jsonl)$/.test(name))continue;
       await mkdir(destination,{recursive:true});
       await copyFile(join(sourceLogs,name),join(destination,name));
+    }
+    // A timeout can occur before the hunt produces a final report. The
+    // controller's per-turn audit log is still essential for diagnosis.
+    const nested=join(root,'data','inspection-checkpoints');
+    for(const name of await readdir(nested).catch(()=>[])) {
+      if(!name.endsWith('.memory.json'))continue;
+      await mkdir(join(destination,'checkpoints'),{recursive:true});
+      await copyFile(join(nested,name),join(destination,'checkpoints',name));
     }
   }catch(error) {console.error('Could not preserve reviewer diagnostics:',error);}
   await rm(root,{recursive:true,force:true});
