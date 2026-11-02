@@ -481,19 +481,24 @@ try {
         ...(stateful?{sequence}:{}),
         hypothesis:"Check the stated fixture behavior; an assertion mismatch or escaped output disproves the hypothesis."};
     } else {
-      if(!caseId) {
-        caseId=recordedCaseId(request.messages,"source-1/"+source)||"";
-        assert.ok(caseId,"expected a recorded verifier observation before constructing a finding, source="+
-          source+" turn="+turn+" recent="+JSON.stringify(request.messages.slice(-5)).slice(0,2500));
+      if(stateful) {
+        const recorded=request.messages.some((m:any)=>m.content?.includes('observation_only'));
+        assert.ok(recorded,"Solidity assertion observation must exist before finalization");
+        next=action("final","","",JSON.stringify({outcome:"inspected",findings:[]}));
+      } else {
+        if(!caseId) {
+          caseId=recordedCaseId(request.messages,"source-1/"+source)||"";
+          assert.ok(caseId,"expected a recorded verifier observation before constructing a finding, source="+
+            source+" turn="+turn+" recent="+JSON.stringify(request.messages.slice(-5)).slice(0,2500));
+        }
+        next=action("final","","",JSON.stringify({findings:[{
+          caseId,severity:"medium",confidence:0.7,title:"Owned fixture reflection",
+          ratingReason:"Owned fixture preserves input; this test checks report plumbing only.",
+          impact:"Owned fixture returns raw markup to its caller.",
+          callerFile:"source-1/"+caller,callerLine:1,
+          falsification:"No production exploitability is claimed; only owned fixture behavior was measured."
+        }]}));
       }
-      assert.ok(caseId);
-      next=action("final","","",JSON.stringify({findings:[{
-        caseId,severity:"medium",confidence:0.7,title:stateful?"Owned fixture assertion discrepancy":"Owned fixture reflection",
-        ratingReason:"Owned fixture preserves input; this test checks report plumbing only.",
-        impact:stateful?"Owned fixture returns 7 while the supplied test expects 8; no vulnerability claimed.":"Owned fixture returns raw markup to its caller.",
-        callerFile:"source-1/"+(stateful?source:caller),callerLine:1,...(stateful?{reachability:"direct_transaction"}:{}),
-        falsification:"No production exploitability is claimed; only owned fixture behavior was measured."
-      }]}));
     }
     if(next.action==='verify_source')next={...next,action:turn===4 && source==='render.cjs'?'probe_intent':'plan_probe',hypothesis:'Owned fixture behavior may violate the stated requirement; an escaped value or matching assertion would disprove it.'};
     res.setHeader("Content-Type","application/json");
@@ -536,21 +541,16 @@ try {
     const result=await runLocalProgramHunt(program);
     if(!result.success && result.auditRecord)console.error(await readFile(join(root,"data/logs",result.auditRecord),"utf8"));
     assert.equal(result.success,true,JSON.stringify(result));
+    if(stateful) {
+      assert.equal(result.findings.length,0,"Solidity expectation mismatches cannot become findings");
+      assert.equal(caseId,"","observation-only results cannot manufacture verified case IDs");
+      continue;
+    }
     assert.equal(result.findings.length,1);
-    if(!stateful)assert.ok(result.coverageDetail && !result.coverageDetail.includes("1 failed probes") && !result.coverageDetail.includes("1 unsupported probes"),"invented probe should be stopped at declaration preflight");
-    else assert.equal(result.findings[0].vulnerabilityType,"State assertion discrepancy");
+    assert.ok(result.coverageDetail && !result.coverageDetail.includes("1 failed probes") && !result.coverageDetail.includes("1 unsupported probes"),"invented probe should be stopped at declaration preflight");
     const record=await readSourceCase(caseId,program);
     assert.equal((await replaySourceCase(record,fixture)).behavior_observed,true);
-    if(stateful) {
-      assert.deepEqual(record.spec.sequence,sequence);
-      assert.match(result.findings[0].reportBody,/Reachability: direct_transaction/);
-      reviewMode=true;reviewIndex=0;reviewOffset=0;
-      const reviewProgram={...program,scopeSummary:JSON.stringify({...JSON.parse(program.scopeSummary),policy:"Long policy text. ".repeat(1600)})};
-      const reviewed=await independentReview({...result.findings[0],id:"owned-review"} as any,reviewProgram,caseId,new AbortController().signal);
-      assert.equal(reviewed.review.verdict,"reject");assert.equal(reviewIndex,reviewFiles.length);
-      reviewMode=false;
-      assert.ok(result.findings[0].reportBody.includes(JSON.stringify(sequence,null,2)));
-    }
+
   }
   console.log("JavaScript/Java/Solidity model action -> failed probe recovery -> sandbox -> caller -> report -> persisted evidence -> replay PASSED");
 } finally {

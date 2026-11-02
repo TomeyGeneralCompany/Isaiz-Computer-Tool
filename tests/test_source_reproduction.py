@@ -326,7 +326,7 @@ contract Store {
     def test_constructor_state_changes_payable_and_deterministic_replay(self):
         sequence=self.sequence()
         first=self.run_sequence(sequence)
-        self.assertEqual(first['status'],'behavior_not_observed',first)
+        self.assertEqual(first['status'],'observation_only',first)
         self.assertFalse(first['behavior_observed'])
         self.assertTrue(all(step['passed'] for step in first['observations']['steps']))
         self.assertEqual(self.run_sequence(sequence)['observations'],first['observations'])
@@ -338,7 +338,7 @@ contract Store {
             (repo/"package.json").write_text('{"devDependencies":{"unrelated":"1"}}')
             result=driver.run_probe(repo,{"file":"Store.sol","function":"Store.set",
                 "kind":"solidity_sequence","nonce":"a"*32,"sequence":self.sequence()})
-            self.assertEqual(result['status'],'behavior_not_observed',result)
+            self.assertEqual(result['status'],'observation_only',result)
 
     def test_solidity_fetches_only_the_missing_import(self):
         data=io.BytesIO()
@@ -358,22 +358,23 @@ contract Store {
             with patch('source_dependencies.download',return_value=archive) as download:
                 result=driver.run_probe(repo,{'file':'Store.sol','function':'Store.set',
                     'kind':'solidity_sequence','nonce':'a'*32,'sequence':self.sequence()})
-                self.assertEqual(result['status'],'behavior_not_observed',result)
+                self.assertEqual(result['status'],'observation_only',result)
                 self.assertEqual(download.call_count,1)
                 self.assertFalse((repo/'node_modules/unrelated').exists())
 
     def test_assertion_mismatch_is_recorded(self):
         sequence=self.sequence();sequence['steps'][2]['expect']='8'
         result=self.run_sequence(sequence)
-        self.assertEqual(result['status'],'behavior_observed',result)
+        self.assertEqual(result['status'],'observation_only',result)
         self.assertFalse(result['observations']['steps'][2]['passed'])
         self.assertEqual(result['observations']['steps'][2]['actual'],'7')
+        self.assertFalse(result['behavior_observed'])
 
     def test_expected_and_unexpected_revert(self):
         sequence=self.sequence()
         sequence['steps'].insert(1,{'operation':'send','function':'set(uint256)','args':['2'],'sender':1,'expectRevert':True})
         result=self.run_sequence(sequence)
-        self.assertEqual(result['status'],'behavior_not_observed',result)
+        self.assertEqual(result['status'],'observation_only',result)
         self.assertTrue(result['observations']['steps'][1]['reverted'])
         sequence['steps'][1]['expectRevert']=False
         self.assertEqual(self.run_sequence(sequence)['status'],'probe_failed')
