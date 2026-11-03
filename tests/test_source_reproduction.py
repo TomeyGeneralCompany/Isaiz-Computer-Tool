@@ -45,14 +45,14 @@ class ValidationTests(unittest.TestCase):
             repo = Path(directory)
             (repo / '.git').mkdir()
             (repo / '.gitmodules').write_text(
-                '[submodule "open-lib"]\\n path = lib/open-lib\\n'
-                ' url = https://github.com/owned/open-lib.git\\n')
+                '[submodule "open-lib"]\n path = lib/open-lib\n'
+                ' url = https://github.com/owned/open-lib.git\n')
             revision = 'a' * 40
             invoked = []
             def command(args, **kwargs):
                 invoked.append(args)
                 if 'ls-tree' in args:
-                    return Mock(stdout='160000 commit ' + revision + '\\tlib/open-lib\\n')
+                    return Mock(stdout='160000 commit ' + revision + '\tlib/open-lib\n')
                 if 'init' in args:
                     Path(args[-1]).mkdir(parents=True, exist_ok=True)
                 if 'checkout' in args:
@@ -76,14 +76,14 @@ class ValidationTests(unittest.TestCase):
             repo = Path(directory)
             (repo / '.git').mkdir()
             manifest = repo / '.gitmodules'
-            manifest.write_text('[submodule "evil"]\\n path = lib/evil\\n'
-                                ' url = https://untrusted.invalid/evil.git\\n')
+            manifest.write_text('[submodule "evil"]\n path = lib/evil\n'
+                                ' url = https://untrusted.invalid/evil.git\n')
             with patch('source_dependencies.subprocess.run') as run:
                 self.assertFalse(prepare_pinned_foundry_submodules(
                     repo,['lib/evil/Lib.sol']))
                 run.assert_not_called()
-            manifest.write_text('[submodule "owned"]\\n path = lib/owned\\n'
-                                ' url = https://github.com/owned/lib.git\\n')
+            manifest.write_text('[submodule "owned"]\n path = lib/owned\n'
+                                ' url = https://github.com/owned/lib.git\n')
             with patch('source_dependencies.subprocess.run',
                        return_value=Mock(stdout='')) as run:
                 with self.assertRaises(DependencyError):
