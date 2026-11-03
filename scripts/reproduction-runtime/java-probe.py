@@ -286,7 +286,7 @@ jvm = ['-Xmx128m', '-XX:ActiveProcessorCount=2', '-XX:+UseSerialGC']
 # modules; keep runtime probes tight, but give compilation bounded headroom.
 javac_jvm = ['-Xmx512m', '-XX:ActiveProcessorCount=2', '-XX:+UseSerialGC']
 subprocess.run(['/jdk/bin/javac', *['-J'+x for x in javac_jvm], '-proc:none', '-encoding', 'UTF-8',
-                '-classpath', str(classes), '-sourcepath', sourcepath, '-d', str(classes),
+                '-classpath', os.pathsep.join([str(classes), *spec.get('javaClasspath', [])]), '-sourcepath', sourcepath, '-d', str(classes),
                 str(target), str(harness)], check=True, timeout=15)
 if sequence_mode:
     def encode_value(value):
