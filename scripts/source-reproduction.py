@@ -169,6 +169,80 @@ def foundry_settings(profile: dict) -> dict:
     return settings
 
 
+def prepare_java_classpath(repository: Path, target: Path, destination: Path) -> list[str]:
+    """Stage bounded, already-resolved Java dependency JARs for sandbox-only use.
+
+    No target Gradle/Maven scripts run, and neither host cache nor network is
+    exposed to the source verifier. Only existing regular ZIP/JAR artifacts
+    matching an imported package are copied into the temporary sandbox.
+    """
+    import zipfile
+    source = target.read_text(errors='replace')[:256000]
+    imports = re.findall(r'^\s*import\s+(static\s+)?([\w.]+)(\.\*)?\s*;', source, re.M)
+    if not imports:
+        return []
+    wanted = set()
+    for static_keyword, item, wildcard in imports:
+        if item.startswith(('java.', 'javax.', 'jdk.', 'sun.')) or wildcard:
+            continue
+        parts = item.split('.')
+        if len(parts) >= 2:
+            # Static imports name a member, not a class.
+            wanted.add('/'.join(parts[:-1] if static_keyword else parts) + '.class')
+    if not wanted:
+        return []
+    roots = [repository / 'lib', repository / 'libs', repository / 'vendor',
+             repository / 'build' / 'libs', repository / 'target',
+             Path.home() / '.gradle' / 'caches' / 'modules-2' / 'files-2.1',
+             Path.home() / '.m2' / 'repository']
+    destination.mkdir(mode=0o700)
+    copied = []
+    count = 0
+    total = 0
+    visited = 0
+    for root in roots:
+        if not root.is_dir() or root.is_symlink():
+            continue
+        for parent, dirs, files in os.walk(root, followlinks=False):
+            visited += 1
+            if visited > 10000 or len(copied) >= 96:
+                return copied
+            dirs[:] = sorted(d for d in dirs if not (Path(parent) / d).is_symlink())
+            for name in sorted(files):
+                if not name.endswith('.jar'):
+                    continue
+                count += 1
+                if count > 3000 or len(copied) >= 96:
+                    return copied
+                jar = Path(parent) / name
+                try:
+                    if jar.is_symlink() or not jar.is_file():
+                        continue
+                    size = jar.stat().st_size
+                    if not 0 < size <= 16 * 1024**2 or total + size > 192 * 1024**2:
+                        continue
+                    with zipfile.ZipFile(jar) as archive:
+                        matched = wanted.intersection(archive.namelist())
+                        if not matched:
+                            continue
+                    # In-repository JARs are already mounted at /repo.
+                    # Avoid a second bind mount for them; cached host JARs
+                    # must still be copied into the isolated dependency mount.
+                    if jar.resolve().is_relative_to(repository):
+                        copied.append('/repo/' + str(jar.relative_to(repository)))
+                    else:
+                        dest = destination / (str(len(copied)).zfill(3) + '.jar')
+                        shutil.copyfile(jar, dest)
+                        copied.append('/java-deps/' + dest.name)
+                    total += size
+                    wanted.difference_update(matched)
+                    if not wanted:
+                        return copied
+                except (OSError, zipfile.BadZipFile, ValueError):
+                    continue
+    return copied
+
+
 def run_probe(repository: Path, specification: dict, _dependency_round: int = 0) -> dict:
     repository=repository.resolve(strict=True)
     if not repository.is_dir(): raise ValueError('Repository directory required')
@@ -248,6 +322,11 @@ def run_probe(repository: Path, specification: dict, _dependency_round: int = 0)
         work=Path(temporary)
         (work/'probe.py').write_text((runtime/('java-sequence.py' if kind == 'java_sequence' else 'java-probe.py')).read_text() if language == 'java' else PROBE)
         (work/'spec.json').write_text(json.dumps(specification))
+        java_jars = prepare_java_classpath(repository,target,work/'java-deps') if language == 'java' else []
+        # Controller-owned only: never accept a model-supplied classpath.
+        specification = {**specification, 'javaClasspath': java_jars}
+        (work/'spec.json').write_text(json.dumps(specification))
+        java_dependency_bind = ['--ro-bind',str(work/'java-deps'),'/java-deps'] if language == 'java' else []
         runtime_binds = ['--ro-bind',str(java_home),'/jdk',*java_config_binds,'--ro-bind',str(runtime),'/runtime'] if language == 'java' else [] if language == 'python' else [
             '--ro-bind',str(Path(node).resolve()),'/probe-node',
             '--ro-bind',str(runtime),'/runtime']

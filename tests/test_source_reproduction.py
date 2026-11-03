@@ -9,6 +9,7 @@ import tarfile
 from unittest.mock import patch
 from pathlib import Path
 import tempfile
+import subprocess
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -98,6 +99,30 @@ class LanguageTests(unittest.TestCase):
             self.assertEqual(result["status"], "unsupported_execution", result)
             self.assertFalse(result["behavior_observed"])
             self.assertIn("not supported by the current execution adapter", result["detail"])
+
+    def test_java_resolves_prebuilt_dependency_jar_without_running_build_scripts(self):
+        # Real external dependency, compiled before the verifier's sandbox.
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            helper = repo / 'fixture/external/Helper.java'
+            helper.parent.mkdir(parents=True)
+            helper.write_text('package external; public class Helper { '
+                              'public static String wrap(String x) { return "<p>" + x + "</p>"; } }')
+            classes = repo / 'fixture/classes'
+            classes.mkdir()
+            subprocess.run(['javac', '-d', str(classes), str(helper)], check=True)
+            lib = repo / 'lib'
+            lib.mkdir()
+            subprocess.run(['jar', 'cf', str(lib / 'helper.jar'), '-C', str(classes), '.'], check=True)
+            (repo / 'Render.java').write_text('import external.Helper; public class Render { '
+                'public static String render(String x) { return Helper.wrap(x); } }')
+            # Prove the fixture JAR is usable before entering bubblewrap.
+            subprocess.run(['javac', '-classpath', str(lib / 'helper.jar'), '-d', str(classes),
+                            str(repo / 'Render.java')], check=True)
+            result = driver.run_probe(repo, {'file':'Render.java',
+                'function':'Render.render','kind':'html_reflection','nonce':'a'*32})
+            self.assertEqual(result['status'], 'behavior_observed', result)
+            self.assertTrue(result['behavior_observed'])
 
     def test_java_missing_dependency_is_not_false_reproduction(self):
         with tempfile.TemporaryDirectory() as directory:

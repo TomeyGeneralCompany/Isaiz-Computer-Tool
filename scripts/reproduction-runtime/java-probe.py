@@ -285,9 +285,11 @@ jvm = ['-Xmx128m', '-XX:ActiveProcessorCount=2', '-XX:+UseSerialGC']
 # javac on JDK 21 can exceed a 128 MiB heap while initializing compiler
 # modules; keep runtime probes tight, but give compilation bounded headroom.
 javac_jvm = ['-Xmx512m', '-XX:ActiveProcessorCount=2', '-XX:+UseSerialGC']
-subprocess.run(['/jdk/bin/javac', *['-J'+x for x in javac_jvm], '-proc:none', '-encoding', 'UTF-8',
-                '-classpath', str(classes), '-sourcepath', sourcepath, '-d', str(classes),
-                str(target), str(harness)], check=True, timeout=15)
+compiled = subprocess.run(['/jdk/bin/javac', *['-J'+x for x in javac_jvm], '-proc:none', '-encoding', 'UTF-8',
+                '-classpath', os.pathsep.join([str(classes), *spec.get('javaClasspath', [])]), '-sourcepath', sourcepath, '-d', str(classes),
+                str(target), str(harness)], capture_output=True, timeout=15)
+if compiled.returncode:
+    raise RuntimeError('TOMEY_JAVA_COMPILER_FAILURE: ' + compiled.stderr.decode(errors='replace')[:5000])
 if sequence_mode:
     def encode_value(value):
         if value is None:
@@ -304,7 +306,7 @@ if sequence_mode:
     for step in steps:
         argv += [step['method'], str(len(step.get('args', [])))]
         argv += [encode(v) for v in step.get('args', [])]
-    outcome = subprocess.run(['/jdk/bin/java', *jvm, '-cp', str(classes),
+    outcome = subprocess.run(['/jdk/bin/java', *jvm, '-cp', os.pathsep.join([str(classes), *spec.get('javaClasspath', [])]),
                               'TomeyJavaProbe', *argv], check=True,
                              stdout=subprocess.PIPE, timeout=8)
     lines = outcome.stdout.decode().splitlines()
@@ -324,7 +326,7 @@ if sequence_mode:
 control = 'TOMEY_CONTROL_' + spec['nonce']
 attack = ('<em data-tomey="'+spec['nonce']+'">TOMEY_PROBE</em>'
           if spec['kind'] == 'html_reflection' else '../../TOMEY_ESCAPE_'+spec['nonce'])
-result = subprocess.run(['/jdk/bin/java', *jvm, '-cp', str(classes), 'TomeyJavaProbe',
+result = subprocess.run(['/jdk/bin/java', *jvm, '-cp', os.pathsep.join([str(classes), *spec.get('javaClasspath', [])]), 'TomeyJavaProbe',
                          (package+'.' if package else '')+parts[0], parts[1],
                          *[base64.b64encode(x.encode()).decode() for x in (control, attack)]],
                         check=True, stdout=subprocess.PIPE, timeout=8)

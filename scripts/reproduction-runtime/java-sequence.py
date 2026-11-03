@@ -139,7 +139,7 @@ public class TomeyJavaSequence {
 jvm=['-Xmx128m','-XX:ActiveProcessorCount=2','-XX:+UseSerialGC']
 compiler=['-J-Xmx512m','-J-XX:ActiveProcessorCount=2','-J-XX:+UseSerialGC']
 subprocess.run(['/jdk/bin/javac',*compiler,'-proc:none','-encoding','UTF-8',
-                '-classpath',str(classes),'-sourcepath',os.pathsep.join(map(str,roots)),
+                '-classpath',os.pathsep.join([str(classes),*spec.get('javaClasspath',[])]),'-sourcepath',os.pathsep.join(map(str,roots)),
                 '-d',str(classes),str(target),str(harness)],check=True,timeout=15)
 def token(value):
     if isinstance(value,bool):tag='b';text=str(value).lower()
@@ -160,7 +160,7 @@ argv=[(package+'.' if package else '')+parts[0],str(len(ctor)),*ctor,str(len(ste
 for step in steps:
     args=[token(x) for x in step.get('args',[])]
     argv.extend([step['method'],str(len(args)),*args])
-result=subprocess.run(['/jdk/bin/java',*jvm,'-cp',str(classes),'TomeyJavaSequence',*argv],
+result=subprocess.run(['/jdk/bin/java',*jvm,'-cp',os.pathsep.join([str(classes),*spec.get('javaClasspath',[])]),'TomeyJavaSequence',*argv],
                       check=True,stdout=subprocess.PIPE,timeout=8)
 lines=result.stdout.decode().splitlines()
 if len(lines)!=len(steps):raise ValueError('TOMEY_INVALID_JAVA_PROBE: incorrect output count')
