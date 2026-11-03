@@ -8,6 +8,17 @@ on:
         required: true
         default: '4'
         options: ['1', '2', '3', '4', '5']
+      language:
+        description: Random selection, or a specific language for replay
+        type: choice
+        required: true
+        default: random
+        options: [random, solidity, python, javascript, java]
+      seed:
+        description: Optional replay seed (leave blank to generate a new random challenge)
+        type: string
+        required: false
+        default: ''
       mode:
         description: Prepare fixture without model, or run production investigator
         type: choice
@@ -17,14 +28,14 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: lotus-gauntlet-\${{ github.ref }}
+  group: lotus-gauntlet-${{ github.ref }}
   cancel-in-progress: false
 jobs:
   gauntlet:
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     env:
-      GITHUB_TOKEN: \${{ github.token }}
+      GITHUB_TOKEN: ${{ github.token }}
       LOCAL_OLLAMA_MODEL: qwen3:4b
       LOCAL_MODEL_ADAPTER: ollama
       LOCAL_OLLAMA_TOOL_PROTOCOL: json
@@ -49,7 +60,11 @@ jobs:
         run: npm ci
       - name: Prepare owned source without model inference
         if: inputs.mode == 'prepare'
-        run: node --import tsx scripts/lotus-gauntlet.ts --prepare --level=\${{ inputs.level }} --output=data/gauntlet/latest
+        env:
+          GAUNTLET_LANGUAGE: ${{ inputs.language }}
+          GAUNTLET_SEED: ${{ inputs.seed }}
+        run: |
+          node --import tsx scripts/lotus-gauntlet.ts --prepare --level=${{ inputs.level }} --language="$GAUNTLET_LANGUAGE" ${GAUNTLET_SEED:+--seed="$GAUNTLET_SEED"} --output=data/gauntlet/latest
       - name: Install production runtime
         if: inputs.mode == 'run'
         run: |
@@ -69,14 +84,17 @@ jobs:
           docker exec lotus-gauntlet-ollama ollama pull qwen3:4b
       - name: Investigate blind synthetic bounty with production controller
         if: inputs.mode == 'run'
+        env:
+          GAUNTLET_LANGUAGE: ${{ inputs.language }}
+          GAUNTLET_SEED: ${{ inputs.seed }}
         run: |
           set -o pipefail
-          node --import tsx scripts/lotus-gauntlet.ts --run --level=\${{ inputs.level }} --output=data/gauntlet/latest 2>&1 | tee data/gauntlet/live-terminal.log
+          node --import tsx scripts/lotus-gauntlet.ts --run --level=${{ inputs.level }} --language="$GAUNTLET_LANGUAGE" ${GAUNTLET_SEED:+--seed="$GAUNTLET_SEED"} --output=data/gauntlet/latest 2>&1 | tee data/gauntlet/live-terminal.log
       - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: lotus-gauntlet-\${{ inputs.mode }}-level-\${{ inputs.level }}-\${{ github.run_id }}
+          name: lotus-gauntlet-${{ inputs.mode }}-level-${{ inputs.level }}-${{ github.run_id }}
           path: |
             data/gauntlet/latest/manifest.json
             data/gauntlet/latest/grade.json
