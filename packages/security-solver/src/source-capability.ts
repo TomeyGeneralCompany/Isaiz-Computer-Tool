@@ -6,11 +6,43 @@ import {sourceCodeOnly} from './source-function-reference';
 const execute=promisify(execFile);
 /** Rank application source ahead of tooling; retain every path for coverage. */
 export function sourcePriority(path:string):number {
+  // Only rank navigation candidates; every eligible file remains inspectable
+  // and callable by the verifier. A file's location does not prove a defect.
+  const normalized=path.replaceAll('\\','/');
+  const parts=normalized.toLowerCase().split('/').filter(Boolean);
+  const folders=parts.slice(0,-1);
+  const filename=parts.at(-1)||'';
+  const has=(names:readonly string[])=>folders.some(folder=>names.includes(folder));
+  const appRoots=['contracts','src','actuator','app'];
   let score=0;
-  if(/(?:^|\/)(?:contracts|src|actuator|app|lib)\//.test(path))score+=20;
-  if(/(?:^|\/)(?:test|tests|fixtures|mocks|vendors?|scripts?|deploy|node_modules|\.github)\//i.test(path))score-=60;
-  if(/(?:^|\/)(?:libs|interfaces)\//i.test(path))score-=10;
-  if(/(?:^|\/)[^/]*(?:config|mock|test)[^/]*\.[^.]+$/i.test(path)||/(?:^|\/)\./.test(path))score-=40;
+
+  if(has(appRoots))score+=20;
+  // The src/main/java convention is application code; test and generated
+  // trees are different investigation targets.
+  if(folders.includes('src') && folders.includes('main'))score+=10;
+
+  // Third-party code exists in different locations across languages.
+  // Subdirectories like src/vendor, app/node_modules, src/main/java/.../vendor
+  // should not win the initial navigation window merely by exposing probes.
+  if(has(['node_modules','site-packages','dist-packages','.venv','venv','virtualenv',
+    '.m2','.gradle','vendor','vendors','third_party','third-party','external',
+    'bower_components','packages-lock','__pycache__']))score-=90;
+  if(has(['test','tests','testing','fixtures','fixture','mocks','mock','__tests__',
+    'scripts','script','deploy','deployment','.github','examples','example']))score-=60;
+  if(has(['dist','build','generated','gen','out','target','coverage',
+    '.next','compiled','minified']))score-=45;
+
+  // Solidity's contracts/libs and nested imports, Java library packages,
+  // and Python/JS internal compatibility shims remain reachable but begin
+  // after first-party application entry points.
+  if(has(['lib','libs','libraries','interfaces','imports','deps','dependencies',
+    'thirdparty','third_party','third-party']))score-=25;
+  if(folders.includes('contracts') && has(['lib','libs','interfaces','imports']))score-=20;
+
+  if(/(?:^|[._-])(?:config|mock|test|spec)(?:[._-]|$)/i.test(filename) ||
+     filename.startsWith('.'))score-=40;
+  // Support code with common names such as SafeERC20.sol, even when stored
+  // directly under contracts/, should be inspected after app callers.
   return score;
 }
 const compiler=[0,8,30];

@@ -6,12 +6,12 @@ import {sourcePriority} from './source-capability';
 export async function prioritizeSourceCandidates(root:string,eligible:string[],fallback:string[],leads:Array<{path:string;line:number;rule?:string;message?:string}>,focus?:string) {
   const allowed=new Set(eligible),base=await realpath(root);
   const selected=leads.filter(lead=>allowed.has(lead.path)&&Number.isSafeInteger(lead.line)&&lead.line>0);
-  // A detector match in deployment tooling must not crowd actual application
-  // contracts out of the eight-file navigation window. Prefer production
-  // source consistently for detector hits and fallbacks, without discarding
-  // eligible files or treating a detector hit as verified evidence.
+  // A detector match in vendored, generated, test, or dependency code must not
+  // crowd application source out of the eight-file navigation window, for any
+  // supported language. Preserve every eligible source for later inspection;
+  // detector leads are navigation hints, not evidence of a vulnerability.
   const candidates=[...new Set([...(focus?[focus]:[]),...selected.map(lead=>lead.path),...fallback,...eligible])].filter(path=>allowed.has(path));
-  // Rank a bounded navigation pool by demonstrably probe-compatible signatures.
+  // Rank a bounded navigation pool using application ownership and supported signatures.
   // Lexical hints are not evidence; an actual source read and isolated probe
   // still determine whether any candidate is testable or vulnerable.
   const ranked=candidates.sort((a,b)=>sourcePriority(b)-sourcePriority(a) ||
@@ -50,8 +50,11 @@ export async function prioritizeSourceCandidates(root:string,eligible:string[],f
     }
   }
   const paths=focus ? rankedPool : rankedPool
-    .sort((a,b)=>(signatureScores.get(b)||0)-(signatureScores.get(a)||0) ||
-      sourcePriority(b)-sourcePriority(a))
+    // Application ownership takes precedence over a probe-compatible dependency
+    // signature across Solidity, Python, JavaScript, and Java. The overnight
+    // 88mph run paginated a supporting ERC1155 library before application code.
+    .sort((a,b)=>sourcePriority(b)-sourcePriority(a) ||
+      (signatureScores.get(b)||0)-(signatureScores.get(a)||0))
     .slice(0,8);
   const locations:Array<{path:string;offset:number;line:number;rule?:string;hypothesis?:string}>=[];
   for(const path of paths) {

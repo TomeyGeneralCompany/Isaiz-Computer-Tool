@@ -1,4 +1,5 @@
 import {modelProfile} from './model-profile';
+import {normalizeForcedOutlineCursor} from './outline-cursor';
 import {z} from "zod";
 import {javaSequenceSchema, type JavaSequence} from "./java-sequence";
 import {buildBaselineSequence} from './solidity-probe-inputs';
@@ -410,6 +411,15 @@ export async function runLocalAudit(
               action.path=normalized;
             }
           } catch {}
+        }
+        // The model may carry a read_file *character* cursor into the
+        // controller-required outline_solidity action, whose offset indexes
+        // declarations. Reset only forced outlines; preserve normal pagination.
+        const outlineOffset=normalizeForcedOutlineCursor(action.action,action.offset,constraints?.action);
+        if(outlineOffset!==action.offset) {
+          await appendFile(logFile,'[FORCED_OUTLINE_CURSOR_RESET] '+JSON.stringify({
+            path:action.path,requested:action.offset,used:outlineOffset})+'\n');
+          action.offset=outlineOffset;
         }
         // The workflow owns the exact pending verifier request. Do not ask
         // Qwen to reconstruct it after a correct plan has been accepted.
