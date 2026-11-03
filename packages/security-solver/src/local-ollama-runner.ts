@@ -250,6 +250,14 @@ export async function runLocalAudit(
           const output=JSON.stringify(result);
           const verify={action:'verify_source',path,query:hint.functionName,answer:hint.kind};
           workflow.observe(verify as any,output);
+          // A controller-initiated negative probe must also advance navigation.
+          // Previously only model-initiated negative probes triggered the
+          // mandatory source handoff, leaving Qwen free to cycle on decoys.
+          if(result.status==='behavior_not_observed') {
+            const next=workflow.requireNextUnreadSource(limits.initialSourcePaths||[]);
+            if(next)await appendFile(logFile,'[GUIDED_NEGATIVE_PROBE_SOURCE_HANDOFF] '+
+              JSON.stringify({testedPath:path,next})+'\\n');
+          }
           if(result.status==='behavior_observed') {
             const paths=(limits.initialSourcePaths||[]).filter(p=>p.startsWith('source-') &&
               p!==path && /\.(?:py|js|mjs|cjs|java|sol)$/.test(p));
