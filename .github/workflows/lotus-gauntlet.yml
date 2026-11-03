@@ -81,8 +81,10 @@ jobs:
             data/gauntlet/latest/manifest.json
             data/gauntlet/latest/grade.json
             data/gauntlet/latest/result.json
+            data/gauntlet/latest/review.json
             data/gauntlet/latest/runner.txt
             data/gauntlet/latest/local-hunt-*.log
+            data/gauntlet/latest/local-review-*.log
             data/gauntlet/latest/local-hunt-*.json
             data/gauntlet/live-terminal.log
           retention-days: 30
