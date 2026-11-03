@@ -59,7 +59,13 @@ function report(candidate:z.infer<typeof candidateSchema>,record:SourceCase,id:s
   return `## Summary\n${candidate.title}\n\n${candidate.impact}\n\n## Affected Source\n${record.repositoryUrl}/${record.spec.file}\nCommit: ${record.commit}\nSource SHA256: ${record.sourceSha256}\nCaller: ${caller}:${candidate.callerLine}\nReachability: ${candidate.reachability || "caller"}\n\n## Steps to Reproduce\nCall ${record.spec.function} in ${record.spec.file} using the recorded inputs or local transaction sequence below.\nProbe kind: ${record.spec.kind}\n${record.spec.sequence ? "Local deployment and transaction sequence:\n"+JSON.stringify(record.spec.sequence,null,2)+"\n" : ""}Reproduction case: ${id}\n\n## Observed Results\n${JSON.stringify(record.result.observations,null,2)}\n\n## Falsification Attempts\n${candidate.falsification}\n\n## Evidence Limits\n${record.result.limitation}\nThis is an isolated source-function reproduction; no production endpoint was tested.\n\n## Impact\n${candidate.impact}\n\n## Evidence Assessment\nSeverity: ${candidate.severity}\nConfidence: ${candidate.confidence}\n${candidate.ratingReason}\n`;
 }
 export interface StaticLeadFocus { id:string; repositoryUrl:string; commit:string; file:string; line:number; rule:string; }
-export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortSignal,focus?:StaticLeadFocus,beforeInspection?:()=>void,automatic=false):Promise<SecuritySolveResult> {
+/** Explicit offline fixture acquisition, supplied only by owned test harnesses.
+ * Production calls omit this parameter and retain the hardened HTTPS Git cloner.
+ */
+export type OwnedFixtureAcquirer = (url:string,destination:string,options:{
+  signal?:AbortSignal;commit?:string;allowPartialDependencies?:boolean
+})=>Promise<{missingDependencies:string[]}>;
+export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortSignal,focus?:StaticLeadFocus,beforeInspection?:()=>void,automatic=false,fixtureAcquirer?:OwnedFixtureAcquirer):Promise<SecuritySolveResult> {
   const ownJob = signal ? undefined : beginLocalJob();
   signal ??= ownJob!.signal;
   let coverage: "failed" | "unsupported" = "failed";
@@ -104,7 +110,7 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
       signal.throwIfAborted();
       try {
         await note('ACQUISITION_REPOSITORY_START',{index:i+1,repository:url});
-        const acquired=await cloneAuthorizedSource(url,destination,{signal,allowPartialDependencies:true,...(focus ? {commit:focus.commit} : {})});
+        const acquired=await (fixtureAcquirer || cloneAuthorizedSource)(url,destination,{signal,allowPartialDependencies:true,...(focus ? {commit:focus.commit} : {})});
         repos.push({directory:destination,url});
         await note('ACQUISITION_REPOSITORY_DONE',{index:i+1,repository:url});
         acquisitionChecks.push({repository:url,reason:null,retryAfter:null});
