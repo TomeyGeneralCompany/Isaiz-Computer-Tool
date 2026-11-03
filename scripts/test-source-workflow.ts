@@ -57,6 +57,21 @@ assert.equal(intent.answer,"html_reflection");
 
 
 const {InvestigationWorkflow}=await import("../packages/security-solver/src/investigation-workflow");
+// Invalid Qwen probe plans must advance to real unread source rather than
+// repeatedly consuming turns; existing context and evidence remain intact.
+const recover=new InvestigationWorkflow();
+recover.read("source-1/contracts/First.sol");
+const ranked=["source-1/contracts/First.sol","source-1/contracts/Second.sol","source-1/contracts/Third.sol"];
+assert.equal(recover.requireNextUnreadSource(ranked),"source-1/contracts/Second.sol");
+assert.equal(recover.requireNextUnreadSource(ranked),null,"pending required read must stay pinned");
+assert.match(recover.validate({action:"plan_probe",path:ranked[0],query:"X.y",answer:"solidity_sequence"} as any)||"",/Read the required candidate source/);
+assert.deepEqual(await recover.constraints(),{action:["read_file"],path:[ranked[1]]});
+recover.read(ranked[1]);
+assert.equal(recover.requireNextUnreadSource(ranked),ranked[2]);
+recover.read(ranked[2]);
+assert.equal(recover.requireNextUnreadSource(ranked),null);
+assert.equal(recover.snapshot().readPaths.length,3);
+
 const compactedWorkflow=new InvestigationWorkflow();
 compactedWorkflow.restore({version:1,notes:Array(12).fill("older navigation ".repeat(40))});
 compactedWorkflow.observe({action:"verify_source",path:"source-1/Render.java",
@@ -118,6 +133,8 @@ try {
   assert.deepEqual(await probeChoices(js,"solidity_sequence"),[]);
 } finally { await rm(choiceDir,{recursive:true,force:true}); }
 const revisedRunner=await readFile(new URL("../packages/security-solver/src/local-ollama-runner.ts",import.meta.url),"utf8");
+assert.ok(revisedRunner.includes("[REJECTED_PLAN_SOURCE_HANDOFF]"),"invalid probe recovery must advance ranked source");
+assert.ok(revisedRunner.includes("[REJECTED_FINAL_SOURCE_HANDOFF]"),"repeated premature finals must advance ranked source");
 assert.ok(revisedRunner.includes("[PROBE_INTENT_MENU]"));
 assert.ok(revisedRunner.includes("Controller Solidity probe guidance:"));
 assert.ok(revisedRunner.includes("[PROBE_INTENT_EXECUTE]"),"controller should perform accepted probe without a second model turn");
