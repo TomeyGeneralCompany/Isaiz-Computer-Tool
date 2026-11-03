@@ -14,12 +14,12 @@ assert.equal(compilerCompatible('0.8.x'),null);
 assert.equal(compilerCompatible('0.7.0 - 0.9.0'),null);
 for(const line of ['// target.set(x);','function set(uint x) external {}','const text = "target.set(x)";','/* target.set(x); */'])assert.equal(referencesProbedFunction(line,'Store.set'),false,line);
 assert.equal(referencesProbedFunction('target.set(x);','Store.set'),true);
-const exactCallerFixture='public class HttpHandler {\\n' +
-  '  public String responseBody(String input) { return Renderer.render(input); }\\n' +
+const exactCallerFixture='public class HttpHandler {\n' +
+  '  public String responseBody(String input) { return Renderer.render(input); }\n' +
   '}';
-const unrelatedMethod='public class Adapter {\\n' +
-  '  public static String render(String value) { return value; }\\n' +
-  '  public static String inspect(String value) { return render(value); }\\n' +
+const unrelatedMethod='public class Adapter {\n' +
+  '  public static String render(String value) { return value; }\n' +
+  '  public static String inspect(String value) { return render(value); }\n' +
   '}';
 assert.equal(qualifiedCallerLineReferences(exactCallerFixture,2,'Renderer.render'),true,
   'Java qualified renderer invocation is an exact caller');
