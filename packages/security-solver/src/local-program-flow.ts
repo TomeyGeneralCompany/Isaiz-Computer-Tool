@@ -242,6 +242,42 @@ Do not claim production testing, JavaScript execution, file access or other effe
             // until all 80 turns are exhausted.
             const recovered=recoverEmptyUnprobedFinal(proposed,session.completedProbes,session.blockedReason);
             if(recovered!==proposed)await appendFile(logFile,'[EMPTY_UNPROBED_FINAL_RECOVERED] Applying selected-source coverage gate\\n');
+            // Report metadata belongs to the controller, not the language
+            // model. For a real observed case, reconstruct a uniquely
+            // inspected caller from verified source rather than trusting a
+            // hallucinated path or line. No candidate is manufactured when
+            // source evidence is absent or ambiguous.
+            if(recovered && typeof recovered==='object' && !Array.isArray(recovered) &&
+               Array.isArray(recovered.findings)) {
+              for(const candidate of recovered.findings) {
+                const record=session.cases.get(candidate?.caseId);
+                if(!record || !record.result.behavior_observed ||
+                   candidate.reachability==='direct_transaction')continue;
+                const sites:{file:string,line:number,qualified:boolean}[]=[];
+                for(const path of [...new Set([...sourceHints,...eligiblePaths])].slice(0,80)) {
+                  const sourceRepo=repos.find(r=>path.startsWith(relative(root,r.directory).split(sep).join('/')+'/'));
+                  if(!sourceRepo || sourceRepo.url!==record.repositoryUrl || !reads.has(path))continue;
+                  try {
+                    const code=await readFile(join(root,path),'utf8');
+                    for(let i=1;i<=code.split('\n').length;i++) {
+                      if(!reads.sawLine(path,code,i) || !callerLineReferences(code,i,record.spec.function))continue;
+                      sites.push({file:path,line:i,qualified:qualifiedCallerLineReferences(code,i,record.spec.function)});
+                    }
+                  }catch{}
+                }
+                const qualified=sites.filter(site=>site.qualified);
+                const chosen=qualified.length===1?qualified[0]:sites.length===1?sites[0]:null;
+                if(chosen) {
+                  candidate.callerFile=chosen.file;
+                  candidate.callerLine=chosen.line;
+                  await appendFile(logFile,'[CONTROLLER_EVIDENCE_ASSEMBLED] '+JSON.stringify({
+                    caseId:candidate.caseId,source:record.spec.file,callerFile:chosen.file,
+                    callerLine:chosen.line,sourceSha256:record.sourceSha256,
+                    reason:'single inspected caller verified against recorded case'
+                  })+'\\n');
+                }
+              }
+            }
             const value=huntSchema.parse(recovered);
             if(value.outcome === "no_testable_candidate") {
               if(session.completedProbes) {
