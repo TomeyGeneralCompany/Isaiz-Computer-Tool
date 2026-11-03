@@ -10,6 +10,11 @@ export function sourcePriority(path:string):number {
   if(/(?:^|\/)(?:contracts|src|actuator|app|lib)\//.test(path))score+=20;
   if(/(?:^|\/)(?:test|tests|fixtures|mocks|vendors?|scripts?|deploy|node_modules|\.github)\//i.test(path))score-=60;
   if(/(?:^|\/)(?:libs|interfaces)\//i.test(path))score-=10;
+  // Supporting Solidity libraries and re-exported imports are navigation context,
+  // not the first investigation target when concrete application contracts exist.
+  // Keep them eligible for caller tracing and execution preparation.
+  if(/(?:^|\/)contracts\/(?:libs?|interfaces|imports)\//i.test(path))score-=35;
+  if(/(?:^|\/)contracts\/[^/]+\/(?:imports|libs?)\//i.test(path))score-=20;
   if(/(?:^|\/)[^/]*(?:config|mock|test)[^/]*\.[^.]+$/i.test(path)||/(?:^|\/)\./.test(path))score-=40;
   return score;
 }
