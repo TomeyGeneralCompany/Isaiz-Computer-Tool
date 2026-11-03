@@ -20,7 +20,7 @@ import subprocess
 import tempfile
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from source_dependencies import prepare_dependencies, DependencyError
+from source_dependencies import prepare_dependencies, prepare_pinned_foundry_submodules, DependencyError
 
 SUPPORTED_EXECUTION_STATUS = {
     'behavior_observed',
@@ -354,7 +354,13 @@ def run_probe(repository: Path, specification: dict, _dependency_round: int = 0)
             try: missing = json.loads(diagnostic.rsplit('TOMEY_ERROR ', 1)[1]).get('missingImports', [])
             except (IndexError, ValueError): missing = []
             if missing and isinstance(missing, list) and len(missing) <= 128 and all(isinstance(x,str) and len(x)<=4096 for x in missing):
-                try: prepare_dependencies(repository, missing)
+                try:
+                    # Foundry libraries may be pinned git submodules rather than
+                    # npm packages. Retrieve only repository-committed gitlinks,
+                    # then retry in the unchanged isolated verifier.
+                    if prepare_pinned_foundry_submodules(repository, missing, specification.get('remappings', [])):
+                        return run_probe(repository, specification, _dependency_round + 1)
+                    prepare_dependencies(repository, missing)
                 except (DependencyError, OSError, ValueError) as error:
                     return {'status':'unsupported_dependencies','behavior_observed':False,'detail':str(error)[:1000]}
                 return run_probe(repository, specification, _dependency_round + 1)

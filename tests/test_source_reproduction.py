@@ -6,7 +6,7 @@ import hashlib
 import io
 import json
 import tarfile
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 from pathlib import Path
 import tempfile
 import subprocess
@@ -38,6 +38,57 @@ class ValidationTests(unittest.TestCase):
             self.assertFalse(detected(output),output)
         self.assertFalse(detected(attack, 'constant output'))
         self.assertFalse(detected(attack, 'TOMEY_CONTROL_'+nonce+attack))
+
+    def test_foundry_submodule_recovers_exact_gitlink_without_build_scripts(self):
+        from source_dependencies import prepare_pinned_foundry_submodules
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            (repo / '.git').mkdir()
+            (repo / '.gitmodules').write_text(
+                '[submodule "open-lib"]\n path = lib/open-lib\n'
+                ' url = https://github.com/owned/open-lib.git\n')
+            revision = 'a' * 40
+            invoked = []
+            def command(args, **kwargs):
+                invoked.append(args)
+                if 'ls-tree' in args:
+                    return Mock(stdout='160000 commit ' + revision + '\tlib/open-lib\n')
+                if 'init' in args:
+                    Path(args[-1]).mkdir(parents=True, exist_ok=True)
+                if 'checkout' in args:
+                    checkout = Path(args[2])
+                    (checkout / 'Sample.sol').write_text('library Sample {}')
+                return Mock(returncode=0)
+            with (patch('source_dependencies.subprocess.run', side_effect=command),
+                  patch('source_dependencies.subprocess.check_output', return_value=revision+'\n')):
+                installed = prepare_pinned_foundry_submodules(repo, ['owned/Sample.sol'],
+                    ['owned/=lib/open-lib/'])
+            self.assertTrue(installed)
+            self.assertTrue((repo / 'lib/open-lib/Sample.sol').is_file())
+            fetches = [args for args in invoked if 'fetch' in args]
+            self.assertEqual(len(fetches), 1)
+            self.assertEqual(fetches[0][-2:],
+                             ['https://github.com/owned/open-lib.git', revision])
+
+    def test_foundry_submodule_rejects_unpinned_or_untrusted_dependency(self):
+        from source_dependencies import prepare_pinned_foundry_submodules, DependencyError
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            (repo / '.git').mkdir()
+            manifest = repo / '.gitmodules'
+            manifest.write_text('[submodule "evil"]\n path = lib/evil\n'
+                                ' url = https://untrusted.invalid/evil.git\n')
+            with patch('source_dependencies.subprocess.run') as run:
+                self.assertFalse(prepare_pinned_foundry_submodules(
+                    repo,['lib/evil/Lib.sol']))
+                run.assert_not_called()
+            manifest.write_text('[submodule "owned"]\n path = lib/owned\n'
+                                ' url = https://github.com/owned/lib.git\n')
+            with patch('source_dependencies.subprocess.run',
+                       return_value=Mock(stdout='')) as run:
+                with self.assertRaises(DependencyError):
+                    prepare_pinned_foundry_submodules(repo,['lib/owned/Lib.sol'])
+                self.assertEqual(run.call_count,1)
 
     def test_foundry_compiler_settings(self):
         self.assertEqual(driver.foundry_settings({}), {})
