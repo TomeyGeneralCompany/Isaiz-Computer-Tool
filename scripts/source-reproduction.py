@@ -178,7 +178,7 @@ def prepare_java_classpath(repository: Path, target: Path, destination: Path) ->
     """
     import zipfile
     source = target.read_text(errors='replace')[:256000]
-    imports = set(re.findall(r'^\\s*import\\s+(?:static\\s+)?([\\w.]+)(?:\\.\\*)?\\s*;', source, re.M))
+    imports = set(re.findall(r'^\s*import\s+(?:static\s+)?([\w.]+)(?:\.\*)?\s*;', source, re.M))
     if not imports:
         return []
     wanted = set()
