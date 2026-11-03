@@ -3,9 +3,26 @@ import {InvestigationWorkflow} from '../packages/security-solver/src/investigati
 import {decodeAuditAction} from '../packages/security-solver/src/local-audit-protocol';
 import {modelProfile} from '../packages/security-solver/src/model-profile';
 import {buildSourceMap} from '../packages/security-solver/src/source-map';
+import {recoverEmptyUnprobedFinal} from '../packages/security-solver/src/inspection-coverage';
 import {mkdtemp,writeFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
+// Regression: no-probe empty finals must reach the existing candidate coverage
+// validator, not repeat FINAL_REJECTED until the 80-turn limit. Real findings,
+// completed probes, and blocked outcomes must remain unchanged.
+const empty={findings:[],outcome:'inspected'};
+const recovered=recoverEmptyUnprobedFinal(empty,0) as {findings:unknown[];outcome:string;reason:string};
+assert.deepEqual(recovered.findings,[]);
+assert.equal(recovered.outcome,'no_testable_candidate');
+assert.match(recovered.reason,/No supported source probe/);
+assert.equal(recoverEmptyUnprobedFinal(empty,1),empty);
+assert.equal(recoverEmptyUnprobedFinal(empty,0,'dependencies missing'),empty);
+const explicit={findings:[],outcome:'no_testable_candidate',reason:'Selected sources were inspected but the necessary dependencies were missing.'};
+assert.equal(recoverEmptyUnprobedFinal(explicit,0),explicit);
+const finding={findings:[{caseId:'recorded'}],outcome:'inspected'};
+assert.equal(recoverEmptyUnprobedFinal(finding,0),finding);
+const withReason={findings:[],outcome:'inspected',reason:'Inspected selected contracts but no supported probe was possible.'};
+assert.equal((recoverEmptyUnprobedFinal(withReason,0) as typeof withReason).reason,withReason.reason);
 const flow=new InvestigationWorkflow();
 const action={action:'read_file',path:'large.py',query:'',answer:'',offset:0};
 for(let i=0;i<8;i++){flow.read(action.path);flow.observe({...action,offset:i*156},JSON.stringify({start:i*156,end:(i+1)*156,nextOffset:(i+1)*156}));}
