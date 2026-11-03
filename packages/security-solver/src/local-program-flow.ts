@@ -248,8 +248,8 @@ Do not claim production testing, JavaScript execution, file access or other effe
             // hallucinated path or line. No candidate is manufactured when
             // source evidence is absent or ambiguous.
             if(recovered && typeof recovered==='object' && !Array.isArray(recovered) &&
-               Array.isArray(recovered.findings)) {
-              for(const candidate of recovered.findings) {
+               Array.isArray((recovered as {findings?:unknown}).findings)) {
+              for(const candidate of (recovered as {findings:any[]}).findings) {
                 const record=session.cases.get(candidate?.caseId);
                 if(!record || !record.result.behavior_observed ||
                    candidate.reachability==='direct_transaction')continue;
