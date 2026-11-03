@@ -84,9 +84,12 @@ export async function prioritizeSourceCandidates(root:string,eligible:string[],f
   // displace eight available production/dependency candidates. A disconnected
   // generated file may share a basename with application code and receive a
   // misleading inbound lexical reference score.
-  const nonGenerated=rankedPool.filter(path=>
-    !/(?:^|\\/)(?:test|tests|__tests__|generated|build|dist)(?:\\/|$)/i.test(path) &&
-    !/(?:^|\\/)(?:Generated|Mock)[A-Z][^/]*\\.(?:java|sol|py|js|mjs|cjs)$/i.test(path));
+  const nonGenerated=rankedPool.filter(path=>{
+    const segments=path.toLowerCase().split('/');
+    const base=path.split('/').at(-1)||'';
+    return !segments.some(part=>['test','tests','__tests__','generated','build','dist'].includes(part)) &&
+      !/^(?:Generated|Mock)[A-Z][^/]*[.](?:java|sol|py|js|mjs|cjs)$/.test(base);
+  });
   const navigationPool=nonGenerated.length>=8 ? nonGenerated : rankedPool;
   const paths=focus ? rankedPool : navigationPool
     // Application ownership takes precedence over a probe-compatible dependency
