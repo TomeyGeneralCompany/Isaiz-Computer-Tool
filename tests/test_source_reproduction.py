@@ -59,8 +59,8 @@ class ValidationTests(unittest.TestCase):
                     checkout = Path(args[2])
                     (checkout / 'Sample.sol').write_text('library Sample {}')
                 return Mock(returncode=0)
-            with patch('source_dependencies.subprocess.run', side_effect=command), \\
-                 patch('source_dependencies.subprocess.check_output', return_value=revision+'\\n'):
+            with (patch('source_dependencies.subprocess.run', side_effect=command),
+                  patch('source_dependencies.subprocess.check_output', return_value=revision+'\n')):
                 installed = prepare_pinned_foundry_submodules(repo, ['owned/Sample.sol'],
                     ['owned/=lib/open-lib/'])
             self.assertTrue(installed)
