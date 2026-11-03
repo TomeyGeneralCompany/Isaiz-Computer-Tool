@@ -139,7 +139,7 @@ public class TomeyJavaSequence {
 jvm=['-Xmx128m','-XX:ActiveProcessorCount=2','-XX:+UseSerialGC']
 compiler=['-J-Xmx512m','-J-XX:ActiveProcessorCount=2','-J-XX:+UseSerialGC']
 subprocess.run(['/jdk/bin/javac',*compiler,'-proc:none','-encoding','UTF-8',
-                '-classpath',str(classes),'-sourcepath',os.pathsep.join(map(str,roots)),
+                '-classpath',os.pathsep.join([str(classes),*spec.get('javaClasspath',[])]),'-sourcepath',os.pathsep.join(map(str,roots)),
                 '-d',str(classes),str(target),str(harness)],check=True,timeout=15)
 def token(value):
     if isinstance(value,bool):tag='b';text=str(value).lower()
