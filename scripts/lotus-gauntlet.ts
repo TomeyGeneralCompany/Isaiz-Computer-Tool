@@ -4,7 +4,7 @@
  */
 import 'dotenv/config';
 import {execFileSync} from 'node:child_process';
-import {mkdir,mkdtemp,writeFile,readFile,copyFile,readdir,chmod} from 'node:fs/promises';
+import {mkdir,mkdtemp,writeFile,readFile,copyFile,readdir,cp} from 'node:fs/promises';
 import {join,dirname} from 'node:path';
 import {tmpdir} from 'node:os';
 const LEVELS:Record<number,number>={1:12,2:28,3:48,4:84,5:144};
@@ -93,24 +93,26 @@ async function main(){
  const {fixture,answer}=await prepare(root,level,language,selectedSeed);
  if(preview){console.log('Gauntlet prepared (NO model or tests run): '+root);return;}
  const app=join(root,'work');await mkdir(app);
- const bin=join(root,'shim-bin');await mkdir(bin);
- const git=execFileSync('which',['git'],{encoding:'utf8'}).trim();
- const shim=join(bin,'git');
- // Preserve original clone verification and acquisition behavior, replacing
- // only the remote clone with this exact owned Git repository.
- await writeFile(shim,[
- '#!/usr/bin/python3','import os,sys,shutil,subprocess','args=sys.argv[1:]',
- 'if "clone" in args:',' shutil.copytree('+JSON.stringify(fixture)+',args[-1])',
- 'elif "fetch" in args:',' subprocess.run(['+JSON.stringify(git)+',"cat-file","-e",args[-1]+"^{commit}"],check=True)',
- 'else:',' os.execv('+JSON.stringify(git)+',['+JSON.stringify(git)+']+args)',
- ''].join('\n'));
- await chmod(shim,0o700);
- const old={PATH:process.env.PATH,PROJECT_ROOT:process.env.PROJECT_ROOT,GITHUB_TOKEN:process.env.GITHUB_TOKEN};
+ // Owned fixture cloning is an explicit test dependency, not a PATH shim.
+ // All downstream capability, source-map, controller, probe, and review stages
+ // run through the same implementation as the authorized real-program path.
+ const sourceUrl='https://github.com/fixture/gauntlet-settlement';
+ const sourceAcquirer=async (url:string,destination:string,options:{signal?:AbortSignal})=>{
+   options.signal?.throwIfAborted();
+   if(url!==sourceUrl)throw Error('Gauntlet rejected an unexpected source URL: '+url);
+   await cp(fixture,destination,{recursive:true,errorOnExist:true,force:false});
+   const actual=execFileSync('git',['-c','core.hooksPath=/dev/null','rev-parse','HEAD'],{
+     cwd:destination,encoding:'utf8',timeout:10000}).trim();
+   const expected=execFileSync('git',['-c','core.hooksPath=/dev/null','rev-parse','HEAD'],{
+     cwd:fixture,encoding:'utf8',timeout:10000}).trim();
+   if(actual!==expected)throw Error('Owned fixture revision was not preserved');
+   return {missingDependencies:[]};
+ };
+ const old={PROJECT_ROOT:process.env.PROJECT_ROOT,GITHUB_TOKEN:process.env.GITHUB_TOKEN};
  const began=Date.now();
  let result:any={success:false,findings:[],error:'No investigation result'};
  let review:any=null;
  try{
-  process.env.PATH=bin+':'+old.PATH;
   process.env.PROJECT_ROOT=app;
   process.env.GITHUB_TOKEN='owned-gauntlet-fixture';
   process.env.LOCAL_OLLAMA_MODEL ||= 'qwen3:4b';
@@ -124,7 +126,7 @@ async function main(){
   const program:any={id:'owned-gauntlet-'+level+'-'+language,provider:'immunefi',name:'Controlled source application benchmark',
    scopeSummary:JSON.stringify({policy:'Owned synthetic application. Inspect source, data flow, authorization, input handling and application behavior. Local reproduction and diagnostics only. No submissions.',
     scopes:[{assetType:'SOURCE_CODE',eligibleForBounty:true,assetIdentifier:'https://github.com/fixture/gauntlet-settlement'}]})};
-  result=await runLocalProgramHunt(program);
+  result=await runLocalProgramHunt(program,undefined,undefined,undefined,false,sourceAcquirer);
   if(result.findings?.length){
    const finding=result.findings[0];
    if(finding.reproductionCaseId){
@@ -135,7 +137,6 @@ async function main(){
   }
  }catch(e){result.error=String(e);}
  finally{
-  if(old.PATH===undefined)delete process.env.PATH;else process.env.PATH=old.PATH;
   if(old.PROJECT_ROOT===undefined)delete process.env.PROJECT_ROOT;else process.env.PROJECT_ROOT=old.PROJECT_ROOT;
   if(old.GITHUB_TOKEN===undefined)delete process.env.GITHUB_TOKEN;else process.env.GITHUB_TOKEN=old.GITHUB_TOKEN;
   const logs=join(app,'data','logs');
