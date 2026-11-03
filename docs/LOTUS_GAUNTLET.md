@@ -2,70 +2,72 @@
 
 **Proprietary benchmark infrastructure developed on behalf of Tomey General Company, LLC.**
 
-LOTUS Gauntlet places the existing production investigator against a large, owned, synthetic security-research repository. Its purpose is to identify where autonomous investigation diverges from the steps needed to reproduce a deliberately planted vulnerability.
+LOTUS Gauntlet runs the production investigator against large, owned synthetic security repositories. Each challenge contains an intentionally introduced vulnerability, caller relationships, competing candidates, and code that must be navigated before it can be tested.
 
-## What is included
+## Four languages, randomized by default
 
-- Executable harness: scripts/lotus-gauntlet.ts
-- Manually dispatched runner: .github/workflows/lotus-gauntlet.yml
-- Five difficulty levels: 12, 28, 48, 84, or 144 Solidity source files
-- Level 4 default: 84 files with a privileged settlement path, additional imported library code, caller relationships, and many misleadingly similar authorized methods
-- Separate hidden answer key, outside the source repository presented to the investigator
-- Real runLocalProgramHunt production path: acquisition, indexing, static leads, Qwen3 controller, isolated reproduction, evidence handling
-- Diagnostic results: manifest.json, result.json, grade.json, and original model/audit logs
+Gauntlet now generates challenges in **Solidity, Python, JavaScript, and Java**. Each run selects one language at random unless an explicit language override is supplied.
 
-The challenge presents a settlement application with a reproducible operator-authorization defect. Model instructions do not include the vulnerability location, expected reproduction, or answer key.
+| Language | Synthetic investigation | Reproduction path |
+| --- | --- | --- |
+| Solidity | Privileged settlement and unprotected operator rotation among guarded decoy contracts | Local EVM, `solidity_sequence` |
+| Python | Unescaped user input passing through renderer, pipeline, and codec modules | Isolated `html_reflection` |
+| JavaScript | Multi-module CommonJS rendering and unsanitized user input | Isolated `html_reflection` |
+| Java | Package-qualified rendering, supporting classes, and unsanitized input | Isolated Java `html_reflection` |
 
-## Preparing a challenge without executing any model
+All four languages support five difficulty levels: **12, 28, 48, 84, and 144 source files**. Level 4 (84 source files) is the default.
 
-From the repository root, after installing application dependencies:
+Random selection chooses among the four languages with equal probability. Each run records the generated seed and selected language in `manifest.json`; providing the same seed reproduces the language selection. The generated source tree is deterministic for that language and level.
 
-    node --import tsx scripts/lotus-gauntlet.ts --prepare --level=4 --output=data/gauntlet/example
+The answer key is saved outside the repository being investigated. The model receives only the synthetic program scope and source code.
 
-This only creates the synthetic repository, its local git commit, a private answer key, and a manifest.
+## Local use
 
-## Running a real benchmark
+Install the normal application dependencies first, then generate a randomly selected fixture **without running the model**:
 
-After installing the normal isolated reproduction environment and starting local Ollama:
+```bash
+node --import tsx scripts/lotus-gauntlet.ts --prepare --level=4 --output=data/gauntlet/example
+```
 
-    LOCAL_OLLAMA_MODEL=qwen3:4b node --import tsx scripts/lotus-gauntlet.ts --run --level=4 --output=data/gauntlet/first-attempt
+Run one randomly chosen real-controller benchmark (requires the installed reproduction runtimes and a running local Ollama instance):
 
-This invokes the real investigation controller through runLocalProgramHunt. A local git shim substitutes the owned challenge at the acquisition boundary, following the existing real-program-hunt acceptance pattern. The model receives only the owned source and the synthetic program's scope.
+```bash
+LOCAL_OLLAMA_MODEL=qwen3:4b node --import tsx scripts/lotus-gauntlet.ts --run --level=4 --output=data/gauntlet/attempt-01
+```
 
-Each attempt needs a fresh output directory. The generated answer-key.private.json is outside the checked-out fixture and is not uploaded in GitHub diagnostic artifacts.
+Reproduce a recorded challenge, or target a single language for debugging:
+
+```bash
+node --import tsx scripts/lotus-gauntlet.ts --prepare --level=4 --seed=REPLAY_SEED --output=data/gauntlet/replay
+node --import tsx scripts/lotus-gauntlet.ts --prepare --level=4 --language=java --output=data/gauntlet/java
+```
+
+The `--language` flag accepts `random`, `solidity`, `python`, `javascript`, or `java`. Use a fresh output directory per run.
 
 ## GitHub Actions
 
-[LOTUS Gauntlet (manual only)](../.github/workflows/lotus-gauntlet.yml) has no push, pull_request, or schedule trigger.
+The [Gauntlet workflow](../.github/workflows/lotus-gauntlet.yml) is manually triggered. It provides a difficulty selection, a **language** choice (default `random`), an optional replay seed, and two operating modes.
 
-Select a difficulty level and one of two modes:
+- **Prepare:** installs the Node application dependencies and generates a random synthetic challenge; it does not start Ollama or investigate the code.
+- **Run:** installs the reproduction toolchains, starts Qwen3:4b on the four-vCPU CPU-only runner, selects one language, and executes the real production `runLocalProgramHunt` path and independent reviewer.
 
-- prepare — generate a synthetic repository and manifest without starting Ollama or conducting an investigation
-- run — install the normal runtimes, start CPU-only Qwen3:4b, and run the actual production investigation
+No recurring, push, or pull-request trigger starts a Gauntlet model run. No external bug-bounty programs are contacted, and no bounty report is submitted.
 
-The GitHub runner uses ubuntu-24.04 with four virtual CPUs and 16 GB RAM. The job is bounded by the GitHub Actions duration limit and retains logs as downloadable artifacts for 30 days. No live bounty target is contacted and no bounty submission occurs.
+The workflow stores its logs and result artifacts for 30 days.
 
-The workflow is not triggered by merging its code. Only manual dispatch starts a benchmark.
+## Diagnostics and grading
 
-## Interpreting grade.json
+The run output includes:
 
-The grader records sequential milestones:
+- `manifest.json` — chosen language, seed, level, source count, and synthetic Git commit
+- `answer-key.private.json` — locally retained hidden reference; excluded from GitHub artifacts
+- `result.json` — production hunt result and recorded case IDs
+- `review.json` — production independent-review result
+- `grade.json` — milestones, counters, and first divergence
+- `local-hunt-*.log` and `local-review-*.log` — source inspection, model actions, probes, and reviewer evidence
 
-1. Source acquisition
-2. Source map construction
-3. Source navigation
-4. Relevant candidate exposure
-5. Relevant method analysis
-6. Probe planning
-7. Probe execution
-8. Finding/review readiness
+The grader checks source acquisition, source mapping, navigation, candidate exposure, hypothesis/probe planning, completed reproduction, and independently reviewed findings. These stages are evaluated against the language-specific answer key.
 
-The first absent milestone becomes firstDivergence. Counters include rejected workflow actions, premature finals, source-handoff recovery, completed probes, and allowance extensions.
-
-The grader is an aid for investigation analysis. Source-name presence in a transcript alone does not prove the model understood the implementation; the original log, reproduced case IDs, and final evidence determine the complete outcome. Repeating the same challenge with unchanged source allows direct comparison of two controller revisions.
-
-## Extension plan
-
-The first implemented challenge is Solidity, modeled on the investigation difficulties encountered with large on-chain codebases. The harness is designed to support additional controlled repositories using the same production entry point, including Java projects with dependencies, Python package graphs, and multi-module JavaScript programs.
+The same production evidence and execution gates remain in force regardless of language. Repeating an identical language/level/seed combination makes controller regressions comparable.
 
 Copyright © 2026 Tomey General Company, LLC. All rights reserved.
