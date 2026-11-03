@@ -80,7 +80,15 @@ export async function prioritizeSourceCandidates(root:string,eligible:string[],f
     }
   }
   const pathDepth=(path:string)=>path.split('/').length;
-  const paths=focus ? rankedPool : rankedPool
+  // Keep generated and test-only sources inspectable, but do not let them
+  // displace eight available production/dependency candidates. A disconnected
+  // generated file may share a basename with application code and receive a
+  // misleading inbound lexical reference score.
+  const nonGenerated=rankedPool.filter(path=>
+    !/(?:^|\\/)(?:test|tests|__tests__|generated|build|dist)(?:\\/|$)/i.test(path) &&
+    !/(?:^|\\/)(?:Generated|Mock)[A-Z][^/]*\\.(?:java|sol|py|js|mjs|cjs)$/i.test(path));
+  const navigationPool=nonGenerated.length>=8 ? nonGenerated : rankedPool;
+  const paths=focus ? rankedPool : navigationPool
     // Application ownership takes precedence over a probe-compatible dependency
     // signature across Solidity, Python, JavaScript, and Java. The overnight
     // 88mph run paginated a supporting ERC1155 library before application code.
