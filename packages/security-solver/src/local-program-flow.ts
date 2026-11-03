@@ -20,7 +20,7 @@ import { createProbeSession, readSourceCase, replaySourceCase, type SourceCase, 
 import { writeSecuritySolverStatus, clearSecuritySolverStatus, writeAdversarialReviewStatus, clearAdversarialReviewStatus } from "./status";
 import type { SecuritySolveResult, ParsedFinding } from "./claude-runner";
 import { selectSourceBatch, incompleteProbeCoverage, recoverEmptyUnprobedFinal } from "./inspection-coverage";
-import { callerLineReferences, transactionEntryLine } from "./source-function-reference";
+import { callerLineReferences, qualifiedCallerLineReferences, transactionEntryLine } from "./source-function-reference";
 const log=createLogger("local-program-flow");
 const sha=z.string().regex(/^[a-f0-9]{64}$/);
 const severitySchema = z.enum(["critical","high","medium","low","informational"]);
@@ -304,17 +304,31 @@ Do not claim production testing, JavaScript execution, file access or other effe
                       sites.push({file:candidatePath,line});
                 }catch{}
               }
-              // Only a unique inspected call site may be reconciled automatically.
-              // Preserve multiple genuine sites for model disambiguation rather
-              // than treating the first syntactic hit as evidence of reachability.
+              // The exact qualified call is stronger than an unrelated
+              // same-named function declaration or bare invocation. Select it
+              // only when it is unique among previously inspected source lines.
+              // An ambiguous call graph remains unresolved for independent
+              // review; never fabricate a caller or relax evidence validation.
+              const exactSites:{file:string,line:number}[]=[];
+              if(record.spec.function.includes('.')) {
+                for(const site of sites) {
+                  const code=await readFile(join(root,site.file),'utf8');
+                  if(qualifiedCallerLineReferences(code,site.line,record.spec.function))
+                    exactSites.push(site);
+                }
+              }
+              const reconciled=exactSites.length===1 ? exactSites[0] :
+                sites.length===1 ? sites[0] : null;
               if(sites.length>1)await appendFile(logFile,'[CALLER_CANDIDATES] '+JSON.stringify({
-                caseId:finding.caseId,sites:sites.slice(0,8),reason:'multiple inspected call sites require disambiguation'
+                caseId:finding.caseId,sites:sites.slice(0,8),
+                exactSites,reason:reconciled?'unique exact qualified call':'multiple inspected call sites require disambiguation'
               })+'\\n');
-              if(sites.length===1) {
-                finding.callerFile=sites[0].file;
-                finding.callerLine=sites[0].line;
+              if(reconciled) {
+                finding.callerFile=reconciled.file;
+                finding.callerLine=reconciled.line;
                 await appendFile(logFile,'[CALLER_RECONCILED] '+JSON.stringify({caseId:finding.caseId,
-                  callerFile:finding.callerFile,callerLine:finding.callerLine,reason:'unique previously inspected caller'})+'\\n');
+                  callerFile:finding.callerFile,callerLine:finding.callerLine,
+                  reason:exactSites.length===1?'unique inspected qualified caller':'unique previously inspected caller'})+'\\n');
               }
             }
             for(const finding of value.findings) {
