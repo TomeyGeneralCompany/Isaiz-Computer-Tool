@@ -44,7 +44,7 @@ export function qualifiedCallerLineReferences(text:string,line:number,selector:s
   const lines=sourceCodeOnly(text).split("\n");
   if(line<1 || line>lines.length)return false;
   const code=lines[line-1];
-  const pattern=new RegExp("(^|[^A-Za-z0-9_$])"+receiver+"\\\\s*\\\\.\\\\s*"+method+"\\\\s*\\\\(");
+  const pattern=new RegExp("(^|[^A-Za-z0-9_$])"+receiver+"\\s*\\.\\s*"+method+"\\s*\\(");
   return pattern.test(code);
 }
 /** The recorded mined send establishes ABI reachability; locate its declaration for review. */
