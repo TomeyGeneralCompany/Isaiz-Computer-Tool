@@ -193,7 +193,7 @@ def prepare_pinned_foundry_submodules(repository: Path, missing_imports: list[st
         path = config.get(section, 'path', fallback='')
         url = config.get(section, 'url', fallback='')
         if (not re.fullmatch(r'lib/[A-Za-z0-9_.-]+', path)
-                or not re.fullmatch(r'https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\\.git)?', url)):
+                or not re.fullmatch(r'https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\.git)?', url)):
             continue
         declared.append((path, url))
     mappings = []
@@ -225,7 +225,7 @@ def prepare_pinned_foundry_submodules(repository: Path, missing_imports: list[st
                 capture_output=True, text=True, check=True, timeout=10)
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as error:
             raise DependencyError("Cannot read pinned Foundry dependency revision") from error
-        match = re.fullmatch(r'160000 commit ([a-f0-9]{40})\\t' + re.escape(path) + r'\\n?', gitlink.stdout)
+        match = re.fullmatch(r'160000 commit ([a-f0-9]{40})\t' + re.escape(path) + r'\n?', gitlink.stdout)
         if not match:
             raise DependencyError("Foundry dependency lacks a pinned gitlink: " + path)
         revision = match.group(1)
