@@ -285,9 +285,11 @@ jvm = ['-Xmx128m', '-XX:ActiveProcessorCount=2', '-XX:+UseSerialGC']
 # javac on JDK 21 can exceed a 128 MiB heap while initializing compiler
 # modules; keep runtime probes tight, but give compilation bounded headroom.
 javac_jvm = ['-Xmx512m', '-XX:ActiveProcessorCount=2', '-XX:+UseSerialGC']
-subprocess.run(['/jdk/bin/javac', *['-J'+x for x in javac_jvm], '-proc:none', '-encoding', 'UTF-8',
+compiled = subprocess.run(['/jdk/bin/javac', *['-J'+x for x in javac_jvm], '-proc:none', '-encoding', 'UTF-8',
                 '-classpath', os.pathsep.join([str(classes), *spec.get('javaClasspath', [])]), '-sourcepath', sourcepath, '-d', str(classes),
-                str(target), str(harness)], check=True, timeout=15)
+                str(target), str(harness)], capture_output=True, timeout=15)
+if compiled.returncode:
+    raise RuntimeError('TOMEY_JAVA_COMPILER_FAILURE: ' + compiled.stderr.decode(errors='replace')[:5000])
 if sequence_mode:
     def encode_value(value):
         if value is None:
