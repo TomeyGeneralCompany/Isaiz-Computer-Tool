@@ -1,0 +1,218 @@
+name: LOTUS Real-World Trial (manual only)
+
+# No push, pull_request, or schedule triggers.
+on:
+  workflow_dispatch:
+    inputs:
+      program_id:
+        description: 'ID of the assessed program in LOTUS_TRIAL_PROGRAM_JSON'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+concurrency:
+  group: lotus-real-world-trial
+  cancel-in-progress: false
+
+jobs:
+  actual-lotus-trial:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      PROJECT_ROOT: ${{ github.workspace }}
+      GITHUB_TOKEN: ${{ github.token }}
+      TRIAL_PROGRAM_ID: ${{ inputs.program_id }}
+      LOCAL_OLLAMA_MODEL: qwen3:4b
+      LOCAL_MODEL_ADAPTER: ollama
+      LOCAL_OLLAMA_TOOL_PROTOCOL: json
+      AUTOHACK_OLLAMA_URL: http://127.0.0.1:11434/api/chat
+      LOCAL_HUNT_DYNAMIC_ALLOWANCE: 'true'
+      LOCAL_HUNT_MAX_TURNS: '80'
+      LOCAL_HUNT_NUM_PREDICT: '2048'
+      SECURITY_AUTO_SUBMIT: 'false'
+      SECURITY_AUTO_HUNT_ENABLED: 'false'
+      IMMUNEFI_ENABLED: 'true'
+      HACKERONE_ENABLED: 'true'
+      AGGREGATOR_ENABLED: 'true'
+      SECURITY_MIN_REWARD_CENTS: '0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Require user-supplied assessed program and 4 CPU runner
+        env:
+          LOTUS_TRIAL_PROGRAM_JSON: ${{ secrets.LOTUS_TRIAL_PROGRAM_JSON }}
+        run: |
+          test "$(nproc)" -eq 4
+          test -n "$TRIAL_PROGRAM_ID"
+          test -n "$LOTUS_TRIAL_PROGRAM_JSON"
+          mkdir -p data/github-trial
+          { nproc; free -h; df -h .; } > data/github-trial/runner.txt
+
+      - name: Install original LOTUS toolchains and initialize isolated DB
+        env:
+          LOTUS_TRIAL_PROGRAM_JSON: ${{ secrets.LOTUS_TRIAL_PROGRAM_JSON }}
+        run: |
+          set -euo pipefail
+          npm ci
+          sudo apt-get update -qq
+          sudo apt-get install -y bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          bash scripts/install-reproduction-runtime.sh
+          touch .env
+          node --import tsx scripts/initialize-db.ts
+          python3 - <<'PY'
+          import os,json,sqlite3,time
+          row=json.loads(os.environ['LOTUS_TRIAL_PROGRAM_JSON'])
+          if isinstance(row,list):
+              if len(row)!=1: raise ValueError('Export exactly one assessed program')
+              row=row[0]
+          program=os.environ['TRIAL_PROGRAM_ID']
+          if not isinstance(row,dict) or row.get('id')!=program:
+              raise ValueError('Selected program ID does not match exported record')
+          meta=row.get('scope_summary',row.get('scopeSummary'))
+          meta=json.loads(meta) if isinstance(meta,str) else meta
+          if not isinstance(meta,dict) or not isinstance(meta.get('scopes'),list) or not meta['scopes']:
+              raise ValueError('Real explicit program scope required')
+          if not isinstance(meta.get('assessment'),dict) or not meta['assessment'].get('opportunityScore'):
+              raise ValueError('An actual prior program assessment is required')
+          if row.get('provider') not in ('immunefi','hackerone','bugcrowd','intigriti','yeswehack'):
+              raise ValueError('Unsupported provider')
+          now=int(time.time())
+          with sqlite3.connect('data/bounty.db') as db:
+              db.execute('''INSERT INTO security_programs
+                  (id,provider,provider_program_id,name,url,scope_summary,reward_min_cents,reward_max_cents,
+                   currency,response_efficiency,status,requires_signal,discovered_at,updated_at)
+                  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+                  (program,row['provider'],row.get('provider_program_id',row.get('providerProgramId')),
+                   row['name'],row.get('url'),json.dumps(meta),row.get('reward_min_cents') or 0,
+                   row.get('reward_max_cents') or 0,'USD',row.get('response_efficiency') or 0.5,
+                   'active',int(bool(row.get('requires_signal'))),now,now))
+          print('Loaded original assessed program:',program)
+          PY
+
+      - name: Start local CPU-only Ollama Qwen3 4B
+        run: |
+          docker run -d --name lotus-trial-model -p 127.0.0.1:11434:11434 ollama/ollama:latest
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:11434/api/tags >/dev/null; then break; fi
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:11434/api/tags >/dev/null
+          docker exec lotus-trial-model ollama pull qwen3:4b
+
+      - name: Run the existing four acceptance stages, ending with real bounty
+        run: |
+          set -uo pipefail
+          mkdir -p data/lotus-acceptance
+          set +e
+          {
+            echo '1/4 Source workflow regression tests'
+            node --import tsx scripts/test-source-workflow.ts || exit $?
+            echo '2/4 Real Qwen3 production controller and isolated reproduction'
+            node --import tsx scripts/test-production-workflow.ts --real-model --prefetch || exit $?
+            echo '3/4 Real Qwen3 scoped synthetic hunt and independent review'
+            node --import tsx scripts/test-real-program-hunt.ts || exit $?
+            echo '4/4 One authorized live bounty investigation (NO automatic submission)'
+            bash scripts/run-one-bounty.sh --program "$TRIAL_PROGRAM_ID" --timeout-min 35
+          } 2>&1 | tee data/lotus-acceptance/github-live.log
+          code=${PIPESTATUS[0]}
+          echo "$code" > data/github-trial/exit-code.txt
+          exit "$code"
+
+      - name: Collect bounded redacted diagnostics even after failure
+        if: always()
+        env:
+          TRIAL_JOB_STATUS: ${{ job.status }}
+          TRIAL_RUN_ID: ${{ github.run_id }}
+          TRIAL_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          python3 - <<'PY'
+          import os,re,json,pathlib,datetime
+          root=pathlib.Path('data')
+          dest=root/'github-trial'
+          dest.mkdir(parents=True,exist_ok=True)
+          pairs={
+            'acceptance.log':list((root/'lotus-acceptance').glob('github-live.log')),
+            'bounty.log':list((root/'logs').glob('local-hunt-*.log')),
+            'review.log':list((root/'logs').glob('local-review-*.log')),
+            'summary.json':list((root/'one-bounty').glob('*.json')),
+            'terminal.log':list((root/'one-bounty').glob('terminal-*.log'))}
+          patterns=[
+            (re.compile(r'(?i)(authorization\s*[:=]\s*bearer\s+)\S+'),r'\1[REDACTED]'),
+            (re.compile(r'\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]+\b'),'[REDACTED]'),
+            (re.compile(r'\bgithub_pat_[A-Za-z0-9_]+\b'),'[REDACTED]'),
+            (re.compile(r'(?i)((?:api[_-]?key|access[_-]?token|client[_-]?secret)\s*[:=]\s*["\x27]?)[^\s"\x27]{12,}'),r'\1[REDACTED]')]
+          def save(source,name,limit):
+              with source.open('rb') as f:
+                  f.seek(0,2); f.seek(max(0,f.tell()-limit))
+                  content=f.read().decode('utf8','replace')
+              for pat,replacement in patterns: content=pat.sub(replacement,content)
+              (dest/name).write_text(content)
+          for name,files in pairs.items():
+              if not files: continue
+              source=max(files,key=lambda p:p.stat().st_mtime)
+              save(source,name,3000000)
+              if name=='bounty.log':
+                  activity=pathlib.Path(str(source)+'.activity.jsonl')
+                  if activity.is_file(): save(activity,'tool-activity.jsonl',2000000)
+          (dest/'status.json').write_text(json.dumps({
+            'source_commit':os.environ.get('GITHUB_SHA'),
+            'program_id':os.environ.get('TRIAL_PROGRAM_ID'),
+            'job_status':os.environ.get('TRIAL_JOB_STATUS'),
+            'run_id':os.environ.get('TRIAL_RUN_ID'),
+            'attempt':os.environ.get('TRIAL_RUN_ATTEMPT'),
+            'captured_at':datetime.datetime.now(datetime.timezone.utc).isoformat()
+          },indent=2)+'\n')
+          PY
+
+      - name: Upload remote-inspection artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lotus-real-world-${{ github.run_id }}-${{ github.run_attempt }}
+          path: data/github-trial/
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Mirror diagnostics to private GitHub repo if token configured
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.LOTUS_DIAGNOSTICS_TOKEN }}
+          TRIAL_RUN_ID: ${{ github.run_id }}
+          TRIAL_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          if [[ -z "$GH_TOKEN" ]]; then
+            echo "Private mirror not configured; GitHub Actions artifact is available."
+            exit 0
+          fi
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            TMP="$(mktemp -d)"
+            if gh repo clone TomeyGeneralCompany/AutoHack-Overnight-Diagnostics "$TMP/repo" -- --depth 1; then
+              DEST="$TMP/repo/runs/github-${TRIAL_RUN_ID}-${TRIAL_RUN_ATTEMPT}"
+              mkdir -p "$DEST"
+              cp -a data/github-trial/. "$DEST/"
+              git -C "$TMP/repo" add "runs/github-${TRIAL_RUN_ID}-${TRIAL_RUN_ATTEMPT}"
+              git -C "$TMP/repo" -c user.name="LOTUS Trial" -c user.email="lotus-trial@users.noreply.github.com" commit -m "LOTUS remote trial ${TRIAL_RUN_ID}-${TRIAL_RUN_ATTEMPT}" || true
+              if git -C "$TMP/repo" push origin HEAD:main; then
+                echo "Private diagnostic upload completed."
+                rm -rf "$TMP"
+                exit 0
+              fi
+            fi
+            rm -rf "$TMP"
+            sleep 15
+          done
+          echo "::warning::Private mirror upload failed; Actions artifact retained."
+
+      - name: Stop Ollama
+        if: always()
+        run: docker rm -f lotus-trial-model || true
