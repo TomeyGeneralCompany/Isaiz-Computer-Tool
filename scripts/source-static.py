@@ -7,6 +7,7 @@ from pathlib import Path
 import resource
 import shutil
 import subprocess
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -87,6 +88,17 @@ def analyze(repository, engine, target=None):
         for folder in ('/usr', '/bin', '/lib', '/lib64'):
             if Path(folder).exists():
                 command += ['--ro-bind', folder, folder]
+        # CI's virtualenv entry points use an interpreter symlink outside the
+        # virtualenv (e.g. /opt/hostedtoolcache/Python/3.12.../bin/python).
+        # Mount that interpreter's installation as read-only as well; merely
+        # binding .venv-static leaves its shebang target missing inside bwrap.
+        interpreter = (runtime / 'bin' / 'python').resolve(strict=True)
+        python_prefix = Path(sys.base_prefix).resolve()
+        if not interpreter.is_relative_to(python_prefix):
+            # The sandbox must not expose an arbitrary interpreter location.
+            return {'status': 'unavailable', 'reason': 'Virtualenv interpreter is outside the Python installation', 'leads': []}
+        if not any(python_prefix.is_relative_to(Path(folder)) for folder in ('/usr', '/bin', '/lib', '/lib64')):
+            command += ['--ro-bind', str(python_prefix), str(python_prefix)]
         command += ['--ro-bind', str(runtime), str(runtime), '--ro-bind', str(source), '/repo',
                     '--ro-bind', str(ROOT / 'scripts/static-leads.yaml'), '/rules.yaml',
                     '--ro-bind', str(ROOT / 'scripts/vendor/semgrep-rules'), '/vendor-rules',

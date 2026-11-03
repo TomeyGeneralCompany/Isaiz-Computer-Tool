@@ -250,6 +250,14 @@ export async function runLocalAudit(
           const output=JSON.stringify(result);
           const verify={action:'verify_source',path,query:hint.functionName,answer:hint.kind};
           workflow.observe(verify as any,output);
+          // A controller-initiated negative probe must also advance navigation.
+          // Previously only model-initiated negative probes triggered the
+          // mandatory source handoff, leaving Qwen free to cycle on decoys.
+          if(result.status==='behavior_not_observed') {
+            const next=workflow.requireNextUnreadSource(limits.initialSourcePaths||[]);
+            if(next)await appendFile(logFile,'[GUIDED_NEGATIVE_PROBE_SOURCE_HANDOFF] '+
+              JSON.stringify({testedPath:path,next})+'\\n');
+          }
           if(result.status==='behavior_observed') {
             const paths=(limits.initialSourcePaths||[]).filter(p=>p.startsWith('source-') &&
               p!==path && /\.(?:py|js|mjs|cjs|java|sol)$/.test(p));
@@ -415,7 +423,7 @@ export async function runLocalAudit(
         // The model may carry a read_file *character* cursor into the
         // controller-required outline_solidity action, whose offset indexes
         // declarations. Reset only forced outlines; preserve normal pagination.
-        const outlineOffset=normalizeForcedOutlineCursor(action.action,action.offset,constraints?.action);
+        const outlineOffset=normalizeForcedOutlineCursor(action.action,action.offset ?? 0,constraints?.action);
         if(outlineOffset!==action.offset) {
           await appendFile(logFile,'[FORCED_OUTLINE_CURSOR_RESET] '+JSON.stringify({
             path:action.path,requested:action.offset,used:outlineOffset})+'\n');
@@ -1114,6 +1122,17 @@ export async function runLocalAudit(
               }
             }
 
+            // A negative isolated probe is useful evidence about one method,
+            // not grounds to abandon the connected source graph. Move to the
+            // next ranked unread candidate instead of spending turns on the
+            // same disproved helper or an unsupported final.
+            if(workflow && probeStatus==='behavior_not_observed') {
+              const next=workflow.requireNextUnreadSource(limits.initialSourcePaths||[]);
+              if(next) {
+                await appendFile(logFile,'[NEGATIVE_PROBE_SOURCE_HANDOFF] '+JSON.stringify({
+                  testedPath:String(call.function.arguments?.path||''),next})+'\\n');
+              }
+            }
             await appendFile(logFile,"[PROBE_RESULT] "+JSON.stringify({path:call.function.arguments?.path,function:call.function.arguments?.query,kind:call.function.arguments?.kind,status:probeStatus,evidenceFile:probeResult.evidenceFile,detail:String(probeResult.detail||probeResult.reason||probeResult.error||"").slice(0,400)})+"\n");
           }catch{}
         }

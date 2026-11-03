@@ -131,6 +131,7 @@ async function main(){
  const began=Date.now();
  let result:any={success:false,findings:[],error:'No investigation result'};
  let review:any=null;
+ let gradePassed=false;
  try{
   process.env.PROJECT_ROOT=app;
   process.env.GITHUB_TOKEN='owned-gauntlet-fixture';
@@ -172,9 +173,10 @@ async function main(){
   await writeFile(join(root,'result.json'),JSON.stringify(resultData,null,2));
   await writeFile(join(root,'review.json'),JSON.stringify(review,null,2));
   const summary=grade(content,{...result,level},Date.now()-began,review,answer);
+  gradePassed=summary.milestones.verifiedFinding;
   await writeFile(join(root,'grade.json'),JSON.stringify(summary,null,2));
   console.log('Gauntlet report: '+JSON.stringify({root,seed:selectedSeed,language,summary},null,2));
  }
- if(!result.success)process.exitCode=1;
+ if(!result.success || !gradePassed)process.exitCode=1;
 }
 main().catch(e=>{console.error(e);process.exitCode=1});
