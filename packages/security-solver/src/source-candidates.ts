@@ -68,7 +68,9 @@ export async function prioritizeSourceCandidates(root:string,eligible:string[],f
       // Cross-file references to a source basename/class suggest a genuine
       // call chain. Count each referencing file at most once per target.
       for(const [name,targets] of names) {
-        const token=new RegExp('(?:^|[^A-Za-z0-9_$])'+name.replace(/[.*+?^\\$()|[\\]{}]/g,'\\  const paths=focus ? rankedPool : rankedPool')+'(?:[^A-Za-z0-9_$]|$)');
+        const escaped=name.replace(/[^A-Za-z0-9_$]/g,'');
+        if(escaped!==name)continue;
+        const token=new RegExp('(?:^|[^A-Za-z0-9_$])'+escaped+'(?:[^A-Za-z0-9_$]|$)');
         if(!token.test(source))continue;
         for(const target of targets) {
           if(target===sourcePath)continue;
