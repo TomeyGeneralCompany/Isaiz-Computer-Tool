@@ -59,6 +59,11 @@ jobs:
           node --import tsx scripts/test-production-workflow.ts
           node --import tsx scripts/test-production-workflow.ts --premature-final
 
+      # Pinned Semgrep 1.99 / OpenTelemetry protobuf wheels do not import on
+      # the runner's default Python 3.14. Isolate static analyzers on 3.12.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - name: Install pinned local static analyzers
         run: bash scripts/install-static-analysis.sh
       - name: Verify vendored upstream rules and positive/negative fixtures
