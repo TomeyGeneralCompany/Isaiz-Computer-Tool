@@ -183,6 +183,8 @@ def prepare_java_classpath(repository: Path, target: Path, destination: Path) ->
         return []
     wanted = set()
     for item in imports:
+        if item.startswith(('java.', 'javax.', 'jdk.', 'sun.')):
+            continue
         parts = item.split('.')
         if len(parts) >= 2:
             wanted.add('/'.join(parts) + '.class')
@@ -220,12 +222,16 @@ def prepare_java_classpath(repository: Path, target: Path, destination: Path) ->
                     if not 0 < size <= 16 * 1024**2 or total + size > 192 * 1024**2:
                         continue
                     with zipfile.ZipFile(jar) as archive:
-                        if not wanted.intersection(archive.namelist()):
+                        matched = wanted.intersection(archive.namelist())
+                        if not matched:
                             continue
                     dest = destination / (str(len(copied)).zfill(3) + '.jar')
                     shutil.copyfile(jar, dest)
                     copied.append('/java-deps/' + dest.name)
                     total += size
+                    wanted.difference_update(matched)
+                    if not wanted:
+                        return copied
                 except (OSError, zipfile.BadZipFile, ValueError):
                     continue
     return copied
