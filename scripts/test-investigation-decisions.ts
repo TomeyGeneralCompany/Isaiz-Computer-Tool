@@ -15,6 +15,7 @@ const recovered=recoverEmptyUnprobedFinal(empty,0) as {findings:unknown[];outcom
 assert.deepEqual(recovered.findings,[]);
 assert.equal(recovered.outcome,'no_testable_candidate');
 assert.match(recovered.reason,/No supported source probe/);
+assert.equal(recoverEmptyUnprobedFinal({findings:[]},0).outcome,undefined,'omitted outcome must not be silently classified as inspected');
 assert.equal(recoverEmptyUnprobedFinal(empty,1),empty);
 assert.equal(recoverEmptyUnprobedFinal(empty,0,'dependencies missing'),empty);
 const explicit={findings:[],outcome:'no_testable_candidate',reason:'Selected sources were inspected but the necessary dependencies were missing.'};
