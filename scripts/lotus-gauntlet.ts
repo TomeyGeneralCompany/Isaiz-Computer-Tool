@@ -101,17 +101,22 @@ async function prepare(root:string,level:number){
  await writeFile(join(root,'manifest.json'),JSON.stringify({challenge:'settlement-authority-v1',level,sourceFiles:size,commit,mode:'owned-synthetic'},null,2));
  return fixture;
 }
-function grade(log:string,result:any,elapsed:number){
+function grade(log:string,result:any,elapsed:number,review:any){
  const count=(s:string)=>(log.split(s).length-1);
+ const modelActions=log.split('\n').filter(line=>line.includes('[MODEL_ACTION]'));
+ const targetRead=modelActions.some(line=>line.includes('SettlementAuthority.sol') &&
+   (line.includes('read_file')||line.includes('read_solidity')||line.includes('outline_solidity')));
+ const targetProbe=modelActions.some(line=>line.includes('rotateOperator') &&
+   (line.includes('plan_probe')||line.includes('probe_intent')));
  const milestones={
   sourceAcquired:count('[ACQUISITION_REPOSITORY_DONE]')>0,
   sourceMapBuilt:count('[SOURCE_MAP]')>0,
   sourceRead:count('"action":"read_file"')+count('"action":"read_solidity"')+count('"action":"outline_solidity"')>0,
-  relevantCandidateInspected:log.includes('SettlementAuthority.sol'),
-  hypothesisExamined:log.includes('rotateOperator'),
+  relevantCandidateInspected:targetRead,
+  hypothesisExamined:targetProbe,
   probePlanned:count('[PROBE_PLANNED]')>0,
   probeExecuted:count('[PROBE_RESULT]')>0,
-  verifiedFinding:result.success===true && Array.isArray(result.findings) && result.findings.length>0
+  verifiedFinding:result.success===true && Array.isArray(result.findings) && result.findings.length>0 && !!review?.verdict
  };
  const stages:Record<string,string>={sourceAcquired:'acquisition',sourceMapBuilt:'source_mapping',
   sourceRead:'navigation',relevantCandidateInspected:'candidate_selection',
@@ -154,6 +159,7 @@ async function main(){
  const old={PATH:process.env.PATH,PROJECT_ROOT:process.env.PROJECT_ROOT,GITHUB_TOKEN:process.env.GITHUB_TOKEN};
  const began=Date.now();
  let result:any={success:false,findings:[],error:'No investigation result'};
+ let review:any=null;
  try{
   process.env.PATH=bin+':'+old.PATH;
   process.env.PROJECT_ROOT=app;
@@ -165,11 +171,19 @@ async function main(){
   process.env.LOCAL_HUNT_DYNAMIC_ALLOWANCE='true';
   process.env.LOCAL_HUNT_MAX_TURNS ||= '80';
   process.env.SECURITY_AUTO_SUBMIT='false';
-  const {runLocalProgramHunt}=await import('../packages/security-solver/src/local-program-flow');
+  const {runLocalProgramHunt,independentReview}=await import('../packages/security-solver/src/local-program-flow');
   const program:any={id:'owned-gauntlet-'+level,provider:'immunefi',name:'Controlled settlement authority benchmark',
    scopeSummary:JSON.stringify({policy:'Owned synthetic application. Inspect authorization and ledger behavior. Local reproduction and diagnostics only. No submissions.',
     scopes:[{assetType:'SOURCE_CODE',eligibleForBounty:true,assetIdentifier:'https://github.com/fixture/gauntlet-settlement'}]})};
   result=await runLocalProgramHunt(program);
+  if(result.findings?.length){
+   const finding=result.findings[0];
+   if(finding.reproductionCaseId){
+    const judged=await independentReview({...finding,id:'owned-gauntlet-review'} as any,
+      program,finding.reproductionCaseId,new AbortController().signal);
+    review={verdict:judged.review.verdict,caseId:judged.caseId,sourceSha256:judged.sourceSha256};
+   }
+  }
  }catch(e){result.error=String(e);}
  finally{
   if(old.PATH===undefined)delete process.env.PATH;else process.env.PATH=old.PATH;
@@ -187,7 +201,8 @@ async function main(){
    findings:(result.findings||[]).map((f:any)=>({title:f.title,targetAsset:f.targetAsset,
      reproductionCaseId:f.reproductionCaseId,reportCreated:!!f.reportBody}))};
   await writeFile(join(root,'result.json'),JSON.stringify(resultData,null,2));
-  const summary=grade(content,{...result,level},Date.now()-began);
+  await writeFile(join(root,'review.json'),JSON.stringify(review,null,2));
+  const summary=grade(content,{...result,level},Date.now()-began,review);
   await writeFile(join(root,'grade.json'),JSON.stringify(summary,null,2));
   console.log('Gauntlet report: '+JSON.stringify({root,summary},null,2));
  }
