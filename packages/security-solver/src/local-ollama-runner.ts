@@ -415,7 +415,7 @@ export async function runLocalAudit(
         // The model may carry a read_file *character* cursor into the
         // controller-required outline_solidity action, whose offset indexes
         // declarations. Reset only forced outlines; preserve normal pagination.
-        const outlineOffset=normalizeForcedOutlineCursor(action.action,action.offset,constraints?.action);
+        const outlineOffset=normalizeForcedOutlineCursor(action.action,action.offset ?? 0,constraints?.action);
         if(outlineOffset!==action.offset) {
           await appendFile(logFile,'[FORCED_OUTLINE_CURSOR_RESET] '+JSON.stringify({
             path:action.path,requested:action.offset,used:outlineOffset})+'\n');
