@@ -20,7 +20,7 @@ import subprocess
 import tempfile
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from source_dependencies import prepare_dependencies, prepare_pinned_foundry_submodules, DependencyError
+from source_dependencies import prepare_dependencies, prepare_pinned_foundry_submodules, prepare_locked_python_wheels, DependencyError
 
 SUPPORTED_EXECUTION_STATUS = {
     'behavior_observed',
@@ -41,7 +41,7 @@ resource.setrlimit(resource.RLIMIT_NPROC,(0,0))
 specification=json.loads(pathlib.Path('/spec.json').read_text())
 file=pathlib.Path('/repo',specification['file']).resolve()
 if not file.is_relative_to('/repo'): raise ValueError('Source outside repository')
-sys.path[:0]=['/repo',str(file.parent)]
+sys.path[:0]=['/repo/.tomey-python-deps','/repo',str(file.parent)]
 control='TOMEY_CONTROL_'+specification['nonce']
 attack=('<em data-tomey="'+specification['nonce']+'">TOMEY_PROBE</em>'
         if specification['kind']=='html_reflection' else '../../TOMEY_ESCAPE_'+specification['nonce'])
@@ -364,6 +364,19 @@ def run_probe(repository: Path, specification: dict, _dependency_round: int = 0)
                 except (DependencyError, OSError, ValueError) as error:
                     return {'status':'unsupported_dependencies','behavior_observed':False,'detail':str(error)[:1000]}
                 return run_probe(repository, specification, _dependency_round + 1)
+        if code and language == 'python':
+            diagnostic = (work/'stderr').read_text(errors='replace')
+            match = re.search(r"ModuleNotFoundError: No module named '([^']+)'", diagnostic)
+            if match:
+                if _dependency_round == 0:
+                    try:
+                        if prepare_locked_python_wheels(repository):
+                            return run_probe(repository, specification, _dependency_round + 1)
+                    except (DependencyError, OSError, ValueError, UnicodeError) as error:
+                        return {'status':'unsupported_dependencies','behavior_observed':False,
+                                'detail':str(error)[:1000]}
+                return {'status':'unsupported_dependencies','behavior_observed':False,
+                        'detail':'Python module not available in pinned pure-wheel dependencies: '+match.group(1)}
         if code and language == 'java':
             diagnostic = (work/'stderr').read_text(errors='replace')
             if 'TOMEY_INVALID_JAVA_PROBE:' in diagnostic:
