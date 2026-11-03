@@ -87,6 +87,19 @@ def analyze(repository, engine, target=None):
         for folder in ('/usr', '/bin', '/lib', '/lib64'):
             if Path(folder).exists():
                 command += ['--ro-bind', folder, folder]
+        # GitHub's setup-python interpreter lives in /opt/hostedtoolcache,
+        # outside the standard /usr mounts. A venv's semgrep entry point
+        # references that interpreter and stdlib; bind only its resolved base
+        # prefix, rather than weakening isolation or executing outside bwrap.
+        python_base = Path(subprocess.check_output(
+            [str(runtime / 'bin/python'), '-c', 'import sys; print(sys.base_prefix)'],
+            text=True, timeout=10).strip()).resolve()
+        if not python_base.is_relative_to(Path('/usr')):
+            for parent in reversed(python_base.parents):
+                if str(parent) not in ('/', '/home', '/usr', '/bin', '/lib', '/lib64'):
+                    command += ['--dir', str(parent)]
+            command += ['--ro-bind', str(python_base), str(python_base)]
+            command += ['--setenv', 'LD_LIBRARY_PATH', str(python_base / 'lib')]
         command += ['--ro-bind', str(runtime), str(runtime), '--ro-bind', str(source), '/repo',
                     '--ro-bind', str(ROOT / 'scripts/static-leads.yaml'), '/rules.yaml',
                     '--ro-bind', str(ROOT / 'scripts/vendor/semgrep-rules'), '/vendor-rules',
