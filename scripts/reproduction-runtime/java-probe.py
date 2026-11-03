@@ -304,7 +304,7 @@ if sequence_mode:
     for step in steps:
         argv += [step['method'], str(len(step.get('args', [])))]
         argv += [encode(v) for v in step.get('args', [])]
-    outcome = subprocess.run(['/jdk/bin/java', *jvm, '-cp', str(classes),
+    outcome = subprocess.run(['/jdk/bin/java', *jvm, '-cp', os.pathsep.join([str(classes), *spec.get('javaClasspath', [])]),
                               'TomeyJavaProbe', *argv], check=True,
                              stdout=subprocess.PIPE, timeout=8)
     lines = outcome.stdout.decode().splitlines()
@@ -324,7 +324,7 @@ if sequence_mode:
 control = 'TOMEY_CONTROL_' + spec['nonce']
 attack = ('<em data-tomey="'+spec['nonce']+'">TOMEY_PROBE</em>'
           if spec['kind'] == 'html_reflection' else '../../TOMEY_ESCAPE_'+spec['nonce'])
-result = subprocess.run(['/jdk/bin/java', *jvm, '-cp', str(classes), 'TomeyJavaProbe',
+result = subprocess.run(['/jdk/bin/java', *jvm, '-cp', os.pathsep.join([str(classes), *spec.get('javaClasspath', [])]), 'TomeyJavaProbe',
                          (package+'.' if package else '')+parts[0], parts[1],
                          *[base64.b64encode(x.encode()).decode() for x in (control, attack)]],
                         check=True, stdout=subprocess.PIPE, timeout=8)
