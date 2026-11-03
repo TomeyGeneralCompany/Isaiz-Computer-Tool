@@ -45,13 +45,14 @@ jobs:
         run: |
           mkdir -p data/gauntlet/latest
           { nproc; free -h; df -h .; } > data/gauntlet/latest/runner.txt
+      - name: Install locked application runtime
+        run: npm ci
       - name: Prepare owned source without model inference
         if: inputs.mode == 'prepare'
         run: node --import tsx scripts/lotus-gauntlet.ts --prepare --level=\${{ inputs.level }} --output=data/gauntlet/latest
       - name: Install production runtime
         if: inputs.mode == 'run'
         run: |
-          npm ci
           sudo apt-get update -qq
           sudo apt-get install -y bubblewrap default-jdk-headless
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
