@@ -5,6 +5,12 @@ import {execFileSync} from "node:child_process";
 import {mkdtemp,writeFile,readFile,mkdir,rm,chmod} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
+import {normalizeForcedOutlineCursor} from "../packages/security-solver/src/outline-cursor";
+
+assert.equal(normalizeForcedOutlineCursor("outline_solidity",undefined,["outline_solidity"]),0,"forced outline with no cursor starts at declaration zero");
+assert.equal(normalizeForcedOutlineCursor("outline_solidity",2000,["outline_solidity"]),0,"forced outline resets a source-character cursor");
+assert.equal(normalizeForcedOutlineCursor("outline_solidity",undefined,["outline_solidity","read_file"]),undefined,"optional outline preserves absent pagination cursor");
+assert.equal(normalizeForcedOutlineCursor("outline_solidity",7,["outline_solidity","read_file"]),7,"optional outline preserves declaration pagination");
 
 // Exercise compatible candidate ranking during the existing workflow acceptance suite.
 await import("./test-source-candidate-selection");
