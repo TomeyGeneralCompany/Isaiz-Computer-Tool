@@ -16,7 +16,7 @@ export function incompleteProbeCoverage(session: {failedProbes:number; unsupport
 export function recoverEmptyUnprobedFinal(value:unknown, completedProbes:number, blockedReason?:string|null):unknown {
   if(!value || typeof value!=='object' || Array.isArray(value) || completedProbes!==0 || blockedReason)return value;
   const result=value as Record<string,unknown>;
-  if(!Array.isArray(result.findings) || result.findings.length!==0 || result.outcome==='no_testable_candidate')return value;
+  if(!Array.isArray(result.findings) || result.findings.length!==0 || result.outcome!=='inspected')return value;
   const reason=typeof result.reason==='string' && result.reason.trim().length>=20
     ? result.reason : 'No supported source probe completed in this bounded inspection; coverage remains incomplete.';
   return {...result,outcome:'no_testable_candidate',reason};
