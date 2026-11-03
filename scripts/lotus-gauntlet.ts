@@ -4,7 +4,7 @@
  */
 import 'dotenv/config';
 import {execFileSync} from 'node:child_process';
-import {mkdir,mkdtemp,writeFile,readFile,copyFile,readdir,cp} from 'node:fs/promises';
+import {mkdir,mkdtemp,writeFile,readFile,copyFile,readdir,cp,rm} from 'node:fs/promises';
 import {join,dirname} from 'node:path';
 import {tmpdir} from 'node:os';
 const LEVELS:Record<number,number>={1:12,2:28,3:48,4:84,5:144};
@@ -76,9 +76,27 @@ function grade(log:string,result:any,elapsed:number,review:any,answer:Answer){
    findingCount:result.findings?.length||0,coverage:result.coverage||null,
    error:result.error||null,elapsedMs:elapsed};
 }
+/** The owned synthetic repository is supplied without contacting a remote host.
+ * The normal acquisition security checks remain the default for other callers.
+ */
+export function createOwnedFixtureAcquirer(fixture:string){
+  const sourceUrl='https://github.com/fixture/gauntlet-settlement';
+  return async (url:string,destination:string,options:{signal?:AbortSignal})=>{
+    options.signal?.throwIfAborted();
+    if(url!==sourceUrl)throw Error('Gauntlet rejected an unexpected source URL: '+url);
+    await cp(fixture,destination,{recursive:true,errorOnExist:true,force:false});
+    const actual=execFileSync('git',['-c','core.hooksPath=/dev/null','rev-parse','HEAD'],{
+      cwd:destination,encoding:'utf8',timeout:10000}).trim();
+    const expected=execFileSync('git',['-c','core.hooksPath=/dev/null','rev-parse','HEAD'],{
+      cwd:fixture,encoding:'utf8',timeout:10000}).trim();
+    if(actual!==expected)throw Error('Owned fixture revision was not preserved');
+    return {missingDependencies:[]};
+  };
+}
+
 async function main(){
- const args=process.argv.slice(2),run=args.includes('--run'),preview=args.includes('--prepare');
- if(run===preview)throw new Error('Specify --prepare OR --run');
+ const args=process.argv.slice(2),run=args.includes('--run'),preview=args.includes('--prepare'),smoke=args.includes('--smoke');
+ if(Number(run)+Number(preview)+Number(smoke)!==1)throw new Error('Specify exactly one: --prepare, --smoke, or --run');
  const level=Number((args.find(x=>x.startsWith('--level='))||'--level=4').split('=')[1]);
  if(!LEVELS[level])throw new Error('Invalid level');
  const requestedLanguage=(args.find(x=>x.startsWith('--language='))||'--language=random').split('=')[1];
@@ -92,22 +110,23 @@ async function main(){
  catch(e:any){if(e?.code!=='ENOENT')throw e;}
  const {fixture,answer}=await prepare(root,level,language,selectedSeed);
  if(preview){console.log('Gauntlet prepared (NO model or tests run): '+root);return;}
+ if(smoke){
+   const cloned=join(root,'acquired-smoke');
+   try {
+     await createOwnedFixtureAcquirer(fixture)('https://github.com/fixture/gauntlet-settlement',cloned,{});
+     const {inspectSourceCapability}=await import('../packages/security-solver/src/source-capability');
+     const capability=await inspectSourceCapability(cloned);
+     if(capability.blocked||capability.sourcePaths.length!==LEVELS[level])
+       throw Error('Owned source capability check failed: '+JSON.stringify(capability).slice(0,500));
+     console.log('Gauntlet source acquisition smoke PASSED for '+language+' with '+capability.sourcePaths.length+' source files');
+   }finally{await rm(cloned,{recursive:true,force:true});}
+   return;
+ }
  const app=join(root,'work');await mkdir(app);
  // Owned fixture cloning is an explicit test dependency, not a PATH shim.
  // All downstream capability, source-map, controller, probe, and review stages
  // run through the same implementation as the authorized real-program path.
- const sourceUrl='https://github.com/fixture/gauntlet-settlement';
- const sourceAcquirer=async (url:string,destination:string,options:{signal?:AbortSignal})=>{
-   options.signal?.throwIfAborted();
-   if(url!==sourceUrl)throw Error('Gauntlet rejected an unexpected source URL: '+url);
-   await cp(fixture,destination,{recursive:true,errorOnExist:true,force:false});
-   const actual=execFileSync('git',['-c','core.hooksPath=/dev/null','rev-parse','HEAD'],{
-     cwd:destination,encoding:'utf8',timeout:10000}).trim();
-   const expected=execFileSync('git',['-c','core.hooksPath=/dev/null','rev-parse','HEAD'],{
-     cwd:fixture,encoding:'utf8',timeout:10000}).trim();
-   if(actual!==expected)throw Error('Owned fixture revision was not preserved');
-   return {missingDependencies:[]};
- };
+ const sourceAcquirer=createOwnedFixtureAcquirer(fixture);
  const old={PROJECT_ROOT:process.env.PROJECT_ROOT,GITHUB_TOKEN:process.env.GITHUB_TOKEN};
  const began=Date.now();
  let result:any={success:false,findings:[],error:'No investigation result'};
