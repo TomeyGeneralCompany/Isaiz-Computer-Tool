@@ -9,7 +9,7 @@ import {tmpdir} from 'node:os';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {runLocalAudit} from '../packages/security-solver/src/local-ollama-runner';
-import {InvestigationWorkflow} from '../packages/security-solver/src/investigation-workflow';
+import {InvestigationWorkflow, probeHypothesisMismatch} from '../packages/security-solver/src/investigation-workflow';
 import {modelProfile} from '../packages/security-solver/src/model-profile';
 import {hostModelTimeout} from './model-check-settings';
 const variant=Number(process.argv.find(a=>a.startsWith('--variant='))?.split('=')[1]||0);
@@ -29,6 +29,13 @@ let calls=0;const observations=new Map<string,boolean>();const server=createServ
 const action=(name:string,path='',query='',answer='')=>({action:name,path,query,answer});
 try {
   // The same routing implementation production uses: errors never become observations.
+  // Controller must not execute a test unrelated to an explicit hypothesis.
+  assert.match(probeHypothesisMismatch('html_reflection','This method may permit path traversal using byte inputs') || '',/Correct probe.*path_construction/);
+  assert.match(probeHypothesisMismatch('path_construction','Unescaped HTML injection may occur') || '',/Correct probe.*html_reflection/);
+  assert.equal(probeHypothesisMismatch('path_construction','Potential directory traversal using user-provided path'),null);
+  assert.equal(probeHypothesisMismatch('html_reflection','Potential unescaped HTML reflection'),null);
+  assert.equal(probeHypothesisMismatch('java_sequence','Path traversal through state mutation'),null);
+  assert.equal(probeHypothesisMismatch('html_reflection','User input may escape the intended output encoding'),null);
   const routing=new InvestigationWorkflow();
   for(let i=0;i<6;i++)routing.observe(action('read_file','a.py'),JSON.stringify({nextOffset:100+i}));
   assert.ok((await routing.constraints()).action.includes('read_file'));

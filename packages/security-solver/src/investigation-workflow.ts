@@ -12,6 +12,19 @@ const graph = new StateGraph(State)
   .addNode('route', state => ({stage: state.pending ? 'test' as const :
     state.inspections >= 6 ? 'hypothesize' as const : state.tested.length ? 'review' as const : 'inspect' as const}))
   .addEdge(START, 'route').addEdge('route', END).compile();
+/** Reject only explicit contradictions between a hypothesis and its chosen probe.
+ * Ambiguous hypotheses remain eligible for ordinary source/runtime validation. */
+export function probeHypothesisMismatch(kind:string,hypothesis:string):string|null {
+  const h=hypothesis.toLowerCase();
+  const path= /\b(?:path traversal|directory traversal|directory escape|filesystem path traversal)\b/.test(h);
+  const html= /\b(?:html reflection|html injection|cross.site scripting|\bxss\b|unescaped html|html escaping)\b/.test(h);
+  if(path && !html && kind==='html_reflection')
+    return 'Wrong probe: html_reflection measures HTML output. Correct probe for this path-traversal hypothesis: path_construction. Set answer="path_construction" and inspect whether the method constructs a filesystem path before planning. If it does not, this hypothesis is unsupported by the available probe; do not test an unrelated method.';
+  if(html && !path && kind==='path_construction')
+    return 'Wrong probe: path_construction measures filesystem path behavior. Correct probe for this HTML-output hypothesis: html_reflection. Set answer="html_reflection" and ensure the inspected method returns compatible text before planning. If it does not, this hypothesis is unsupported by the available probe.';
+  return null;
+}
+
 const key = (a:Action) => JSON.stringify([a.path,a.query,a.answer,a.sequence]);
 export class InvestigationWorkflow {
   private state:typeof State.State={stage:'inspect',inspections:0,pending:null,tested:[]};
@@ -143,6 +156,8 @@ export class InvestigationWorkflow {
       if(action.path.endsWith('.sol') && !/^[A-Za-z_$][\w$]*\.(?:[A-Za-z_$][\w$]*|constructor)$/.test(action.query))
         return 'Invalid Solidity probe target: query must be Contract.function using a declaration returned by outline_solidity. Do not use function, method, or guessed names.';
       if(!action.hypothesis?.trim())return 'State the suspected behavior and what observation would disprove it in hypothesis.';
+      const mismatch=probeHypothesisMismatch(action.answer,action.hypothesis);
+      if(mismatch)return mismatch;
       if(this.state.tested.includes(key(action)))return 'This probe already finished or was attempted. Use its observation; choose a different candidate or conclude with the permitted incomplete outcome.';
     }
     if(action.action==='verify_source' && this.state.pending && (action.path!==this.state.pending.path || action.query!==this.state.pending.query || action.answer!==this.state.pending.answer || !isDeepStrictEqual(action.sequence,this.state.pending.sequence)))
