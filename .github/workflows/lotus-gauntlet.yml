@@ -1,4 +1,4 @@
-name: LOTUS Gauntlet (one-shot trial branch)
+name: LOTUS Gauntlet (Level 4 Java failure replay)
 on:
   push:
     branches:
@@ -63,6 +63,8 @@ jobs:
           { nproc; free -h; df -h .; } > data/gauntlet/latest/runner.txt
       - name: Install locked application runtime
         run: npm ci
+      - name: Verify candidate selection and four-language caller-chain regression
+        run: node --import tsx scripts/test-source-candidates.ts
       - name: Verify owned acquisition for all four languages without model
         if: inputs.mode == 'run' || github.event_name == 'push'
         run: |
@@ -72,8 +74,8 @@ jobs:
       - name: Prepare owned source without model inference
         if: inputs.mode == 'prepare'
         env:
-          GAUNTLET_LANGUAGE: ${{ inputs.language || 'random' }}
-          GAUNTLET_SEED: ${{ inputs.seed || '' }}
+          GAUNTLET_LANGUAGE: ${{ inputs.language || (github.event_name == 'push' && 'java') || 'random' }}
+          GAUNTLET_SEED: ${{ inputs.seed || (github.event_name == 'push' && '9d3a245ae1a47a3475ddfdf3efb02b98') || '' }}
         run: |
           node --import tsx scripts/lotus-gauntlet.ts --prepare --level=${{ inputs.level || '4' }} --language="$GAUNTLET_LANGUAGE" ${GAUNTLET_SEED:+--seed="$GAUNTLET_SEED"} --output=data/gauntlet/latest
       - name: Install production runtime
