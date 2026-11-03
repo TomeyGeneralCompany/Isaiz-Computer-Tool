@@ -2,10 +2,14 @@
 from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 import base64
+import configparser
 import hashlib
 import io
 import json
 import os
+import re
+import shutil
+import subprocess
 from pathlib import Path, PurePosixPath
 import tarfile
 import tempfile
@@ -162,3 +166,93 @@ def prepare_dependencies(repository: Path, required_imports: list[str] | None = 
     if required_imports is None:
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.write_text(digest)
+
+def prepare_pinned_foundry_submodules(repository: Path, missing_imports: list[str],
+                                     remappings: list[str] | None = None) -> bool:
+    """Resolve missing Foundry library sources from exact checked-in gitlinks.
+
+    No Gradle/Forge/npm build or target hooks execute. Only GitHub HTTPS URLs
+    from .gitmodules are eligible, and the fetched commit must match the
+    repository's 160000 gitlink, not a mutable upstream branch.
+    """
+    repository = repository.resolve(strict=True)
+    manifest = repository / ".gitmodules"
+    if not manifest.is_file() or manifest.is_symlink() or manifest.stat().st_size > 128000:
+        return False
+    if not (repository / ".git").exists():
+        return False
+    config = configparser.RawConfigParser(interpolation=None)
+    try:
+        config.read_string(manifest.read_text())
+    except (configparser.Error, UnicodeError):
+        raise DependencyError("Malformed Foundry git-submodule declaration")
+    declared = []
+    for section in config.sections():
+        if not section.startswith('submodule '):
+            continue
+        path = config.get(section, 'path', fallback='')
+        url = config.get(section, 'url', fallback='')
+        if (not re.fullmatch(r'lib/[A-Za-z0-9_.-]+', path)
+                or not re.fullmatch(r'https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\\.git)?', url)):
+            continue
+        declared.append((path, url))
+    mappings = []
+    for item in remappings or []:
+        if isinstance(item, str) and '=' in item:
+            prefix, replacement = item.split('=', 1)
+            if prefix and replacement and '..' not in Path(replacement).parts:
+                mappings.append((prefix, replacement))
+    candidates = set()
+    for request in missing_imports:
+        if not isinstance(request, str) or len(request) > 4096 or '\\\\' in request:
+            continue
+        candidates.add(request)
+        for prefix, replacement in mappings:
+            if request.startswith(prefix):
+                candidates.add(replacement + request[len(prefix):])
+    installed = False
+    for path, url in declared[:32]:
+        if not any(item.startswith(path + '/') for item in candidates):
+            continue
+        target = inside(repository, path)
+        if target.is_file() or target.is_symlink():
+            raise DependencyError("Foundry dependency path is not a normal directory")
+        if target.is_dir() and any(target.iterdir()):
+            continue
+        try:
+            gitlink = subprocess.run(
+                ['git','-C',str(repository),'ls-tree','HEAD','--',path],
+                capture_output=True, text=True, check=True, timeout=10)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as error:
+            raise DependencyError("Cannot read pinned Foundry dependency revision") from error
+        match = re.fullmatch(r'160000 commit ([a-f0-9]{40})\\t' + re.escape(path) + r'\\n?', gitlink.stdout)
+        if not match:
+            raise DependencyError("Foundry dependency lacks a pinned gitlink: " + path)
+        revision = match.group(1)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix=".tomey-foundry-", dir=target.parent) as temporary:
+            staging = Path(temporary) / 'library'
+            environment = {**os.environ, 'GIT_TERMINAL_PROMPT':'0',
+                           'GIT_LFS_SKIP_SMUDGE':'1','GIT_CONFIG_NOSYSTEM':'1',
+                           'GIT_CONFIG_GLOBAL':'/dev/null'}
+            try:
+                subprocess.run(['git','init','--quiet',str(staging)],env=environment,check=True,timeout=10,
+                               stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
+                subprocess.run(['git','-C',str(staging),'-c','protocol.file.allow=never',
+                                '-c','protocol.ext.allow=never','fetch','--quiet','--depth=1',
+                                url, revision],env=environment,check=True,timeout=75,
+                               stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
+                subprocess.run(['git','-C',str(staging),'checkout','--quiet','--detach',revision],
+                               env=environment,check=True,timeout=20,
+                               stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
+                actual = subprocess.check_output(['git','-C',str(staging),'rev-parse','HEAD'],
+                                                 env=environment,text=True,timeout=10).strip()
+            except (subprocess.CalledProcessError,subprocess.TimeoutExpired,OSError) as error:
+                raise DependencyError("Pinned Foundry library could not be retrieved: " + path) from error
+            if actual != revision:
+                raise DependencyError("Foundry library does not match pinned revision: " + path)
+            if target.exists():
+                target.rmdir()  # only empty directories may be replaced
+            shutil.move(str(staging), str(target))
+            installed = True
+    return installed
