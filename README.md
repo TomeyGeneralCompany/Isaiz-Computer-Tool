@@ -16,7 +16,6 @@ The LOTUS software and associated materials are proprietary to Tomey General Com
 
 **Repository:** [TomeyGeneralCompany/Isaiz-Computer-Tool](https://github.com/TomeyGeneralCompany/Isaiz-Computer-Tool)
 
-> **Compatibility:** LOTUS was formerly named AutoHack. Existing scripts, Linux paths, environment variables, systemd service names, and historical log identifiers retain their `autohack` names. The canonical repository remains `TomeyGeneralCompany/Isaiz-Computer-Tool`.
 
 ## Operation
 
