@@ -50,8 +50,11 @@ export async function prioritizeSourceCandidates(root:string,eligible:string[],f
     }
   }
   const paths=focus ? rankedPool : rankedPool
-    .sort((a,b)=>(signatureScores.get(b)||0)-(signatureScores.get(a)||0) ||
-      sourcePriority(b)-sourcePriority(a))
+    // Application ownership takes precedence over a probe-compatible library
+    // signature. In the 88mph run, an imported ERC1155 library consumed the
+    // opening turns while application contracts stayed unread.
+    .sort((a,b)=>sourcePriority(b)-sourcePriority(a) ||
+      (signatureScores.get(b)||0)-(signatureScores.get(a)||0))
     .slice(0,8);
   const locations:Array<{path:string;offset:number;line:number;rule?:string;hypothesis?:string}>=[];
   for(const path of paths) {
