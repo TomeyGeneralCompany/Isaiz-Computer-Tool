@@ -10,7 +10,13 @@ export function referencesProbedFunction(line:string, selector:string):boolean {
   const pattern=new RegExp("(^|[^A-Za-z0-9_$])("+name+")\\s*\\(","g");
   for(const match of code.matchAll(pattern)) {
     const prefix=code.slice(0,match.index!+match[1].length);
-    if(!/\b(?:function|def)\s*$/.test(prefix))return true;
+    // A declaration of the probed method is not evidence of a caller.
+    // Include function keywords and C/Java/C#-style return types, while
+    // preserving calls in expressions such as "return Renderer.render(x)".
+    const declarationKeyword=/\b(?:function|def|func|fn)\s*$/.test(prefix);
+    const declarationType=/^\s*(?:(?:public|private|protected|internal|static|final|abstract|synchronized|async|export|default|override|virtual|readonly|native|strictfp)\s+)*(?:[A-Za-z_$][\w$<>\[\],.?]*\s+)+$/.test(prefix) &&
+      !/^\s*(?:return|throw|await|yield|new|case)\s+$/.test(prefix);
+    if(!declarationKeyword && !declarationType)return true;
   }
   return false;
 }
