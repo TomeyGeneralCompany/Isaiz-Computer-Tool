@@ -58,6 +58,12 @@ jobs:
           { nproc; free -h; df -h .; } > data/gauntlet/latest/runner.txt
       - name: Install locked application runtime
         run: npm ci
+      - name: Verify owned acquisition across all languages without model
+        if: inputs.mode == 'run'
+        run: |
+          for lang in solidity python javascript java; do
+            node --import tsx scripts/lotus-gauntlet.ts --smoke --level=4 --language="$lang" --output="data/gauntlet/smoke-$lang"
+          done
       - name: Prepare owned source without model inference
         if: inputs.mode == 'prepare'
         env:
