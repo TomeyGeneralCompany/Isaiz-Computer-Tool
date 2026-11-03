@@ -18,6 +18,7 @@ export async function prioritizeSourceCandidates(root:string,eligible:string[],f
     (a.endsWith('.sol')? -1:0) - (b.endsWith('.sol')? -1:0));
   const rankedPool=focus ? ranked.filter(path=>path===focus) : ranked.slice(0,192);
   const signatureScores=new Map<string,number>();
+  const sourceTexts=new Map<string,string>();
   if(!focus) {
     let examinedBytes=0;
     for(const path of rankedPool) {
@@ -28,6 +29,7 @@ export async function prioritizeSourceCandidates(root:string,eligible:string[],f
         if(size>128000 || examinedBytes+size>4000000)continue;
         examinedBytes+=size;
         const source=await readFile(full,'utf8');
+        sourceTexts.set(path,source);
         // Match exactly one supported argument and a supported return type;
         // avoid ranking ByteString setters and getters without arguments as probe targets.
         // Permits concrete Java modifiers and optional final on the parameter.
@@ -49,11 +51,40 @@ export async function prioritizeSourceCandidates(root:string,eligible:string[],f
       }catch{}
     }
   }
+  // Prefer source connected by references from *other* files over isolated
+  // same-signature helpers. This gives caller->callee chains a fair opening
+  // in large Python/JS/Java/Solidity projects without marking anything unsafe.
+  // Use actual inspected file text for navigation only, never as proof.
+  const referenceScores=new Map<string,number>();
+  if(!focus) {
+    const names=new Map<string,string[]>();
+    for(const path of rankedPool) {
+      const baseName=path.split('/').at(-1)!.replace(/\\.(?:sol|java|py|js|mjs|cjs)$/,'');
+      if(baseName==='__init__'||baseName==='index'||baseName.length<4)continue;
+      const match=names.get(baseName)||[];
+      match.push(path);names.set(baseName,match);
+    }
+    for(const [sourcePath,source] of sourceTexts) {
+      // Cross-file references to a source basename/class suggest a genuine
+      // call chain. Count each referencing file at most once per target.
+      for(const [name,targets] of names) {
+        const token=new RegExp('(?:^|[^A-Za-z0-9_$])'+name.replace(/[.*+?^\\$()|[\\]{}]/g,'\\  const paths=focus ? rankedPool : rankedPool')+'(?:[^A-Za-z0-9_$]|$)');
+        if(!token.test(source))continue;
+        for(const target of targets) {
+          if(target===sourcePath)continue;
+          referenceScores.set(target,Math.min(12,(referenceScores.get(target)||0)+1));
+        }
+      }
+    }
+  }
+  const pathDepth=(path:string)=>path.split('/').length;
   const paths=focus ? rankedPool : rankedPool
     // Application ownership takes precedence over a probe-compatible dependency
     // signature across Solidity, Python, JavaScript, and Java. The overnight
     // 88mph run paginated a supporting ERC1155 library before application code.
     .sort((a,b)=>sourcePriority(b)-sourcePriority(a) ||
+      (referenceScores.get(b)||0)-(referenceScores.get(a)||0) ||
+      pathDepth(a)-pathDepth(b) ||
       (signatureScores.get(b)||0)-(signatureScores.get(a)||0))
     .slice(0,8);
   const locations:Array<{path:string;offset:number;line:number;rule?:string;hypothesis?:string}>=[];
