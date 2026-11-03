@@ -8,105 +8,44 @@ import {mkdir,mkdtemp,writeFile,readFile,copyFile,readdir,chmod} from 'node:fs/p
 import {join,dirname} from 'node:path';
 import {tmpdir} from 'node:os';
 const LEVELS:Record<number,number>={1:12,2:28,3:48,4:84,5:144};
-const SECRET={file:'contracts/settlement/SettlementAuthority.sol',
-  function:'rotateOperator',caller:'contracts/settlement/SettlementVault.sol',
-  defect:'Unrestricted operator replacement permits subsequent privileged settlement'};
-const modules=['Pricing','Settlement','Compliance','SettlementRoute','Reserve','Oracle','Pool','Ledger','Adapter','Gateway'];
-const authority=[
-'// SPDX-License-Identifier: MIT',
-'pragma solidity ^0.8.20;',
-'contract SettlementAuthority {',
-'  address public administrator;',
-'  address public operator;',
-'  constructor(){ administrator=msg.sender;operator=msg.sender; }',
-'  function rotateOperator(address nextOperator) external {',
-'    require(nextOperator!=address(0),"invalid operator");',
-'    operator=nextOperator;',
-'  }',
-'  function isOperator(address who) external view returns(bool){return who==operator;}',
-'  function changeAdministrator(address nextAdministrator) external {',
-'    require(msg.sender==administrator,"administrator only");',
-'    require(nextAdministrator!=address(0),"invalid administrator");',
-'    administrator=nextAdministrator;',
-'  }',
-'}',''].join('\n');
-const vault=[
-'// SPDX-License-Identifier: MIT',
-'pragma solidity ^0.8.20;',
-'import "./SettlementAuthority.sol";',
-'import "../../lib/settlement-utils/src/AmountMath.sol";',
-'contract SettlementVault is SettlementAuthority {',
-'  using AmountMath for uint256;',
-'  mapping(address=>uint256) public credit;',
-'  uint256 public totalCredit;',
-'  function fund(address recipient,uint256 amount) external {',
-'    uint256 approved=amount.bounded(type(uint128).max);',
-'    credit[recipient]+=approved;totalCredit+=approved;',
-'  }',
-'  function settle(address recipient,uint256 amount) external {',
-'    require(msg.sender==operator,"operator only");',
-'    require(amount>0 && amount<=totalCredit,"invalid amount");',
-'    credit[recipient]+=amount;totalCredit-=amount;',
-'  }',
-'  function ledgerState(address account) external view returns(uint256,uint256,address){',
-'    return(credit[account],totalCredit,operator);',
-'  }',
-'}',''].join('\n');
-function decoy(i:number):string{
- const name=modules[i%modules.length]+'D'+String(i).padStart(3,'0');
- const prior=i>0?'import "./'+modules[(i-1)%modules.length]+'D'+String(i-1).padStart(3,'0')+'.sol";\n':'';
- return ['// SPDX-License-Identifier: MIT','pragma solidity ^0.8.20;',prior,
- 'contract '+name+' {',
- '  address public administrator;',
- '  mapping(address=>uint256) private allowances;',
- '  uint256 public configuration;',
- '  constructor(){administrator=msg.sender;configuration='+String(i%17+2)+';}',
- '  function rotateOperator(address next) external {',
- '    require(msg.sender==administrator,"administrator only");',
- '    require(next!=address(0),"invalid address");',
- '    configuration=uint256(uint160(next))%97;',
- '  }',
- '  function reserve(address member,uint256 amount) external {',
- '    require(msg.sender==administrator,"administrator only");',
- '    require(amount<1000000000,"limit");allowances[member]+=amount;',
- '  }',
- '  function inspect(address member) external view returns(uint256){',
- '    return allowances[member]+configuration;',
- '  }',
- '  function settlementPreview(uint256 base) external view returns(uint256){',
- '    return base+configuration;',
- '  }',
- '}',''].join('\n');
+import {createHash,randomBytes} from 'node:crypto';
+import {generate,LANGUAGES,type Answer,type Language} from './lotus-gauntlet-fixtures';
+
+/** Each invocation chooses one language uniformly unless an explicit replay language is provided. */
+export function chooseLanguage(seed:string,override?:string):Language {
+ if(override && override!=='random'){
+   if(!(LANGUAGES as readonly string[]).includes(override))throw Error('Unsupported language: '+override);
+   return override as Language;
+ }
+ const index=createHash('sha256').update(seed).digest().readUInt32BE(0)%LANGUAGES.length;
+ return LANGUAGES[index];
 }
-async function prepare(root:string,level:number){
- const size=LEVELS[level];if(!size)throw new Error('Choose a level from 1 to 5');
+async function prepare(root:string,level:number,language:Language,seed:string){
+ const size=LEVELS[level];
+ if(!size)throw Error('Level must be from 1 through 5');
  const fixture=join(root,'fixture');
- async function put(path:string,content:string){const full=join(fixture,path);
-   await mkdir(dirname(full),{recursive:true});await writeFile(full,content);}
- await put('contracts/settlement/SettlementAuthority.sol',authority);
- await put('contracts/settlement/SettlementVault.sol',vault);
- await put('lib/settlement-utils/src/AmountMath.sol',[
-   '// SPDX-License-Identifier: MIT','pragma solidity ^0.8.20;',
-   'library AmountMath {',
-   ' function bounded(uint256 value,uint256 upper) internal pure returns(uint256){',
-   '  require(value<=upper,"limit exceeded");return value;',
-   ' }','}',''].join('\n'));
- await put('foundry.toml','[profile.default]\nsrc = "contracts"\nlibs = ["lib"]\nsolc_version = "0.8.30"\noptimizer = true\noptimizer_runs = 200\n');
- await put('README.md','Settlement platform. Investigate privileged settlement operations, authorization, and ledger transitions using isolated local EVM tests.\n');
- for(let i=0;i<size-3;i++)await put('contracts/modules/'+modules[i%modules.length]+'D'+String(i).padStart(3,'0')+'.sol',decoy(i));
- execFileSync('git',['init','-q',fixture]);execFileSync('git',['-C',fixture,'add','.']);
- execFileSync('git',['-C',fixture,'-c','user.name=Gauntlet','-c','user.email=fixture@example.invalid','commit','-qm','Synthetic settlement repository']);
+ const challenge=generate(language,size);
+ for(const [path,body] of Object.entries(challenge.files)){
+   const full=join(fixture,path);await mkdir(dirname(full),{recursive:true});await writeFile(full,body);
+ }
+ await writeFile(join(fixture,'README.md'),'Message and settlement service. Analyze source, callers, data flow, authorization boundaries, and observable security behavior.\n');
+ execFileSync('git',['init','-q',fixture]);
+ execFileSync('git',['-C',fixture,'add','.']);
+ execFileSync('git',['-C',fixture,'-c','user.name=Gauntlet','-c','user.email=fixture@example.invalid',
+   'commit','-qm','Owned synthetic benchmark']);
  const commit=execFileSync('git',['-C',fixture,'rev-parse','HEAD'],{encoding:'utf8'}).trim();
- await writeFile(join(root,'answer-key.private.json'),JSON.stringify(SECRET,null,2),{mode:0o600});
- await writeFile(join(root,'manifest.json'),JSON.stringify({challenge:'settlement-authority-v1',level,sourceFiles:size,commit,mode:'owned-synthetic'},null,2));
- return fixture;
+ await writeFile(join(root,'answer-key.private.json'),JSON.stringify(challenge.answer,null,2),{mode:0o600});
+ await writeFile(join(root,'manifest.json'),JSON.stringify({
+   challenge:'gauntlet-blind-v2',language,seed,level,sourceFiles:size,commit,mode:'owned-synthetic'
+ },null,2));
+ return {fixture,answer:challenge.answer};
 }
-function grade(log:string,result:any,elapsed:number,review:any){
+function grade(log:string,result:any,elapsed:number,review:any,answer:Answer){
  const count=(s:string)=>(log.split(s).length-1);
  const modelActions=log.split('\n').filter(line=>line.includes('[MODEL_ACTION]'));
- const targetRead=modelActions.some(line=>line.includes('SettlementAuthority.sol') &&
+ const targetRead=modelActions.some(line=>line.includes(answer.file) &&
    (line.includes('read_file')||line.includes('read_solidity')||line.includes('outline_solidity')));
- const targetProbe=modelActions.some(line=>line.includes('rotateOperator') &&
+ const targetProbe=modelActions.some(line=>line.includes(answer.selector) &&
    (line.includes('plan_probe')||line.includes('probe_intent')));
  const milestones={
   sourceAcquired:count('[ACQUISITION_REPOSITORY_DONE]')>0,
@@ -118,8 +57,9 @@ function grade(log:string,result:any,elapsed:number,review:any){
   probeExecuted:count('[PROBE_RESULT]')>0,
   verifiedFinding:result.success===true && review?.verdict==='approve' &&
    Array.isArray(result.findings) && result.findings.some((f:any)=>
-     (String(f.reportBody||'')+' '+String(f.title||'')).includes(SECRET.function) &&
-     (String(f.reportBody||'')+' '+String(f.title||'')).includes('SettlementAuthority'))
+     f.reproductionCaseId && f.reproductionCaseId===review.caseId &&
+     (String(f.reportBody||'')+' '+String(f.title||'')).includes(answer.selector.split('.').at(-1)!) &&
+     (String(f.reportBody||'')+' '+String(f.title||'')).includes(answer.file))
  };
  const stages:Record<string,string>={sourceAcquired:'acquisition',sourceMapBuilt:'source_mapping',
   sourceRead:'navigation',relevantCandidateInspected:'candidate_selection',
@@ -130,7 +70,7 @@ function grade(log:string,result:any,elapsed:number,review:any){
  for(const key of ['WORKFLOW_REJECTED','FINAL_REJECTED','EMPTY_FINAL_RETRY','PROBE_PLANNED','PROBE_RESULT',
  'FINAL_UNVERIFIED_FINDINGS_BLOCKED','REJECTED_PLAN_SOURCE_HANDOFF','ALLOWANCE_EXTENDED','MODEL_ACTION'])
    counters[key]=count('['+key+']');
- return {version:1,level:result.level??4,challenge:'settlement-authority-v1',
+ return {version:2,level:result.level??4,language:answer.language,challenge:'gauntlet-blind-v2',
    firstDivergence:firstDivergence?stages[firstDivergence]:null,milestones,counters,
    resultStatus:result.success?'investigated':'failed_or_incomplete',
    findingCount:result.findings?.length||0,coverage:result.coverage||null,
@@ -141,10 +81,16 @@ async function main(){
  if(run===preview)throw new Error('Specify --prepare OR --run');
  const level=Number((args.find(x=>x.startsWith('--level='))||'--level=4').split('=')[1]);
  if(!LEVELS[level])throw new Error('Invalid level');
+ const requestedLanguage=(args.find(x=>x.startsWith('--language='))||'--language=random').split('=')[1];
+ const selectedSeed=(args.find(x=>x.startsWith('--seed='))||'').split('=').slice(1).join('=')||randomBytes(16).toString('hex');
+ if(selectedSeed.length>128 || !/^[A-Za-z0-9._-]+$/.test(selectedSeed))throw Error('Invalid replay seed');
+ const language=chooseLanguage(selectedSeed,requestedLanguage);
  const root=(args.find(x=>x.startsWith('--output='))||'').split('=').slice(1).join('=')||
     await mkdtemp(join(tmpdir(),'lotus-gauntlet-'));
  await mkdir(root,{recursive:true,mode:0o700});
- const fixture=await prepare(root,level);
+ try {await readFile(join(root,'manifest.json'));throw Error('Gauntlet output directory already contains a challenge');}
+ catch(e:any){if(e?.code!=='ENOENT')throw e;}
+ const {fixture,answer}=await prepare(root,level,language,selectedSeed);
  if(preview){console.log('Gauntlet prepared (NO model or tests run): '+root);return;}
  const app=join(root,'work');await mkdir(app);
  const bin=join(root,'shim-bin');await mkdir(bin);
@@ -175,8 +121,8 @@ async function main(){
   process.env.LOCAL_HUNT_MAX_TURNS ||= '80';
   process.env.SECURITY_AUTO_SUBMIT='false';
   const {runLocalProgramHunt,independentReview}=await import('../packages/security-solver/src/local-program-flow');
-  const program:any={id:'owned-gauntlet-'+level,provider:'immunefi',name:'Controlled settlement authority benchmark',
-   scopeSummary:JSON.stringify({policy:'Owned synthetic application. Inspect authorization and ledger behavior. Local reproduction and diagnostics only. No submissions.',
+  const program:any={id:'owned-gauntlet-'+level+'-'+language,provider:'immunefi',name:'Controlled source application benchmark',
+   scopeSummary:JSON.stringify({policy:'Owned synthetic application. Inspect source, data flow, authorization, input handling and application behavior. Local reproduction and diagnostics only. No submissions.',
     scopes:[{assetType:'SOURCE_CODE',eligibleForBounty:true,assetIdentifier:'https://github.com/fixture/gauntlet-settlement'}]})};
   result=await runLocalProgramHunt(program);
   if(result.findings?.length){
@@ -205,9 +151,9 @@ async function main(){
      reproductionCaseId:f.reproductionCaseId,reportCreated:!!f.reportBody}))};
   await writeFile(join(root,'result.json'),JSON.stringify(resultData,null,2));
   await writeFile(join(root,'review.json'),JSON.stringify(review,null,2));
-  const summary=grade(content,{...result,level},Date.now()-began,review);
+  const summary=grade(content,{...result,level},Date.now()-began,review,answer);
   await writeFile(join(root,'grade.json'),JSON.stringify(summary,null,2));
-  console.log('Gauntlet report: '+JSON.stringify({root,summary},null,2));
+  console.log('Gauntlet report: '+JSON.stringify({root,seed:selectedSeed,language,summary},null,2));
  }
  if(!result.success)process.exitCode=1;
 }
