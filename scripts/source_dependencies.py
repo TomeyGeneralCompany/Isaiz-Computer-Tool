@@ -197,7 +197,13 @@ def prepare_pinned_foundry_submodules(repository: Path, missing_imports: list[st
             continue
         declared.append((path, url))
     mappings = []
-    for item in remappings or []:
+    # Match the compiler's resolution rules: it also reads remappings.txt.
+    text_remappings = []
+    remap_file = repository / 'remappings.txt'
+    if remap_file.is_file() and not remap_file.is_symlink() and remap_file.stat().st_size <= 128000:
+        text_remappings = [line.strip() for line in remap_file.read_text().splitlines()
+                           if line.strip() and not line.lstrip().startswith('#')]
+    for item in [*(remappings or []), *text_remappings]:
         if isinstance(item, str) and '=' in item:
             prefix, replacement = item.split('=', 1)
             if prefix and replacement and '..' not in Path(replacement).parts:
