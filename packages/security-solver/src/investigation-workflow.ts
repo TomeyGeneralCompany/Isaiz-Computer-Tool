@@ -16,8 +16,8 @@ const graph = new StateGraph(State)
  * Ambiguous hypotheses remain eligible for ordinary source/runtime validation. */
 export function probeHypothesisMismatch(kind:string,hypothesis:string):string|null {
   const h=hypothesis.toLowerCase();
-  const path= /\\b(?:path traversal|directory traversal|directory escape|filesystem path traversal)\\b/.test(h);
-  const html= /\\b(?:html reflection|html injection|cross.site scripting|\\bxss\\b|unescaped html|html escaping)\\b/.test(h);
+  const path= /\b(?:path traversal|directory traversal|directory escape|filesystem path traversal)\b/.test(h);
+  const html= /\b(?:html reflection|html injection|cross.site scripting|\bxss\b|unescaped html|html escaping)\b/.test(h);
   if(path && !html && kind==='html_reflection')
     return 'Wrong probe: html_reflection measures HTML output. Correct probe for this path-traversal hypothesis: path_construction. Set answer="path_construction" and inspect whether the method constructs a filesystem path before planning. If it does not, this hypothesis is unsupported by the available probe; do not test an unrelated method.';
   if(html && !path && kind==='path_construction')
