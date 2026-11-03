@@ -55,6 +55,21 @@ assert.ok((await rejected.constraints()).action.includes('read_file'));
 rejected.finalRejected('The required evidence is still missing.');
 assert.match(rejected.validate(missingContext)!,/already attempted/);
 assert.ok((await rejected.constraints()).action.includes('final'));
+// A completed caller page may be forced again after model compaction. When
+// bounded duplicate-read recovery recognizes the recorded completed page,
+// acknowledging that prior read must release the read_file-only constraint.
+// It must not manufacture a new source span or a reproduction observation.
+const callerRecovery=new InvestigationWorkflow();
+const callerPath='source-1/caller.py';
+callerRecovery.read(callerPath);
+callerRecovery.observe({...action,path:callerPath},JSON.stringify({start:0,end:457,nextOffset:null}));
+const priorProgress=callerRecovery.snapshot().sourceProgress;
+callerRecovery.requireSource(callerPath);
+assert.deepEqual((await callerRecovery.constraints()).action,['read_file']);
+callerRecovery.read(callerPath);
+assert.ok((await callerRecovery.constraints()).action.includes('final'));
+assert.equal(callerRecovery.snapshot().sourceProgress,priorProgress);
+assert.equal(callerRecovery.snapshot().observations.length,0);
 assert.equal(decodeAuditAction(JSON.stringify({...action,action:'final',result:{findings:[]}})).answer,'{"findings":[]}');
 assert.throws(()=>decodeAuditAction(JSON.stringify({...action,result:{findings:[]}})));
 const original=process.env.LOCAL_MODEL_PROFILE;
