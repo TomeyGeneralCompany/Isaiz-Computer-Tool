@@ -225,9 +225,15 @@ def prepare_java_classpath(repository: Path, target: Path, destination: Path) ->
                         matched = wanted.intersection(archive.namelist())
                         if not matched:
                             continue
-                    dest = destination / (str(len(copied)).zfill(3) + '.jar')
-                    shutil.copyfile(jar, dest)
-                    copied.append('/java-deps/' + dest.name)
+                    # In-repository JARs are already mounted at /repo.
+                    # Avoid a second bind mount for them; cached host JARs
+                    # must still be copied into the isolated dependency mount.
+                    if jar.resolve().is_relative_to(repository):
+                        copied.append('/repo/' + str(jar.relative_to(repository)))
+                    else:
+                        dest = destination / (str(len(copied)).zfill(3) + '.jar')
+                        shutil.copyfile(jar, dest)
+                        copied.append('/java-deps/' + dest.name)
                     total += size
                     wanted.difference_update(matched)
                     if not wanted:
