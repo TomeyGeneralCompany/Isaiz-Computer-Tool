@@ -51,7 +51,7 @@ function python(n:number):Fixture {
    '    user_text = parse_qs(urlsplit(url).query).get("message", [""])[0]',
    '    return render(user_text)')
  };
- for(let i=0;i<n-4;i++)files['src/modules/'+title(i).toLowerCase()+'.py']=join(
+ for(let i=0;i<n-6;i++)files['src/modules/'+title(i).toLowerCase()+'.py']=join(
   'from html import escape',
   'def render(value):','    return "<p>" + escape(value, quote=True) + "</p>"',
   'def inspect(value):','    return render(str(value))');
