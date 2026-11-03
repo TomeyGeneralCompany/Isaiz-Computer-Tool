@@ -160,7 +160,7 @@ argv=[(package+'.' if package else '')+parts[0],str(len(ctor)),*ctor,str(len(ste
 for step in steps:
     args=[token(x) for x in step.get('args',[])]
     argv.extend([step['method'],str(len(args)),*args])
-result=subprocess.run(['/jdk/bin/java',*jvm,'-cp',str(classes),'TomeyJavaSequence',*argv],
+result=subprocess.run(['/jdk/bin/java',*jvm,'-cp',os.pathsep.join([str(classes),*spec.get('javaClasspath',[])]),'TomeyJavaSequence',*argv],
                       check=True,stdout=subprocess.PIPE,timeout=8)
 lines=result.stdout.decode().splitlines()
 if len(lines)!=len(steps):raise ValueError('TOMEY_INVALID_JAVA_PROBE: incorrect output count')
