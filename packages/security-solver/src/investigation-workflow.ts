@@ -143,7 +143,7 @@ export class InvestigationWorkflow {
     if(this.requiredSource)return null;
     const next=prioritized.find(path=>
       path.startsWith('source-') &&
-      /\\.(?:sol|java|py|js|mjs|cjs|ts|tsx|jsx)$/.test(path) &&
+      /\.(?:sol|java|py|js|mjs|cjs|ts|tsx|jsx)$/.test(path) &&
       !this.readPaths.has(path));
     if(!next)return null;
     this.requireSource(next);
