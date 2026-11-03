@@ -57,7 +57,9 @@ function grade(log:string,result:any,elapsed:number,review:any,answer:Answer){
   probeExecuted:count('[PROBE_RESULT]')>0,
   verifiedFinding:result.success===true && review?.verdict==='approve' &&
    Array.isArray(result.findings) && result.findings.some((f:any)=>
-     (String(f.reportBody||'')+' '+String(f.title||'')).includes(answer.selector.split('.').at(-1)!))
+     f.reproductionCaseId && f.reproductionCaseId===review.caseId &&
+     (String(f.reportBody||'')+' '+String(f.title||'')).includes(answer.selector.split('.').at(-1)!) &&
+     (String(f.reportBody||'')+' '+String(f.title||'')).includes(answer.file))
  };
  const stages:Record<string,string>={sourceAcquired:'acquisition',sourceMapBuilt:'source_mapping',
   sourceRead:'navigation',relevantCandidateInspected:'candidate_selection',
@@ -86,6 +88,8 @@ async function main(){
  const root=(args.find(x=>x.startsWith('--output='))||'').split('=').slice(1).join('=')||
     await mkdtemp(join(tmpdir(),'lotus-gauntlet-'));
  await mkdir(root,{recursive:true,mode:0o700});
+ try {await readFile(join(root,'manifest.json'));throw Error('Gauntlet output directory already contains a challenge');}
+ catch(e:any){if(e?.code!=='ENOENT')throw e;}
  const {fixture,answer}=await prepare(root,level,language,selectedSeed);
  if(preview){console.log('Gauntlet prepared (NO model or tests run): '+root);return;}
  const app=join(root,'work');await mkdir(app);
@@ -118,7 +122,7 @@ async function main(){
   process.env.SECURITY_AUTO_SUBMIT='false';
   const {runLocalProgramHunt,independentReview}=await import('../packages/security-solver/src/local-program-flow');
   const program:any={id:'owned-gauntlet-'+level+'-'+language,provider:'immunefi',name:'Controlled source application benchmark',
-   scopeSummary:JSON.stringify({policy:'Owned synthetic application. Inspect authorization and ledger behavior. Local reproduction and diagnostics only. No submissions.',
+   scopeSummary:JSON.stringify({policy:'Owned synthetic application. Inspect source, data flow, authorization, input handling and application behavior. Local reproduction and diagnostics only. No submissions.',
     scopes:[{assetType:'SOURCE_CODE',eligibleForBounty:true,assetIdentifier:'https://github.com/fixture/gauntlet-settlement'}]})};
   result=await runLocalProgramHunt(program);
   if(result.findings?.length){
