@@ -12,10 +12,12 @@ import shutil
 import subprocess
 from pathlib import Path, PurePosixPath
 import tarfile
+import zipfile
+import stat
 import tempfile
 import time
 import urllib.request
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, quote
 
 class DependencyError(ValueError):
     pass
@@ -262,3 +264,118 @@ def prepare_pinned_foundry_submodules(repository: Path, missing_imports: list[st
             shutil.move(str(staging), str(target))
             installed = True
     return installed
+
+
+def python_registry_read(url: str, host: str, limit: int) -> bytes:
+    """Bounded PyPI read with same-origin redirects only."""
+    def allowed(destination):
+        parsed = urlsplit(destination)
+        return (parsed.scheme == 'https' and parsed.hostname == host and
+                parsed.port in (None, 443) and not parsed.username and not parsed.password
+                and not parsed.fragment)
+    if not allowed(url):
+        raise DependencyError('Python package URL outside trusted registry')
+    class SameOriginRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, request, fp, code, msg, headers, destination):
+            if not allowed(destination):
+                raise DependencyError('Python dependency redirect leaves trusted registry')
+            return super().redirect_request(request, fp, code, msg, headers, destination)
+    opener = urllib.request.build_opener(SameOriginRedirect())
+    with opener.open(url, timeout=12) as response:
+        data = response.read(limit + 1)
+    if len(data) > limit:
+        raise DependencyError('Python registry response exceeds size limit')
+    return data
+
+
+def prepare_locked_python_wheels(repository: Path) -> bool:
+    """Install only hash-pinned pure-Python wheels; never execute pip/setup scripts.
+
+    Accept standard 'name==version --hash=sha256:...' entries from requirements.lock
+    or requirements.txt. Transitive packages must themselves have locked entries.
+    """
+    repository = repository.resolve(strict=True)
+    lock = next((repository / name for name in ('requirements.lock', 'requirements.txt')
+                 if (repository / name).is_file()), None)
+    if lock is None:
+        return False
+    if lock.is_symlink() or lock.stat().st_size > 128000:
+        raise DependencyError('Python requirements file is not an eligible lock')
+    raw = lock.read_bytes()
+    specs = []
+    for line in raw.decode('utf8').splitlines():
+        line = line.strip()
+        if not line or line.startswith('#'):
+            continue
+        match = re.fullmatch(
+            r'([A-Za-z0-9][A-Za-z0-9_.-]{0,79})==([A-Za-z0-9][A-Za-z0-9_.!+-]{0,79})\s+--hash=sha256:([a-fA-F0-9]{64})',
+            line)
+        if not match:
+            raise DependencyError('Python dependencies require exact versions and SHA-256 hashes')
+        specs.append(match.groups())
+    if not specs or len(specs) > 24:
+        raise DependencyError('Python wheel lock must list 1-24 pinned packages')
+    destination = inside(repository, '.tomey-python-deps')
+    marker = hashlib.sha256(raw).hexdigest()
+    if destination.is_dir() and not destination.is_symlink() and (
+            destination / '.tomey-lock.sha256').is_file() and (
+            destination / '.tomey-lock.sha256').read_text() == marker:
+        return True
+    if destination.is_symlink() or (destination.exists() and not destination.is_dir()):
+        raise DependencyError('Unsafe Python dependency directory')
+    with tempfile.TemporaryDirectory(prefix='.tomey-python-', dir=repository) as temporary:
+        staging = Path(temporary) / 'site'
+        staging.mkdir()
+        unpacked_bytes = 0
+        installed_paths = set()
+        for name, version, digest in specs:
+            metadata_url = ('https://pypi.org/pypi/' + quote(name, safe='') + '/' +
+                            quote(version, safe='') + '/json')
+            try:
+                release = json.loads(python_registry_read(metadata_url, 'pypi.org', 512000))
+            except (ValueError, OSError) as error:
+                raise DependencyError('Python release metadata unavailable: '+name) from error
+            wheels = [entry for entry in release.get('urls', []) if
+                      isinstance(entry, dict) and
+                      re.search(r'-(?:py3|py2\.py3)-none-any\.whl$', str(entry.get('filename',''))) and
+                      entry.get('digests', {}).get('sha256') == digest.lower()]
+            if len(wheels) != 1:
+                raise DependencyError('No hash-matching pure Python wheel for '+name+'=='+version)
+            url = wheels[0].get('url','')
+            try:
+                archive = python_registry_read(url, 'files.pythonhosted.org', 20*1024*1024)
+            except (OSError, ValueError) as error:
+                raise DependencyError('Python wheel download failed: '+name) from error
+            if hashlib.sha256(archive).hexdigest() != digest.lower():
+                raise DependencyError('Python wheel digest mismatch: '+name)
+            try:
+                with zipfile.ZipFile(io.BytesIO(archive)) as wheel:
+                    members = wheel.infolist()
+                    if len(members)>3000:
+                        raise DependencyError('Python wheel contains too many files')
+                    for item in members:
+                        pathname = PurePosixPath(item.filename)
+                        if (pathname.is_absolute() or not pathname.parts or
+                            '..' in pathname.parts or '\\' in item.filename or
+                            any(part.endswith('.data') for part in pathname.parts) or
+                            stat.S_ISLNK(item.external_attr >> 16)):
+                            raise DependencyError('Unsupported wheel path/link')
+                        if item.is_dir():
+                            continue
+                        if item.filename in installed_paths:
+                            raise DependencyError('Conflicting Python wheel files')
+                        installed_paths.add(item.filename)
+                        unpacked_bytes += item.file_size
+                        if unpacked_bytes > 128*1024*1024:
+                            raise DependencyError('Python dependency extraction exceeds limit')
+                        target = inside(staging, item.filename)
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        with target.open('wb') as output:
+                            output.write(wheel.read(item))
+            except (zipfile.BadZipFile, OSError) as error:
+                raise DependencyError('Invalid Python wheel archive') from error
+        (staging / '.tomey-lock.sha256').write_text(marker)
+        if destination.exists():
+            shutil.rmtree(destination)
+        os.replace(staging, destination)
+    return True

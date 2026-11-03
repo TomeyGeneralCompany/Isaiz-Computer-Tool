@@ -6,6 +6,7 @@ import hashlib
 import io
 import json
 import tarfile
+import zipfile
 from unittest.mock import patch, Mock
 from pathlib import Path
 import tempfile
@@ -90,6 +91,16 @@ class ValidationTests(unittest.TestCase):
                     prepare_pinned_foundry_submodules(repo,['lib/owned/Lib.sol'])
                 self.assertEqual(run.call_count,1)
 
+    def test_python_requirements_without_hash_is_not_auto_installed(self):
+        from source_dependencies import prepare_locked_python_wheels, DependencyError
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            (repo / 'requirements.txt').write_text('untrusted==1.0\n')
+            with patch('source_dependencies.python_registry_read') as download:
+                with self.assertRaises(DependencyError):
+                    prepare_locked_python_wheels(repo)
+                download.assert_not_called()
+
     def test_foundry_compiler_settings(self):
         self.assertEqual(driver.foundry_settings({}), {})
         self.assertEqual(driver.foundry_settings({'optimizer': True, 'optimizer_runs': 500, 'via_ir': True}),
@@ -131,6 +142,32 @@ class LanguageTests(unittest.TestCase):
 
     def test_python_uppercase_markup(self):
         self.probe("render.py", "def render(x):\n    return x.upper()\n")
+
+    def test_python_hash_pinned_pure_wheel_is_imported_in_sandbox(self):
+        content = b'def wrap(x):\n    return "<p>" + x + "</p>"\n'
+        wheel_bytes = io.BytesIO()
+        with zipfile.ZipFile(wheel_bytes, 'w') as wheel:
+            wheel.writestr('owned_test_pkg/__init__.py', content)
+        archive = wheel_bytes.getvalue()
+        digest = hashlib.sha256(archive).hexdigest()
+        metadata = json.dumps({'urls':[{
+            'filename':'owned_test_pkg-1.0-py3-none-any.whl',
+            'digests':{'sha256':digest},
+            'url':'https://files.pythonhosted.org/packages/owned_test_pkg-1.0-py3-none-any.whl'
+        }]}).encode()
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            (repo/'render.py').write_text(
+                'import owned_test_pkg\n'
+                'def render(x):\n    return owned_test_pkg.wrap(x)\n')
+            (repo/'requirements.lock').write_text('owned_test_pkg==1.0 --hash=sha256:'+digest+'\n')
+            with patch('source_dependencies.python_registry_read',
+                       side_effect=[metadata, archive]) as download:
+                result=driver.run_probe(repo, {'file':'render.py','function':'render',
+                    'kind':'html_reflection','nonce':'a'*32})
+            self.assertEqual(result['status'],'behavior_observed',result)
+            self.assertTrue(result['behavior_observed'])
+            self.assertEqual(download.call_count,2)
 
     def test_javascript_uppercase_markup(self):
         self.probe("render.cjs", "exports.render = x => x.toUpperCase();")
