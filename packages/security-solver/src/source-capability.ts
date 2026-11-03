@@ -28,9 +28,9 @@ export function sourcePriority(path:string):number {
     '.m2','.gradle','vendor','vendors','third_party','third-party','external',
     'bower_components','packages-lock','__pycache__']))score-=90;
   if(has(['test','tests','testing','fixtures','fixture','mocks','mock','__tests__',
-    'scripts','script','deploy','deployment','.github','examples','example']))score-=60;
+    'scripts','script','deploy','deployment','.github','examples','example']))score-=110;
   if(has(['dist','build','generated','gen','out','target','coverage',
-    '.next','compiled','minified']))score-=45;
+    '.next','compiled','minified']))score-=110;
 
   // Solidity's contracts/libs and nested imports, Java library packages,
   // and Python/JS internal compatibility shims remain reachable but begin
