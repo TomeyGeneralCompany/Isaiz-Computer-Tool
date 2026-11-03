@@ -4,7 +4,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {compilerCompatible,inspectSourceCapability} from '../packages/security-solver/src/source-capability';
-import {referencesProbedFunction,callerLineReferences,transactionEntryLine} from '../packages/security-solver/src/source-function-reference';
+import {referencesProbedFunction,callerLineReferences,qualifiedCallerLineReferences,transactionEntryLine} from '../packages/security-solver/src/source-function-reference';
 import {compactAuditContext,auditCheckpoint} from '../packages/security-solver/src/audit-context';
 import {programCandidateBlocker,LOCAL_REPRODUCTION_CAPABILITY_VERSION} from '../packages/core/src/program-eligibility';
 import {loadConfig} from '../packages/core/src/config';
@@ -14,6 +14,26 @@ assert.equal(compilerCompatible('0.8.x'),null);
 assert.equal(compilerCompatible('0.7.0 - 0.9.0'),null);
 for(const line of ['// target.set(x);','function set(uint x) external {}','const text = "target.set(x)";','/* target.set(x); */'])assert.equal(referencesProbedFunction(line,'Store.set'),false,line);
 assert.equal(referencesProbedFunction('target.set(x);','Store.set'),true);
+const exactCallerFixture='public class HttpHandler {\\n' +
+  '  public String responseBody(String input) { return Renderer.render(input); }\\n' +
+  '}';
+const unrelatedMethod='public class Adapter {\\n' +
+  '  public static String render(String value) { return value; }\\n' +
+  '  public static String inspect(String value) { return render(value); }\\n' +
+  '}';
+assert.equal(qualifiedCallerLineReferences(exactCallerFixture,2,'Renderer.render'),true,
+  'Java qualified renderer invocation is an exact caller');
+assert.equal(qualifiedCallerLineReferences(unrelatedMethod,2,'Renderer.render'),false,
+  'same-named Java method declaration must not impersonate a caller');
+assert.equal(qualifiedCallerLineReferences(unrelatedMethod,3,'Renderer.render'),false,
+  'unrelated unqualified method invocation must not impersonate an exact caller');
+assert.equal(qualifiedCallerLineReferences('render(value)',1,'render'),false,
+  'bare-language function names remain subject to normal caller validation');
+assert.equal(qualifiedCallerLineReferences('renderer.render(input)',1,'renderer.render'),true,
+  'exact qualified invocation is language-independent');
+assert.equal(qualifiedCallerLineReferences('// Renderer.render(input)',1,'Renderer.render'),false,
+  'comments never count as caller evidence');
+
 assert.equal(callerLineReferences('/*\ntarget.set(x);\n*/',2,'Store.set'),false);
 assert.equal(transactionEntryLine('function set(uint x) external {}',1,'Store.set'),true);
 assert.equal(transactionEntryLine('// function set(uint x) external {}',1,'Store.set'),false);
