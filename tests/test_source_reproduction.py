@@ -116,6 +116,9 @@ class LanguageTests(unittest.TestCase):
             subprocess.run(['jar', 'cf', str(lib / 'helper.jar'), '-C', str(classes), '.'], check=True)
             (repo / 'Render.java').write_text('import external.Helper; public class Render { '
                 'public static String render(String x) { return Helper.wrap(x); } }')
+            # Prove the fixture JAR is usable before entering bubblewrap.
+            subprocess.run(['javac', '-classpath', str(lib / 'helper.jar'), '-d', str(classes),
+                            str(repo / 'Render.java')], check=True)
             result = driver.run_probe(repo, {'file':'Render.java',
                 'function':'Render.render','kind':'html_reflection','nonce':'a'*32})
             self.assertEqual(result['status'], 'behavior_observed', result)
