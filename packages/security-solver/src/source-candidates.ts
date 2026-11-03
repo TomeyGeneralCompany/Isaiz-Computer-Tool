@@ -59,7 +59,7 @@ export async function prioritizeSourceCandidates(root:string,eligible:string[],f
   if(!focus) {
     const names=new Map<string,string[]>();
     for(const path of rankedPool) {
-      const baseName=path.split('/').at(-1)!.replace(/\\.(?:sol|java|py|js|mjs|cjs)$/,'');
+      const baseName=path.split('/').at(-1)!.replace(/\.(?:sol|java|py|js|mjs|cjs)$/,'');
       if(baseName==='__init__'||baseName==='index'||baseName.length<4)continue;
       const match=names.get(baseName)||[];
       match.push(path);names.set(baseName,match);
