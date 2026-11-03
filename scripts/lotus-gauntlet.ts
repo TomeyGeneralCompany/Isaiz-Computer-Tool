@@ -151,7 +151,7 @@ async function main(){
    const finding=result.findings[0];
    if(finding.reproductionCaseId){
     const judged=await independentReview({...finding,id:'owned-gauntlet-review'} as any,
-      program,finding.reproductionCaseId,new AbortController().signal);
+      program,finding.reproductionCaseId,new AbortController().signal,sourceAcquirer);
     review={verdict:judged.review.verdict,caseId:judged.caseId,sourceSha256:judged.sourceSha256};
    }
   }

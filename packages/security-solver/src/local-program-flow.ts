@@ -419,7 +419,7 @@ Do not claim production testing, JavaScript execution, file access or other effe
     ownJob?.dispose();await clearSecuritySolverStatus().catch(()=>{});if(cleanupRoot)await rm(cleanupRoot,{recursive:true,force:true});}
 }
 
-export async function independentReview(finding:SecurityFinding,program:SecurityProgram,id:string,signal:AbortSignal) {
+export async function independentReview(finding:SecurityFinding,program:SecurityProgram,id:string,signal:AbortSignal,fixtureAcquirer?:OwnedFixtureAcquirer) {
   signal.throwIfAborted();
   const record=await readSourceCase(id,program);
   if(finding.targetAsset!==record.repositoryUrl+"/"+record.spec.file)throw new Error("Finding target does not match its reproduction");
@@ -429,7 +429,11 @@ export async function independentReview(finding:SecurityFinding,program:Security
   if(!caller || caller[1].includes(".."))throw new Error("Report has no valid recorded caller");
   const root=await workspace("local-review-");
   try {
-    const repository=join(root,"source");await cloneAuthorizedSource(record.repositoryUrl,repository,{commit:record.commit,signal});
+    const repository=join(root,"source");
+    // Use the same explicitly injected owned-fixture acquisition in both the
+    // investigator and independent reviewer. Live programs still use the
+    // authorized remote cloner; all languages share this review path.
+    await (fixtureAcquirer || cloneAuthorizedSource)(record.repositoryUrl,repository,{commit:record.commit,signal});
     const replay=await replaySourceCase(record,repository,signal);
     const reachability=/^Reachability: (caller|direct_transaction)$/m.exec(finding.reportBody!)?.[1] || "caller";
     const callerText=await readFile(join(repository,caller[1]),"utf8");
