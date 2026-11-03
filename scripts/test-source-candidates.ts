@@ -6,6 +6,7 @@ import {prioritizeSourceCandidates} from '../packages/security-solver/src/source
 import {normalizeForcedOutlineCursor} from '../packages/security-solver/src/outline-cursor';
 import {AuditNavigation} from '../packages/security-solver/src/audit-navigation';
 import {collectStaticLeads} from '../packages/security-solver/src/local-static-leads';
+import {generate,LANGUAGES} from './lotus-gauntlet-fixtures';
 const root=await mkdtemp(join(tmpdir(),'candidate-selection-'));
 try {
   const paths=Array.from({length:200},(_,i)=>`file-${i}.py`);
@@ -94,6 +95,23 @@ try {
     const dependenciesOnly=await prioritizeSourceCandidates(root,paths.slice(0,10),paths.slice(0,8),[]);
     assert.equal(dependenciesOnly.paths.length,8,
       layout.language+': supporting-only repositories remain inspectable');
+  }
+  // Actual Level 4 synthetic layouts have 80 harmless decoys. The shared
+  // navigator must expose the connected application chain, not just decoys
+  // which happen to support a convenient probe signature.
+  for(const language of LANGUAGES){
+    const fixture=generate(language,84);
+    const entries=Object.entries(fixture.files).filter(([path])=>/\\.(sol|java|py|js|mjs|cjs)$/.test(path));
+    const prefixed=entries.map(([path])=>'source-1/'+path);
+    for(const [path,content] of entries){
+      await mkdir(join(root,'source-1',path,'..'),{recursive:true});
+      await writeFile(join(root,'source-1',path),content);
+    }
+    const challengeSelection=await prioritizeSourceCandidates(root,prefixed,prefixed.slice(0,48),[]);
+    assert(challengeSelection.paths.includes('source-1/'+fixture.answer.file),
+      language+': app entry point must appear in first eight candidates');
+    assert(challengeSelection.paths.includes('source-1/'+fixture.answer.caller),
+      language+': real caller must appear in first eight candidates');
   }
   // read_file uses character offsets, but outline_solidity uses an item cursor.
   // Forced outlines always start at the first declaration; discretionary
