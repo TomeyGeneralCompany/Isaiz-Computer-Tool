@@ -27,10 +27,12 @@ export function sourcePriority(path:string):number {
   if(has(['node_modules','site-packages','dist-packages','.venv','venv','virtualenv',
     '.m2','.gradle','vendor','vendors','third_party','third-party','external',
     'bower_components','packages-lock','__pycache__']))score-=90;
+  // Test and generated trees remain eligible but must follow even vendored
+  // source when selecting the first eight investigation candidates.
   if(has(['test','tests','testing','fixtures','fixture','mocks','mock','__tests__',
-    'scripts','script','deploy','deployment','.github','examples','example']))score-=60;
+    'scripts','script','deploy','deployment','.github','examples','example']))score-=100;
   if(has(['dist','build','generated','gen','out','target','coverage',
-    '.next','compiled','minified']))score-=45;
+    '.next','compiled','minified']))score-=110;
 
   // Solidity's contracts/libs and nested imports, Java library packages,
   // and Python/JS internal compatibility shims remain reachable but begin
