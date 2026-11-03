@@ -116,7 +116,10 @@ function grade(log:string,result:any,elapsed:number,review:any){
   hypothesisExamined:targetProbe,
   probePlanned:count('[PROBE_PLANNED]')>0,
   probeExecuted:count('[PROBE_RESULT]')>0,
-  verifiedFinding:result.success===true && Array.isArray(result.findings) && result.findings.length>0 && !!review?.verdict
+  verifiedFinding:result.success===true && review?.verdict==='approve' &&
+   Array.isArray(result.findings) && result.findings.some((f:any)=>
+     (String(f.reportBody||'')+' '+String(f.title||'')).includes(SECRET.function) &&
+     (String(f.reportBody||'')+' '+String(f.title||'')).includes('SettlementAuthority'))
  };
  const stages:Record<string,string>={sourceAcquired:'acquisition',sourceMapBuilt:'source_mapping',
   sourceRead:'navigation',relevantCandidateInspected:'candidate_selection',
