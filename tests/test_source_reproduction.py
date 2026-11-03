@@ -53,6 +53,8 @@ class ValidationTests(unittest.TestCase):
                 invoked.append(args)
                 if 'ls-tree' in args:
                     return Mock(stdout='160000 commit ' + revision + '\\tlib/open-lib\\n')
+                if 'init' in args:
+                    Path(args[-1]).mkdir(parents=True, exist_ok=True)
                 if 'checkout' in args:
                     checkout = Path(args[2])
                     (checkout / 'Sample.sol').write_text('library Sample {}')
