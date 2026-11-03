@@ -19,7 +19,7 @@ import { runLocalAudit } from "./local-ollama-runner";
 import { createProbeSession, readSourceCase, replaySourceCase, type SourceCase, type ProbeRepository } from "./source-reproduction";
 import { writeSecuritySolverStatus, clearSecuritySolverStatus, writeAdversarialReviewStatus, clearAdversarialReviewStatus } from "./status";
 import type { SecuritySolveResult, ParsedFinding } from "./claude-runner";
-import { selectSourceBatch, incompleteProbeCoverage } from "./inspection-coverage";
+import { selectSourceBatch, incompleteProbeCoverage, recoverEmptyUnprobedFinal } from "./inspection-coverage";
 import { callerLineReferences, transactionEntryLine } from "./source-function-reference";
 const log=createLogger("local-program-flow");
 const sha=z.string().regex(/^[a-f0-9]{64}$/);
@@ -229,7 +229,14 @@ Do not claim production testing, JavaScript execution, file access or other effe
               proposed.outcome='inspected';
               delete proposed.reason;
             }
-            const value=huntSchema.parse(proposed);
+            // Qwen can emit findings=[] with outcome="inspected" after a series
+            // of rejected empty finals. With no completed probe this is a scoped
+            // incomplete pass, not an inspected result. Reuse the existing
+            // selected-source coverage gate instead of rejecting the same final
+            // until all 80 turns are exhausted.
+            const recovered=recoverEmptyUnprobedFinal(proposed,session.completedProbes,session.blockedReason);
+            if(recovered!==proposed)await appendFile(logFile,'[EMPTY_UNPROBED_FINAL_RECOVERED] Applying selected-source coverage gate\\n');
+            const value=huntSchema.parse(recovered);
             if(value.outcome === "no_testable_candidate") {
               if(session.completedProbes) {
                 const known=[...session.cases].slice(0,5).map(([caseId,c])=>({caseId,file:c.spec.file,
