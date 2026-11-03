@@ -101,7 +101,7 @@ try {
   // which happen to support a convenient probe signature.
   for(const language of LANGUAGES){
     const fixture=generate(language,84);
-    const entries=Object.entries(fixture.files).filter(([path])=>/\\.(sol|java|py|js|mjs|cjs)$/.test(path));
+    const entries=Object.entries(fixture.files).filter(([path])=>/\.(sol|java|py|js|mjs|cjs)$/.test(path));
     const prefixed=entries.map(([path])=>'source-1/'+path);
     for(const [path,content] of entries){
       await mkdir(join(root,'source-1',path,'..'),{recursive:true});
