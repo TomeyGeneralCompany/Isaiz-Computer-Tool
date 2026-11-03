@@ -1,233 +1,224 @@
-# LOTUS — Localized Offensive Testing and Understanding System
+# LOTUS
+### Localized Offensive Testing and Understanding System
 
-**Operational status (updated 2026-11-02):** The local model and complete live bounty workflow are **not yet verified end-to-end**. See [operator setup, verified cash accounting, safety controls and acceptance gates](docs/OPERATOR_RUNBOOK.md) and [readiness evidence](AUTONOMOUS_READINESS.md). The CI fixture only tests an owned synthetic target with an intercepted submission backend; it is not live-provider proof.
+**Proprietary Autonomous Security Research Software**  
+**Developed on behalf of Tomey General Company, LLC**
 
-LOTUS (formerly AutoHack) is a local security research system for authorized bug bounty programs. It discovers programs, runs Claude sessions to hunt for vulnerabilities inside each program's declared scope, checks its own findings with a second adversarial model, drafts platform-ready reports, and submits behind a human approval gate.
+LOTUS is an autonomous security research platform developed for the discovery, assessment, and investigation of authorized vulnerability disclosure and bug bounty programs. It integrates locally hosted artificial intelligence, source-code inspection, static analysis, dependency resolution, isolated execution, evidence collection, independent review, and reporting into one investigative system.
 
-> **Naming and compatibility:** LOTUS is the current project; AutoHack is its predecessor. Existing commands, Linux directories, systemd unit names, environment variables, and historical log identifiers retain their `autohack` names during the compatibility transition. Do not rename an installed service or workspace solely to update branding. The canonical GitHub repository remains `TomeyGeneralCompany/Isaiz-Computer-Tool` until an explicit repository rename is coordinated with deployment.
+LOTUS uses Qwen3 through Ollama for local inference. A structured investigation controller manages source acquisition, reasoning, tool execution, recovery, and persistent evidence. Language-specific execution adapters provide reproduction capabilities across Python, JavaScript, Java, and Solidity.
 
-> **Current implementation:** The local source-investigation path uses Ollama/Qwen3, with source acquisition, chunked inspection, isolated reproduction, and independent review. Older README sections describing Claude-specific workflows document the original AutoHack architecture, not the entire current LOTUS system. A passing synthetic real-model acceptance test is not evidence of successful live bounty completion.
+The platform is designed to operate on conventional Linux hardware without dedicated graphics hardware or paid inference services.
 
-![autohack dashboard overview](docs/screenshots/dashboard-overview.png)
+**Copyright © 2026 Tomey General Company, LLC. All rights reserved.**
 
-![autohack dashboard findings pipeline](docs/screenshots/findings.png)
+The LOTUS software and associated materials are proprietary to Tomey General Company, LLC. Public visibility of repository contents does not grant a license to copy, modify, redistribute, or commercially exploit the software.
 
-<sub>The real-time tRPC dashboard. Top: the per-stage model control (Scout / Hunt / Review / Submit, each assignable to Opus, Sonnet, or Haiku) and the live pipeline. Bottom: findings moving through their lifecycle with per-finding confidence and status. <b>Shown with sample data.</b></sub>
+**Repository:** [TomeyGeneralCompany/Isaiz-Computer-Tool](https://github.com/TomeyGeneralCompany/Isaiz-Computer-Tool)
 
-## How it works
+> **Compatibility:** LOTUS was formerly named AutoHack. Existing scripts, Linux paths, environment variables, systemd service names, and historical log identifiers retain their `autohack` names. The canonical repository remains `TomeyGeneralCompany/Isaiz-Computer-Tool`.
 
-- Discovery polls HackerOne, Immunefi, and Huntr directly, plus an aggregator feed that adds Bugcrowd, Intigriti, YesWeHack, and Federacy. It deduplicates targets and scores each program for opportunity.
-- Each hunt spawns Claude in a pseudo-terminal for a 60-minute session scoped to one program's rules. Every tool call streams live to the dashboard over xterm.js.
-- A second Claude instance reviews each finding as an adversary, scoring it 0-15 across five dimensions (exploitability, impact, evidence, novelty, scope fit). Anything under 8/15 is rejected before it becomes a report.
-- Approved findings get a platform-formatted report with reproduction steps, impact, and remediation, then a separate Sonnet pass trims verbose ones. Submission runs through a manual approval gate; auto-submit is off by default and only applies to findings the reviewer marks "submit".
-- Every hunt writes findings, near-misses, and dead ends to a store, so later hunts on the same program start with that history and skip known dead ends.
-- Each stage (Scout, Hunt, Review, Submit) runs on Opus, Sonnet, or Haiku, set live from the dashboard. Ephemeral prompt caching cuts repeated input tokens about 90%. Two backends: Claude Max via CLI, or the API via SDK (`CLAUDE_BACKEND=cli|api`).
+## Operation
 
-Built on direct Anthropic SDK calls, no framework wrappers. TypeScript, Next.js 15, tRPC, SQLite with Drizzle, xterm.js, Pino, node-cron.
+LOTUS follows a unified investigative process:
 
-## Running locally
+**Program discovery → Assessment → Source acquisition → Static analysis → Model investigation → Isolated reproduction → Evidence evaluation → Independent review → Reporting**
 
-```bash
-npm install
-cp .env.example .env    # add your Claude backend and platform tokens
-npm run dev             # orchestrator + dashboard on :3456
-npm run dashboard       # dashboard only, on :3456
-```
+### Discovery and assessment
 
-## Scope
+LOTUS maintains a SQLite database of programs collected through supported discovery feeds, including HackerOne, Immunefi, and aggregator-supported programs from Bugcrowd, Intigriti, and YesWeHack.
 
-autohack only hunts targets with active, in-scope bug bounty programs, and never touches systems without authorization. The prompt scaffolding and per-program cheat sheet bound each session to that program's declared scope. Nothing is submitted without passing the approval gate unless auto-submit is explicitly turned on.
+Its selection system evaluates published scope, source-code availability, recorded assessments, reward information, investigation history, and program difficulty. Program assessments persist in `security_programs.scope_summary.assessment`.
 
+### Source acquisition and analysis
 
-### Local source inspection settings
+LOTUS retrieves repositories identified by eligible program scopes. It indexes source declarations, functions, constructors, callers, and state relationships, then prioritizes candidates using source context and static-analysis leads.
 
-Local source inspection defaults to 180 minutes and 2,048 generated tokens per response.
-`LOCAL_HUNT_NUM_PREDICT` accepts 32–4,096; truncated JSON may retry up to 4,096
-when context permits. The context remains 8,192 tokens and generation stays sequential.
-These are local Ollama settings; they do not select a paid service. Existing environment
-or persisted timeout overrides remain in effect. The dashboard timeout now edits the
-source-inspection budget when a local model is active.
+Semgrep and Slither integrations provide additional investigative leads. Source inspection uses bounded pagination and function-level context so large codebases can be investigated with a local model.
 
-Run `bash scripts/install-reproduction-runtime.sh` with Node 22 selected to install/check
-Python, Node, the Solidity compiler/local EVM, bubblewrap and a Java JDK. Java probes
-support public static `Class.method(String)` returning `String`, with JDK or repository
-source dependencies. They compile inside the offline sandbox with annotation processing
-disabled; Maven/Gradle builds and third-party Java dependencies are not supported.
-JavaScript supports exported functions (including async). Solidity uses the installed
-0.8.30 compiler and supports the existing string probes and declarative transaction tests.
-Source readers and searches work independently of whether a supported test can run.
+### Autonomous investigation controller
 
+The local production path uses **Ollama/Qwen3:4b** and a **LangGraph.js** investigation controller. The controller coordinates source reads, hypotheses, probe specifications, execution, evidence records, and recovery.
 
-### Diagnose local controller behavior
+Model requests run sequentially. The controller enforces action constraints, preserves investigation state outside the model conversation, and recovers from repeated navigation, incompatible probe plans, empty finals, and invalid model output.
 
-`node --import tsx scripts/test-local-controller.ts` uses the configured local Ollama
-model at the hunt's 8,192-token context and configured output allowance. It asks the
-model to read an owned Python fixture, select its isolated probe, and finish after
-observing the result. It saves timing, turn counts and a transcript under
-`data/controller-diagnostics/`. It does not query bounty programs or submit reports.
-Run it with the service stopped so the measurement is not competing with a hunt.
-The default deadline is ten minutes, configurable with `LOCAL_AGENT_TEST_TIMEOUT_MS`.
-A fixture pass tests basic tool sequencing, not autonomous performance on large repositories.
+Investigation history records the source ranges inspected, hypotheses considered, probes attempted, observations returned, coverage achieved, and stopping reason.
 
-Program assessments already persist in the local SQLite database, inside
-`security_programs.scope_summary.assessment`. Automatic analysis skips saved scores;
-startup does not intentionally clear them. The dashboard's explicit Reassess operation
-can clear assessments. If analysis repeats after a restart, compare the configured
-DB_PATH and persisted assessment counts before changing storage or adding cloud backups.
+### Isolated reproduction and dependency resolution
 
-### Progress-aware local investigations
+LOTUS executes supported reproduction cases in isolated local environments using language-specific adapters.
 
-Local source investigations start with `LOCAL_HUNT_MAX_TURNS` (default 80) and
-`SECURITY_SOURCE_CODE_TIMEOUT_MINUTES` (default 180). With
-`LOCAL_HUNT_DYNAMIC_ALLOWANCE` enabled (default), approaching either limit can
-add 40 turns and 60 minutes together. An extension requires at least ten turns
-with newly delivered source ranges or distinct completed probes within the last
-20 turns, including progress within the last three turns. Repeated/overlapping
-reads, directory navigation, errors and model assertions do not earn credit.
-Credits are consumed by the extension. A run remains bounded at 640 turns and
-24 hours (or the original deadline if configured longer); individual model
-requests have a maximum 15-minute deadline. Set
-`LOCAL_HUNT_DYNAMIC_ALLOWANCE=false` to restore fixed allowances. Operator
-cancellation remains immediate, and the daily dispatch setting is unchanged.
+| Language | Execution and dependency capabilities |
+| --- | --- |
+| **Python** | Function execution, input/output observation, and SHA-256-locked pure-Python wheel dependencies |
+| **JavaScript** | Exported and asynchronous function probes, with dependency preparation from npm lockfiles |
+| **Java** | Text/byte probes, constructor initialization, stateful sequences, interface mocks and proxies, and available project JAR dependencies |
+| **Solidity** | Local EVM transaction sequences, contract constructors, state-changing calls, read assertions, npm dependencies, and pinned Foundry submodules |
 
-Each local audit writes `.log.summary.json` beside its existing log, including
-read ranges, completed distinct probes, final answer, stopping reason, elapsed
-turns and final allowance. `[ALLOWANCE_EXTENDED]` records why an extension was
-earned. `[MODEL_ACTION]` records the selected action, including empty finals;
-empty finals get two corrective retries and never become successful outcomes.
-The dashboard displays partial inspection separately from “no findings,” with
-the recorded coverage explanation. This includes matching recent older records
-when their persisted coverage timestamp identifies the same attempt.
+The shared controller handles investigation progress and evidence requirements; the language adapters implement each runtime's compilation, dependency preparation, and execution mechanics.
 
-Source hints prioritize application code over configuration, vendor fixtures,
-and deployment/test scripts without excluding those files. Solidity hints use
-the existing outline/function-context tools before paginating whole files.
-Context size, output budget, thread count, source evidence requirements and
-probe/report validation remain unchanged.
+### Evidence, review, and reports
 
-### Investigation records and independent model checks
+LOTUS records test inputs, execution results, source references, and reproduction evidence. The review process evaluates caller reachability, input provenance, execution behavior, impact, and program scope before findings advance through reporting.
 
-Recent Hunts now offers **View investigation record** and a JSON download for
-new runs. The record includes exact source ranges (whole-file delivery is
-labelled only when established), explicitly stated hypotheses, tests and errors,
-allowance extensions, final answer, source-preparation limitations and the
-stopping reason. New history entries link by run ID; ambiguous older records are
-not silently attached to another attempt. Hypotheses remain unverified model
-claims, are retained in bounded compaction notes when space permits, and never
-count as extension credit or reproduced evidence.
+Program records, findings, assessments, and investigation history are retained in SQLite and local diagnostic files. The application includes report generation and submission infrastructure. **Automatic bounty submission is disabled by default**; the one-bounty diagnostic runner does not submit reports.
 
-The read candidate now uses available message space (up to 2,000 characters)
-before the existing exact serialized-output fitter shortens it as needed. The
-8,192-token context, output reservation and four-thread configuration are
-unchanged. Repeated missing-file requests receive corrective navigation feedback
-and end as incomplete after three failures for the same path.
+## System requirements
 
-For a controller-guided check of the configured laptop model, run from the application folder
-with the application idle (to avoid competing inference):
+The reference development machine is a Zorin OS/Ubuntu-compatible laptop with an Intel Core i7-8650U (4 cores, 8 threads), 16 GB RAM, and no dedicated GPU.
+
+| Component | Runtime |
+| --- | --- |
+| Operating system | Ubuntu-compatible Linux, including Zorin OS |
+| Application | Node.js 22, npm, TypeScript |
+| Model | Ollama, Qwen3:4b |
+| Database | SQLite and Drizzle |
+| Dashboard | Next.js and tRPC |
+| Reproduction | Python 3, Java JDK, Node.js, Solidity local EVM, bubblewrap |
+| Service supervision | systemd user service |
+| Remote testing | GitHub Actions, CPU-only Ubuntu runner |
+
+The reference configuration is a development system rather than a minimum hardware requirement.
+
+## Installation
+
+Clone the repository:
 
 ```bash
-source scripts/node-runtime.sh
-LOCAL_AGENT_TEST_TIMEOUT_MS=1800000 node --import tsx scripts/test-local-reasoning.ts
+git clone https://github.com/TomeyGeneralCompany/Isaiz-Computer-Tool.git
+cd Isaiz-Computer-Tool
 ```
 
-This creates only owned local fixtures. Filenames and function names are
-randomized; the model chooses among functions discovered in the source and
-classifies the measured results. The controller enforces source reading followed
-by the task-specific markup test. It does not supply the hidden classification. The evaluator requires correct classifications of both a raw
-HTML case and an escaping case plus relevant completed probes. Expected answers
-remain outside the model prompt and corrective feedback. It writes evidence to
-`data/reasoning-diagnostics/`. A failed/blocked probe does not pass. `--mock`
-validates the harness with actual isolated Python execution but scripted model
-actions; it is **not** a model reasoning result. CI also checks that deliberately
-wrong classifications fail. Before accepting a final answer, the controller now
-requires a completed, relevant formatting-function probe for each module and checks that classifications
-match the recorded observations. Missing tests and contradictory conclusions receive
-corrective feedback while turns remain. Relevance is checked against the public paragraph-formatting requirement using
-the measured ordinary-input output. Utility observations remain recorded but do
-not clear pending work. The hidden function/classification answer key is still
-used only by the independent evaluator.
-`--mock --premature-final` exercises recovery from omitted tests and a conclusion
-that contradicts observations.
+Use Node.js 22 and configure a private `.env` for the installed model and enabled providers. Then run the project's installation and verification entry point:
 
-Normal assessment persistence is exercised by a fresh child process. Assessment
-writes merge current database metadata, and explicit Reassess removes only the
-assessment field from program metadata and logs that operation. The retained
-October 24–25 evidence does not establish the cause of the earlier assessment
-count drop; see `docs/diagnostics/2026-10-25-overnight.md` for the supported findings.
+```bash
+bash setup-and-run.sh --verify-only
+```
 
-The reasoning diagnostic uses plain classification lines (`filename.py | tested_function |
-markup_survives` or `markup_escaped`) to avoid nested JSON escaping. An optional controller progress
-note lists observed results and pending tests on every request, within the existing
-context budget. In this diagnostic only, identical completed probes on unchanged
-source reuse their recorded result and direct the model to pending work; failures
-remain retryable. CI checks that a duplicate request performs no extra sandbox
-execution and that the next request sees the updated pending list. Production
-investigations do not opt into this diagnostic state or result reuse.
+The installer prepares the locked Node dependencies, source-reproduction runtimes, SQLite schema, and host checks. It can import configuration from an existing local installation.
 
-Classification lines identify the tested function and one explicit conclusion;
-the saved reason is derived from that observation, rather than accepting a second,
-contradictory prose verdict. This diagnostic measures function selection, testing,
-and classification; it does not assess unrestricted explanatory prose.
+Start the foreground application:
 
-HTML reflection detection parses the nonce-bearing HTML element instead of
-requiring an unchanged output string. Upper/lowercase tag and attribute spelling
-and quote changes are recognized; escaped text, comments, raw-text contexts,
-unrelated markers, and constant control outputs do not establish reflection.
-This remains a local markup observation, not proof of script execution or impact.
+```bash
+bash run-complete-autohack.sh
+```
 
-The diagnostic now defaults to a finite controller-guided workflow. Its response
-schema allows only the current read, untested source function probe, or final
-classification. Runtime validation also rejects out-of-stage actions if a model
-ignores the schema. Completed reads and already-tested unrelated functions cannot
-be selected again. The final stage offers all classification combinations, not
-only the expected answer. Evidence validation and independent grading still reject
-wrong classifications. This measures assisted execution and classification, not
-independent investigation planning; `--unguided` retains the planning comparison.
-Production callers retain their existing behavior unless they explicitly provide
-an action contract. CI replays repeated reads, an irrelevant utility, a duplicate
-probe, malformed finals, and a contradictory conclusion in one recovery run.
+The dashboard is available at **http://127.0.0.1:3456**.
 
-### Production investigation stages and local Qwen-Agent adapter
+For supervised operation:
 
-Production source investigations now use a sequential LangGraph.js controller.
-It keeps source reads, a proposed hypothesis, its exact probe specification, and
-returned observations outside the model's disposable conversation history. A
-`plan_probe` decision must identify inspected source, a function, probe kind and
-a hypothesis with a disproof condition. The following stage permits only that
-probe. Completed or failed identical probes cannot be planned again in the same
-pass; unsupported results remain incomplete, never negative evidence.
+```bash
+bash scripts/install-user-service.sh
+bash scripts/control-user-service.sh status
+bash scripts/control-user-service.sh logs
+```
 
-After six completed inspection actions the controller requests a hypothesis or
-an honest incomplete outcome. Continuing pages of a large file does not consume
-that decision allowance. Existing source/caller, reproduction, review and report
-validation remain authoritative. Dynamic turn/time extensions remain enabled.
-Workflow state and observations are recorded in the existing audit summary.
-Restart checkpoints remain navigation hints; probes must be rerun on restart.
+Service controls include `start`, `stop`, `restart`, `status`, and `logs`. The application uses host locks to prevent competing supervisors and orchestrators from running against the same checkout.
 
-`npm ci` installs the pinned LangGraph dependency. The reproduction-runtime
-installer also installs the pinned Qwen-Agent environment into `.venv-qwen`
-(Python venv support is required). No cloud model or subscription is used.
+See the [Operator Runbook](docs/OPERATOR_RUNBOOK.md) for configuration, installation, service management, and host diagnostics.
 
-The default remains `LOCAL_MODEL_ADAPTER=ollama`, preserving the installed JSON
-transport. `LOCAL_MODEL_ADAPTER=qwen-agent` selects the installed Qwen-Agent
-formatter/parser through a local Python bridge. This adapter accepts only a
-loopback Ollama `/api/chat` URL and retains the same inference lock, cancellation,
-thread/context options, stage restrictions and evidence validators. It performs
-one model request at a time; Qwen-Agent never executes investigation tools.
-It is an alternative transport, not a second concurrent model. Do not select it
-on the basis of mocked tests alone; compare its real-model fixture result first.
+## Single-program investigation
 
-Run the shared production controller on owned fixtures:
+The one-bounty launcher uses the production source investigation and review implementation.
+
+List eligible, assessed programs:
+
+```bash
+bash scripts/run-one-bounty.sh --list
+```
+
+Investigate a selected program:
+
+```bash
+LOCAL_OLLAMA_MODEL=qwen3:4b \
+bash scripts/run-one-bounty.sh --program PROGRAM_ID --timeout-min 35
+```
+
+Replace `PROGRAM_ID` with an eligible identifier returned by the list command.
+
+This launcher runs one authorized program investigation without starting the recurring scheduler. Its timeout measures **inactivity**, not the total wall-clock duration of productive work. Results are written beneath `data/one-bounty/`, with investigation logs maintained under `data/logs/`.
+
+### Progress-aware model allowances
+
+The default local investigation starts with 80 model turns and a source-inspection budget of 180 minutes. With `LOCAL_HUNT_DYNAMIC_ALLOWANCE=true`, qualifying inspection or reproduction progress can add 40 turns and 60 minutes per extension.
+
+Extension credit comes from newly delivered source ranges and distinct completed probes. The implementation maintains a bounded total turn and time allowance, along with per-request limits and operator cancellation.
+
+### Local model configuration
+
+```dotenv
+LOCAL_OLLAMA_MODEL=qwen3:4b
+LOCAL_MODEL_ADAPTER=ollama
+LOCAL_OLLAMA_TOOL_PROTOCOL=json
+LOCAL_HUNT_MAX_TURNS=80
+LOCAL_HUNT_NUM_PREDICT=2048
+LOCAL_HUNT_DYNAMIC_ALLOWANCE=true
+SECURITY_SOURCE_CODE_TIMEOUT_MINUTES=180
+```
+
+The local model uses an 8,192-token context by default. Source reads are paginated at up to 2,000 characters and fitted into the available response context. `LOCAL_HUNT_NUM_PREDICT` controls generation length.
+
+`LOCAL_MODEL_ADAPTER=qwen-agent` selects the installed Qwen-Agent transport bridge to the local Ollama endpoint. Tool execution, evidence validation, and stage restrictions remain with the production controller.
+
+## Testing and diagnostics
+
+LOTUS includes regression and integration suites for repository navigation, static-analysis leads, source reproduction, controller transitions, model interaction, evidence validation, program selection, database operations, reporting, and independent review.
+
+Run source workflow regressions:
+
+```bash
+npx tsx scripts/test-source-workflow.ts
+```
+
+Run the production controller against owned test fixtures using the installed model:
 
 ```bash
 node --import tsx scripts/test-production-workflow.ts --real-model
-LOCAL_MODEL_ADAPTER=qwen-agent node --import tsx scripts/test-production-workflow.ts --real-model
 ```
 
-The test saves its log and result under `data/production-workflow-tests/`.
-Unlike the earlier guided fixture, it supplies no fixture-specific action or
-function enums: production stage rules govern the model's choices. Hidden
-expected labels are checked separately. Without `--real-model` the model is
-scripted and Python probes still execute in the existing isolated runner;
-`--mock-probes` is only a controller unit check. CI also exercises the production
-source workflow through report creation and independent review on owned fixtures.
+The source-reproduction suite exercises Python, JavaScript, Java, and Solidity in the isolated runtime. Controller and investigation diagnostics are saved under `data/` for review.
+
+### GitHub-hosted real-world trial
+
+The repository includes the [LOTUS Real-World Trial](.github/workflows/lotus-real-world-trial.yml), a **manually dispatched** GitHub Actions workflow configured for a CPU-only Ubuntu runner with four virtual CPUs and 16 GB RAM.
+
+The remote trial uses the existing four-stage sequence:
+
+1. Source workflow regressions.
+2. Real Qwen3 production-controller acceptance.
+3. Real Qwen3 scoped synthetic investigation and independent review.
+4. One authorized real-program investigation through the production one-bounty launcher.
+
+GitHub Actions retains diagnostic artifacts. With the optional private-repository token, the workflow also mirrors logs into `TomeyGeneralCompany/AutoHack-Overnight-Diagnostics` for remote inspection.
+
+The workflow runs only when manually dispatched. Setup requires an existing assessed program record supplied as a repository secret. Full configuration is documented in the [GitHub Trial Guide](docs/lotus-github-trial.md).
+
+### Investigation records
+
+LOTUS captures model activity, read ranges, completed reproduction steps, errors, evidence identifiers, review results, and stopping reasons. Its logs distinguish ongoing investigation, incomplete coverage, recorded observations, and reviewed findings.
+
+## Architecture
+
+| Component | Responsibility |
+| --- | --- |
+| **Qwen3 / Ollama** | Locally hosted investigative inference |
+| **LangGraph.js controller** | Investigation stages, actions, context, recovery, and evidence state |
+| **Source analysis** | Repository acquisition, declarations, callers, static leads, and prioritization |
+| **Language adapters** | Isolated Python, JavaScript, Java, and Solidity reproduction |
+| **SQLite / Drizzle** | Persistent program, assessment, and finding data |
+| **TypeScript / Node.js** | Application orchestration and internal services |
+| **Next.js / tRPC** | Dashboard and application interface |
+| **GitHub Actions** | Automated regression CI and manually dispatched real-world trials |
+| **systemd** | Linux service supervision |
+
+## Development status
+
+LOTUS has implemented local-model investigation, source navigation, static analysis, language-specific reproduction, dependency preparation, evidence recording, independent review, and controller recovery. Development is focused on the performance and reliability of complete autonomous investigations against real eligible programs.
+
+Detailed host setup, acceptance results, and operating procedures are maintained in the [Operator Runbook](docs/OPERATOR_RUNBOOK.md), [Readiness Documentation](AUTONOMOUS_READINESS.md), and [GitHub Trial Guide](docs/lotus-github-trial.md).
+
+---
+
+**LOTUS — Localized Offensive Testing and Understanding System**  
+**Tomey General Company, LLC**  
+**Copyright © 2026 Tomey General Company, LLC. All rights reserved.**
