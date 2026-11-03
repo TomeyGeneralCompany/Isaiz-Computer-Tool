@@ -3,9 +3,27 @@ import {InvestigationWorkflow} from '../packages/security-solver/src/investigati
 import {decodeAuditAction} from '../packages/security-solver/src/local-audit-protocol';
 import {modelProfile} from '../packages/security-solver/src/model-profile';
 import {buildSourceMap} from '../packages/security-solver/src/source-map';
+import {recoverEmptyUnprobedFinal} from '../packages/security-solver/src/inspection-coverage';
 import {mkdtemp,writeFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
+// Regression: no-probe empty finals must reach the existing candidate coverage
+// validator, not repeat FINAL_REJECTED until the 80-turn limit. Real findings,
+// completed probes, and blocked outcomes must remain unchanged.
+const empty={findings:[],outcome:'inspected'};
+const recovered=recoverEmptyUnprobedFinal(empty,0) as {findings:unknown[];outcome:string;reason:string};
+assert.deepEqual(recovered.findings,[]);
+assert.equal(recovered.outcome,'no_testable_candidate');
+assert.match(recovered.reason,/No supported source probe/);
+assert.equal(recoverEmptyUnprobedFinal({findings:[]},0).outcome,undefined,'omitted outcome must not be silently classified as inspected');
+assert.equal(recoverEmptyUnprobedFinal(empty,1),empty);
+assert.equal(recoverEmptyUnprobedFinal(empty,0,'dependencies missing'),empty);
+const explicit={findings:[],outcome:'no_testable_candidate',reason:'Selected sources were inspected but the necessary dependencies were missing.'};
+assert.equal(recoverEmptyUnprobedFinal(explicit,0),explicit);
+const finding={findings:[{caseId:'recorded'}],outcome:'inspected'};
+assert.equal(recoverEmptyUnprobedFinal(finding,0),finding);
+const withReason={findings:[],outcome:'inspected',reason:'Inspected selected contracts but no supported probe was possible.'};
+assert.equal((recoverEmptyUnprobedFinal(withReason,0) as typeof withReason).reason,withReason.reason);
 const flow=new InvestigationWorkflow();
 const action={action:'read_file',path:'large.py',query:'',answer:'',offset:0};
 for(let i=0;i<8;i++){flow.read(action.path);flow.observe({...action,offset:i*156},JSON.stringify({start:i*156,end:(i+1)*156,nextOffset:(i+1)*156}));}
@@ -37,6 +55,21 @@ assert.ok((await rejected.constraints()).action.includes('read_file'));
 rejected.finalRejected('The required evidence is still missing.');
 assert.match(rejected.validate(missingContext)!,/already attempted/);
 assert.ok((await rejected.constraints()).action.includes('final'));
+// A completed caller page may be forced again after model compaction. When
+// bounded duplicate-read recovery recognizes the recorded completed page,
+// acknowledging that prior read must release the read_file-only constraint.
+// It must not manufacture a new source span or a reproduction observation.
+const callerRecovery=new InvestigationWorkflow();
+const callerPath='source-1/caller.py';
+callerRecovery.read(callerPath);
+callerRecovery.observe({...action,path:callerPath},JSON.stringify({start:0,end:457,nextOffset:null}));
+const priorProgress=callerRecovery.snapshot().sourceProgress;
+callerRecovery.requireSource(callerPath);
+assert.deepEqual((await callerRecovery.constraints()).action,['read_file']);
+callerRecovery.read(callerPath);
+assert.ok((await callerRecovery.constraints()).action.includes('final'));
+assert.equal(callerRecovery.snapshot().sourceProgress,priorProgress);
+assert.equal(callerRecovery.snapshot().observations.length,0);
 assert.equal(decodeAuditAction(JSON.stringify({...action,action:'final',result:{findings:[]}})).answer,'{"findings":[]}');
 assert.throws(()=>decodeAuditAction(JSON.stringify({...action,result:{findings:[]}})));
 const original=process.env.LOCAL_MODEL_PROFILE;

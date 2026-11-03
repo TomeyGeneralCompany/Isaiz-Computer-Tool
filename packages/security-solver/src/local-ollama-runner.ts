@@ -927,6 +927,16 @@ export async function runLocalAudit(
               // Keep the finite turn allowance as the ultimate bound.
               await appendFile(logFile,"[CONTEXT_RECOVERY] "+JSON.stringify({tool:name,path,offset,attempt:stalledActions})+"\\n");
               blockCompletedReadsUntil=Math.max(blockCompletedReadsUntil,turn+4);
+              // A required caller/source read can be satisfied by a previously
+              // completed page after context compaction. If that reread is now
+              // rejected as a duplicate, release the requiredSource constraint;
+              // otherwise it forces read_file forever and hides final/probe.
+              // No new source span, observation, or finding is credited here.
+              if(previous.nextOffset===null && workflow.snapshot().readPaths.includes(path)) {
+                workflow.read(path);
+                requireInvestigationAfterEmpty=false;
+                await appendFile(logFile,'[COMPLETED_SOURCE_REQUIREMENT_RELEASED] '+JSON.stringify({path,offset})+'\\n');
+              }
               workflow.feedback('This exact source page is already recorded and rereading it produced no new evidence. Next choose an evidence-backed final, a different eligible probe, or a specific continuation. Do not reread this completed page.');
               stalledActions=0;
               throw new Error("Completed source page is already recorded. Choose another selected source or use the saved observation; do not request this completed page again. "+navigation.hint());

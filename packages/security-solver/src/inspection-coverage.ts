@@ -7,3 +7,17 @@ export function selectSourceBatch(urls: string[], pass: number, size = 2): strin
 export function incompleteProbeCoverage(session: {failedProbes:number; unsupportedProbes:number}): "failed" | "unsupported" {
   return session.failedProbes > 0 || session.unsupportedProbes === 0 ? "failed" : "unsupported";
 }
+
+/** A model's empty "inspected" final is not a completed audit when no probe ran.
+ * Convert only that classification into the existing scoped-incomplete outcome.
+ * The caller still enforces the selected-source coverage gate and hunt schema.
+ * Never change a finding, a recorded probe, or an explicit blocked outcome.
+ */
+export function recoverEmptyUnprobedFinal(value:unknown, completedProbes:number, blockedReason?:string|null):unknown {
+  if(!value || typeof value!=='object' || Array.isArray(value) || completedProbes!==0 || blockedReason)return value;
+  const result=value as Record<string,unknown>;
+  if(!Array.isArray(result.findings) || result.findings.length!==0 || result.outcome!=='inspected')return value;
+  const reason=typeof result.reason==='string' && result.reason.trim().length>=20
+    ? result.reason : 'No supported source probe completed in this bounded inspection; coverage remains incomplete.';
+  return {...result,outcome:'no_testable_candidate',reason};
+}
