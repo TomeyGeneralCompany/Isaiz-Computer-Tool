@@ -115,6 +115,7 @@ export async function runLocalAudit(
 
   let rejectedPlans=0;
   let consecutiveWorkflowRejections=0;
+  let unsupportedFinalRejections=0;
   let lastWorkflowRejection='';
   const sourceTotals=new Map<string,number>();
   const hypotheses:Array<{turn:number;path:string;statement:string}>=[];
@@ -529,6 +530,17 @@ export async function runLocalAudit(
           consecutiveWorkflowRejections=lastWorkflowRejection===workflowError?consecutiveWorkflowRejections+1:1;
           lastWorkflowRejection=workflowError;
           await appendFile(logFile,'[WORKFLOW_REJECTED] '+workflowError+'\n');
+          // Do not waste the remaining turns on a repeated untestable plan.
+          // Choose an already-ranked unread source, never a fabricated target.
+          if(action.action==='plan_probe' && consecutiveWorkflowRejections>=2 &&
+             workflowError==='Select a function from the inspected source and a supported probe kind.') {
+            const next=workflow!.requireNextUnreadSource(limits.initialSourcePaths||[]);
+            if(next) {
+              await appendFile(logFile,'[REJECTED_PLAN_SOURCE_HANDOFF] '+JSON.stringify({next})+'\n');
+              messages.push({role:'user',content:'Repeated incomplete probe plans did not create evidence. Read the next ranked candidate: '+next+' with offset=0. Do not invent a probe or unverified finding. /no_think'});
+              continue;
+            }
+          }
           if(action.action==='plan_probe' && workflow!.rejectedRequiredProbePlan())
             await appendFile(logFile,'[REQUIRED_PROBE_PLAN_RELEASED] Repeated invalid plans; reopen investigation\n');
           const template=action.action==='plan_probe' ?
@@ -780,6 +792,18 @@ export async function runLocalAudit(
           // Retain read-action history: rejecting a final answer does not make prior pages new evidence.
           if(!workflow)recentActions.clear(); // Legacy no-workflow repair may explicitly require a fresh source read.
           stalledActions=0;workflow?.finalRejected(feedback);
+          if(workflow && feedback.startsWith('No supported probe has completed.') &&
+             !workflow.snapshot().observations.length) {
+            unsupportedFinalRejections++;
+            if(unsupportedFinalRejections>=2) {
+              const next=workflow.requireNextUnreadSource(limits.initialSourcePaths||[]);
+              if(next) {
+                unsupportedFinalRejections=0;
+                requireInvestigationAfterEmpty=true;
+                await appendFile(logFile,'[REJECTED_FINAL_SOURCE_HANDOFF] '+JSON.stringify({next})+'\n');
+              }
+            }
+          } else unsupportedFinalRejections=0;
           if(workflow?.snapshot().observations.some(o=>o.status==='behavior_observed')) {
             const observed=workflow.snapshot().observations.filter(o=>o.status==='behavior_observed').at(-1)!;
             const required=(limits.initialSourcePaths||[]).find(p=>p.startsWith('source-') &&
@@ -859,6 +883,7 @@ export async function runLocalAudit(
         }
         controller.signal.throwIfAborted();
         invalidReviewFinals=0;
+        unsupportedFinalRejections=0;
         finalAnswer=message.content;stoppingReason="Validated final answer";
         return message.content;
       }
