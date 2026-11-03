@@ -178,17 +178,17 @@ def prepare_java_classpath(repository: Path, target: Path, destination: Path) ->
     """
     import zipfile
     source = target.read_text(errors='replace')[:256000]
-    imports = set(re.findall(r'^\s*import\s+(?:static\s+)?([\w.]+)(?:\.\*)?\s*;', source, re.M))
+    imports = re.findall(r'^\s*import\s+(static\s+)?([\w.]+)(\.\*)?\s*;', source, re.M)
     if not imports:
         return []
     wanted = set()
-    for item in imports:
-        if item.startswith(('java.', 'javax.', 'jdk.', 'sun.')):
+    for static_keyword, item, wildcard in imports:
+        if item.startswith(('java.', 'javax.', 'jdk.', 'sun.')) or wildcard:
             continue
         parts = item.split('.')
         if len(parts) >= 2:
-            wanted.add('/'.join(parts) + '.class')
-            wanted.add('/'.join(parts[:-1]) + '.class')  # static member import
+            # Static imports name a member, not a class.
+            wanted.add('/'.join(parts[:-1] if static_keyword else parts) + '.class')
     if not wanted:
         return []
     roots = [repository / 'lib', repository / 'libs', repository / 'vendor',
