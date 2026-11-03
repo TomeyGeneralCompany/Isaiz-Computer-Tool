@@ -38,6 +38,63 @@ try {
     'Application contract must outrank compatible imported library contracts');
   assert(solidityRank.paths.includes(library),'Supporting libraries must remain inspectable');
   assert(solidityRank.paths.includes(imported),'Imported dependencies must remain inspectable');
+  // A complete top-eight navigation window must favor application source
+  // across the four supported languages even when dependency files have
+  // convenient probe signatures and arrive first in a static-lead list.
+  const layouts=[
+    {
+      language:'python',
+      application:'src/services/MessageRenderer.py',
+      dependency:'src/vendor/htmltool/LegacyRenderer.py',
+      generated:'src/build/GeneratedRenderer.py',
+      source:'def render(value):\n    return "<p>" + value + "</p>"\n'
+    },
+    {
+      language:'javascript',
+      application:'src/routes/message.js',
+      dependency:'src/node_modules/htmltool/renderer.js',
+      generated:'dist/renderer.js',
+      source:'export function render(value) { return "<p>" + value + "</p>"; }\n'
+    },
+    {
+      language:'java',
+      application:'src/main/java/com/tomey/api/MessageRenderer.java',
+      dependency:'src/main/java/com/tomey/vendor/LegacyRenderer.java',
+      generated:'src/test/java/com/tomey/api/GeneratedRenderer.java',
+      source:'public class Renderer { public static String render(String input) { return input; } }\n'
+    },
+    {
+      language:'solidity',
+      application:'contracts/protocol/MessageVault.sol',
+      dependency:'contracts/libs/MessageLibrary.sol',
+      generated:'contracts/tests/MockMessageVault.sol',
+      source:'pragma solidity ^0.8.20; contract MessageVault { function render(string memory input) public pure returns (string memory) { return input; } }\n'
+    }
+  ];
+  for(const layout of layouts){
+    // More supporting sources than the navigation window could contain.
+    // The exact application path must be chosen, not merely left eligible.
+    const filler=Array.from({length:9},(_,i)=>{
+      const basename='Legacy'+String(i).padStart(2,'0');
+      return layout.dependency.replace(/[^/]+$/,basename+layout.dependency.slice(layout.dependency.lastIndexOf('.')));
+    });
+    const paths=[...filler,layout.dependency,layout.generated,layout.application];
+    for(const path of paths){
+      await mkdir(join(root,path,'..'),{recursive:true});
+      await writeFile(join(root,path),layout.source);
+    }
+    const ranked=await prioritizeSourceCandidates(root,paths,paths.slice(0,8),
+      [{path:layout.dependency,line:1,rule:'unverified-scan-lead'}]);
+    assert.equal(ranked.paths[0],layout.application,
+      layout.language+': application must lead even when vendor has a detector hit');
+    assert(!ranked.paths.includes(layout.generated),
+      layout.language+': generated/test source must not displace application source');
+    assert.equal(ranked.paths.length,8,layout.language+': preserve eight-file selection');
+    // Only dependency sources: fallback still produces inspection candidates.
+    const dependenciesOnly=await prioritizeSourceCandidates(root,paths.slice(0,10),paths.slice(0,8),[]);
+    assert.equal(dependenciesOnly.paths.length,8,
+      layout.language+': supporting-only repositories remain inspectable');
+  }
   // read_file uses character offsets, but outline_solidity uses an item cursor.
   // Forced outlines always start at the first declaration; discretionary
   // outline pagination retains the model's item offset.
