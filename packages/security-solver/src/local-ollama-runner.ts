@@ -1114,6 +1114,17 @@ export async function runLocalAudit(
               }
             }
 
+            // A negative isolated probe is useful evidence about one method,
+            // not grounds to abandon the connected source graph. Move to the
+            // next ranked unread candidate instead of spending turns on the
+            // same disproved helper or an unsupported final.
+            if(workflow && probeStatus==='behavior_not_observed') {
+              const next=workflow.requireNextUnreadSource(limits.initialSourcePaths||[]);
+              if(next) {
+                await appendFile(logFile,'[NEGATIVE_PROBE_SOURCE_HANDOFF] '+JSON.stringify({
+                  testedPath:String(call.function.arguments?.path||''),next})+'\\n');
+              }
+            }
             await appendFile(logFile,"[PROBE_RESULT] "+JSON.stringify({path:call.function.arguments?.path,function:call.function.arguments?.query,kind:call.function.arguments?.kind,status:probeStatus,evidenceFile:probeResult.evidenceFile,detail:String(probeResult.detail||probeResult.reason||probeResult.error||"").slice(0,400)})+"\n");
           }catch{}
         }
