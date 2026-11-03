@@ -137,6 +137,18 @@ export class InvestigationWorkflow {
   }
   rejectedDuplicateProbe() {this.duplicateProbeRejections++;this.feedback('The already attempted probe cannot be repeated. Return outcome=no_testable_candidate with a specific reason and findings=[]; do not claim an unverified vulnerability.');}
   requireSource(path:string) {this.requiredSource=path;this.feedback('Read '+path+' before planning its test.',true);}
+  /** Recover from repeated unsupported model plans using already ranked source.
+   * This requires a genuine next read; it never fabricates a probe or evidence. */
+  requireNextUnreadSource(prioritized:string[]):string|null {
+    if(this.requiredSource)return null;
+    const next=prioritized.find(path=>
+      path.startsWith('source-') &&
+      /\.(?:sol|java|py|js|mjs|cjs|ts|tsx|jsx)$/.test(path) &&
+      !this.readPaths.has(path));
+    if(!next)return null;
+    this.requireSource(next);
+    return next;
+  }
   validate(action:Action):string|null {
     if(this.requiredSource && (action.action!=='read_file' || action.path!==this.requiredSource))return 'Read the required candidate source '+this.requiredSource+' before other actions.';
     if(action.action==='continue_inspection') {
