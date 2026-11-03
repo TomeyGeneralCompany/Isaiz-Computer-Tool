@@ -192,9 +192,9 @@ async function main(){
   const logs=join(app,'data','logs');
   let content='';
   for(const filename of await readdir(logs).catch(()=>[])){
-   if(!filename.startsWith('local-hunt-'))continue;
+   if(!filename.startsWith('local-hunt-') && !filename.startsWith('local-review-'))continue;
    const path=join(logs,filename);await copyFile(path,join(root,filename));
-   if(filename.endsWith('.log'))content+=(await readFile(path,'utf8'))+'\n';
+   if(filename.startsWith('local-hunt-') && filename.endsWith('.log'))content+=(await readFile(path,'utf8'))+'\n';
   }
   const resultData={success:result.success||false,coverage:result.coverage||null,
    error:result.error||null,auditRecord:result.auditRecord||null,level,
