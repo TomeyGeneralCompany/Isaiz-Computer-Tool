@@ -5,6 +5,7 @@ import {join} from 'node:path';
 import {controllerOwnedNextAction,canonicalSourceNavigationAction} from '../packages/security-solver/src/controller-next-action';
 import {sourceCandidateEvidence,verifiedProbeSummary} from '../packages/security-solver/src/source-candidate-evidence';
 import {traceSourceCalls} from '../packages/security-solver/src/source-flow-facts';
+import {InvestigationWorkflow} from '../packages/security-solver/src/investigation-workflow';
 
 const pending={path:'source-1/src/render.py',query:'render',answer:'html_reflection'};
 assert.deepEqual(controllerOwnedNextAction({
@@ -23,6 +24,23 @@ assert.equal(canonicalSourceNavigationAction({
 assert.equal(canonicalSourceNavigationAction({
   action:'outline_solidity',path:'source-1/Contract.sol',query:'',answer:''
 }).action,'outline_solidity');
+const focusedWorkflow=new InvestigationWorkflow();
+const verifiedCase='b'.repeat(64);
+focusedWorkflow.read('source-1/src/render.py');
+focusedWorkflow.observe({
+  action:'verify_source',path:'source-1/src/render.py',query:'render',answer:'html_reflection'
+} as any,JSON.stringify({status:'behavior_observed',behavior_observed:true,caseId:verifiedCase}));
+assert.equal(focusedWorkflow.focusVerifiedEvidence('c'.repeat(64)),false,
+  'never focus an unrecorded model-invented case');
+assert.equal(focusedWorkflow.focusVerifiedEvidence(verifiedCase),true);
+focusedWorkflow.requireSource('source-1/src/http_handler.py');
+assert.deepEqual(await focusedWorkflow.constraints(),{
+  action:['read_file'],path:['source-1/src/http_handler.py']
+});
+focusedWorkflow.read('source-1/src/http_handler.py');
+assert.deepEqual(await focusedWorkflow.constraints(),{action:['final']},
+  'after source-backed caller reading, Qwen cannot navigate another target');
+
 
 const root=await mkdtemp(join(tmpdir(),'lotus-controller-facts-'));
 try {
