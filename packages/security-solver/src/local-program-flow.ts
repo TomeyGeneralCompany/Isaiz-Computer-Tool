@@ -19,7 +19,7 @@ import { runLocalAudit } from "./local-ollama-runner";
 import { createProbeSession, readSourceCase, replaySourceCase, type SourceCase, type ProbeRepository } from "./source-reproduction";
 import { writeSecuritySolverStatus, clearSecuritySolverStatus, writeAdversarialReviewStatus, clearAdversarialReviewStatus } from "./status";
 import type { SecuritySolveResult, ParsedFinding } from "./claude-runner";
-import { selectSourceBatch, incompleteProbeCoverage, recoverEmptyUnprobedFinal } from "./inspection-coverage";
+import { selectSourceBatch, incompleteProbeCoverage, recoverEmptyUnprobedFinal, retainGroundedCandidates } from "./inspection-coverage";
 import { callerLineReferences, qualifiedCallerLineReferences, transactionEntryLine } from "./source-function-reference";
 const log=createLogger("local-program-flow");
 const sha=z.string().regex(/^[a-f0-9]{64}$/);
@@ -275,6 +275,41 @@ Do not claim production testing, JavaScript execution, file access or other effe
                     callerLine:chosen.line,sourceSha256:record.sourceSha256,
                     reason:'single inspected caller verified against recorded case'
                   })+'\\n');
+                }
+              }
+            }
+            // A small model can return both a verified candidate and a second
+            // unsupported case in the same final. Do not let that extra case
+            // invalidate the grounded one and trigger 80 turns of retries.
+            // Prune only when at least one independently inspected caller
+            // survives. Every surviving finding still passes all the normal
+            // schema, scope, case, replay and reviewer gates below.
+            if(recovered && typeof recovered==='object' && !Array.isArray(recovered) &&
+               Array.isArray((recovered as {findings?:unknown}).findings)) {
+              const candidates=(recovered as {findings:any[]}).findings;
+              if(candidates.length>1) {
+                const grounded:any[]=[];
+                for(const candidate of candidates) {
+                  const record=session.cases.get(candidate?.caseId);
+                  if(!record || !record.result.behavior_observed)continue;
+                  const repository=repos.find(r=>r.url===record.repositoryUrl);
+                  if(!repository)continue;
+                  try {
+                    const candidatePath=String(candidate.callerFile||'');
+                    const callerRelative=relative(repository.directory,join(root,candidatePath));
+                    if(callerRelative==='..' || callerRelative.startsWith('..'+sep))continue;
+                    const code=await readFile(join(root,candidatePath),'utf8');
+                    if(!reads.has(sourceFileInWorkspace(repository,record.spec.file,root)) ||
+                       !reads.sawLine(candidatePath,code,candidate.callerLine))continue;
+                    if(!validReachability(candidate,record,callerRelative.split(sep).join('/'),code))continue;
+                    grounded.push(candidate);
+                  }catch{}
+                }
+                const retained=retainGroundedCandidates(candidates,grounded);
+                if(retained!==candidates) {
+                  (recovered as {findings:any[]}).findings=retained;
+                  await appendFile(logFile,'[CONTROLLER_UNSUPPORTED_REPORTS_PRUNED] '+
+                    JSON.stringify({removed:candidates.length-retained.length,remaining:retained.map(c=>c.caseId)})+'\\n');
                 }
               }
             }
