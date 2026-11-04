@@ -371,7 +371,7 @@ export async function runLocalAudit(
       if(constraints?.action?.some(action=>!actionSchema.properties.action.enum.includes(action)))throw new Error("Task requested an unavailable action");
       let requestSchema:Record<string,any>=constraints ? {...actionSchema,properties:{...actionSchema.properties,
         ...Object.fromEntries(Object.entries(constraints).map(([key,values])=>[key,{type:"string",enum:values}]))}} : actionSchema;
-      if(structured && !requireInvestigationAfterEmpty && limits.finalSchema && (emptyFinals>=1 || invalidReviewFinals>=2) &&
+      if(structured && !requireInvestigationAfterEmpty && limits.finalSchema && (emptyFinals>=1 || invalidReviewFinals>=2 || !!workflow?.snapshot().verifiedEvidenceFocus) &&
          (!constraints?.action || constraints.action.includes('final'))) {
         // Qwen3:4b sometimes returns a valid "final" action with both answer=""
         // and result omitted. Once that is observed, require the typed final
