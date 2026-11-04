@@ -96,6 +96,7 @@ export async function runLocalAudit(
   let successfulReads = 0;
   let rejectedRequiredProbeFinals = 0;
   let controllerAutoProbeCount = 0;
+  let controllerAutoReadCount = 0;
   let generationBudget = settings.numPredict;
   const root = await realpath(cwd);
   const controller = new AbortController();
@@ -488,6 +489,29 @@ export async function runLocalAudit(
             await appendFile(logFile,'[CONTROLLER_SOURCE_PROBE_UNAVAILABLE] '+
               JSON.stringify({path,error:String(error).slice(0,160)})+'\n');
           }
+        }
+      }
+      // The acquisition/ranking controller already owns a finite list of real
+      // candidates. Read the next ranked, existing source directly, rather
+      // than allowing Qwen to choose from a filename menu before receiving
+      // sufficient facts. Cap this scan; unresolved semantic questions still
+      // belong to the model.
+      if(!controllerAction && structured && workflow &&
+         process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false' &&
+         !workflow.snapshot().verifiedEvidenceFocus && controllerAutoReadCount<8 &&
+         constraints?.action?.includes('read_file')) {
+        const inspected=new Set(workflow.snapshot().readPaths);
+        for(const candidate of limits.initialSourcePaths||[]) {
+          if(!candidate.startsWith('source-') || !/\.(?:java|py|js|mjs|cjs|sol)$/.test(candidate) ||
+             inspected.has(candidate))continue;
+          try {
+            await safePath(candidate);
+            controllerAction={action:'read_file',path:candidate,query:'',answer:'',offset:0};
+            controllerAutoReadCount++;
+            await appendFile(logFile,'[CONTROLLER_RANKED_SOURCE_READ] '+
+              JSON.stringify({path:candidate,rankedRead:controllerAutoReadCount})+'\n');
+            break;
+          }catch{}
         }
       }
       if(controllerAction)await appendFile(logFile,'[CONTROLLER_OWNED_ACTION] '+JSON.stringify(controllerAction)+'\n');
