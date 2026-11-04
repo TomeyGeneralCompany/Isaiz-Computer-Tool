@@ -456,6 +456,19 @@ Do not claim production testing, JavaScript execution, file access or other effe
               }
             }
             const value=huntSchema.parse(recovered);
+            // A real reproduced case cannot silently disappear because Qwen
+            // returned a blank findings array. A supported negative judgment
+            // must say what specific link, mitigation or applicability
+            // requirement defeats the candidate.
+            if(value.findings.length===0 &&
+               [...session.cases.values()].some(record=>record.result.behavior_observed)) {
+              const rationale=String(value.reason||'');
+              if(rationale.length<40 ||
+                 !/(?:caller|source|input|entry|reachab|saniti[sz]|escap|mitigat|trust|authoriz|access|impact|scope|state|invariant|runtime)/i.test(rationale))
+                return 'Controller has recorded a successful reproduction. To reject the security hypothesis, explain the actual missing caller/input/sink link, mitigation, scope mismatch or source-backed reason in the final reason field (at least 40 characters). Do not discard the reproduction or invent a missing test.';
+              if(/(?:no probe|nothing (?:was |has been )?reproduced|no recorded case|no testable candidate)/i.test(rationale))
+                return 'Contradiction: the controller has a recorded successful reproduction. Discuss its security significance or a source-backed disproof; the observed behavior cannot be denied.';
+            }
             if(value.outcome === "no_testable_candidate") {
               if(session.completedProbes) {
                 const known=[...session.cases].slice(0,5).map(([caseId,c])=>({caseId,file:c.spec.file,
