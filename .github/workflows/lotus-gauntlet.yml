@@ -1,5 +1,10 @@
-name: LOTUS Gauntlet (manual only)
+name: LOTUS Gauntlet (merged PR120 Level4 Java replay)
 on:
+  push:
+    branches:
+      - trial/lotus-post120-merged-level4-java-20261104
+    paths:
+      - .github/workflows/lotus-gauntlet.yml
   workflow_dispatch:
     inputs:
       level:
@@ -29,7 +34,7 @@ permissions:
   contents: read
 concurrency:
   group: lotus-gauntlet-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 jobs:
   gauntlet:
     runs-on: ubuntu-24.04
@@ -58,8 +63,10 @@ jobs:
           { nproc; free -h; df -h .; } > data/gauntlet/latest/runner.txt
       - name: Install locked application runtime
         run: npm ci
-      - name: Verify owned acquisition across all languages without model
-        if: inputs.mode == 'run'
+      - name: Verify candidate selection and four-language caller-chain regression
+        run: node --import tsx scripts/test-source-candidates.ts
+      - name: Verify owned acquisition for all four languages without model
+        if: inputs.mode == 'run' || github.event_name == 'push'
         run: |
           for lang in solidity python javascript java; do
             node --import tsx scripts/lotus-gauntlet.ts --smoke --level=4 --language="$lang" --output="data/gauntlet/smoke-$lang"
@@ -67,19 +74,19 @@ jobs:
       - name: Prepare owned source without model inference
         if: inputs.mode == 'prepare'
         env:
-          GAUNTLET_LANGUAGE: ${{ inputs.language }}
-          GAUNTLET_SEED: ${{ inputs.seed }}
+          GAUNTLET_LANGUAGE: ${{ inputs.language || (github.event_name == 'push' && 'java') || 'random' }}
+          GAUNTLET_SEED: ${{ inputs.seed || (github.event_name == 'push' && '9d3a245ae1a47a3475ddfdf3efb02b98') || '' }}
         run: |
-          node --import tsx scripts/lotus-gauntlet.ts --prepare --level=${{ inputs.level }} --language="$GAUNTLET_LANGUAGE" ${GAUNTLET_SEED:+--seed="$GAUNTLET_SEED"} --output=data/gauntlet/latest
+          node --import tsx scripts/lotus-gauntlet.ts --prepare --level=${{ inputs.level || '4' }} --language="$GAUNTLET_LANGUAGE" ${GAUNTLET_SEED:+--seed="$GAUNTLET_SEED"} --output=data/gauntlet/latest
       - name: Install production runtime
-        if: inputs.mode == 'run'
+        if: inputs.mode == 'run' || github.event_name == 'push'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y bubblewrap default-jdk-headless
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           bash scripts/install-reproduction-runtime.sh
       - name: Start local CPU model
-        if: inputs.mode == 'run'
+        if: inputs.mode == 'run' || github.event_name == 'push'
         run: |
           docker run -d --name lotus-gauntlet-ollama -p 127.0.0.1:11434:11434 ollama/ollama:latest
           for n in $(seq 1 60); do
@@ -89,18 +96,18 @@ jobs:
           curl -fsS http://127.0.0.1:11434/api/tags >/dev/null
           docker exec lotus-gauntlet-ollama ollama pull qwen3:4b
       - name: Investigate blind synthetic bounty with production controller
-        if: inputs.mode == 'run'
+        if: inputs.mode == 'run' || github.event_name == 'push'
         env:
-          GAUNTLET_LANGUAGE: ${{ inputs.language }}
-          GAUNTLET_SEED: ${{ inputs.seed }}
+          GAUNTLET_LANGUAGE: ${{ inputs.language || (github.event_name == 'push' && 'java') || 'random' }}
+          GAUNTLET_SEED: ${{ inputs.seed || (github.event_name == 'push' && '9d3a245ae1a47a3475ddfdf3efb02b98') || '' }}
         run: |
           set -o pipefail
-          node --import tsx scripts/lotus-gauntlet.ts --run --level=${{ inputs.level }} --language="$GAUNTLET_LANGUAGE" ${GAUNTLET_SEED:+--seed="$GAUNTLET_SEED"} --output=data/gauntlet/latest 2>&1 | tee data/gauntlet/live-terminal.log
+          node --import tsx scripts/lotus-gauntlet.ts --run --level=${{ inputs.level || '4' }} --language="$GAUNTLET_LANGUAGE" ${GAUNTLET_SEED:+--seed="$GAUNTLET_SEED"} --output=data/gauntlet/latest 2>&1 | tee data/gauntlet/live-terminal.log
       - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: lotus-gauntlet-${{ inputs.mode }}-level-${{ inputs.level }}-${{ github.run_id }}
+          name: lotus-gauntlet-${{ inputs.mode || 'run' }}-level-${{ inputs.level || '4' }}-${{ github.run_id }}
           path: |
             data/gauntlet/latest/manifest.json
             data/gauntlet/latest/grade.json
@@ -114,5 +121,5 @@ jobs:
           retention-days: 30
           if-no-files-found: warn
       - name: Stop model
-        if: always() && inputs.mode == 'run'
+        if: always() && (inputs.mode == 'run' || github.event_name == 'push')
         run: docker rm -f lotus-gauntlet-ollama || true
