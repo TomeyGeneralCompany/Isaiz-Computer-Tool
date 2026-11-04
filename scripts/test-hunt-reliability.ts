@@ -14,6 +14,17 @@ assert.equal(compilerCompatible('0.8.x'),null);
 assert.equal(compilerCompatible('0.7.0 - 0.9.0'),null);
 for(const line of ['// target.set(x);','function set(uint x) external {}','const text = "target.set(x)";','/* target.set(x); */'])assert.equal(referencesProbedFunction(line,'Store.set'),false,line);
 assert.equal(referencesProbedFunction('target.set(x);','Store.set'),true);
+assert.equal(referencesProbedFunction('public String responseBody(String userInput){return Renderer.render(userInput);}','HttpHandler.responseBody'),false,
+  'Java method declaration is not a call to itself');
+assert.equal(referencesProbedFunction('public String responseBody(String userInput){return Renderer.render(userInput);}','Renderer.render'),true,
+  'a real qualified call in a method body remains discoverable');
+assert.equal(referencesProbedFunction('return responseBody(input);','HttpHandler.responseBody'),true,
+  'a real unqualified call in a return expression remains discoverable');
+assert.equal(referencesProbedFunction('String responseBody(String input) {','HttpHandler.responseBody'),false,
+  'package-private Java method declaration is not a caller');
+assert.equal(referencesProbedFunction('def responseBody(value):','HttpHandler.responseBody'),false,
+  'Python function declaration is not a caller');
+
 const exactCallerFixture='public class HttpHandler {\n' +
   '  public String responseBody(String input) { return Renderer.render(input); }\n' +
   '}';
