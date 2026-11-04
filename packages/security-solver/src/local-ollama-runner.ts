@@ -207,6 +207,29 @@ export async function runLocalAudit(
       }
       return candidate;
     }
+    /** Resolve a verified source-root alias for read-only navigation only.
+     * Structured JSON actions and native tool calls use the same resolver.
+     * No speculative path rewriting for probes, writes or external paths.
+     */
+    async function canonicalSourceReadPath(path:string):Promise<string> {
+      const readOnlyCandidate = path !== "." && path !== "" && !path.startsWith("/") &&
+        !path.startsWith("source/") && path !== "source" &&
+        !path.split(/[\\/]/).some(segment=>segment===".." || segment===".") &&
+        !path.includes("\\");
+      if (!readOnlyCandidate) return path;
+      try {
+        await safePath(path);
+        return path;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") return path;
+        const aliased = "source/"+path;
+        try {
+          await safePath(aliased);
+          await appendFile(logFile,"[CONTROLLER_SOURCE_ALIAS] "+JSON.stringify({requested:path,resolved:aliased})+"\n");
+          return aliased;
+        } catch {return path;}
+      }
+    }
     // Source locations have already been selected from an authorized workspace.
     // Feed real source pages to the model, then run only narrowly recognizable
     // local probes in the same isolated verifier. Never manufacture evidence.
@@ -416,9 +439,9 @@ export async function runLocalAudit(
           }
           throw new Error("Ollama did not return a valid read-only JSON action; no tool was executed");
         }
-        // Model-visible tool paths may be absolute after a source reread.
-        // Normalize existing authorized paths before workflow constraints and
-        // read-history checks; never normalize an outside-workspace path.
+        // Normalize navigation requests BEFORE workflow validation so source
+        // evidence and read-history checks see the same canonical path.
+        // Existing absolute-path canonicalization remains intact.
         if(action.path.startsWith('/')) {
           try {
             const normalized=relative(root,await safePath(action.path)).split(sep).join('/');
@@ -427,6 +450,8 @@ export async function runLocalAudit(
               action.path=normalized;
             }
           } catch {}
+        } else if (["read_file","list_files","search_files","outline_solidity","read_solidity"].includes(action.action)) {
+          action.path=await canonicalSourceReadPath(action.path);
         }
         // The model may carry a read_file *character* cursor into the
         // controller-required outline_solidity action, whose offset indexes
@@ -944,24 +969,10 @@ export async function runLocalAudit(
         try {
           const name = call.function.name;
           let path = String(call.function.arguments?.path ?? ".");
-          let full: string;
-          try {
-            full = await safePath(path);
-          } catch (error) {
-            // Independent review places a cloned repository in workspace/source/.
-            // Qwen sometimes requests repo-relative "src/..." instead of the
-            // workspace-relative "source/src/...". Resolve that exact read-only
-            // alias deterministically rather than wasting turns on ENOENT.
-            const readOnly = ["read_file","list_files","search_files","outline_solidity","read_solidity"].includes(name);
-            const clean = !path.startsWith("/") && !path.split(/[\\/]/).some(part=>part===".." || part===".") &&
-              path!=="" && path!=="source" && !path.startsWith("source/");
-            if (!readOnly || !clean || (error as NodeJS.ErrnoException).code!=="ENOENT") throw error;
-            const aliasedPath = "source/" + path;
-            full = await safePath(aliasedPath);
-            await appendFile(logFile,"[CONTROLLER_SOURCE_ALIAS] "+JSON.stringify({requested:path,resolved:aliasedPath})+"\n");
-            path = aliasedPath;
-            call.function.arguments.path=aliasedPath;
-          }
+          if (["read_file","list_files","search_files","outline_solidity","read_solidity"].includes(name))
+            path=await canonicalSourceReadPath(path);
+          const full = await safePath(path);
+          call.function.arguments.path=path;
           let offset = pageOffset(call.function.arguments?.offset);
           const keyAt=(at:number)=>JSON.stringify([name,relative(root,full),at,String(call.function.arguments?.query ?? "")]);
           let actionKey = keyAt(offset);
