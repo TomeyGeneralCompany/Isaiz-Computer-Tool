@@ -33,6 +33,7 @@ export class InvestigationWorkflow {
   private attemptedOutlines=new Set<string>();
   private latestSolidityPath:string|null=null;
   private requiredSource:string|null=null;
+  private requiredSourceQueue:string[]=[];
   private verifiedEvidenceFocus:string|null=null;
   private recoveryProbe:{path:string;query:string;kind:string}|null=null;
   private requiredProbePlanning=false;
@@ -143,6 +144,12 @@ export class InvestigationWorkflow {
   }
   rejectedDuplicateProbe() {this.duplicateProbeRejections++;this.feedback('The already attempted probe cannot be repeated. Return outcome=no_testable_candidate with a specific reason and findings=[]; do not claim an unverified vulnerability.');}
   requireSource(path:string) {this.requiredSource=path;this.feedback('Read '+path+' before planning its test.',true);}
+  requireSources(paths:string[]) {
+    const fresh=[...new Set(paths)].filter(path=>!this.readPaths.has(path));
+    this.requiredSource=fresh.shift()||null;
+    this.requiredSourceQueue=fresh;
+    if(this.requiredSource)this.feedback('Controller-selected caller chain requires reading '+this.requiredSource+'.',true);
+  }
   focusVerifiedEvidence(caseId:string) {
     if(!/^[a-f0-9]{64}$/.test(caseId))return false;
     if(!this.observations.some(o=>o.caseId===caseId && o.status==='behavior_observed'))return false;
@@ -192,7 +199,7 @@ export class InvestigationWorkflow {
     return null;
   }
   plan(action:Action) { this.recoveryProbe=null;this.requiredProbePlanning=false;this.requiredProbeKind=null;this.requiredProbePlanningRejections=0;this.state.pending=action;this.duplicateProbeRejections=0;this.lastFeedback=''; }
-  read(path:string) { this.readPaths.add(path);this.latestSolidityPath=path.endsWith('.sol')?path:null; if(path===this.requiredSource)this.requiredSource=null; }
+  read(path:string) { this.readPaths.add(path);this.latestSolidityPath=path.endsWith('.sol')?path:null; if(path===this.requiredSource)this.requiredSource=this.requiredSourceQueue.shift()||null; }
   observe(action:Action,output:string) {
     if(action.action==='outline_solidity')this.outlinedPaths.add(action.path);
     if(action.action==='verify_source') {
