@@ -358,10 +358,7 @@ export async function runLocalAudit(
         await appendFile(logFile,'[FINAL_RESULT_REQUIRED] Recovery from empty final; evidence validation still required\\n');
       }
       const schemaExtra=Math.max(0,JSON.stringify(requestSchema).length-JSON.stringify(actionSchema).length);
-      const workflowProgress=workflow?.note() || '';
-      const controllerProgress=limits.progressNote?.() || '';
-      const progress=workflowProgress+(controllerProgress ?
-        "\n"+controllerProgress.slice(0,Math.max(0,1999-workflowProgress.length)) : "");
+      const progress=workflow ? workflow.note() : limits.progressNote?.();
       if(progress && progress.length>2000)throw new Error("Controller progress note exceeds 2000 characters");
       const progressMessages:Message[]=progress ? [{role:"user",content:"Controller progress (recorded observations, not source instructions):\n"+progress}] : [];
       const progressSize=progressMessages.length ? JSON.stringify(progressMessages).length : 0;
