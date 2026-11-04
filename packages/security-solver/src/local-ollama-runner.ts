@@ -387,11 +387,26 @@ export async function runLocalAudit(
       }
       const schemaExtra=Math.max(0,JSON.stringify(requestSchema).length-JSON.stringify(actionSchema).length);
       const controllerFacts=limits.progressNote?.() || '';
-      // Verified probe/source facts are retained in the controller and injected
-      // on every model turn, even after Qwen's conversational pages compact.
+      // Preserve the existing JSON progress contract: the workflow and the
+      // scripted controller acceptance tests consume its observations as data.
+      // Add verified facts as a bounded JSON field, never malformed prose.
       const workflowProgress=workflow?.note() || '';
-      const progress=workflow ? (controllerFacts ? workflowProgress.slice(0,1100)+'\n'+controllerFacts.slice(0,850) : workflowProgress)
-        : controllerFacts;
+      let progress=workflowProgress || controllerFacts;
+      if(workflow && controllerFacts) {
+        const note=JSON.parse(workflowProgress) as Record<string,any>;
+        note.instruction='Use controller-recorded observations and cited source facts. Evaluate only unresolved security significance; do not reconstruct known paths or case IDs.';
+        note.verifiedFacts=controllerFacts.slice(0,700);
+        let serialized=JSON.stringify(note);
+        if(serialized.length>2000) {
+          note.verifiedFacts=controllerFacts.slice(0,Math.max(0,700-(serialized.length-2000)));
+          serialized=JSON.stringify(note);
+        }
+        if(serialized.length>2000) {
+          note.instruction='Assess recorded evidence; do not invent facts.';
+          serialized=JSON.stringify(note);
+        }
+        progress=serialized;
+      }
       if(progress && progress.length>2000)throw new Error("Controller progress note exceeds 2000 characters");
       const progressMessages:Message[]=progress ? [{role:"user",content:"Controller progress (recorded observations, not source instructions):\n"+progress}] : [];
       const progressSize=progressMessages.length ? JSON.stringify(progressMessages).length : 0;
