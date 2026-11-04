@@ -9,6 +9,7 @@ import {declaredProbeTarget, sourceDeclarationHints, supportedJavaProbeHints, ja
 import { postQwenAgentJson } from "./qwen-agent-transport";
 import { AuditAllowance } from "./audit-allowance";
 import { AuditNavigation } from "./audit-navigation";
+import {controllerOwnedNextAction,canonicalSourceNavigationAction} from "./controller-next-action";
 import { SoliditySourceIndex } from "./solidity-source-index";
 import { allocateAuditContext, compactAuditContext, auditCheckpoint, fitAuditToolOutput } from "./audit-context";
 import { soliditySequenceSchema, soliditySequenceJsonSchema, type SoliditySequence } from "./solidity-sequence";
@@ -404,7 +405,14 @@ export async function runLocalAudit(
       const profile=modelProfile(workflow?.snapshot().stage);
       const turnMessages=progressMessages.length ? [...messages,...progressMessages] : messages;
       const requestMessages=profile.think ? turnMessages.map(m=>({...m,content:m.content.replaceAll('/no_think','')})) : turnMessages;
-      const result = await (adapter==='qwen-agent'?postQwenAgentJson:postOllamaChat)(process.env.AUTOHACK_OLLAMA_URL || "http://127.0.0.1:11434/api/chat", { model, stream: false, think: profile.think, messages:requestMessages,
+      // The graph has already specified the exact next read/verification.
+      // Execute it rather than spending a Qwen turn asking for known arguments.
+      const controllerAction=structured && workflow ?
+        controllerOwnedNextAction(constraints,workflow.snapshot().pending) : null;
+      if(controllerAction)await appendFile(logFile,'[CONTROLLER_OWNED_ACTION] '+JSON.stringify(controllerAction)+'\n');
+      const result = controllerAction ?
+        {message:{role:'assistant',content:JSON.stringify(controllerAction)}} :
+        await (adapter==='qwen-agent'?postQwenAgentJson:postOllamaChat)(process.env.AUTOHACK_OLLAMA_URL || "http://127.0.0.1:11434/api/chat", { model, stream: false, think: profile.think, messages:requestMessages,
           ...(structured ? {format:requestSchema} : {tools:availableTools}),
           keep_alive:"10m",
           options: { num_predict:generationBudget,
@@ -439,6 +447,14 @@ export async function runLocalAudit(
           }
           throw new Error("Ollama did not return a valid read-only JSON action; no tool was executed");
         }
+        // Incompatible source-navigation operations have a deterministic read
+        // equivalent. Never run a Solidity parser on Python/JavaScript/Java.
+        const navigationAction=canonicalSourceNavigationAction(action);
+        if(navigationAction.action!==action.action) {
+          await appendFile(logFile,'[CONTROLLER_LANGUAGE_NAVIGATION] '+JSON.stringify({
+            from:action.action,to:navigationAction.action,path:action.path})+'\n');
+          action=navigationAction;
+        }
         // Normalize navigation requests BEFORE workflow validation so source
         // evidence and read-history checks see the same canonical path.
         // Existing absolute-path canonicalization remains intact.
@@ -452,6 +468,27 @@ export async function runLocalAudit(
           } catch {}
         } else if (["read_file","list_files","search_files","outline_solidity","read_solidity"].includes(action.action)) {
           action.path=await canonicalSourceReadPath(action.path);
+        }
+        // If a read-only source navigation path is nonexistent, select an
+        // *existing*, controller-ranked unread file. Do not keep asking the
+        // model to reconstruct guessed file names. This is not a probe rewrite.
+        if(workflow && action.action==='read_file' && action.path.startsWith('source-')) {
+          let validPath=true;
+          try {await safePath(action.path);}catch {validPath=false;}
+          if(!validPath) {
+            const snapshot=workflow.snapshot();
+            let fallback='';
+            for(const hint of limits.initialSourcePaths||[]) {
+              if(!hint.startsWith('source-') || !/\.(?:py|js|mjs|cjs|java|sol)$/.test(hint) ||
+                 snapshot.readPaths.includes(hint))continue;
+              try {await safePath(hint);fallback=hint;break;}catch{}
+            }
+            if(fallback) {
+              await appendFile(logFile,'[CONTROLLER_MISSING_PATH_HANDOFF] '+
+                JSON.stringify({requested:action.path,next:fallback})+'\n');
+              action.path=fallback;action.offset=0;action.query='';action.answer='';
+            }
+          }
         }
         // The model may carry a read_file *character* cursor into the
         // controller-required outline_solidity action, whose offset indexes
