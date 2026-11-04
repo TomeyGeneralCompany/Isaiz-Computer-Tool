@@ -1,0 +1,121 @@
+import {readFile} from 'node:fs/promises';
+import {dirname,join,relative,resolve,sep} from 'node:path';
+import {createHash} from 'node:crypto';
+
+export type ReviewLink = {file:string;line:number;code:string;relationship:string};
+export type ReviewEvidence = {
+  language:string;kind:string;reachabilityRequirement:string;
+  links:ReviewLink[];unresolved:string[];sourceDigest:string;
+  summary:string;
+};
+
+/** Source-derived call edges, NOT an inferred vulnerability or an exploitability proof.
+ * Only quote actual in-repository lines; limit traversal and never follow traversal/symlinks.
+ */
+export async function buildReviewEvidence(repository:string,input:{
+  testedFile:string;testedFunction:string;callerFile:string;callerLine:number;
+  kind:string;reachability:string
+}):Promise<ReviewEvidence> {
+  const base=resolve(repository);
+  const language=input.testedFile.endsWith('.java')?'java':
+    input.testedFile.endsWith('.py')?'python':
+    /\.(?:cjs|mjs|js|ts)$/.test(input.testedFile)?'javascript':
+    input.testedFile.endsWith('.sol')?'solidity':'other';
+  const requirements:Record<string,string>={
+    java:'Establish the calling Java method, trace the supplied argument through invoked methods into an HTML/string output, check effective escaping and input trust. A blockchain transaction is NOT a prerequisite for Java source-level reachability.',
+    python:'Establish the input origin and subsequent data flow to the relevant output or filesystem operation; distinguish request parsing from sanitization.',
+    javascript:'Establish attacker-influenced input, dynamic output context, and actual encoding or validation before the sink.',
+    solidity:'Establish transaction entry, reachable state changes, privileges and concrete transaction/state sequence.',
+    other:'Establish the language-appropriate input origin, concrete call chain, relevant sink, and any mitigation.'
+  };
+  const links:ReviewLink[]=[]; const unresolved:string[]=[];
+  const seen=new Set<string>();
+  const selector=input.testedFunction.split('.').at(-1)||input.testedFunction;
+  const safeRead=async (file:string):Promise<string|null>=>{
+    if(!file || file.startsWith('/') || file.split(/[\\/]/).includes('..'))return null;
+    const absolute=resolve(base,file);
+    if(!absolute.startsWith(base+sep))return null;
+    try {
+      const {realpath}=await import('node:fs/promises');
+      const canonical=await realpath(absolute);
+      if(!canonical.startsWith(base+sep))return null;
+      return await readFile(canonical,'utf8');
+    }catch{return null;}
+  };
+  const appendLines=(file:string,source:string,lo:number,hi:number,relationship:string)=>{
+    const lines=source.split('\n');
+    for(let i=Math.max(0,lo);i<Math.min(hi,lines.length);i++){
+      const code=lines[i].trim();
+      if(!code)continue;
+      const key=file+':'+(i+1);
+      if(seen.has(key))continue;
+      seen.add(key);
+      links.push({file,line:i+1,code:lines[i],relationship});
+    }
+  };
+  const caller=await safeRead(input.callerFile);
+  if(caller){
+    appendLines(input.callerFile,caller,input.callerLine-3,input.callerLine+2,'recorded caller context');
+  }else unresolved.push('Recorded caller file cannot be read');
+  const target=await safeRead(input.testedFile);
+  if(target){
+    const lines=target.split('\n'),ix=lines.findIndex(x=>x.includes(selector+'(')||x.includes(selector+' ('));
+    appendLines(input.testedFile,target,Math.max(0,ix-2),Math.max(0,ix)+12,'reproduced function and nearby source');
+    if(ix<0)unresolved.push('Selector not textually found in tested source');
+  }else unresolved.push('Tested source file cannot be read');
+  if(language==='java' && target) {
+    const queue:[string,string][]=[[input.testedFile,target]];
+    const visited=new Set<string>();
+    while(queue.length && visited.size<8){
+      const [file,body]=queue.shift()!;
+      if(visited.has(file))continue;
+      visited.add(file);
+      for(const match of body.matchAll(/\b([A-Z][A-Za-z0-9_]*)\.([a-zA-Z][A-Za-z0-9_]*)\s*\(/g)){
+        const helper=join(dirname(file),match[1]+'.java').split(sep).join('/');
+        if(helper===file||visited.has(helper))continue;
+        const helperCode=await safeRead(helper);
+        if(!helperCode){unresolved.push('Unresolved potential call '+match[1]+'.'+match[2]+' in '+file);continue;}
+        const methodLines=helperCode.split('\n');
+        const methodAt=methodLines.findIndex(line=>line.includes(match[2]+'('));
+        if(methodAt>=0){
+          appendLines(helper,helperCode,Math.max(0,methodAt-1),methodAt+12,'referenced Java helper: '+match[1]+'.'+match[2]);
+          queue.push([helper,helperCode]);
+        }else unresolved.push('Java helper method not found in '+helper+': '+match[2]);
+      }
+    }
+  }
+  // Source lines and their digest persist as immutable review facts. A static call
+  // edge alone does not prove that the argument can be controlled by an attacker.
+  const sourceDigest=createHash('sha256').update(JSON.stringify(links)).digest('hex');
+  const summary=[
+    'Language: '+language+'; probe: '+input.kind+'; reachability: '+input.reachability,
+    'Required evidence: '+(requirements[language]||requirements.other),
+    'Source-backed lines (quoted verbatim; no inferred taint or exploitability):',
+    ...links.map(x=>x.file+':'+x.line+' ['+x.relationship+'] '+x.code),
+    'Unresolved edges: '+(unresolved.length?unresolved.join('; '):'none detected by this bounded scan'),
+    'Evidence SHA256: '+sourceDigest,
+    'A local reproduction supports behavior only. Judge attacker control, mitigation, context and real impact independently.'
+  ].join('\n');
+  return {language,kind:input.kind,reachabilityRequirement:requirements[language]||requirements.other,
+    links,unresolved,sourceDigest,summary};
+}
+
+/** Reject unspecific/contradictory objections; do not auto-approve findings. */
+export function reviewRejectionDefect(review:{
+  verdict:string;issues:{category:string;severity:string;description:string}[];reasoning:string
+},evidence:ReviewEvidence):string|null {
+  if(review.verdict!=='reject')return null;
+  const fatal=review.issues.filter(issue=>issue.severity==='fatal');
+  if(!fatal.length)return 'For rejection, identify at least one specific fatal technical defect in issues, tied to an actual source location or missing evidence. Do not rely on a general impression.';
+  const prose=[...fatal.map(i=>i.description),review.reasoning].join(' ');
+  if(evidence.language!=='solidity' &&
+    /\b(?:blockchain|on.chain|contract transaction|production transaction|transaction (?:path|trace|sequence|entry))\b/i.test(prose))
+    return 'Transaction-chain reachability is a Solidity criterion, not a requirement for this '+evidence.language+' source review. Name the actual missing input/sink link or mitigation instead.';
+  if(/\b(?:no production (?:endpoint|request|deployment)|not deployed|local (?:probe|test) only)\b/i.test(prose) &&
+    !/\b(?:mitigation|sanitiz|escape|unreachable|untrusted|attacker|input origin|sink)\b/i.test(prose))
+    return 'A local reproduction is not proof of full impact, but lack of production testing alone is not a specific source-level technical defect. Identify the missing source link or effective mitigation.';
+  const grounds=/\b(?:unreachable|reachab|untrusted|attacker|input|source|sink|saniti[sz]|escap|mitigat|guard|access|privilege|authorization|state|sequence|replay|observ|scope|impact|evidence|caller|path)\b/i;
+  if(!fatal.some(i=>grounds.test(i.description)))
+    return 'Fatal rejection must name a specific missing source-to-sink link, mitigation, untrusted-input issue, reproduction discrepancy, or other technical defect.';
+  return null;
+}
