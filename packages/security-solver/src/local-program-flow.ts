@@ -240,7 +240,7 @@ Do not claim production testing, JavaScript execution, file access or other effe
           for(let depth=0;depth<4;depth++){
             const candidates:Array<{path:string;line:number;code:string;qualified:boolean;source:string}>=[],prefix=
               relative(root,repository.directory).split(sep).join('/')+'/';
-            for(const candidatePath of [...new Set([...sourceHints,...eligiblePaths])].slice(0,128)) {
+            for(const candidatePath of [...new Set([...sourceHints,...eligiblePaths])].slice(0,192)) {
               if(visited.has(candidatePath) || !candidatePath.startsWith(prefix))continue;
               try {
                 const code=await readFile(join(root,candidatePath),'utf8');
@@ -312,7 +312,7 @@ Do not claim production testing, JavaScript execution, file access or other effe
             const repository=repos.find(r=>r.url===record.repositoryUrl);
             if(!repository || !reads.has(sourceFileInWorkspace(repository,record.spec.file,root)))continue;
             const matches:Array<{path:string,line:number,code:string,qualified:boolean}>=[];
-            for(const sourcePath of [...new Set([...sourceHints,...eligiblePaths])].slice(0,80)) {
+            for(const sourcePath of [...new Set([...sourceHints,...eligiblePaths])].slice(0,192)) {
               if(!sourcePath.startsWith(relative(root,repository.directory).split(sep).join('/')+'/') ||
                  !reads.has(sourcePath))continue;
               try {
@@ -396,7 +396,7 @@ Do not claim production testing, JavaScript execution, file access or other effe
                 if(!record || !record.result.behavior_observed ||
                    candidate.reachability==='direct_transaction')continue;
                 const sites:{file:string,line:number,qualified:boolean}[]=[];
-                for(const path of [...new Set([...sourceHints,...eligiblePaths])].slice(0,80)) {
+                for(const path of [...new Set([...sourceHints,...eligiblePaths])].slice(0,192)) {
                   const sourceRepo=repos.find(r=>path.startsWith(relative(root,r.directory).split(sep).join('/')+'/'));
                   if(!sourceRepo || sourceRepo.url!==record.repositoryUrl || !reads.has(path))continue;
                   try {
@@ -506,7 +506,7 @@ Do not claim production testing, JavaScript execution, file access or other effe
               }catch{}
               if(claimedValid)continue;
               const sites:{file:string,line:number}[]=[];
-              for(const candidatePath of [...new Set([...sourceHints,...eligiblePaths])].slice(0,80)) {
+              for(const candidatePath of [...new Set([...sourceHints,...eligiblePaths])].slice(0,192)) {
                 if(sites.length>=8)break;
                 const candidateRepo=repos.find(r=>candidatePath.startsWith(relative(root,r.directory).split(sep).join('/')+'/'));
                 if(!candidateRepo || candidateRepo.url!==record.repositoryUrl)continue;
