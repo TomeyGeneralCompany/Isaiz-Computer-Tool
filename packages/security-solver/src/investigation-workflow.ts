@@ -33,6 +33,8 @@ export class InvestigationWorkflow {
   private attemptedOutlines=new Set<string>();
   private latestSolidityPath:string|null=null;
   private requiredSource:string|null=null;
+  private requiredSourceQueue:string[]=[];
+  private verifiedEvidenceFocus:string|null=null;
   private recoveryProbe:{path:string;query:string;kind:string}|null=null;
   private requiredProbePlanning=false;
   private requiredProbeKind:string|null=null;
@@ -73,6 +75,11 @@ export class InvestigationWorkflow {
     if(this.pageTurns>=8)this.state.inspections=Math.max(6,this.state.inspections);
     this.state=await graph.invoke(this.state);
     if(this.requiredSource)return {action:['read_file'],path:[this.requiredSource]};
+    // Once the controller has source-grounded reachability evidence for an
+    // observed reproduction, further exploration cannot displace this case.
+    // Only a final technical assessment (including a supported rejection) is
+    // permitted until the reviewer settles it.
+    if(this.verifiedEvidenceFocus && !this.state.pending)return {action:['final']};
     // After a long paginated Solidity read, surface declarations before allowing
     // another speculative final. Once attempted, never trap an unparseable file.
     if(this.pageTurns>=6 && this.latestSolidityPath && !this.attemptedOutlines.has(this.latestSolidityPath) && !this.state.pending) {
@@ -97,8 +104,8 @@ export class InvestigationWorkflow {
   note():string {
     const note={unansweredQuestion:this.decisions.length?{...this.decisions.at(-1)!,path:this.decisions.at(-1)!.path.slice(0,160),question:this.decisions.at(-1)!.question.slice(0,250)}:undefined,priorNavigation:this.priorNotes.slice(-1).map(n=>n.slice(0,200)),pageTurns:this.pageTurns,stage:this.state.stage,inspectionsSinceDecision:this.state.inspections,
       recentReadPaths:[...this.readPaths].slice(-3).map(p=>p.slice(0,160)),nextUnreadPages:[...this.nextOffsets].filter(([,offset])=>offset!==null).slice(-3).map(([path,offset])=>({path:path.slice(0,160),offset})),pending:this.state.pending ? {path:this.state.pending.path.slice(0,160),function:this.state.pending.query,kind:this.state.pending.answer} : null,
-      observations:this.observations.slice(-2).map(o=>({...o,path:o.path.slice(0,160)})),feedback:this.lastFeedback.slice(0,240),
-      instruction:this.state.pending?'Execute the planned probe with exactly its path, function, kind and sequence.':
+      observations:this.observations.slice(-2).map(o=>({...o,path:o.path.slice(0,160)})),verifiedEvidenceFocus:this.verifiedEvidenceFocus,feedback:this.lastFeedback.slice(0,240),
+      instruction:this.verifiedEvidenceFocus?'The controller has locked a source-reproduced case '+this.verifiedEvidenceFocus+'. Assess its technical security significance against the recorded observations, caller chain and mitigations. Do not select new navigation or probes; a supported negative judgment is valid.':this.state.pending?'Execute the planned probe with exactly its path, function, kind and sequence.':
         'Read relevant source, then plan_probe with path, query=function, answer=probe kind, hypothesis=claim AND disproof condition. After six inspections or eight source pages, choose plan_probe, continue_inspection with a specific unanswered question in hypothesis and the next path/offset/query, or an incomplete final. Continue only to obtain that missing evidence; no forced unrelated test. A failed or unsupported verification is not proof of absence or presence. After inspecting recorded evidence, change candidate or request specific missing context; do not repeat completed evidence pages. Read recorded evidenceFile pages when an observation leaves context instead of repeating its probe. After testing inspect caller/mitigations before reporting; observations alone are not findings.'};
     // Evidence is controller-owned and must survive conversation compaction.
     // Discard navigation prose before dropping a verified reproduction record.
@@ -137,6 +144,21 @@ export class InvestigationWorkflow {
   }
   rejectedDuplicateProbe() {this.duplicateProbeRejections++;this.feedback('The already attempted probe cannot be repeated. Return outcome=no_testable_candidate with a specific reason and findings=[]; do not claim an unverified vulnerability.');}
   requireSource(path:string) {this.requiredSource=path;this.feedback('Read '+path+' before planning its test.',true);}
+  requireSources(paths:string[]) {
+    const fresh=[...new Set(paths)].filter(path=>!this.readPaths.has(path));
+    this.requiredSource=fresh.shift()||null;
+    this.requiredSourceQueue=fresh;
+    if(this.requiredSource)this.feedback('Controller-selected caller chain requires reading '+this.requiredSource+'.',true);
+  }
+  focusVerifiedEvidence(caseId:string) {
+    if(!/^[a-f0-9]{64}$/.test(caseId))return false;
+    if(!this.observations.some(o=>o.caseId===caseId && o.status==='behavior_observed'))return false;
+    this.verifiedEvidenceFocus=caseId;
+    this.requiredProbePlanning=false;this.requiredProbeKind=null;
+    this.recoveryProbe=null;
+    this.feedback('Verified behavior and source-backed caller recorded. Make a bounded technical assessment of this case; do not navigate unrelated sources or invent other probe actions. An assessed non-vulnerability remains a valid outcome.');
+    return true;
+  }
   /** Recover from repeated unsupported model plans using already ranked source.
    * This requires a genuine next read; it never fabricates a probe or evidence. */
   requireNextUnreadSource(prioritized:string[]):string|null {
@@ -177,7 +199,7 @@ export class InvestigationWorkflow {
     return null;
   }
   plan(action:Action) { this.recoveryProbe=null;this.requiredProbePlanning=false;this.requiredProbeKind=null;this.requiredProbePlanningRejections=0;this.state.pending=action;this.duplicateProbeRejections=0;this.lastFeedback=''; }
-  read(path:string) { this.readPaths.add(path);this.latestSolidityPath=path.endsWith('.sol')?path:null; if(path===this.requiredSource)this.requiredSource=null; }
+  read(path:string) { this.readPaths.add(path);this.latestSolidityPath=path.endsWith('.sol')?path:null; if(path===this.requiredSource)this.requiredSource=this.requiredSourceQueue.shift()||null; }
   observe(action:Action,output:string) {
     if(action.action==='outline_solidity')this.outlinedPaths.add(action.path);
     if(action.action==='verify_source') {
@@ -216,5 +238,5 @@ export class InvestigationWorkflow {
     } else this.state.inspections=Math.max(6,this.state.inspections);
   }
   feedback(message:string,reopen=false) {this.lastFeedback=message.slice(0,400);if(reopen){this.state.inspections=0;this.pageTurns=0;}}
-  snapshot() {return {outlinedPaths:[...this.outlinedPaths],...this.state,pageTurns:this.pageTurns,sourceProgress:this.sourceProgress,decisions:this.decisions,priorNotes:this.priorNotes,readPaths:[...this.readPaths],observations:this.observations};}
+  snapshot() {return {outlinedPaths:[...this.outlinedPaths],...this.state,pageTurns:this.pageTurns,sourceProgress:this.sourceProgress,decisions:this.decisions,priorNotes:this.priorNotes,readPaths:[...this.readPaths],observations:this.observations,verifiedEvidenceFocus:this.verifiedEvidenceFocus};}
 }

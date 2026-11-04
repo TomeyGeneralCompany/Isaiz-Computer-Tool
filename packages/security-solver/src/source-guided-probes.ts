@@ -22,6 +22,24 @@ export function guidedSourceProbe(path:string,code:string):GuidedProbe|null {
     }
     return null;
   }
+  if(/\.(?:js|mjs|cjs)$/.test(path) && code.length<=256000) {
+    // Exported one-input CommonJS or ESM functions whose literal returned
+    // expression produces HTML are eligible for the same isolated verifier.
+    // A source-level match is only a hypothesis, never vulnerability proof.
+    const declarations=[
+      /\bexports\.([A-Za-z_$][\w$]*)\s*=\s*function\s*(?:[A-Za-z_$][\w$]*)?\s*\(\s*([A-Za-z_$][\w$]*)\s*\)\s*\{/g,
+      /\bexport\s+(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(\s*([A-Za-z_$][\w$]*)\s*\)\s*\{/g
+    ];
+    for(const declaration of declarations)for(const match of code.matchAll(declaration)) {
+      const end=code.indexOf('}',match.index!+match[0].length);
+      if(end<0 || end-match.index!>6000)continue;
+      const body=code.slice(match.index!+match[0].length,end);
+      if(!/\breturn\b/.test(body) || !/<p>/i.test(body) || !/<\/p>/i.test(body))continue;
+      return {path,functionName:match[1],kind:'html_reflection',
+        hypothesis:'Check whether source-provided HTML input survives this exported renderer; escaped markup disproves reflection.'};
+    }
+    return null;
+  }
   if(!path.endsWith('.py') || code.length>256000)return null;
   const declaration=/^def ([A-Za-z][A-Za-z0-9_]{0,79})\(([A-Za-z][A-Za-z0-9_]*)\)\s*(?:->\s*(?:str|String)\s*)?:\s*$/gm;
   for(const match of code.matchAll(declaration)) {

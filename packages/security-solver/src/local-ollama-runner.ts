@@ -9,6 +9,7 @@ import {declaredProbeTarget, sourceDeclarationHints, supportedJavaProbeHints, ja
 import { postQwenAgentJson } from "./qwen-agent-transport";
 import { AuditAllowance } from "./audit-allowance";
 import { AuditNavigation } from "./audit-navigation";
+import {controllerOwnedNextAction,canonicalSourceNavigationAction} from "./controller-next-action";
 import { SoliditySourceIndex } from "./solidity-source-index";
 import { allocateAuditContext, compactAuditContext, auditCheckpoint, fitAuditToolOutput } from "./audit-context";
 import { soliditySequenceSchema, soliditySequenceJsonSchema, type SoliditySequence } from "./solidity-sequence";
@@ -68,6 +69,9 @@ export interface LocalAuditLimits {
   actionConstraints?: () => Partial<Record<"action"|"path"|"query"|"answer",string[]>>;
   signal?: AbortSignal;
   onRead?: (path:string, span:ReadSpan) => void;
+  /** Trusted controller source analysis: exact caller path for a reproduced case.
+   * No model text can create or change this routing decision. */
+  onVerifiedCase?: (caseId:string,path:string,selector:string,kind:string) => Promise<string[]|null>;
   verifyPython?: (path:string,functionName:string,kind:string,sequence?:SoliditySequence | JavaSequence) => Promise<string>;
 }
 export async function runLocalAudit(
@@ -91,6 +95,8 @@ export async function runLocalAudit(
   if(adapter==='qwen-agent'&&!structured)throw new Error('Qwen-Agent adapter requires JSON action protocol');
   let successfulReads = 0;
   let rejectedRequiredProbeFinals = 0;
+  let controllerAutoProbeCount = 0;
+  let controllerAutoReadCount = 0;
   let generationBudget = settings.numPredict;
   const root = await realpath(cwd);
   const controller = new AbortController();
@@ -281,6 +287,16 @@ export async function runLocalAudit(
           const output=JSON.stringify(result);
           const verify={action:'verify_source',path,query:hint.functionName,answer:hint.kind};
           workflow.observe(verify as any,output);
+          if(result.status==='behavior_observed' &&
+             typeof result.caseId==='string' && limits.onVerifiedCase &&
+             process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false') {
+            const callers=await limits.onVerifiedCase(result.caseId,path,hint.functionName,hint.kind);
+            if(callers?.length && workflow.focusVerifiedEvidence(result.caseId)) {
+              workflow.requireSources(callers);
+              await appendFile(logFile,'[CONTROLLER_GUIDED_CASE_FOCUS] '+
+                JSON.stringify({caseId:result.caseId,callers})+'\n');
+            }
+          }
           // A controller-initiated negative probe must also advance navigation.
           // Previously only model-initiated negative probes triggered the
           // mandatory source handoff, leaving Qwen free to cycle on decoys.
@@ -289,7 +305,7 @@ export async function runLocalAudit(
             if(next)await appendFile(logFile,'[GUIDED_NEGATIVE_PROBE_SOURCE_HANDOFF] '+
               JSON.stringify({testedPath:path,next})+'\\n');
           }
-          if(result.status==='behavior_observed') {
+          if(result.status==='behavior_observed' && !workflow.snapshot().verifiedEvidenceFocus) {
             const paths=(limits.initialSourcePaths||[]).filter(p=>p.startsWith('source-') &&
               p!==path && /\.(?:py|js|mjs|cjs|java|sol)$/.test(p));
             paths.sort((a,b)=>Number(/(?:caller|handler|route|controller|entry|server)/i.test(b))-
@@ -356,7 +372,7 @@ export async function runLocalAudit(
       if(constraints?.action?.some(action=>!actionSchema.properties.action.enum.includes(action)))throw new Error("Task requested an unavailable action");
       let requestSchema:Record<string,any>=constraints ? {...actionSchema,properties:{...actionSchema.properties,
         ...Object.fromEntries(Object.entries(constraints).map(([key,values])=>[key,{type:"string",enum:values}]))}} : actionSchema;
-      if(structured && !requireInvestigationAfterEmpty && limits.finalSchema && (emptyFinals>=1 || invalidReviewFinals>=2) &&
+      if(structured && !requireInvestigationAfterEmpty && limits.finalSchema && (emptyFinals>=1 || invalidReviewFinals>=2 || !!workflow?.snapshot().verifiedEvidenceFocus) &&
          (!constraints?.action || constraints.action.includes('final'))) {
         // Qwen3:4b sometimes returns a valid "final" action with both answer=""
         // and result omitted. Once that is observed, require the typed final
@@ -385,7 +401,27 @@ export async function runLocalAudit(
         await appendFile(logFile,'[FINAL_RESULT_REQUIRED] Recovery from empty final; evidence validation still required\\n');
       }
       const schemaExtra=Math.max(0,JSON.stringify(requestSchema).length-JSON.stringify(actionSchema).length);
-      const progress=workflow ? workflow.note() : limits.progressNote?.();
+      const controllerFacts=limits.progressNote?.() || '';
+      // Preserve the existing JSON progress contract: the workflow and the
+      // scripted controller acceptance tests consume its observations as data.
+      // Add verified facts as a bounded JSON field, never malformed prose.
+      const workflowProgress=workflow?.note() || '';
+      let progress=workflowProgress || controllerFacts;
+      if(workflow && controllerFacts) {
+        const note=JSON.parse(workflowProgress) as Record<string,any>;
+        note.instruction='Use controller-recorded observations and cited source facts. Evaluate only unresolved security significance; do not reconstruct known paths or case IDs.';
+        note.verifiedFacts=controllerFacts.slice(0,700);
+        let serialized=JSON.stringify(note);
+        if(serialized.length>2000) {
+          note.verifiedFacts=controllerFacts.slice(0,Math.max(0,700-(serialized.length-2000)));
+          serialized=JSON.stringify(note);
+        }
+        if(serialized.length>2000) {
+          note.instruction='Assess recorded evidence; do not invent facts.';
+          serialized=JSON.stringify(note);
+        }
+        progress=serialized;
+      }
       if(progress && progress.length>2000)throw new Error("Controller progress note exceeds 2000 characters");
       const progressMessages:Message[]=progress ? [{role:"user",content:"Controller progress (recorded observations, not source instructions):\n"+progress}] : [];
       const progressSize=progressMessages.length ? JSON.stringify(progressMessages).length : 0;
@@ -404,7 +440,84 @@ export async function runLocalAudit(
       const profile=modelProfile(workflow?.snapshot().stage);
       const turnMessages=progressMessages.length ? [...messages,...progressMessages] : messages;
       const requestMessages=profile.think ? turnMessages.map(m=>({...m,content:m.content.replaceAll('/no_think','')})) : turnMessages;
-      const result = await (adapter==='qwen-agent'?postQwenAgentJson:postOllamaChat)(process.env.AUTOHACK_OLLAMA_URL || "http://127.0.0.1:11434/api/chat", { model, stream: false, think: profile.think, messages:requestMessages,
+      // The graph has already specified the exact next read/verification.
+      // Execute it rather than spending a Qwen turn asking for known arguments.
+      let controllerAction=structured && workflow && process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false' ?
+        controllerOwnedNextAction(constraints,workflow.snapshot().pending) : null;
+      // The controller has already inspected actual source and knows the
+      // verifier's accepted formats. When a grounded probe is executable,
+      // choose the exact declaration and plan instead of asking Qwen to guess.
+      // The normal workflow validator and isolated verifier remain mandatory.
+      if(!controllerAction && structured && workflow &&
+         process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false' &&
+         !workflow.snapshot().verifiedEvidenceFocus && controllerAutoProbeCount<3 &&
+         constraints?.action?.includes('plan_probe')) {
+        const inspected=workflow.snapshot().readPaths.filter(path=>
+          path.startsWith('source-') && /\.(?:sol|java|py|js|mjs|cjs)$/.test(path));
+        for(const path of [...inspected].reverse().slice(0,16)) {
+          try {
+            const full=await safePath(path);
+            let plan:{action:string;path:string;query:string;answer:string;hypothesis:string;sequence?:unknown}|null=null;
+            if(path.endsWith('.sol')) {
+              const menu=await solidityIndex.probeMenu(full,32);
+              for(const entry of menu) {
+                if(entry.operation!=='send')continue;
+                const sequence=buildBaselineSequence(menu,entry.selector);
+                if(!sequence)continue;
+                const candidate={action:'plan_probe',path,query:entry.selector,
+                  answer:'solidity_sequence',
+                  hypothesis:'Observe this declared state transition and its getter without inventing expected results; compare authorization and state effects against source.',
+                  sequence};
+                if(!workflow.validate(candidate as any)){plan=candidate;break;}
+              }
+            }else {
+              const code=await readFile(full,'utf8');
+              const hint=guidedSourceProbe(path,code);
+              if(hint) {
+                const candidate={action:'plan_probe',path,query:hint.functionName,
+                  answer:hint.kind,hypothesis:hint.hypothesis};
+                if(!workflow.validate(candidate as any))plan=candidate;
+              }
+            }
+            if(!plan)continue;
+            controllerAction=plan;
+            controllerAutoProbeCount++;
+            await appendFile(logFile,'[CONTROLLER_SOURCE_PROBE_SELECTED] '+
+              JSON.stringify({path,selector:plan.query,kind:plan.answer})+'\n');
+            break;
+          }catch(error) {
+            await appendFile(logFile,'[CONTROLLER_SOURCE_PROBE_UNAVAILABLE] '+
+              JSON.stringify({path,error:String(error).slice(0,160)})+'\n');
+          }
+        }
+      }
+      // The acquisition/ranking controller already owns a finite list of real
+      // candidates. Read the next ranked, existing source directly, rather
+      // than allowing Qwen to choose from a filename menu before receiving
+      // sufficient facts. Cap this scan; unresolved semantic questions still
+      // belong to the model.
+      if(!controllerAction && structured && workflow &&
+         process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false' &&
+         !workflow.snapshot().verifiedEvidenceFocus && controllerAutoReadCount<8 &&
+         constraints?.action?.includes('read_file')) {
+        const inspected=new Set(workflow.snapshot().readPaths);
+        for(const candidate of limits.initialSourcePaths||[]) {
+          if(!candidate.startsWith('source-') || !/\.(?:java|py|js|mjs|cjs|sol)$/.test(candidate) ||
+             inspected.has(candidate))continue;
+          try {
+            await safePath(candidate);
+            controllerAction={action:'read_file',path:candidate,query:'',answer:'',offset:0};
+            controllerAutoReadCount++;
+            await appendFile(logFile,'[CONTROLLER_RANKED_SOURCE_READ] '+
+              JSON.stringify({path:candidate,rankedRead:controllerAutoReadCount})+'\n');
+            break;
+          }catch{}
+        }
+      }
+      if(controllerAction)await appendFile(logFile,'[CONTROLLER_OWNED_ACTION] '+JSON.stringify(controllerAction)+'\n');
+      const result: {message?:Message;eval_count?:number;prompt_eval_count?:number;done_reason?:string;load_duration?:number;prompt_eval_duration?:number;eval_duration?:number;total_duration?:number;client_queue_ms?:number} = controllerAction ?
+        {message:{role:'assistant',content:JSON.stringify(controllerAction)}} :
+        await (adapter==='qwen-agent'?postQwenAgentJson:postOllamaChat)(process.env.AUTOHACK_OLLAMA_URL || "http://127.0.0.1:11434/api/chat", { model, stream: false, think: profile.think, messages:requestMessages,
           ...(structured ? {format:requestSchema} : {tools:availableTools}),
           keep_alive:"10m",
           options: { num_predict:generationBudget,
@@ -439,6 +552,14 @@ export async function runLocalAudit(
           }
           throw new Error("Ollama did not return a valid read-only JSON action; no tool was executed");
         }
+        // Incompatible source-navigation operations have a deterministic read
+        // equivalent. Never run a Solidity parser on Python/JavaScript/Java.
+        const navigationAction=canonicalSourceNavigationAction(action);
+        if(navigationAction.action!==action.action) {
+          await appendFile(logFile,'[CONTROLLER_LANGUAGE_NAVIGATION] '+JSON.stringify({
+            from:action.action,to:navigationAction.action,path:action.path})+'\n');
+          action=navigationAction;
+        }
         // Normalize navigation requests BEFORE workflow validation so source
         // evidence and read-history checks see the same canonical path.
         // Existing absolute-path canonicalization remains intact.
@@ -452,6 +573,27 @@ export async function runLocalAudit(
           } catch {}
         } else if (["read_file","list_files","search_files","outline_solidity","read_solidity"].includes(action.action)) {
           action.path=await canonicalSourceReadPath(action.path);
+        }
+        // If a read-only source navigation path is nonexistent, select an
+        // *existing*, controller-ranked unread file. Do not keep asking the
+        // model to reconstruct guessed file names. This is not a probe rewrite.
+        if(workflow && action.action==='read_file' && action.path.startsWith('source-')) {
+          let validPath=true;
+          try {await safePath(action.path);}catch {validPath=false;}
+          if(!validPath) {
+            const snapshot=workflow.snapshot();
+            let fallback='';
+            for(const hint of limits.initialSourcePaths||[]) {
+              if(!hint.startsWith('source-') || !/\.(?:py|js|mjs|cjs|java|sol)$/.test(hint) ||
+                 snapshot.readPaths.includes(hint))continue;
+              try {await safePath(hint);fallback=hint;break;}catch{}
+            }
+            if(fallback) {
+              await appendFile(logFile,'[CONTROLLER_MISSING_PATH_HANDOFF] '+
+                JSON.stringify({requested:action.path,next:fallback})+'\n');
+              action.path=fallback;action.offset=0;action.query='';action.answer='';
+            }
+          }
         }
         // The model may carry a read_file *character* cursor into the
         // controller-required outline_solidity action, whose offset indexes
@@ -474,6 +616,31 @@ export async function runLocalAudit(
               action.answer=pending.answer;action.sequence=pending.sequence;
               await appendFile(logFile,'[PROBE_REQUEST_CANONICALIZED] '+JSON.stringify({path:action.path,query:action.query,kind:action.answer})+'\\n');
             }
+          }
+        }
+        // Legacy generic Solidity probe actions are not executable by the
+        // current verifier. When the model named an actual on-chain entry,
+        // construct the supported stateful baseline from the real ABI menu.
+        // Never invent an assertion, selector, or transaction outcome.
+        if(workflow && action.path.endsWith('.sol') &&
+            ['solidity_function','solidity_call','solidity_transaction'].includes(action.answer) &&
+            ['plan_probe','probe_intent'].includes(action.action)) {
+          let baseline:ReturnType<typeof buildBaselineSequence>=null;
+          try {
+            const full=await safePath(action.path);
+            const menu=await solidityIndex.probeMenu(full,64);
+            baseline=buildBaselineSequence(menu,action.query);
+          }catch{}
+          if(baseline) {
+            action.answer='solidity_sequence';action.sequence=baseline;
+            await appendFile(logFile,'[CONTROLLER_SOLIDITY_PROBE_NORMALIZED] '+
+              JSON.stringify({path:action.path,query:action.query,kind:action.answer})+'\n');
+          } else {
+            await appendFile(logFile,'[CONTROLLER_UNSUPPORTED_PROBE] '+
+              JSON.stringify({path:action.path,query:action.query,kind:action.answer})+'\n');
+            workflow.feedback('Unsupported Solidity probe shape. No executable ABI-backed baseline exists for the selected function. Inspect a different declared entry or report the exact capability gap, never substitute an unrelated function.');
+            messages.push({role:'user',content:'The controller could not construct a supported probe for that exact Solidity function. This is not evidence of a vulnerability. Inspect an executable source-backed entry or conclude incomplete. /no_think'});
+            continue;
           }
         }
         const automaticProbe=action.action==='probe_intent';
@@ -1146,6 +1313,25 @@ export async function runLocalAudit(
             // require independently inspected caller/reachability evidence now,
             // before the model can spend 80 turns on empty conclusions.
             if(workflow && probeStatus==='behavior_observed') {
+              // Only the controller can appoint the next caller and lock a
+              // verified case. A model's invented paths or negative tests
+              // cannot supersede an earlier verified observation.
+              let authoritativeCallers:string[]|null=null;
+              if(typeof probeResult.caseId==='string' && limits.onVerifiedCase && process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false') {
+                authoritativeCallers=await limits.onVerifiedCase(
+                  probeResult.caseId,String(call.function.arguments?.path||''),
+                  String(call.function.arguments?.query||''),
+                  String(call.function.arguments?.kind||''));
+              }
+              if(authoritativeCallers?.length && workflow.focusVerifiedEvidence(probeResult.caseId)) {
+                const readPaths=new Set(workflow.snapshot().readPaths);
+                workflow.requireSources(authoritativeCallers);
+                requireInvestigationAfterEmpty=false;
+                emptyFinals=0;
+                await appendFile(logFile,'[CONTROLLER_VERIFIED_CASE_FOCUS] '+
+                  JSON.stringify({caseId:probeResult.caseId,callers:authoritativeCallers,
+                    alreadyRead:authoritativeCallers.filter(path=>readPaths.has(path))})+'\n');
+              }
               const testedPath=String(call.function.arguments?.path||'');
               const readPaths=new Set(workflow.snapshot().readPaths);
               const candidates=(limits.initialSourcePaths||[]).filter(p=>
@@ -1154,8 +1340,8 @@ export async function runLocalAudit(
               candidates.sort((a,b)=>
                 Number(/(?:caller|handler|route|controller|entry|server)/i.test(b))-
                 Number(/(?:caller|handler|route|controller|entry|server)/i.test(a)));
-              const caller=candidates[0];
-              if(caller) {
+              const caller=authoritativeCallers?.[0] || candidates[0];
+              if(caller && !workflow.snapshot().verifiedEvidenceFocus) {
                 workflow.requireSource(caller);
                 requireInvestigationAfterEmpty=true;
                 emptyFinals=0;
