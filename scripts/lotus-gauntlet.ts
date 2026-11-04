@@ -3,6 +3,7 @@
  * The hidden answer key is never delivered to the model or checked into its source.
  */
 import 'dotenv/config';
+import {reviewedTargetFinding} from './gauntlet-reviewed-finding';
 import {execFileSync} from 'node:child_process';
 import {mkdir,mkdtemp,writeFile,readFile,copyFile,readdir,cp,rm} from 'node:fs/promises';
 import {join,dirname} from 'node:path';
@@ -61,12 +62,8 @@ function grade(log:string,result:any,elapsed:number,review:any,answer:Answer){
   hypothesisExamined:targetProbe,
   probePlanned:count('[PROBE_PLANNED]')>0,
   probeExecuted:count('[PROBE_RESULT]')>0,
-  verifiedFinding:result.success===true &&
-   Array.isArray(result.findings) && result.findings.some((f:any)=>
-     f.reproductionCaseId && (Array.isArray(review)?review:review?[review]:[]).some((judgment:any)=>
-       judgment?.verdict==='approve' && judgment.caseId===f.reproductionCaseId) &&
-     (String(f.reportBody||'')+' '+String(f.title||'')).includes(answer.selector.split('.').at(-1)!) &&
-     (String(f.reportBody||'')+' '+String(f.title||'')).includes(answer.file))
+  verifiedFinding:result.success===true && Array.isArray(result.findings) &&
+    reviewedTargetFinding(result.findings,Array.isArray(review)?review:review?[review]:[],answer)
  };
  const stages:Record<string,string>={sourceAcquired:'acquisition',sourceMapBuilt:'source_mapping',
   sourceRead:'navigation',relevantCandidateInspected:'candidate_selection',
