@@ -32,8 +32,8 @@ try {
     issues:[{severity:'fatal',category:'reachability',description:reason}]});
   assert.match(reviewRejectionDefect(reject('No production transaction path was shown'),evidence)??'',/Transaction-chain/);
   assert.match(reviewRejectionDefect(reject('Local test only; not deployed'),evidence)??'',/local reproduction/i);
-  assert.equal(reviewRejectionDefect(reject('An effective sanitizer escapes the output at src/main/java/org/fixture/Codec.java:3'),evidence),null,
-    'grounded sanitizer objections remain possible; reviewer must determine correctness');
+  assert.match(reviewRejectionDefect(reject('An effective sanitizer escapes the output at src/main/java/org/fixture/Codec.java:3'),evidence)??'',/no source-backed sanitization/,
+    'the reviewer must not mistake a helper name for actual escaping');
   assert.match(reviewRejectionDefect(reject('Not enough proof'),evidence)??'',/Fatal rejection/);
   assert.equal(reviewRejectionDefect({verdict:'approve',issues:[],reasoning:'Supported by source'},evidence),null);
   const repeated=await buildReviewEvidence(root,input);
