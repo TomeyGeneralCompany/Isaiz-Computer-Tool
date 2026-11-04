@@ -412,7 +412,7 @@ export async function runLocalAudit(
       const requestMessages=profile.think ? turnMessages.map(m=>({...m,content:m.content.replaceAll('/no_think','')})) : turnMessages;
       // The graph has already specified the exact next read/verification.
       // Execute it rather than spending a Qwen turn asking for known arguments.
-      const controllerAction=structured && workflow ?
+      const controllerAction=structured && workflow && process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false' ?
         controllerOwnedNextAction(constraints,workflow.snapshot().pending) : null;
       if(controllerAction)await appendFile(logFile,'[CONTROLLER_OWNED_ACTION] '+JSON.stringify(controllerAction)+'\n');
       const result: {message?:Message;eval_count?:number;prompt_eval_count?:number;done_reason?:string;load_duration?:number;prompt_eval_duration?:number;eval_duration?:number;total_duration?:number;client_queue_ms?:number} = controllerAction ?
