@@ -278,6 +278,40 @@ Do not claim production testing, JavaScript execution, file access or other effe
                 }
               }
             }
+            // A small model can return both a verified candidate and a second
+            // unsupported case in the same final. Do not let that extra case
+            // invalidate the grounded one and trigger 80 turns of retries.
+            // Prune only when at least one independently inspected caller
+            // survives. Every surviving finding still passes all the normal
+            // schema, scope, case, replay and reviewer gates below.
+            if(recovered && typeof recovered==='object' && !Array.isArray(recovered) &&
+               Array.isArray((recovered as {findings?:unknown}).findings)) {
+              const candidates=(recovered as {findings:any[]}).findings;
+              if(candidates.length>1) {
+                const grounded:any[]=[];
+                for(const candidate of candidates) {
+                  const record=session.cases.get(candidate?.caseId);
+                  if(!record || !record.result.behavior_observed)continue;
+                  const repository=repos.find(r=>r.url===record.repositoryUrl);
+                  if(!repository)continue;
+                  try {
+                    const candidatePath=String(candidate.callerFile||'');
+                    const callerRelative=relative(repository.directory,join(root,candidatePath));
+                    if(callerRelative==='..' || callerRelative.startsWith('..'+sep))continue;
+                    const code=await readFile(join(root,candidatePath),'utf8');
+                    if(!reads.has(sourceFileInWorkspace(repository,record.spec.file,root)) ||
+                       !reads.sawLine(candidatePath,code,candidate.callerLine))continue;
+                    if(!validReachability(candidate,record,callerRelative.split(sep).join('/'),code))continue;
+                    grounded.push(candidate);
+                  }catch{}
+                }
+                if(grounded.length && grounded.length<candidates.length) {
+                  (recovered as {findings:any[]}).findings=grounded;
+                  await appendFile(logFile,'[CONTROLLER_UNSUPPORTED_REPORTS_PRUNED] '+
+                    JSON.stringify({removed:candidates.length-grounded.length,remaining:grounded.map(c=>c.caseId)})+'\\n');
+                }
+              }
+            }
             const value=huntSchema.parse(recovered);
             if(value.outcome === "no_testable_candidate") {
               if(session.completedProbes) {
