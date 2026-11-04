@@ -21,3 +21,12 @@ export function recoverEmptyUnprobedFinal(value:unknown, completedProbes:number,
     ? result.reason : 'No supported source probe completed in this bounded inspection; coverage remains incomplete.';
   return {...result,outcome:'no_testable_candidate',reason};
 }
+
+/** Drop unsupported extras only when at least one independently grounded
+ * candidate survives. If none is grounded, preserve the original rejection
+ * path; the controller never manufactures or upgrades a finding.
+ */
+export function retainGroundedCandidates<T>(candidates:T[],grounded:T[]):T[] {
+  return candidates.length>1 && grounded.length>0 && grounded.length<candidates.length
+    ? grounded : candidates;
+}
