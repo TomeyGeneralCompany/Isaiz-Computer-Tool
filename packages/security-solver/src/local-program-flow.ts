@@ -210,6 +210,54 @@ Do not claim production testing, JavaScript execution, file access or other effe
           if(repository && missingDependencies.has(repository.url))return JSON.stringify({status:"unsupported",reason:"Repository dependencies are incomplete",missing:missingDependencies.get(repository.url)});
           return session.probe(path,fn,kind,sequence);
         },
+        finalEvidencePacket:async()=>{
+          // This packet is assembled from verifier results and inspected source,
+          // never model-authored case identities or invented caller locations.
+          const packets:ControllerReportPacket[]=[];
+          for(const [caseId,record] of session.cases) {
+            if(!record.result.behavior_observed || packets.length>=2)continue;
+            const repository=repos.find(r=>r.url===record.repositoryUrl);
+            if(!repository || !reads.has(sourceFileInWorkspace(repository,record.spec.file,root)))continue;
+            const matches:Array<{path:string,line:number,code:string,qualified:boolean}>=[];
+            for(const sourcePath of [...new Set([...sourceHints,...eligiblePaths])].slice(0,80)) {
+              if(!sourcePath.startsWith(relative(root,repository.directory).split(sep).join('/')+'/') ||
+                 !reads.has(sourcePath))continue;
+              try {
+                const text=await readFile(join(root,sourcePath),'utf8');
+                const lines=text.split('\n');
+                for(let n=1;n<=lines.length;n++) {
+                  if(!reads.sawLine(sourcePath,text,n) ||
+                     !callerLineReferences(text,n,record.spec.function))continue;
+                  matches.push({path:sourcePath,line:n,code:lines[n-1],
+                    qualified:qualifiedCallerLineReferences(text,n,record.spec.function)});
+                }
+              }catch{}
+            }
+            const precise=matches.filter(m=>m.qualified);
+            const match=precise.length===1?precise[0]:matches.length===1?matches[0]:null;
+            if(!match)continue;
+            packets.push(buildControllerReportPacket({
+              caseId,repositoryUrl:record.repositoryUrl,commit:record.commit,
+              testedFile:record.spec.file,testedFunction:record.spec.function,
+              probeKind:record.spec.kind,sourceSha256:record.sourceSha256,
+              callerFile:relative(repository.directory,join(root,match.path)).split(sep).join('/'),
+              callerLine:match.line,callerCode:match.code,reachability:'caller',
+              observations:record.result.observations,limitation:record.result.limitation
+            }));
+          }
+          if(!packets.length)return '';
+          const file='audit-controller-report-evidence.json';
+          await writeFile(join(root,file),JSON.stringify(packets,null,2),{mode:0o600});
+          const selections=packets.map(packet=>({
+            caseId:packet.caseId,selector:packet.testedFunction,
+            file:packet.testedFile,caller:packet.callerFile+':'+packet.callerLine,
+            callerCode:packet.callerCode.trim(),sourceSha256:packet.sourceSha256,
+            observed:packet.observations
+          }));
+          return 'Verified evidence packets (read '+file+' for full data): '+
+            JSON.stringify(selections).slice(0,1900)+
+            '. Put the exact caseId and caller into findings; explain impact and limits without inventing them.';
+        },
         validateFinal:async text=>{
           try {
             const proposed=JSON.parse(text);
