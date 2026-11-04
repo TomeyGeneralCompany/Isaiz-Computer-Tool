@@ -54,6 +54,10 @@ export interface LocalAuditLimits {
   numThreads: number;
   /** Return corrective feedback to reject a final answer, or null to accept. */
   validateFinal?: (answer: string) => string | null | Promise<string | null>;
+  /** Recover an independently validated conservative final after required source
+   * pages have been read, without another unnecessary model generation.
+   * The caller must enforce all domain-specific evidence requirements. */
+  recoverFinal?: () => string | null | Promise<string | null>;
   /** Optional controller-owned state, refreshed each request and counted in context. */
   progressNote?: () => string;
   /** Optional finite task contract; JSON decoding and runtime validation both enforce it. */
@@ -1194,6 +1198,20 @@ export async function runLocalAudit(
         }
         if(completedActionKey)recentActions.get(completedActionKey)!.response=responseMessage;
         await persistMemory();
+        // The independent reviewer may have supplied a valid conservative
+        // verdict before its mandatory pagination completed. If subsequent
+        // reads now satisfy every validator, preserve that judgment instead
+        // of forcing Qwen to regenerate identical JSON until timeout.
+        if(limits.recoverFinal) {
+          const recovered=await limits.recoverFinal();
+          if(recovered) {
+            controller.signal.throwIfAborted();
+            finalAnswer=recovered;
+            stoppingReason="Controller recovered validated final after evidence reads";
+            await appendFile(logFile,'[CONTROLLER_FINAL_RECOVERED] '+JSON.stringify({turn:turn+1})+'\\n');
+            return recovered;
+          }
+        }
         await renew(turn+1);
       }
     }
