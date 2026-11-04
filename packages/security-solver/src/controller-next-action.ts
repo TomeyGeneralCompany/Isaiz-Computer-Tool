@@ -4,7 +4,7 @@
  */
 export type ControllerAction = {
   action:string;path:string;query:string;answer:string;
-  offset?:number;hypothesis?:string;sequence?:unknown
+  offset?:number;hypothesis?:string;sequence?:unknown;result?:Record<string,unknown>
 };
 export type ActionConstraints=Partial<Record<'action'|'path'|'query'|'answer',string[]>>;
 
