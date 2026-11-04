@@ -2,6 +2,7 @@ import {prioritizeSourceCandidates} from './source-candidates';
 import {collectStaticLeads} from './local-static-leads';
 import {buildSourceMap} from './source-map';
 import {sourceCandidateEvidence,verifiedProbeSummary} from './source-candidate-evidence';
+import {traceSourceCalls} from './source-flow-facts';
 import { LOCAL_REPRODUCTION_CAPABILITY_VERSION } from "../../core/src/program-eligibility";
 import { inspectSourceCapability } from "./source-capability";
 import { SourceReads } from "./source-inspection";
@@ -174,6 +175,7 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
     await writeFile(join(root,'audit-source-map.json'),JSON.stringify(sourceMap,null,2),{mode:0o600});
     // Controller inspects actual declaration/caller lines before involving the
     // model. These are candidate source facts, NOT proof of exploitability.
+    let controllerTraceSummary='';
     const candidateEvidence=await sourceCandidateEvidence(root,sourceMap.symbols,8);
     await writeFile(join(root,'audit-controller-candidates.json'),JSON.stringify(candidateEvidence,null,2),{mode:0o600});
     await appendFile(logFile,'[SOURCE_MAP] '+JSON.stringify({files:sourceMap.scannedFiles,symbols:sourceMap.symbols.length,skipped:sourceMap.skippedFiles})+'\n');
@@ -214,13 +216,29 @@ Do not claim production testing, JavaScript execution, file access or other effe
         onAllowance:async deadline=>writeSecuritySolverStatus({active:true,programId:program.id,programName:program.name,
           stage:"hunting",startedAt:statusStartedAt,timeoutMinutes:(deadline-Date.parse(statusStartedAt))/60000,pid:process.pid}),
         signal,maxTurns,finalSchema:z.toJSONSchema(huntSchema),productionWorkflow:true,dynamicAllowance:process.env.LOCAL_HUNT_DYNAMIC_ALLOWANCE !== "false",initialSourcePaths:["audit-policy.txt",...sourceHints],initialSourceLocations:selection.locations,checkpointPath:join(checkpointDirectory,checkpointKey+".json"),numCtx:8192,numThreads:4,numPredict:getConfig().LOCAL_HUNT_NUM_PREDICT,onRead:(path,span)=>reads.add(path,span),
-        progressNote:()=>verifiedProbeSummary(session.cases,2).slice(0,780),
+        progressNote:()=>(verifiedProbeSummary(session.cases,2).slice(0,420)+'\n'+controllerTraceSummary.slice(0,420)).slice(0,850),
         verifyPython:async (path,fn,kind,sequence) => {
           if (focus && path !== "source-1/"+focus.file) throw new Error("Probe must target the imported lead file");
           const normalized=relative(root,resolve(root,path)).split(sep).join("/");
           const repository=repos.find(repo=>normalized===relative(root,repo.directory) || normalized.startsWith(relative(root,repo.directory)+"/"));
           if(repository && missingDependencies.has(repository.url))return JSON.stringify({status:"unsupported",reason:"Repository dependencies are incomplete",missing:missingDependencies.get(repository.url)});
-          return session.probe(path,fn,kind,sequence);
+          const result=await session.probe(path,fn,kind,sequence);
+          // The controller, not Qwen, follows resolvable source references
+          // after the verifier records behavior. These citations persist.
+          try {
+            const output=JSON.parse(result);
+            if(output.behavior_observed && repository) {
+              const file=relative(repository.directory,resolve(root,path)).split(sep).join('/');
+              const trace=await traceSourceCalls(repository.directory,file,fn);
+              controllerTraceSummary='CONTROLLER SOURCE TRACE (static references, not attacker-control proof): '+
+                trace.facts.slice(0,6).map(f=>f.path+':'+f.line+' '+f.source.trim()).join(' | ');
+              await writeFile(join(root,'audit-verified-flow.json'),JSON.stringify({
+                path,file,selector:fn,caseId:output.caseId||null,
+                observed:output.behavior_observed,trace
+              },null,2),{mode:0o600});
+            }
+          }catch{}
+          return result;
         },
         finalEvidencePacket:async()=>{
           // This packet is assembled from verifier results and inspected source,
