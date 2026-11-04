@@ -1,5 +1,8 @@
-name: LOTUS Gauntlet (manual only)
+name: LOTUS Post-127 Polyglot Baseline (existing 144-file challenge)
 on:
+  push:
+    branches:
+      - trial/lotus-post127-merged-polyglot-baseline-20261104
   workflow_dispatch:
     inputs:
       level:
@@ -32,6 +35,11 @@ concurrency:
   cancel-in-progress: false
 jobs:
   gauntlet:
+    name: Existing Level 5 - ${{ matrix.language }}
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [java, python, javascript, solidity]
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     env:
@@ -59,27 +67,27 @@ jobs:
       - name: Install locked application runtime
         run: npm ci
       - name: Verify owned acquisition across all languages without model
-        if: inputs.mode == 'run'
+        if: github.event_name == 'push' || inputs.mode == 'run'
         run: |
           for lang in solidity python javascript java; do
             node --import tsx scripts/lotus-gauntlet.ts --smoke --level=4 --language="$lang" --output="data/gauntlet/smoke-$lang"
           done
       - name: Prepare owned source without model inference
-        if: inputs.mode == 'prepare'
+        if: github.event_name != 'push' && inputs.mode == 'prepare'
         env:
-          GAUNTLET_LANGUAGE: ${{ inputs.language }}
-          GAUNTLET_SEED: ${{ inputs.seed }}
+          GAUNTLET_LANGUAGE: ${{ github.event_name == 'push' && matrix.language || inputs.language }}
+          GAUNTLET_SEED: ${{ github.event_name == 'push' && format('post127-{0}-{1}', matrix.language, github.run_id) || inputs.seed }}
         run: |
-          node --import tsx scripts/lotus-gauntlet.ts --prepare --level=${{ inputs.level }} --language="$GAUNTLET_LANGUAGE" ${GAUNTLET_SEED:+--seed="$GAUNTLET_SEED"} --output=data/gauntlet/latest
+          node --import tsx scripts/lotus-gauntlet.ts --prepare --level=${{ github.event_name == 'push' && '5' || inputs.level }} --language="$GAUNTLET_LANGUAGE" ${GAUNTLET_SEED:+--seed="$GAUNTLET_SEED"} --output=data/gauntlet/latest
       - name: Install production runtime
-        if: inputs.mode == 'run'
+        if: github.event_name == 'push' || inputs.mode == 'run'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y bubblewrap default-jdk-headless
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           bash scripts/install-reproduction-runtime.sh
       - name: Start local CPU model
-        if: inputs.mode == 'run'
+        if: github.event_name == 'push' || inputs.mode == 'run'
         run: |
           docker run -d --name lotus-gauntlet-ollama -p 127.0.0.1:11434:11434 ollama/ollama:latest
           for n in $(seq 1 60); do
@@ -89,18 +97,18 @@ jobs:
           curl -fsS http://127.0.0.1:11434/api/tags >/dev/null
           docker exec lotus-gauntlet-ollama ollama pull qwen3:4b
       - name: Investigate blind synthetic bounty with production controller
-        if: inputs.mode == 'run'
+        if: github.event_name == 'push' || inputs.mode == 'run'
         env:
-          GAUNTLET_LANGUAGE: ${{ inputs.language }}
-          GAUNTLET_SEED: ${{ inputs.seed }}
+          GAUNTLET_LANGUAGE: ${{ github.event_name == 'push' && matrix.language || inputs.language }}
+          GAUNTLET_SEED: ${{ github.event_name == 'push' && format('post127-{0}-{1}', matrix.language, github.run_id) || inputs.seed }}
         run: |
           set -o pipefail
-          node --import tsx scripts/lotus-gauntlet.ts --run --level=${{ inputs.level }} --language="$GAUNTLET_LANGUAGE" ${GAUNTLET_SEED:+--seed="$GAUNTLET_SEED"} --output=data/gauntlet/latest 2>&1 | tee data/gauntlet/live-terminal.log
+          node --import tsx scripts/lotus-gauntlet.ts --run --level=${{ github.event_name == 'push' && '5' || inputs.level }} --language="$GAUNTLET_LANGUAGE" ${GAUNTLET_SEED:+--seed="$GAUNTLET_SEED"} --output=data/gauntlet/latest 2>&1 | tee data/gauntlet/live-terminal.log
       - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: lotus-gauntlet-${{ inputs.mode }}-level-${{ inputs.level }}-${{ github.run_id }}
+          name: lotus-gauntlet-baseline-${{ matrix.language }}-${{ github.run_id }}
           path: |
             data/gauntlet/latest/manifest.json
             data/gauntlet/latest/grade.json
