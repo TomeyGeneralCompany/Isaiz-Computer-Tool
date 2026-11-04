@@ -21,6 +21,10 @@ const duplicateProbePlan=process.argv.includes('--duplicate-probe-plan');
 const emptyFinalRecovery=process.argv.includes('--empty-final-recovery');
 const live=process.argv.includes('--real-model'),mockProbes=process.argv.includes('--mock-probes'),prefetch=process.argv.includes('--prefetch'),execute=promisify(execFile);
 if(live&&mockProbes)throw new Error('Real model check requires real probes');
+// Scripted mock actions are indexed by model-call count. Test that legacy
+// conversational recovery separately from controller-owned forced actions.
+// Real model runs retain the default deterministic direct-execution behavior.
+if(!live)process.env.LOCAL_CONTROLLER_OWNED_ACTIONS='false';
 const root=await mkdtemp(join(tmpdir(),'production-workflow-'));
 const evidence=resolve('data/production-workflow-tests',new Date().toISOString().replaceAll(':','-'));
 await mkdir(evidence,{recursive:true,mode:0o700});
