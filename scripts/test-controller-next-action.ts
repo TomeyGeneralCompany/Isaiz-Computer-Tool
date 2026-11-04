@@ -55,24 +55,25 @@ try {
   assert.match(verifiedProbeSummary([]),/No successful reproduction/);
   // Real chained source lines, without claiming inferred exploitability.
   await writeFile(join(root,'source-1','src','pipeline.py'),
-    'def wrap_fragment(value):\n    return "<p>" + encode_fragment(value) + "</p>"\n');
+    'from src.codec import encode_fragment\ndef wrap_fragment(value):\n    return "<p>" + encode_fragment(value) + "</p>"\n');
   await writeFile(join(root,'source-1','src','codec.py'),
     'def encode_fragment(value):\n    return value\n');
   await writeFile(join(root,'source-1','src','renderer.py'),
-    'from source_1.src.pipeline import wrap_fragment\ndef render(value):\n    return wrap_fragment(value)\n');
-  const pythonTrace=await traceSourceCalls(root,'source-1/src/renderer.py','render');
+    'from src.pipeline import wrap_fragment\ndef render(value):\n    return wrap_fragment(value)\n');
+  const pythonTrace=await traceSourceCalls(join(root,'source-1'),'src/renderer.py','render');
   assert.ok(pythonTrace.facts.some(f=>f.source.includes('wrap_fragment(value)')));
+  assert.ok(pythonTrace.facts.some(f=>f.path.endsWith('codec.py')),'Python imported helpers must be traced');
   await writeFile(join(root,'source-1','src','renderer.cjs'),
     'const {wrapFragment}=require("./pipeline.cjs");\nexports.render=function render(value){return wrapFragment(value);};\n');
   await writeFile(join(root,'source-1','src','pipeline.cjs'),
     'exports.wrapFragment=function wrapFragment(value){return "<p>"+value+"</p>";};\n');
-  const jsTrace=await traceSourceCalls(root,'source-1/src/renderer.cjs','render');
+  const jsTrace=await traceSourceCalls(join(root,'source-1'),'src/renderer.cjs','render');
   assert.ok(jsTrace.facts.some(f=>f.path.endsWith('pipeline.cjs')),'JS CommonJS helper must be traced');
   await writeFile(join(root,'source-1','src','Renderer.java'),
     'public class Renderer {\npublic static String render(String value){return Pipeline.wrapFragment(value);}\n}\n');
   await writeFile(join(root,'source-1','src','Pipeline.java'),
     'public class Pipeline {\npublic static String wrapFragment(String value){return value;}\n}\n');
-  const javaTrace=await traceSourceCalls(root,'source-1/src/Renderer.java','Renderer.render');
+  const javaTrace=await traceSourceCalls(join(root,'source-1'),'src/Renderer.java','Renderer.render');
   assert.ok(javaTrace.facts.some(f=>f.path.endsWith('Pipeline.java')),'Java helper must be traced');
   console.log('Controller owned-next-action, grounded source citations and verified probe memory PASSED');
 } finally {await rm(root,{recursive:true,force:true});}
