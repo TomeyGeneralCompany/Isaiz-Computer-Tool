@@ -148,7 +148,7 @@ async function main(){
   process.env.SECURITY_AUTO_SUBMIT='false';
   const {runLocalProgramHunt,independentReview}=await import('../packages/security-solver/src/local-program-flow');
   const program:any={id:'owned-gauntlet-'+level+'-'+language,provider:'immunefi',name:'Controlled source application benchmark',
-   scopeSummary:JSON.stringify({policy:'Owned synthetic application. Inspect source, data flow, authorization, input handling and application behavior. Local reproduction and diagnostics only. No submissions.',
+   scopeSummary:JSON.stringify({policy:'Owned synthetic application. Inspect source, data flow, authorization, input handling and application behavior. Local reproduction and independent technical review are expressly authorized and expected. A technically supported finding must be recorded and graded locally, regardless of external submission eligibility. External bounty-platform submissions are disabled; do not send reports to third parties.',
     scopes:[{assetType:'SOURCE_CODE',eligibleForBounty:true,assetIdentifier:'https://github.com/fixture/gauntlet-settlement'}]})};
   result=await runLocalProgramHunt(program,undefined,undefined,undefined,false,sourceAcquirer);
   // Independent review each reported case, not just findings[0]. A valid
