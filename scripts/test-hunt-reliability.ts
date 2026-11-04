@@ -6,6 +6,7 @@ import {execFileSync} from 'node:child_process';
 import {compilerCompatible,inspectSourceCapability} from '../packages/security-solver/src/source-capability';
 import {referencesProbedFunction,callerLineReferences,qualifiedCallerLineReferences,transactionEntryLine} from '../packages/security-solver/src/source-function-reference';
 import {compactAuditContext,auditCheckpoint} from '../packages/security-solver/src/audit-context';
+import {retainGroundedCandidates} from '../packages/security-solver/src/inspection-coverage';
 import {programCandidateBlocker,LOCAL_REPRODUCTION_CAPABILITY_VERSION} from '../packages/core/src/program-eligibility';
 import {loadConfig} from '../packages/core/src/config';
 for(const range of ['^0.8.20','>=0.8.0 <0.9.0','0.8.30','^0.7.0 || ^0.8.0'])assert.equal(compilerCompatible(range),true,range);
@@ -14,6 +15,17 @@ assert.equal(compilerCompatible('0.8.x'),null);
 assert.equal(compilerCompatible('0.7.0 - 0.9.0'),null);
 for(const line of ['// target.set(x);','function set(uint x) external {}','const text = "target.set(x)";','/* target.set(x); */'])assert.equal(referencesProbedFunction(line,'Store.set'),false,line);
 assert.equal(referencesProbedFunction('target.set(x);','Store.set'),true);
+const validReport={caseId:'observed-renderer',callerFile:'source-1/src/HttpHandler.java',callerLine:3};
+const invalidReport={caseId:'observed-handler',callerFile:'source-1/src/HttpHandler.java',callerLine:1};
+assert.deepEqual(retainGroundedCandidates([invalidReport,validReport],[validReport]),[validReport],
+  'a verified report survives a second unsupported proposal');
+assert.deepEqual(retainGroundedCandidates([invalidReport,validReport],[]),[invalidReport,validReport],
+  'zero grounded reports still enter strict rejection');
+assert.deepEqual(retainGroundedCandidates([validReport],[validReport]),[validReport],
+  'a single supported proposal is unchanged');
+assert.deepEqual(retainGroundedCandidates([invalidReport,validReport],[invalidReport,validReport]),
+  [invalidReport,validReport],'fully grounded proposals remain unchanged');
+
 assert.equal(referencesProbedFunction('public String responseBody(String userInput){return Renderer.render(userInput);}','HttpHandler.responseBody'),false,
   'Java method declaration is not a call to itself');
 assert.equal(referencesProbedFunction('public String responseBody(String userInput){return Renderer.render(userInput);}','Renderer.render'),true,
