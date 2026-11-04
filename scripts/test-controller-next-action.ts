@@ -6,6 +6,7 @@ import {controllerOwnedNextAction,canonicalSourceNavigationAction} from '../pack
 import {sourceCandidateEvidence,verifiedProbeSummary} from '../packages/security-solver/src/source-candidate-evidence';
 import {traceSourceCalls} from '../packages/security-solver/src/source-flow-facts';
 import {InvestigationWorkflow} from '../packages/security-solver/src/investigation-workflow';
+import {guidedSourceProbe} from '../packages/security-solver/src/source-guided-probes';
 
 const pending={path:'source-1/src/render.py',query:'render',answer:'html_reflection'};
 assert.deepEqual(controllerOwnedNextAction({
@@ -40,6 +41,27 @@ assert.deepEqual(await focusedWorkflow.constraints(),{
 focusedWorkflow.read('source-1/src/http_handler.py');
 assert.deepEqual(await focusedWorkflow.constraints(),{action:['final']},
   'after source-backed caller reading, Qwen cannot navigate another target');
+const nestedWorkflow=new InvestigationWorkflow();
+nestedWorkflow.read('source-1/src/pipeline.py');
+nestedWorkflow.observe({action:'verify_source',path:'source-1/src/pipeline.py',
+  query:'wrap_fragment',answer:'html_reflection'} as any,
+  JSON.stringify({status:'behavior_observed',behavior_observed:true,caseId:verifiedCase}));
+assert.ok(nestedWorkflow.focusVerifiedEvidence(verifiedCase));
+nestedWorkflow.requireSources(['source-1/src/renderer.py','source-1/src/http_handler.py']);
+assert.deepEqual(await nestedWorkflow.constraints(),{
+  action:['read_file'],path:['source-1/src/renderer.py']
+});
+nestedWorkflow.read('source-1/src/renderer.py');
+assert.deepEqual(await nestedWorkflow.constraints(),{
+  action:['read_file'],path:['source-1/src/http_handler.py']
+});
+nestedWorkflow.read('source-1/src/http_handler.py');
+assert.deepEqual(await nestedWorkflow.constraints(),{action:['final']});
+const jsHint=guidedSourceProbe('source-1/src/pipeline.cjs',
+  'exports.wrapFragment=function wrapFragment(value){return "<p>"+value+"</p>";};');
+assert.equal(jsHint?.functionName,'wrapFragment');
+assert.equal(jsHint?.kind,'html_reflection');
+
 
 
 const root=await mkdtemp(join(tmpdir(),'lotus-controller-facts-'));
