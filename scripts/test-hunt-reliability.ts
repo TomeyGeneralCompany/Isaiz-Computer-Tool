@@ -6,9 +6,24 @@ import {execFileSync} from 'node:child_process';
 import {compilerCompatible,inspectSourceCapability} from '../packages/security-solver/src/source-capability';
 import {referencesProbedFunction,callerLineReferences,qualifiedCallerLineReferences,transactionEntryLine} from '../packages/security-solver/src/source-function-reference';
 import {compactAuditContext,auditCheckpoint} from '../packages/security-solver/src/audit-context';
+import {buildControllerReportPacket,controllerReportPacketText} from '../packages/security-solver/src/controller-report-packet';
 import {retainGroundedCandidates} from '../packages/security-solver/src/inspection-coverage';
 import {programCandidateBlocker,LOCAL_REPRODUCTION_CAPABILITY_VERSION} from '../packages/core/src/program-eligibility';
 import {loadConfig} from '../packages/core/src/config';
+const evidencePacket=buildControllerReportPacket({
+  caseId:'a'.repeat(64),repositoryUrl:'https://github.com/fixture/owned',commit:'sample',
+  testedFile:'src/Renderer.java',testedFunction:'Renderer.render',
+  probeKind:'html_reflection',sourceSha256:'b'.repeat(64),
+  callerFile:'src/HttpHandler.java',callerLine:3,
+  callerCode:'return Renderer.render(userInput);',reachability:'caller',
+  observations:[{input:'<tag>',actual:'<p><tag></p>'}],
+  limitation:'Isolated behavior; endpoint runtime was not exercised.'
+});
+const packetText=controllerReportPacketText(evidencePacket);
+assert.ok(packetText.includes('Renderer.render') && packetText.includes('HttpHandler.java:3'));
+assert.ok(packetText.includes('Inspected caller source:') && packetText.includes('Recorded isolated observations'));
+assert.throws(()=>buildControllerReportPacket({...evidencePacket,callerCode:''}),/caller line/);
+assert.throws(()=>buildControllerReportPacket({...evidencePacket,caseId:'invented'}),/SHA256/);
 for(const range of ['^0.8.20','>=0.8.0 <0.9.0','0.8.30','^0.7.0 || ^0.8.0'])assert.equal(compilerCompatible(range),true,range);
 for(const range of ['^0.7.0','0.8.19','>=0.8.31','~0.7.1'])assert.equal(compilerCompatible(range),false,range);
 assert.equal(compilerCompatible('0.8.x'),null);
