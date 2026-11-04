@@ -54,6 +54,10 @@ export interface LocalAuditLimits {
   numThreads: number;
   /** Return corrective feedback to reject a final answer, or null to accept. */
   validateFinal?: (answer: string) => string | null | Promise<string | null>;
+  /** Controller-generated, source-backed report packet supplied only when a
+   * proposed final is rejected. Never changes the investigation page budget.
+   */
+  finalEvidencePacket?: () => string | Promise<string>;
   /** Recover an independently validated conservative final after required source
    * pages have been read, without another unnecessary model generation.
    * The caller must enforce all domain-specific evidence requirements. */
@@ -898,7 +902,12 @@ export async function runLocalAudit(
           const rejected=messages.at(-1)!;
           rejected.content="Previous final answer rejected; follow the validation feedback.";
           await appendFile(logFile, "[FINAL_REJECTED] " + feedback + "\n");
+          const evidencePacket=limits.finalEvidencePacket ? await limits.finalEvidencePacket() : '';
+          if(evidencePacket)await appendFile(logFile,'[CONTROLLER_FINAL_EVIDENCE_HANDOFF] '+
+            JSON.stringify({length:evidencePacket.length})+'\\n');
           messages.push(fitAuditToolOutput(messages.slice(0,2),rejected,"final_validation",feedback +
+            (evidencePacket ? "\nController-verified report input (actual stored evidence, not model speculation):\n"+
+              evidencePacket.slice(0,2400)+"\nUse these facts to organize your findings JSON. Supply only your evidence-based impact, severity, and falsification interpretation." : "") +
             (workflow?.snapshot().observations.some(o=>o.status==='behavior_observed') ? "\n"+workflow.note() : "") +
             "\nRe-read the specified source when necessary. /no_think",exchangeBudget,true).message);
           continue;
