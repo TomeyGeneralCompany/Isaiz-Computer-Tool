@@ -943,8 +943,25 @@ export async function runLocalAudit(
           offset:call.function.arguments?.offset ?? 0,kind:String(call.function.arguments?.kind ?? "").slice(0,80)});
         try {
           const name = call.function.name;
-          const path = String(call.function.arguments?.path ?? ".");
-          const full = await safePath(path);
+          let path = String(call.function.arguments?.path ?? ".");
+          let full: string;
+          try {
+            full = await safePath(path);
+          } catch (error) {
+            // Independent review places a cloned repository in workspace/source/.
+            // Qwen sometimes requests repo-relative "src/..." instead of the
+            // workspace-relative "source/src/...". Resolve that exact read-only
+            // alias deterministically rather than wasting turns on ENOENT.
+            const readOnly = ["read_file","list_files","search_files","outline_solidity","read_solidity"].includes(name);
+            const clean = !path.startsWith("/") && !path.split(/[\\/]/).some(part=>part===".." || part===".") &&
+              path!=="" && path!=="source" && !path.startsWith("source/");
+            if (!readOnly || !clean || (error as NodeJS.ErrnoException).code!=="ENOENT") throw error;
+            const aliasedPath = "source/" + path;
+            full = await safePath(aliasedPath);
+            await appendFile(logFile,"[CONTROLLER_SOURCE_ALIAS] "+JSON.stringify({requested:path,resolved:aliasedPath})+"\\n");
+            path = aliasedPath;
+            call.function.arguments.path=aliasedPath;
+          }
           let offset = pageOffset(call.function.arguments?.offset);
           const keyAt=(at:number)=>JSON.stringify([name,relative(root,full),at,String(call.function.arguments?.query ?? "")]);
           let actionKey = keyAt(offset);
