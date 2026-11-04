@@ -518,6 +518,31 @@ export async function runLocalAudit(
             }
           }
         }
+        // Legacy generic Solidity probe actions are not executable by the
+        // current verifier. When the model named an actual on-chain entry,
+        // construct the supported stateful baseline from the real ABI menu.
+        // Never invent an assertion, selector, or transaction outcome.
+        if(workflow && action.path.endsWith('.sol') &&
+            ['solidity_function','solidity_call','solidity_transaction'].includes(action.answer) &&
+            ['plan_probe','probe_intent'].includes(action.action)) {
+          let baseline:ReturnType<typeof buildBaselineSequence>=null;
+          try {
+            const full=await safePath(action.path);
+            const menu=await solidityIndex.probeMenu(full,64);
+            baseline=buildBaselineSequence(menu,action.query);
+          }catch{}
+          if(baseline) {
+            action.answer='solidity_sequence';action.sequence=baseline;
+            await appendFile(logFile,'[CONTROLLER_SOLIDITY_PROBE_NORMALIZED] '+
+              JSON.stringify({path:action.path,query:action.query,kind:action.answer})+'\n');
+          } else {
+            await appendFile(logFile,'[CONTROLLER_UNSUPPORTED_PROBE] '+
+              JSON.stringify({path:action.path,query:action.query,kind:action.answer})+'\n');
+            workflow.feedback('Unsupported Solidity probe shape. No executable ABI-backed baseline exists for the selected function. Inspect a different declared entry or report the exact capability gap, never substitute an unrelated function.');
+            messages.push({role:'user',content:'The controller could not construct a supported probe for that exact Solidity function. This is not evidence of a vulnerability. Inspect an executable source-backed entry or conclude incomplete. /no_think'});
+            continue;
+          }
+        }
         const automaticProbe=action.action==='probe_intent';
         if(automaticProbe) {
           action.action='plan_probe';
