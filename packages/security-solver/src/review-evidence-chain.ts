@@ -114,6 +114,17 @@ export function reviewRejectionDefect(review:{
   if(/\b(?:no production (?:endpoint|request|deployment)|not deployed|local (?:probe|test) only)\b/i.test(prose) &&
     !/\b(?:mitigation|sanitiz|escape|unreachable|untrusted|attacker|input origin|sink)\b/i.test(prose))
     return 'A local reproduction is not proof of full impact, but lack of production testing alone is not a specific source-level technical defect. Identify the missing source link or effective mitigation.';
+  // A positive assertion that a sanitizer exists must be backed by source,
+  // not merely by the helper's reassuring name. Missing evidence is a request
+  // for further inspection, NEVER grounds for automatic approval.
+  const mitigationAsserted=fatal.some(i=>/\b(?:effective (?:saniti[sz]er|escap(?:ing|er))|saniti[sz]es? (?:the|user|input|value)|escapes? (?:the|user|input|value|html)|mitigated by (?:escap|saniti[sz]))/i.test(i.description));
+  if(mitigationAsserted) {
+    const matching=evidence.links.filter(link=>/\b(?:replace\s*\(|escape(?:Html|XML|ForHTML)?\s*\(|sanitize\s*\(|encodeForHTML\s*\(|StringEscapeUtils\.)/i.test(link.code));
+    if(!matching.length)return 'The fatal rejection asserts an effective sanitizer, but the recorded source chain contains no source-backed sanitization operation. Read the alleged sanitizer implementation and cite its actual file and line before rejecting.';
+  }
+  const deniesRecordedCaller=fatal.some(i=>/\b(?:no caller (?:calls|invokes|references)|caller does not (?:call|invoke|reference))\b/i.test(i.description));
+  if(deniesRecordedCaller && evidence.links.some(x=>x.relationship==='recorded caller context' && /\b(?:render|wrap|invoke|call)\s*\(/i.test(x.code)))
+    return 'The recorded caller contains an actual invocation. Distinguish an untrusted-input/reachability gap from a claim that no call exists, citing the missing link.';
   const grounds=/\b(?:unreachable|reachab|untrusted|attacker|input|source|sink|saniti[sz]|escap|mitigat|guard|access|privilege|authorization|state|sequence|replay|observ|scope|impact|evidence|caller|path)\b/i;
   if(!fatal.some(i=>grounds.test(i.description)))
     return 'Fatal rejection must name a specific missing source-to-sink link, mitigation, untrusted-input issue, reproduction discrepancy, or other technical defect.';
