@@ -624,6 +624,13 @@ Use one enum value per string. Scores are integers 0..3. bet100=false requires d
       validateFinal:async text=>{
         try {
           const value=reviewSchema.parse(JSON.parse(text));
+          // A submission ban is not a technical defect. Do not cache or accept
+          // a policy-only fatal rejection as the independent security verdict.
+          // This does not auto-approve: the reviewer must still assess evidence.
+          const submissionPolicyFatal=value.verdict==="reject" && value.issues.some(issue=>
+            issue.severity==="fatal" &&
+            /(?:policy|synthetic|owned).*(?:submi|report)|(?:submi|report).*(?:prohibit|forbid|policy)/i.test(issue.description));
+          if(submissionPolicyFatal)return "External submission policy cannot be a fatal technical issue. Reevaluate source, reachability and replay for verdict; set recommendation=dont_submit if external submissions are prohibited. Reject only for evidence-based technical or scope defects.";
           if(value.verdict==="reject" && value.recommendation==="dont_submit")
             pendingRejection=value;
           for(const name of ["report.txt","replay.json","policy.txt","source-chain.txt"] as const)
