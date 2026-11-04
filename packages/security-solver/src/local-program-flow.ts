@@ -217,6 +217,45 @@ Do not claim production testing, JavaScript execution, file access or other effe
           stage:"hunting",startedAt:statusStartedAt,timeoutMinutes:(deadline-Date.parse(statusStartedAt))/60000,pid:process.pid}),
         signal,maxTurns,finalSchema:z.toJSONSchema(huntSchema),productionWorkflow:true,dynamicAllowance:process.env.LOCAL_HUNT_DYNAMIC_ALLOWANCE !== "false",initialSourcePaths:["audit-policy.txt",...sourceHints],initialSourceLocations:selection.locations,checkpointPath:join(checkpointDirectory,checkpointKey+".json"),numCtx:8192,numThreads:4,numPredict:getConfig().LOCAL_HUNT_NUM_PREDICT,onRead:(path,span)=>reads.add(path,span),
         progressNote:()=>(verifiedProbeSummary(session.cases,2).slice(0,420)+'\n'+controllerTraceSummary.slice(0,420)).slice(0,850),
+        onVerifiedCase:async(caseId,path,selector,kind)=>{
+          // This callback is invoked only after the trusted verifier returns
+          // behavior_observed. The model cannot nominate the caller.
+          const record=session.cases.get(caseId);
+          if(!record || !record.result.behavior_observed ||
+             record.spec.function!==selector || record.spec.kind!==kind)return null;
+          const repository=repos.find(r=>r.url===record.repositoryUrl);
+          if(!repository)return null;
+          const testedPath=sourceFileInWorkspace(repository,record.spec.file,root);
+          if(path!==testedPath)return null;
+          if(record.spec.kind==='solidity_sequence') {
+            const entry=record.spec.function.split('.').at(-1)||'';
+            if(record.spec.sequence?.steps.some(step=>
+              'operation' in step && step.operation==='send' && 'function' in step &&
+              step.function.split('(')[0]===entry))return testedPath;
+            return null;
+          }
+          const candidates:Array<{path:string;line:number;code:string;qualified:boolean}>=[];
+          for(const candidatePath of [...new Set([...sourceHints,...eligiblePaths])].slice(0,128)) {
+            if(candidatePath===testedPath || !candidatePath.startsWith(
+              relative(root,repository.directory).split(sep).join('/')+'/'))continue;
+            try {
+              const code=await readFile(join(root,candidatePath),'utf8');
+              if(code.length>256000)continue;
+              const lines=code.split('\n');
+              for(let i=1;i<=lines.length;i++){
+                if(!callerLineReferences(code,i,record.spec.function))continue;
+                candidates.push({path:candidatePath,line:i,code:lines[i-1],
+                  qualified:qualifiedCallerLineReferences(code,i,record.spec.function)});
+              }
+            }catch{}
+          }
+          const precise=candidates.filter(candidate=>candidate.qualified);
+          const chosen=precise.length===1?precise[0]:candidates.length===1?candidates[0]:null;
+          if(!chosen)return null;
+          await appendFile(logFile,'[CONTROLLER_VERIFIED_CALLER] '+
+            JSON.stringify({caseId,source:testedPath,caller:chosen.path,line:chosen.line,code:chosen.code.slice(0,400)})+'\n');
+          return chosen.path;
+        },
         verifyPython:async (path,fn,kind,sequence) => {
           if (focus && path !== "source-1/"+focus.file) throw new Error("Probe must target the imported lead file");
           const normalized=relative(root,resolve(root,path)).split(sep).join("/");
