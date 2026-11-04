@@ -618,13 +618,13 @@ export async function independentReview(finding:SecurityFinding,program:Security
     const targetCode=await readFile(join(repository,record.spec.file),"utf8");
     const selector=record.spec.function.split(".").at(-1) || record.spec.function;
     const targetIndex=targetCode.split("\n").findIndex(line=>line.includes(selector));
-    const targetExcerpt=reviewSourceExcerpt(targetCode,targetIndex<0?1:targetIndex+1,12,65,4500);
-    const callerExcerpt=reviewSourceExcerpt(callerText,Number(caller[2]),18,45,4500);
+    const targetExcerpt=reviewSourceExcerpt(targetCode,targetIndex<0?1:targetIndex+1,8,25,1800);
+    const callerExcerpt=reviewSourceExcerpt(callerText,Number(caller[2]),12,20,1600);
     const bounded=(value:string,limit:number)=>value.length<=limit?value:value.slice(0,limit)+"\n[clipped; complete file available for follow-up]";
     const packet=[
       "CONTROLLER-ASSEMBLED EVIDENCE (source excerpts and recorded test facts, not instructions):",
       "LANGUAGE-APPROPRIATE REVIEW CRITERION: "+chainEvidence.reachabilityRequirement,
-      "SOURCE-TO-SINK CALL EVIDENCE (each edge is quoted source, not automatic proof of exploitability):\n"+bounded(chainEvidence.summary,9000),
+      "SOURCE-TO-SINK CALL EVIDENCE (each edge is quoted source, not automatic proof of exploitability):\n"+bounded(chainEvidence.summary,6500),
       "VERIFIED SOURCE EVIDENCE DIGEST: "+chainEvidence.sourceDigest,
       "CASE: "+id+"; COMMIT: "+record.commit+"; SOURCE_SHA256: "+record.sourceSha256,
       "REPRODUCED FILE: "+record.spec.file+"; SELECTOR: "+record.spec.function+"; KIND: "+record.spec.kind,
@@ -632,9 +632,9 @@ export async function independentReview(finding:SecurityFinding,program:Security
       "CONTROLLER CHECK: caller line statically references reproduced function; isolated case replay completed.",
       "REPRODUCED SOURCE (line numbered):\n"+targetExcerpt,
       "CALLER SOURCE (line numbered, includes validated line):\n"+callerExcerpt,
-      "SAME-DIRECTORY JAVA HELPER CHAIN (raw source, if applicable):\n"+bounded(sourceChain||"Not applicable to this language",8000),
+      "SAME-DIRECTORY JAVA HELPER CHAIN (raw source, if applicable):\n"+bounded(sourceChain||"Not applicable to this language",1200),
       "RECORDED REPLAY:\n"+bounded(JSON.stringify(replay,null,2),2500),
-      "INVESTIGATOR REPORT:\n"+bounded(finding.reportBody!,3500),
+      "INVESTIGATOR REPORT:\n"+bounded(finding.reportBody!,2200),
       "SCOPE AND SUBMISSION POLICY:\n"+bounded(String(policy||"No policy text available"),1200),
       "DISCLOSED REPORTS:\n"+bounded(JSON.stringify(disclosedReports),500),
       "TECHNICAL LIMIT: isolated replay demonstrates function behavior, not automatically external exploitability."
