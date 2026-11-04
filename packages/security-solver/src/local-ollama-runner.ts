@@ -958,7 +958,7 @@ export async function runLocalAudit(
             if (!readOnly || !clean || (error as NodeJS.ErrnoException).code!=="ENOENT") throw error;
             const aliasedPath = "source/" + path;
             full = await safePath(aliasedPath);
-            await appendFile(logFile,"[CONTROLLER_SOURCE_ALIAS] "+JSON.stringify({requested:path,resolved:aliasedPath})+"\\n");
+            await appendFile(logFile,"[CONTROLLER_SOURCE_ALIAS] "+JSON.stringify({requested:path,resolved:aliasedPath})+"\n");
             path = aliasedPath;
             call.function.arguments.path=aliasedPath;
           }
