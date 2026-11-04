@@ -1235,7 +1235,7 @@ export async function runLocalAudit(
               // verified case. A model's invented paths or negative tests
               // cannot supersede an earlier verified observation.
               let authoritativeCaller:string|null=null;
-              if(typeof probeResult.caseId==='string' && limits.onVerifiedCase) {
+              if(typeof probeResult.caseId==='string' && limits.onVerifiedCase && process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false') {
                 authoritativeCaller=await limits.onVerifiedCase(
                   probeResult.caseId,String(call.function.arguments?.path||''),
                   String(call.function.arguments?.query||''),
