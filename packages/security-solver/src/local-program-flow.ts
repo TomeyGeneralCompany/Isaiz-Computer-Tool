@@ -21,6 +21,7 @@ import { writeSecuritySolverStatus, clearSecuritySolverStatus, writeAdversarialR
 import type { SecuritySolveResult, ParsedFinding } from "./claude-runner";
 import { selectSourceBatch, incompleteProbeCoverage, recoverEmptyUnprobedFinal, retainGroundedCandidates } from "./inspection-coverage";
 import { callerLineReferences, qualifiedCallerLineReferences, transactionEntryLine } from "./source-function-reference";
+import {buildControllerReportPacket,controllerReportPacketText,type ControllerReportPacket} from './controller-report-packet';
 const log=createLogger("local-program-flow");
 const sha=z.string().regex(/^[a-f0-9]{64}$/);
 const severitySchema = z.enum(["critical","high","medium","low","informational"]);
@@ -55,8 +56,8 @@ function validReachability(candidate:z.infer<typeof candidateSchema>,record:Sour
   }
   return callerLineReferences(text,candidate.callerLine,record.spec.function);
 }
-function report(candidate:z.infer<typeof candidateSchema>,record:SourceCase,id:string,caller:string):string {
-  return `## Summary\n${candidate.title}\n\n${candidate.impact}\n\n## Affected Source\n${record.repositoryUrl}/${record.spec.file}\nCommit: ${record.commit}\nSource SHA256: ${record.sourceSha256}\nCaller: ${caller}:${candidate.callerLine}\nReachability: ${candidate.reachability || "caller"}\n\n## Steps to Reproduce\nCall ${record.spec.function} in ${record.spec.file} using the recorded inputs or local transaction sequence below.\nProbe kind: ${record.spec.kind}\n${record.spec.sequence ? "Local deployment and transaction sequence:\n"+JSON.stringify(record.spec.sequence,null,2)+"\n" : ""}Reproduction case: ${id}\n\n## Observed Results\n${JSON.stringify(record.result.observations,null,2)}\n\n## Falsification Attempts\n${candidate.falsification}\n\n## Evidence Limits\n${record.result.limitation}\nThis is an isolated source-function reproduction; no production endpoint was tested.\n\n## Impact\n${candidate.impact}\n\n## Evidence Assessment\nSeverity: ${candidate.severity}\nConfidence: ${candidate.confidence}\n${candidate.ratingReason}\n`;
+function report(candidate:z.infer<typeof candidateSchema>,record:SourceCase,id:string,caller:string,packet:ControllerReportPacket):string {
+  return `## Summary\n${candidate.title}\n\n${candidate.impact}\n\n## Affected Source\n${record.repositoryUrl}/${record.spec.file}\nCommit: ${record.commit}\nSource SHA256: ${record.sourceSha256}\nCaller: ${caller}:${candidate.callerLine}\nReachability: ${candidate.reachability || "caller"}\n\n${controllerReportPacketText(packet)}\n\n## Steps to Reproduce\nCall ${record.spec.function} in ${record.spec.file} using the recorded inputs or local transaction sequence below.\nProbe kind: ${record.spec.kind}\n${record.spec.sequence ? "Local deployment and transaction sequence:\n"+JSON.stringify(record.spec.sequence,null,2)+"\n" : ""}Reproduction case: ${id}\n\n## Observed Results\n${JSON.stringify(record.result.observations,null,2)}\n\n## Falsification Attempts\n${candidate.falsification}\n\n## Evidence Limits\n${record.result.limitation}\nThis is an isolated source-function reproduction; no production endpoint was tested.\n\n## Impact\n${candidate.impact}\n\n## Evidence Assessment\nSeverity: ${candidate.severity}\nConfidence: ${candidate.confidence}\n${candidate.ratingReason}\n`;
 }
 export interface StaticLeadFocus { id:string; repositoryUrl:string; commit:string; file:string; line:number; rule:string; }
 /** Explicit offline fixture acquisition, supplied only by owned test harnesses.
@@ -208,6 +209,54 @@ Do not claim production testing, JavaScript execution, file access or other effe
           const repository=repos.find(repo=>normalized===relative(root,repo.directory) || normalized.startsWith(relative(root,repo.directory)+"/"));
           if(repository && missingDependencies.has(repository.url))return JSON.stringify({status:"unsupported",reason:"Repository dependencies are incomplete",missing:missingDependencies.get(repository.url)});
           return session.probe(path,fn,kind,sequence);
+        },
+        finalEvidencePacket:async()=>{
+          // This packet is assembled from verifier results and inspected source,
+          // never model-authored case identities or invented caller locations.
+          const packets:ControllerReportPacket[]=[];
+          for(const [caseId,record] of session.cases) {
+            if(!record.result.behavior_observed || packets.length>=2)continue;
+            const repository=repos.find(r=>r.url===record.repositoryUrl);
+            if(!repository || !reads.has(sourceFileInWorkspace(repository,record.spec.file,root)))continue;
+            const matches:Array<{path:string,line:number,code:string,qualified:boolean}>=[];
+            for(const sourcePath of [...new Set([...sourceHints,...eligiblePaths])].slice(0,80)) {
+              if(!sourcePath.startsWith(relative(root,repository.directory).split(sep).join('/')+'/') ||
+                 !reads.has(sourcePath))continue;
+              try {
+                const text=await readFile(join(root,sourcePath),'utf8');
+                const lines=text.split('\n');
+                for(let n=1;n<=lines.length;n++) {
+                  if(!reads.sawLine(sourcePath,text,n) ||
+                     !callerLineReferences(text,n,record.spec.function))continue;
+                  matches.push({path:sourcePath,line:n,code:lines[n-1],
+                    qualified:qualifiedCallerLineReferences(text,n,record.spec.function)});
+                }
+              }catch{}
+            }
+            const precise=matches.filter(m=>m.qualified);
+            const match=precise.length===1?precise[0]:matches.length===1?matches[0]:null;
+            if(!match)continue;
+            packets.push(buildControllerReportPacket({
+              caseId,repositoryUrl:record.repositoryUrl,commit:record.commit,
+              testedFile:record.spec.file,testedFunction:record.spec.function,
+              probeKind:record.spec.kind,sourceSha256:record.sourceSha256,
+              callerFile:relative(repository.directory,join(root,match.path)).split(sep).join('/'),
+              callerLine:match.line,callerCode:match.code,reachability:'caller',
+              observations:record.result.observations,limitation:record.result.limitation ?? 'No additional reproduction limitations recorded.'
+            }));
+          }
+          if(!packets.length)return '';
+          const file='audit-controller-report-evidence.json';
+          await writeFile(join(root,file),JSON.stringify(packets,null,2),{mode:0o600});
+          const selections=packets.map(packet=>({
+            caseId:packet.caseId,selector:packet.testedFunction,
+            file:packet.testedFile,caller:packet.callerFile+':'+packet.callerLine,
+            callerCode:packet.callerCode.trim(),sourceSha256:packet.sourceSha256,
+            observed:packet.observations
+          }));
+          return 'Verified evidence packets (read '+file+' for full data): '+
+            JSON.stringify(selections).slice(0,1900)+
+            '. Put the exact caseId and caller into findings; explain impact and limits without inventing them.';
         },
         validateFinal:async text=>{
           try {
@@ -486,7 +535,15 @@ Do not claim production testing, JavaScript execution, file access or other effe
       if(!callerLine || !validReachability(candidate,record,callerRelative,callerText))throw new Error("Claimed caller line does not reference the probed function");
       const targetAsset=record.repositoryUrl+"/"+record.spec.file;assertAuthorizedTarget(program.scopeSummary,targetAsset);
       findings.push({title:candidate.title,severity:candidate.severity,vulnerabilityType:record.spec.kind==="html_reflection"?"CWE-116":record.spec.kind==="path_construction"?"CWE-22":"State assertion discrepancy",targetAsset,confidence:candidate.confidence,
-        reproductionCaseId:candidate.caseId,reproductionFingerprint:createHash("sha256").update(JSON.stringify({programId:program.id,repositoryUrl:record.repositoryUrl,commit:record.commit,file:record.spec.file,function:record.spec.function,kind:record.spec.kind,...(record.spec.sequence ? {sequence:record.spec.sequence} : {})})).digest("hex"),reportBody:report(candidate,record,candidate.caseId,callerRelative)});
+        reproductionCaseId:candidate.caseId,reproductionFingerprint:createHash("sha256").update(JSON.stringify({programId:program.id,repositoryUrl:record.repositoryUrl,commit:record.commit,file:record.spec.file,function:record.spec.function,kind:record.spec.kind,...(record.spec.sequence ? {sequence:record.spec.sequence} : {})})).digest("hex"),reportBody:report(candidate,record,candidate.caseId,callerRelative,
+          buildControllerReportPacket({
+            caseId:candidate.caseId,repositoryUrl:record.repositoryUrl,commit:record.commit,
+            testedFile:record.spec.file,testedFunction:record.spec.function,
+            probeKind:record.spec.kind,sourceSha256:record.sourceSha256,
+            callerFile:callerRelative,callerLine:candidate.callerLine,
+            callerCode:callerLine,reachability:candidate.reachability||'caller',
+            observations:record.result.observations,limitation:record.result.limitation ?? 'No additional reproduction limitations recorded.'
+          }))});
     }
     return {auditRecord,success:true,coverage:"partial",acquisitionChecks,capabilityChecks,coverageDetail:`${session.completedProbes} supported probes completed; ${session.unsupportedProbes} unsupported probes; ${session.failedProbes} failed probes`,findings,rawOutput:answer};
   }catch(error:any){preparationFailure=error.message || String(error);return {auditRecord,success:false,coverage,acquisitionChecks,capabilityChecks,findings:[],rawOutput:"",error:signal.aborted ? "Local hunt cancelled by operator" : error.message || "Local hunt failed"};}
