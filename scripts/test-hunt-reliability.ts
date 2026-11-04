@@ -6,6 +6,7 @@ import {execFileSync} from 'node:child_process';
 import {compilerCompatible,inspectSourceCapability} from '../packages/security-solver/src/source-capability';
 import {referencesProbedFunction,callerLineReferences,qualifiedCallerLineReferences,transactionEntryLine} from '../packages/security-solver/src/source-function-reference';
 import {compactAuditContext,auditCheckpoint} from '../packages/security-solver/src/audit-context';
+import {reviewedTargetFinding} from './gauntlet-reviewed-finding';
 import {buildControllerReportPacket,controllerReportPacketText} from '../packages/security-solver/src/controller-report-packet';
 import {retainGroundedCandidates} from '../packages/security-solver/src/inspection-coverage';
 import {programCandidateBlocker,LOCAL_REPRODUCTION_CAPABILITY_VERSION} from '../packages/core/src/program-eligibility';
@@ -24,6 +25,22 @@ assert.ok(packetText.includes('Renderer.render') && packetText.includes('HttpHan
 assert.ok(packetText.includes('Inspected caller source:') && packetText.includes('Recorded isolated observations'));
 assert.throws(()=>buildControllerReportPacket({...evidencePacket,callerCode:''}),/caller line/);
 assert.throws(()=>buildControllerReportPacket({...evidencePacket,caseId:'invented'}),/SHA256/);
+const gradedReports=[
+  {reproductionCaseId:'codec-case',title:'Codec helper',reportBody:'src/Codec.java'},
+  {reproductionCaseId:'renderer-case',title:'Renderer.render injection',reportBody:'src/Renderer.java'},
+];
+const answer={selector:'Renderer.render',file:'src/Renderer.java'};
+assert.equal(reviewedTargetFinding(gradedReports,
+  [{caseId:'codec-case',verdict:'reject'},{caseId:'renderer-case',verdict:'approve'}],answer),true,
+  'second supported finding can pass despite rejection of first');
+assert.equal(reviewedTargetFinding(gradedReports,
+  [{caseId:'codec-case',verdict:'approve'},{caseId:'renderer-case',verdict:'reject'}],answer),false,
+  'approval of unrelated first finding does not pass benchmark');
+assert.equal(reviewedTargetFinding(gradedReports,
+  [{caseId:'codec-case',verdict:'reject'},{caseId:'renderer-case',verdict:'reject'}],answer),false,
+  'reviewer rejections cannot be converted into passes');
+assert.equal(reviewedTargetFinding(gradedReports,[{caseId:'unknown',verdict:'approve'}],answer),false,
+  'review approval must identify a recorded finding case');
 for(const range of ['^0.8.20','>=0.8.0 <0.9.0','0.8.30','^0.7.0 || ^0.8.0'])assert.equal(compilerCompatible(range),true,range);
 for(const range of ['^0.7.0','0.8.19','>=0.8.31','~0.7.1'])assert.equal(compilerCompatible(range),false,range);
 assert.equal(compilerCompatible('0.8.x'),null);
