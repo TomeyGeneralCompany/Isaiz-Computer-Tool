@@ -23,6 +23,7 @@ assert.equal(referencesProbedFunction('return responseBody(input);','HttpHandler
 assert.equal(referencesProbedFunction('String responseBody(String input) {','HttpHandler.responseBody'),false,
   'package-private Java method declaration is not a caller');
 assert.equal(referencesProbedFunction('def responseBody(value):','HttpHandler.responseBody'),false,
+  'Python function declaration is not a caller');
 
 const exactCallerFixture='public class HttpHandler {\n' +
   '  public String responseBody(String input) { return Renderer.render(input); }\n' +
