@@ -195,6 +195,18 @@ Choose severity and confidence from the actual reachability, observed behavior, 
 An empty findings array can end this bounded pass after a supported probe, or with outcome="no_testable_candidate" and a reason. The latter records incomplete inspection, not a claim that the program has no vulnerabilities.
 Do not claim production testing, JavaScript execution, file access or other effects not demonstrated. You initially have ${maxTurns} read/probe turns. The controller may extend turns and time when newly inspected source or completed tests demonstrate progress. Choose relevant functions and callers rather than exhaustively reading unrelated files.`;
     let parsed:z.infer<typeof huntSchema> | undefined;
+    let controllerCallerNote='';
+    const controllerEvidenceNote=()=>{
+      const cases=[...session.cases].filter(([,record])=>record.result.behavior_observed)
+        .slice(0,3).map(([caseId,record])=>({
+          caseId,function:record.spec.function,file:record.spec.file,kind:record.spec.kind,
+          status:record.result.status,sourceSha256:record.sourceSha256
+        }));
+      if(!cases.length)return '';
+      return ('Controller-verified reproduction records (identities, never model guesses): '+
+        JSON.stringify(cases)+'. '+controllerCallerNote+
+        'Use only these exact case IDs and inspected real callers. The controller will attach original source hashes, inputs and observations from stored records. Your work is security impact, severity, mitigation and falsification; do not fabricate caller evidence.').slice(0,1450);
+    };
     signal.throwIfAborted();
     beforeInspection?.();
     await note('MODEL_START',{model:process.env.LOCAL_OLLAMA_MODEL||'qwen3:4b',selectedFiles:sourceHints.length});
@@ -202,7 +214,7 @@ Do not claim production testing, JavaScript execution, file access or other effe
       process.env.LOCAL_OLLAMA_MODEL || "qwen3:4b",undefined,{
         onAllowance:async deadline=>writeSecuritySolverStatus({active:true,programId:program.id,programName:program.name,
           stage:"hunting",startedAt:statusStartedAt,timeoutMinutes:(deadline-Date.parse(statusStartedAt))/60000,pid:process.pid}),
-        signal,maxTurns,finalSchema:z.toJSONSchema(huntSchema),productionWorkflow:true,dynamicAllowance:process.env.LOCAL_HUNT_DYNAMIC_ALLOWANCE !== "false",initialSourcePaths:["audit-policy.txt",...sourceHints],initialSourceLocations:selection.locations,checkpointPath:join(checkpointDirectory,checkpointKey+".json"),numCtx:8192,numThreads:4,numPredict:getConfig().LOCAL_HUNT_NUM_PREDICT,onRead:(path,span)=>reads.add(path,span),verifyPython:async (path,fn,kind,sequence) => {
+        signal,maxTurns,finalSchema:z.toJSONSchema(huntSchema),productionWorkflow:true,progressNote:controllerEvidenceNote,dynamicAllowance:process.env.LOCAL_HUNT_DYNAMIC_ALLOWANCE !== "false",initialSourcePaths:["audit-policy.txt",...sourceHints],initialSourceLocations:selection.locations,checkpointPath:join(checkpointDirectory,checkpointKey+".json"),numCtx:8192,numThreads:4,numPredict:getConfig().LOCAL_HUNT_NUM_PREDICT,onRead:(path,span)=>reads.add(path,span),verifyPython:async (path,fn,kind,sequence) => {
           if (focus && path !== "source-1/"+focus.file) throw new Error("Probe must target the imported lead file");
           const normalized=relative(root,resolve(root,path)).split(sep).join("/");
           const repository=repos.find(repo=>normalized===relative(root,repo.directory) || normalized.startsWith(relative(root,repo.directory)+"/"));
@@ -268,6 +280,8 @@ Do not claim production testing, JavaScript execution, file access or other effe
                 const qualified=sites.filter(site=>site.qualified);
                 const chosen=qualified.length===1?qualified[0]:sites.length===1?sites[0]:null;
                 if(chosen) {
+                  controllerCallerNote='Controller-verified inspected caller for '+record.spec.function+
+                    ': '+chosen.file+':'+chosen.line+'. ';
                   candidate.callerFile=chosen.file;
                   candidate.callerLine=chosen.line;
                   await appendFile(logFile,'[CONTROLLER_EVIDENCE_ASSEMBLED] '+JSON.stringify({
