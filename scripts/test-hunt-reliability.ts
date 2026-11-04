@@ -8,9 +8,28 @@ import {referencesProbedFunction,callerLineReferences,qualifiedCallerLineReferen
 import {compactAuditContext,auditCheckpoint} from '../packages/security-solver/src/audit-context';
 import {reviewedTargetFinding} from './gauntlet-reviewed-finding';
 import {buildControllerReportPacket,controllerReportPacketText} from '../packages/security-solver/src/controller-report-packet';
+import {observedJavaSourceChain} from '../packages/security-solver/src/java-source-chain';
 import {retainGroundedCandidates} from '../packages/security-solver/src/inspection-coverage';
 import {programCandidateBlocker,LOCAL_REPRODUCTION_CAPABILITY_VERSION} from '../packages/core/src/program-eligibility';
 import {loadConfig} from '../packages/core/src/config';
+const chainDir=await mkdtemp(join(tmpdir(),'lotus-java-source-chain-'));
+try {
+  const sourceDir=join(chainDir,'src');
+  await mkdir(sourceDir,{recursive:true});
+  await writeFile(join(sourceDir,'Renderer.java'),
+    'class Renderer { static String render(String x){return Pipeline.wrapFragment(x);} }');
+  await writeFile(join(sourceDir,'Pipeline.java'),
+    'class Pipeline { static String wrapFragment(String x){return Codec.encodeFragment(x);} }');
+  await writeFile(join(sourceDir,'Codec.java'),
+    'class Codec { static String encodeFragment(String x){return x;} }');
+  const chain=await observedJavaSourceChain(chainDir,'src/Renderer.java');
+  assert.ok(chain.includes('SOURCE src/Renderer.java') &&
+    chain.includes('SOURCE src/Pipeline.java') &&
+    chain.includes('SOURCE src/Codec.java'),'Reviewer must receive exact transitive Java helper source');
+  assert.ok(chain.includes('return x;'),'Identity codec must be observable, not guessed');
+  assert.equal(await observedJavaSourceChain(chainDir,'../secret.java'),'',
+    'Reviewer evidence cannot escape the selected repository');
+} finally {await rm(chainDir,{recursive:true,force:true});}
 const evidencePacket=buildControllerReportPacket({
   caseId:'a'.repeat(64),repositoryUrl:'https://github.com/fixture/owned',commit:'sample',
   testedFile:'src/Renderer.java',testedFunction:'Renderer.render',
