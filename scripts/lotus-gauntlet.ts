@@ -45,8 +45,14 @@ function grade(log:string,result:any,elapsed:number,review:any,answer:Answer){
  const modelActions=log.split('\n').filter(line=>line.includes('[MODEL_ACTION]'));
  const targetRead=modelActions.some(line=>line.includes(answer.file) &&
    (line.includes('read_file')||line.includes('read_solidity')||line.includes('outline_solidity')));
- const targetProbe=modelActions.some(line=>line.includes(answer.selector) &&
-   (line.includes('plan_probe')||line.includes('probe_intent')));
+ // The production controller converts accepted probe plans into verify_source.
+ // Grade the persisted accepted plan plus its actual verifier result, rather
+ // than looking only for model-issued plan_probe labels.
+ const events=log.split('\n');
+ const targetProbe=events.some(line=>line.includes('[PROBE_PLANNED]') &&
+   line.includes('"query":'+JSON.stringify(answer.selector))) &&
+   events.some(line=>line.includes('[PROBE_RESULT]') &&
+   line.includes('"function":'+JSON.stringify(answer.selector)));
  const milestones={
   sourceAcquired:count('[ACQUISITION_REPOSITORY_DONE]')>0,
   sourceMapBuilt:count('[SOURCE_MAP]')>0,
