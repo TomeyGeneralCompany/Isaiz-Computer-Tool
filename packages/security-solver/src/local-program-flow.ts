@@ -19,7 +19,7 @@ import { runLocalAudit } from "./local-ollama-runner";
 import { createProbeSession, readSourceCase, replaySourceCase, type SourceCase, type ProbeRepository } from "./source-reproduction";
 import { writeSecuritySolverStatus, clearSecuritySolverStatus, writeAdversarialReviewStatus, clearAdversarialReviewStatus } from "./status";
 import type { SecuritySolveResult, ParsedFinding } from "./claude-runner";
-import { selectSourceBatch, incompleteProbeCoverage, recoverEmptyUnprobedFinal } from "./inspection-coverage";
+import { selectSourceBatch, incompleteProbeCoverage, recoverEmptyUnprobedFinal, retainGroundedCandidates } from "./inspection-coverage";
 import { callerLineReferences, qualifiedCallerLineReferences, transactionEntryLine } from "./source-function-reference";
 const log=createLogger("local-program-flow");
 const sha=z.string().regex(/^[a-f0-9]{64}$/);
@@ -305,10 +305,11 @@ Do not claim production testing, JavaScript execution, file access or other effe
                     grounded.push(candidate);
                   }catch{}
                 }
-                if(grounded.length && grounded.length<candidates.length) {
-                  (recovered as {findings:any[]}).findings=grounded;
+                const retained=retainGroundedCandidates(candidates,grounded);
+                if(retained!==candidates) {
+                  (recovered as {findings:any[]}).findings=retained;
                   await appendFile(logFile,'[CONTROLLER_UNSUPPORTED_REPORTS_PRUNED] '+
-                    JSON.stringify({removed:candidates.length-grounded.length,remaining:grounded.map(c=>c.caseId)})+'\\n');
+                    JSON.stringify({removed:candidates.length-retained.length,remaining:retained.map(c=>c.caseId)})+'\\n');
                 }
               }
             }
