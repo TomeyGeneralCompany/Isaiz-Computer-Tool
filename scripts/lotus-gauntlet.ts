@@ -61,9 +61,10 @@ function grade(log:string,result:any,elapsed:number,review:any,answer:Answer){
   hypothesisExamined:targetProbe,
   probePlanned:count('[PROBE_PLANNED]')>0,
   probeExecuted:count('[PROBE_RESULT]')>0,
-  verifiedFinding:result.success===true && review?.verdict==='approve' &&
+  verifiedFinding:result.success===true &&
    Array.isArray(result.findings) && result.findings.some((f:any)=>
-     f.reproductionCaseId && f.reproductionCaseId===review.caseId &&
+     f.reproductionCaseId && (Array.isArray(review)?review:review?[review]:[]).some((judgment:any)=>
+       judgment?.verdict==='approve' && judgment.caseId===f.reproductionCaseId) &&
      (String(f.reportBody||'')+' '+String(f.title||'')).includes(answer.selector.split('.').at(-1)!) &&
      (String(f.reportBody||'')+' '+String(f.title||'')).includes(answer.file))
  };
@@ -136,7 +137,7 @@ async function main(){
  const old={PROJECT_ROOT:process.env.PROJECT_ROOT,GITHUB_TOKEN:process.env.GITHUB_TOKEN};
  const began=Date.now();
  let result:any={success:false,findings:[],error:'No investigation result'};
- let review:any=null;
+ let review:any[]=[];
  let gradePassed=false;
  try{
   process.env.PROJECT_ROOT=app;
@@ -153,12 +154,18 @@ async function main(){
    scopeSummary:JSON.stringify({policy:'Owned synthetic application. Inspect source, data flow, authorization, input handling and application behavior. Local reproduction and diagnostics only. No submissions.',
     scopes:[{assetType:'SOURCE_CODE',eligibleForBounty:true,assetIdentifier:'https://github.com/fixture/gauntlet-settlement'}]})};
   result=await runLocalProgramHunt(program,undefined,undefined,undefined,false,sourceAcquirer);
-  if(result.findings?.length){
-   const finding=result.findings[0];
-   if(finding.reproductionCaseId){
-    const judged=await independentReview({...finding,id:'owned-gauntlet-review'} as any,
+  // Independent review each reported case, not just findings[0]. A valid
+  // report later in the candidate array must receive the same review gate.
+  // Never use the hidden answer key to select or approve a report.
+  for(const [index,finding] of (result.findings||[]).entries()){
+   if(!finding.reproductionCaseId)continue;
+   try {
+    const judged=await independentReview({...finding,id:'owned-gauntlet-review-'+index} as any,
       program,finding.reproductionCaseId,new AbortController().signal,sourceAcquirer);
-    review={verdict:judged.review.verdict,caseId:judged.caseId,sourceSha256:judged.sourceSha256};
+    review.push({verdict:judged.review.verdict,caseId:judged.caseId,
+      sourceSha256:judged.sourceSha256});
+   }catch(e){
+    review.push({verdict:'error',caseId:finding.reproductionCaseId,error:String(e)});
    }
   }
  }catch(e){result.error=String(e);}
