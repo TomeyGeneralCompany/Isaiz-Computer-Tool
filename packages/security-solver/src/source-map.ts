@@ -6,7 +6,7 @@ export type SourceSymbol={path:string;name:string;offset:number;line:number;sign
 export async function buildSourceMap(root:string,paths:string[]) {
   const base=await realpath(root),symbols:SourceSymbol[]=[],sources:Array<{path:string;code:string}>=[];
   let bytes=0,skipped=0;
-  for(const path of paths.slice(0,128)) {
+  for(const path of paths.slice(0,192)) {
     try {
       const full=await realpath(resolve(base,path)),rel=relative(base,full);
       if(rel==='..'||rel.startsWith('..'+sep)) {skipped++;continue;}
@@ -16,7 +16,7 @@ export async function buildSourceMap(root:string,paths:string[]) {
       const code=sourceCodeOnly(text);sources.push({path,code});
       const declarations=/\b(?:def|function)\s+([A-Za-z_$][\w$]*)\s*\([^\n)]*\)|\b(?:(?:public|protected|private|final|static|synchronized)\s+){0,5}(?:String|byte\s*\[\s*\])\s+([A-Za-z_$][\w$]*)\s*\([^\n)]*\)|\b(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?\([^\n)]*\)\s*=>/g;
       for(const match of code.matchAll(declarations)) {
-        if(symbols.length>=256)break;
+        if(symbols.length>=512)break;
         const signature=text.slice(match.index!,match.index!+match[0].length);
         const probeHint=path.endsWith('.sol')?'Solidity: inspect ABI/constructor and state assertions':
           path.endsWith('.java')?'Java candidate: inspect a public String or UTF-8 byte[] function and its caller; static or public no-argument-constructible instance methods are supported':
@@ -34,6 +34,6 @@ export async function buildSourceMap(root:string,paths:string[]) {
       symbol.callers.push({path:source.path,line:source.code.slice(0,match.index).split('\n').length});
     }
   }
-  return {kind:'navigation_only',complete:false,scannedFiles:sources.length,skippedFiles:skipped+Math.max(0,paths.length-128),symbols,
+  return {kind:'navigation_only',complete:false,scannedFiles:sources.length,skippedFiles:skipped+Math.max(0,paths.length-192),symbols,
     limitation:'Lexical candidates and possible callers; aliases, overloads and dynamic calls may be missed or misidentified. Read source to verify. No vulnerability or execution is established.'};
 }
