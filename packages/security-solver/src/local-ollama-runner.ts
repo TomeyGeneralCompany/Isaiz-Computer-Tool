@@ -69,6 +69,9 @@ export interface LocalAuditLimits {
   actionConstraints?: () => Partial<Record<"action"|"path"|"query"|"answer",string[]>>;
   signal?: AbortSignal;
   onRead?: (path:string, span:ReadSpan) => void;
+  /** Trusted controller source analysis: exact caller path for a reproduced case.
+   * No model text can create or change this routing decision. */
+  onVerifiedCase?: (caseId:string,path:string,selector:string,kind:string) => Promise<string|null>;
   verifyPython?: (path:string,functionName:string,kind:string,sequence?:SoliditySequence | JavaSequence) => Promise<string>;
 }
 export async function runLocalAudit(
@@ -1228,6 +1231,24 @@ export async function runLocalAudit(
             // require independently inspected caller/reachability evidence now,
             // before the model can spend 80 turns on empty conclusions.
             if(workflow && probeStatus==='behavior_observed') {
+              // Only the controller can appoint the next caller and lock a
+              // verified case. A model's invented paths or negative tests
+              // cannot supersede an earlier verified observation.
+              let authoritativeCaller:string|null=null;
+              if(typeof probeResult.caseId==='string' && limits.onVerifiedCase) {
+                authoritativeCaller=await limits.onVerifiedCase(
+                  probeResult.caseId,String(call.function.arguments?.path||''),
+                  String(call.function.arguments?.query||''),
+                  String(call.function.arguments?.kind||''));
+              }
+              if(authoritativeCaller && workflow.focusVerifiedEvidence(probeResult.caseId)) {
+                const readPaths=new Set(workflow.snapshot().readPaths);
+                if(!readPaths.has(authoritativeCaller))workflow.requireSource(authoritativeCaller);
+                requireInvestigationAfterEmpty=false;
+                emptyFinals=0;
+                await appendFile(logFile,'[CONTROLLER_VERIFIED_CASE_FOCUS] '+
+                  JSON.stringify({caseId:probeResult.caseId,caller:authoritativeCaller,alreadyRead:readPaths.has(authoritativeCaller)})+'\n');
+              }
               const testedPath=String(call.function.arguments?.path||'');
               const readPaths=new Set(workflow.snapshot().readPaths);
               const candidates=(limits.initialSourcePaths||[]).filter(p=>
@@ -1236,8 +1257,8 @@ export async function runLocalAudit(
               candidates.sort((a,b)=>
                 Number(/(?:caller|handler|route|controller|entry|server)/i.test(b))-
                 Number(/(?:caller|handler|route|controller|entry|server)/i.test(a)));
-              const caller=candidates[0];
-              if(caller) {
+              const caller=authoritativeCaller || candidates[0];
+              if(caller && !workflow.snapshot().verifiedEvidenceFocus) {
                 workflow.requireSource(caller);
                 requireInvestigationAfterEmpty=true;
                 emptyFinals=0;
