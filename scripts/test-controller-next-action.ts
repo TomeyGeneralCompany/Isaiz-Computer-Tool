@@ -7,6 +7,7 @@ import {sourceCandidateEvidence,verifiedProbeSummary} from '../packages/security
 import {traceSourceCalls} from '../packages/security-solver/src/source-flow-facts';
 import {InvestigationWorkflow} from '../packages/security-solver/src/investigation-workflow';
 import {guidedSourceProbe} from '../packages/security-solver/src/source-guided-probes';
+import {buildSourceMap} from '../packages/security-solver/src/source-map';
 
 const pending={path:'source-1/src/render.py',query:'render',answer:'html_reflection'};
 assert.deepEqual(controllerOwnedNextAction({
@@ -115,5 +116,15 @@ try {
     'public class Pipeline {\npublic static String wrapFragment(String value){return value;}\n}\n');
   const javaTrace=await traceSourceCalls(join(root,'source-1'),'src/Renderer.java','Renderer.render');
   assert.ok(javaTrace.facts.some(f=>f.path.endsWith('Pipeline.java')),'Java helper must be traced');
+  // Level 5 uses 144 source files: a 128-file map silently discarded 16.
+  const manyFiles:string[]=[];
+  for(let i=0;i<144;i++) {
+    const file='source-1/src/module_'+i+'.py';
+    manyFiles.push(file);
+    await writeFile(join(root,file),'def function_'+i+'(value):\n    return value\n');
+  }
+  const map=await buildSourceMap(root,manyFiles);
+  assert.equal(map.scannedFiles,144,'controller must index the entire 144-file challenge');
+  assert.equal(map.skippedFiles,0);
   console.log('Controller owned-next-action, grounded source citations and verified probe memory PASSED');
 } finally {await rm(root,{recursive:true,force:true});}
