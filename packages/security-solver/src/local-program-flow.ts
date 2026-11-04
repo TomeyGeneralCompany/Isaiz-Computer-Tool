@@ -443,6 +443,9 @@ export async function independentReview(finding:SecurityFinding,program:Security
     await mkdir(join(logFile,".."),{recursive:true});
     await writeFile(logFile,"",{mode:0o600});
     const reads=new SourceReads();let review:z.infer<typeof reviewSchema> | undefined;
+    // A conservative, schema-valid rejection may precede the last required
+    // evidence page. Preserve it, but never recover a premature approval.
+    let pendingRejection:z.infer<typeof reviewSchema> | undefined;
     const {policy,disclosedReports}=program.provider==="hackerone" && program.providerProgramId
       ? await fetchProgramPolicy(program.providerProgramId)
       : {policy:JSON.parse(program.scopeSummary || "{}").policy || null,disclosedReports:[]};
@@ -459,13 +462,27 @@ Return final JSON only:
 Independently assign severity and confidence from observed impact, source reachability and evidence limits. Do not copy the hunter ratings or raise them to pass a threshold.
 Use one enum value per string. Scores are integers 0..3. bet100=false requires dont_submit. Approval requires a demonstrated reportable issue, not just a passing probe.`;
     await runLocalAudit(prompt,logFile,getConfig().SECURITY_HUNT_TIMEOUT_MINUTES*60000,root,process.env.LOCAL_OLLAMA_MODEL || "qwen3:4b",undefined,{
-      signal,maxTurns:200,dynamicAllowance:process.env.LOCAL_HUNT_DYNAMIC_ALLOWANCE !== "false",prefetchReadOnly:true,finalSchema:z.toJSONSchema(reviewSchema),numCtx:8192,numThreads:4,numPredict:getConfig().LOCAL_HUNT_NUM_PREDICT,initialSourcePaths:["evidence/report.txt","evidence/replay.json","evidence/policy.txt","source/"+record.spec.file,"source/"+caller[1]],onRead:(path,span)=>reads.add(path,span),validateFinal:async text=>{
+      signal,maxTurns:200,dynamicAllowance:process.env.LOCAL_HUNT_DYNAMIC_ALLOWANCE !== "false",prefetchReadOnly:true,finalSchema:z.toJSONSchema(reviewSchema),numCtx:8192,numThreads:4,numPredict:getConfig().LOCAL_HUNT_NUM_PREDICT,initialSourcePaths:["evidence/report.txt","evidence/replay.json","evidence/policy.txt","source/"+record.spec.file,"source/"+caller[1]],onRead:(path,span)=>reads.add(path,span),
+      recoverFinal:()=>{
+        if(!pendingRejection || review)return null;
+        for(const name of ["report.txt","replay.json","policy.txt"] as const)
+          if(!reads.covers("evidence/"+name,0,evidenceFiles[name].length))return null;
+        if(!reads.has("source/"+record.spec.file) || !reads.has("source/"+caller[1]) ||
+           !reads.sawLine("source/"+caller[1],callerText,Number(caller[2])))return null;
+        // The original reviewer explicitly rejected this report. Completing
+        // required reads may validate that conservative decision, never elevate
+        // a previously premature judgment into an approval.
+        review=pendingRejection;
+        return JSON.stringify(review);
+      },
+      validateFinal:async text=>{
         try {
           const value=reviewSchema.parse(JSON.parse(text));
+          if(value.verdict==="reject" && value.recommendation==="dont_submit")
+            pendingRejection=value;
           for(const name of ["report.txt","replay.json","policy.txt"] as const)
             if(!reads.covers("evidence/"+name,0,evidenceFiles[name].length))return "Read every page of evidence/"+name+" before reviewing; continue at nextOffset.";
           if(!reads.has("source/"+record.spec.file) || !reads.has("source/"+caller[1]))return "Read the reproduced source and caller before giving a review verdict.";
-          const callerText=await readFile(join(repository,caller[1]),"utf8");
           if(!reads.sawLine("source/"+caller[1],callerText,Number(caller[2])))return "Read the page containing the entire recorded caller line before reviewing.";
           review=value;return null;
         }catch{return "Return the requested review JSON with actual enum values and integer rubric scores.";}
