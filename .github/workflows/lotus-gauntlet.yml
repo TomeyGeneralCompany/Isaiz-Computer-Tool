@@ -122,5 +122,5 @@ jobs:
           retention-days: 30
           if-no-files-found: warn
       - name: Stop model
-        if: always() && inputs.mode == 'run'
+        if: always() && (github.event_name == 'push' || inputs.mode == 'run')
         run: docker rm -f lotus-gauntlet-ollama || true
