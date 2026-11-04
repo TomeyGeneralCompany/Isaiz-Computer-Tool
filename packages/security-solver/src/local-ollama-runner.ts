@@ -415,7 +415,7 @@ export async function runLocalAudit(
       const controllerAction=structured && workflow ?
         controllerOwnedNextAction(constraints,workflow.snapshot().pending) : null;
       if(controllerAction)await appendFile(logFile,'[CONTROLLER_OWNED_ACTION] '+JSON.stringify(controllerAction)+'\n');
-      const result = controllerAction ?
+      const result: {message?:Message;eval_count?:number;prompt_eval_count?:number;done_reason?:string;load_duration?:number;prompt_eval_duration?:number;eval_duration?:number;total_duration?:number;client_queue_ms?:number} = controllerAction ?
         {message:{role:'assistant',content:JSON.stringify(controllerAction)}} :
         await (adapter==='qwen-agent'?postQwenAgentJson:postOllamaChat)(process.env.AUTOHACK_OLLAMA_URL || "http://127.0.0.1:11434/api/chat", { model, stream: false, think: profile.think, messages:requestMessages,
           ...(structured ? {format:requestSchema} : {tools:availableTools}),
