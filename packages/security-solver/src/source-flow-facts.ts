@@ -123,7 +123,8 @@ export function sourceImportsTarget(callerPath:string,targetPath:string,code:str
     return false;
   }
   if(target.endsWith('.py')){
-    const pathInRepo=target.split('/').slice(1).join('/');
+    const parts=target.split('/');
+    const pathInRepo=(/^source-\d+$/.test(parts[0])?parts.slice(1):parts).join('/');
     const module=pathInRepo.slice(0,-3).replaceAll('/','.');
     const filename=target.split('/').at(-1)!.slice(0,-3);
     // Package and local-relative imports. The target is still verified by
