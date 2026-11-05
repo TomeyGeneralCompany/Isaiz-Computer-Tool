@@ -2,6 +2,7 @@ import {modelProfile} from './model-profile';
 import {normalizeForcedOutlineCursor} from './outline-cursor';
 import {z} from "zod";
 import {javaSequenceSchema, type JavaSequence} from "./java-sequence";
+import {polyglotSequenceSchema,type PolyglotSequence} from "./polyglot-sequence";
 import {buildBaselineSequence} from './solidity-probe-inputs';
 import {privilegedRoleMutationCandidate} from './solidity-security-candidates';
 import {rankTracedSourceCandidates} from './controller-source-candidates';
@@ -75,7 +76,7 @@ export interface LocalAuditLimits {
    * No model text can create or change this routing decision. */
   onVerifiedCase?: (caseId:string,path:string,selector:string,kind:string) =>
     Promise<{callers:string[];promoted?:{caseId:string;path:string;selector:string;kind:string}}|null>;
-  verifyPython?: (path:string,functionName:string,kind:string,sequence?:SoliditySequence | JavaSequence) => Promise<string>;
+  verifyPython?: (path:string,functionName:string,kind:string,sequence?:SoliditySequence | JavaSequence | PolyglotSequence) => Promise<string>;
 }
 export async function runLocalAudit(
   prompt: string, logFile: string, timeoutMs: number, cwd: string,
@@ -155,7 +156,7 @@ export async function runLocalAudit(
       }}}
     },required:["steps"]},
     action:{type:"string",enum:[...auditActionSchema.properties.action.enum,"verify_source","verify_python",...(workflow?["plan_probe","probe_intent","continue_inspection"]:[])]}}} : {...auditActionSchema,properties:{...auditActionSchema.properties,...(limits.finalSchema?{result:limits.finalSchema}:{})}};
-  const probePrompt = limits.verifyPython ? "\\nUse probe_intent with inspected path, exact query (or blank for a unique candidate), supported answer kind, hypothesis and optional sequence. The controller validates and executes the accepted request. Python top-level and exported JavaScript functions require one string input and string output. Java text probes support one text/byte argument. For Java methods with primitive/String args, use java_sequence with sequence with constructor args and method steps; calls share one instance. Do not use html_reflection for Java numeric/state methods. Solidity accepts state-changing sends and read assertions in a local EVM. Do not invent method names, expected values, or findings. " : "";
+  const probePrompt = limits.verifyPython ? "\\nUse probe_intent with inspected path, exact query (or blank for a unique candidate), supported answer kind, hypothesis and optional sequence. The controller validates and executes the accepted request. Python top-level and exported JavaScript functions require one string input and string output. Java text probes support one text/byte argument. For Python and JavaScript stateful behavior, use python_sequence or javascript_sequence with a declarative factory (optional), constructor array and at least two steps {method,args,expected?}, all on the same object; state observations are not security findings. For Java methods with primitive/String args, use java_sequence with constructor args and method steps; calls share one instance. Do not use html_reflection for Java numeric/state methods. Solidity accepts state-changing sends and read assertions in a local EVM. Do not invent method names, expected values, or findings. " : "";
   const availableTools = limits.verifyPython ? [...tools,{type:"function",function:{
     name:"verify_source",description:probePrompt,parameters:{type:"object",
       properties:{path:{type:"string"},query:{type:"string"},kind:{type:"string"},sequence:soliditySequenceJsonSchema},required:["path","query","kind"]},
@@ -921,7 +922,7 @@ export async function runLocalAudit(
           }
           // A single controller-facing handoff for all supported source probes.
           // Unlike model prompts, these choices derive from actual declarations.
-          if(action.answer!=='solidity_sequence' && !action.path.endsWith('.java') && !action.path.endsWith('.sol')) {
+          if(!['solidity_sequence','python_sequence','javascript_sequence'].includes(action.answer) && !action.path.endsWith('.java') && !action.path.endsWith('.sol')) {
             let valid=false;
             let menu:Awaited<ReturnType<typeof probeChoices>>=[];
             try {
@@ -935,6 +936,22 @@ export async function runLocalAudit(
                 'Do not invent a function or report an unexecuted probe.';
               workflow.feedback(feedback);
               await appendFile(logFile,'[PROBE_INTENT_MENU] '+JSON.stringify({path:action.path,kind:action.answer,menu})+'\n');
+              messages.push({role:'user',content:feedback+' /no_think'});
+              continue;
+            }
+          }
+          if(['python_sequence','javascript_sequence'].includes(action.answer)) {
+            const parsed=polyglotSequenceSchema.safeParse(action.sequence);
+            const extension=action.answer==='python_sequence'?/\.py$/:/\.(?:js|mjs|cjs)$/;
+            if(!extension.test(action.path) || !parsed.success ||
+               !parsed.data.steps.some(step=>step.method===action.query)) {
+              const feedback='Controller stateful execution requires a source-grounded '+
+                'declarative sequence: {factory:"actualFactory",constructor:[],steps:['+
+                '{method:"selectedMethod",args:[],expected:0},{method:"selectedMethod",args:[],expected:1}]}. '+
+                'The factory is optional for module-level functions. Two or more executed steps must invoke the selected method. '+ 
+                'Expected mismatches are observations, not security findings.';
+              workflow.feedback(feedback);
+              await appendFile(logFile,'[POLYGLOT_SEQUENCE_INVALID] '+JSON.stringify({path:action.path,query:action.query})+'\n');
               messages.push({role:'user',content:feedback+' /no_think'});
               continue;
             }
@@ -1282,8 +1299,8 @@ export async function runLocalAudit(
           if((name === "verify_source" || name === "verify_python") && limits.verifyPython) {
             const kind=String(call.function.arguments?.kind || "");
             const rawSequence=call.function.arguments?.sequence;
-            if(!["solidity_sequence","java_sequence"].includes(kind) && rawSequence!==undefined)throw new Error("Sequence requires a sequence kind");
-            const sequence=kind==="solidity_sequence"?soliditySequenceSchema.parse(rawSequence):kind==="java_sequence"?javaSequenceSchema.parse(rawSequence):undefined;
+            if(!["solidity_sequence","java_sequence","python_sequence","javascript_sequence"].includes(kind) && rawSequence!==undefined)throw new Error("Sequence requires a sequence kind");
+            const sequence=kind==="solidity_sequence"?soliditySequenceSchema.parse(rawSequence):kind==="java_sequence"?javaSequenceSchema.parse(rawSequence):["python_sequence","javascript_sequence"].includes(kind)?polyglotSequenceSchema.parse(rawSequence):undefined;
             output=await limits.verifyPython(path,String(call.function.arguments?.query || ""),kind,sequence);
             try {
               const result=JSON.parse(output);

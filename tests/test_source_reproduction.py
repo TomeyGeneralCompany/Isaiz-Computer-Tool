@@ -166,6 +166,40 @@ class LanguageTests(unittest.TestCase):
             self.assertEqual(result["behavior_observed"], observed)
             return result
 
+    def test_stateful_python_factory_sequence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo=Path(directory)
+            (repo/'counter.py').write_text(
+                'class Counter:\n'
+                ' def __init__(self,start=0): self.value=start\n'
+                ' def advance(self,by=1): self.value+=by; return self.value\n'
+                'def make(start=0): return Counter(start)\n')
+            sequence={'factory':'make','constructor':[2],
+                      'steps':[{'method':'advance','args':[3],'expected':5},
+                               {'method':'advance','args':[4],'expected':99}]}
+            result=driver.run_probe(repo,{'file':'counter.py','function':'advance',
+                'kind':'python_sequence','nonce':'a'*32,'sequence':sequence})
+            self.assertEqual(result['status'],'observation_only',result)
+            self.assertFalse(result['behavior_observed'])
+            self.assertEqual([s['actual'] for s in result['observations']['steps']],[5,9])
+            self.assertEqual([s['passed'] for s in result['observations']['steps']],[True,False])
+
+    def test_stateful_javascript_factory_sequence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo=Path(directory)
+            (repo/'counter.cjs').write_text(
+                'exports.make = function(start) {let value=start; return {\n'
+                'advance(by) {value += by; return value;}};};\n')
+            sequence={'factory':'make','constructor':[2],
+                      'steps':[{'method':'advance','args':[3],'expected':5},
+                               {'method':'advance','args':[4],'expected':99}]}
+            result=driver.run_probe(repo,{'file':'counter.cjs','function':'advance',
+                'kind':'javascript_sequence','nonce':'a'*32,'sequence':sequence})
+            self.assertEqual(result['status'],'observation_only',result)
+            self.assertFalse(result['behavior_observed'])
+            self.assertEqual([s['actual'] for s in result['observations']['steps']],[5,9])
+            self.assertEqual([s['passed'] for s in result['observations']['steps']],[True,False])
+
     def test_python_uppercase_markup(self):
         self.probe("render.py", "def render(x):\n    return x.upper()\n")
 

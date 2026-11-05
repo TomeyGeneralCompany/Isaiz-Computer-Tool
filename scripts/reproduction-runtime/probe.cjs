@@ -33,6 +33,30 @@ async function javascript() {
   }
   return [await fn(control), await fn(attack)];
 }
+async function javascriptSequence() {
+  const module = await import(pathToFileURL(sourceFile(spec.file)).href);
+  const sequence = spec.sequence;
+  if (!sequence || !Array.isArray(sequence.steps) || sequence.steps.length < 2 ||
+      sequence.steps.length > 12) throw new Error('Invalid stateful sequence');
+  const factory = sequence.factory ? (module[sequence.factory] ?? module.default?.[sequence.factory]) : null;
+  const receiver = factory ? await factory(...(sequence.constructor || [])) : (module.default ?? module);
+  if (!receiver) throw new Error('Stateful sequence receiver unavailable');
+  const steps = [];
+  for (const step of sequence.steps) {
+    if (!/^[A-Za-z][A-Za-z0-9_]{0,79}$/.test(step.method) ||
+        !Array.isArray(step.args || []) || (step.args || []).length > 8)
+      throw new Error('Invalid stateful step');
+    const fn = receiver[step.method];
+    if (typeof fn !== 'function') throw new Error('Stateful method not callable: ' + step.method);
+    const actual = await fn.apply(receiver, step.args || []);
+    if (JSON.stringify(actual) === undefined || JSON.stringify(actual).length > 16000)
+      throw new Error('Unsupported sequence output');
+    steps.push({operation:'call',function:step.method,actual,
+      ...(Object.hasOwn(step,'expected') ? {expected:step.expected} : {}),
+      passed:!Object.hasOwn(step,'expected') || JSON.stringify(actual) === JSON.stringify(step.expected)});
+  }
+  return {factory:sequence.factory || null,steps};
+}
 const missingImports = new Set();
 function solidityImport(name) {
   const candidates = [name, 'node_modules/' + name, 'lib/' + name];
@@ -102,6 +126,11 @@ async function solidity() {
   } finally { await transport.disconnect(); }
 }
 (async () => {
+  if (spec.kind === 'javascript_sequence') {
+    if (!/\.(?:js|mjs|cjs)$/.test(spec.file)) throw new Error('JavaScript source required');
+    output(JSON.stringify(await javascriptSequence()));
+    return;
+  }
   if (spec.kind === 'solidity_sequence') {
     if (!spec.file.endsWith('.sol')) throw new Error('Solidity source required');
     output(JSON.stringify(await solidity()));

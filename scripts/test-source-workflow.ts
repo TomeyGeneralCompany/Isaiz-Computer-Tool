@@ -556,7 +556,16 @@ try {
   }));
   assert.equal(baseline.status,"observation_only");
   assert.deepEqual(baseline.observations.steps.filter((step:any)=>step.operation==="observe").map((step:any)=>step.actual),["5","7"]);
-  assert.equal(baseline.caseId,undefined);
+  assert.match(baseline.caseId,/^[a-f0-9]{64}$/,
+    "Observed state transitions are retained as tamper-evident cases, not as findings");
+  const {readRecordedSourceCase}=await import("../packages/security-solver/src/source-reproduction");
+  const recorded=await readRecordedSourceCase(baseline.caseId,program);
+  assert.equal(recorded.result.status,"observation_only");
+  await assert.rejects(readSourceCase(baseline.caseId,program),/not verified security evidence/,
+    "An observation-only state transition must never be treated as a verified finding");
+  const replay=await replaySourceCase(recorded,fixture);
+  assert.deepEqual(replay.observations,recorded.result.observations,
+    "Independent execution must reproduce every stateful observation exactly");
   assert.equal(baselineSession.completedProbes,1);
 
   for(const language of ["javascript","java","solidity","stateful_solidity"]) {

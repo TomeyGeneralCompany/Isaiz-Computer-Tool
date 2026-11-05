@@ -13,8 +13,9 @@ const driver = fileURLToPath(new URL("../../../scripts/source-reproduction.py",i
 const sha = (value:string | Buffer) => createHash("sha256").update(value).digest("hex");
 const digest = z.string().regex(/^[a-f0-9]{64}$/);
 import {javaSequenceSchema, type JavaSequence} from "./java-sequence";
+import {polyglotSequenceSchema,type PolyglotSequence} from "./polyglot-sequence";
 const specSchema = z.object({file:z.string().min(1).max(4096),function:z.string().regex(/^[A-Za-z][A-Za-z0-9_]{0,79}(?:\.[A-Za-z][A-Za-z0-9_]{0,79})?$/),
-  kind:z.enum(["html_reflection","entry_html_reflection","path_construction","solidity_sequence","java_sequence"]),sequence:z.union([soliditySequenceSchema,javaSequenceSchema]).optional(),nonce:z.string().regex(/^[a-f0-9]{32}$/)}).strict().superRefine((spec,ctx)=>{
+  kind:z.enum(["html_reflection","entry_html_reflection","path_construction","solidity_sequence","java_sequence","python_sequence","javascript_sequence"]),sequence:z.union([soliditySequenceSchema,javaSequenceSchema,polyglotSequenceSchema]).optional(),nonce:z.string().regex(/^[a-f0-9]{32}$/)}).strict().superRefine((spec,ctx)=>{
     if(spec.kind === "solidity_sequence") {
       if(!spec.file.endsWith(".sol") || !spec.function.includes(".") || !spec.sequence ||
          !soliditySequenceSchema.safeParse(spec.sequence).success ||
@@ -24,6 +25,12 @@ const specSchema = z.object({file:z.string().min(1).max(4096),function:z.string(
       if(!spec.file.endsWith(".java") || !spec.function.includes(".") || !javaSequenceSchema.safeParse(spec.sequence).success ||
          !(spec.sequence as JavaSequence)?.steps?.some(step=>step.method===spec.function.split(".")[1]))
         ctx.addIssue({code:z.ZodIssueCode.custom,message:"Java sequence must exercise selected Class.method"});
+    } else if(spec.kind === "python_sequence" || spec.kind === "javascript_sequence") {
+      const extension=spec.kind==="python_sequence"?/\\.py$/:/\\.(?:js|mjs|cjs)$/;
+      const parsed=polyglotSequenceSchema.safeParse(spec.sequence);
+      if(!extension.test(spec.file) || spec.function.includes(".") || !parsed.success ||
+         !parsed.data.steps.some(step=>step.method===spec.function))
+        ctx.addIssue({code:z.ZodIssueCode.custom,message:"Stateful sequence must use the matching language and invoke the selected exported function"});
     } else if(spec.kind === "entry_html_reflection" &&
         (!/\.(?:py|cjs|js|mjs|java)$/.test(spec.file) ||
          !/(?:handler|controller|route|entry|server)/i.test(spec.file) ||
@@ -38,10 +45,14 @@ const sequenceObservations = z.object({contract:z.string(),accounts:z.array(z.st
     z.object({operation:z.literal("send"),function:z.string(),sender:z.number(),valueWei:z.string(),reverted:z.boolean(),gasUsed:z.string(),passed:z.boolean()}),
   ])).min(1).max(16)});
 const javaSequenceObservations=z.object({constructor:z.array(z.unknown()),steps:z.array(z.object({operation:z.literal("call"),function:z.string(),actual:z.string(),expected:z.unknown().optional(),passed:z.boolean()})).min(1).max(12)});
+const polyglotSequenceObservations=z.object({factory:z.string().nullable(),steps:z.array(z.object({
+  operation:z.literal("call"),function:z.string(),actual:z.unknown(),
+  expected:z.unknown().optional(),passed:z.boolean()
+})).min(2).max(12)});
 const resultSchema = z.object({status:z.string(),behavior_observed:z.boolean(),source_sha256:digest.optional(),
   kind:z.string().optional(),observations:z.union([z.object({control_input:z.string(),control_output:z.string(),attack_input:z.string(),attack_output:z.string(),
     entry_control_url:z.string().optional(),entry_attack_url:z.string().optional(),
-    entry_selector:z.string().optional(),entry_parameter:z.string().optional()}),sequenceObservations,javaSequenceObservations]).optional(),
+    entry_selector:z.string().optional(),entry_parameter:z.string().optional()}),sequenceObservations,javaSequenceObservations,polyglotSequenceObservations]).optional(),
   limitation:z.string().optional(),detail:z.string().optional(),exit_code:z.number().optional()});
 const caseSchema = z.object({version:z.literal(1),programId:z.string(),repositoryUrl:z.string(),commit:z.string().regex(/^[a-f0-9]{40}$/),
   sourceSha256:digest,spec:specSchema,result:resultSchema});
@@ -76,15 +87,24 @@ async function executeProbe(directory:string,spec:z.infer<typeof specSchema>,sig
     return resultSchema.parse(JSON.parse(output));
   } finally {await rm(temporary,{recursive:true,force:true});}
 }
-export async function readSourceCase(id:string,program:SecurityProgram):Promise<SourceCase> {
+/** Read a tamper-evident observed state transition without implying a
+ * reportable vulnerability. Security findings still use readSourceCase.
+ */
+export async function readRecordedSourceCase(id:string,program:SecurityProgram):Promise<SourceCase> {
   digest.parse(id);
   const record=caseSchema.parse(JSON.parse(await readFile(join(caseDirectory(),id+".json"),"utf8")));
   if(sourceCaseId(record)!==id || record.programId!==program.id) throw new Error("Reproduction record does not match finding/program");
   let scopes:unknown=[];try {const parsed=JSON.parse(program.scopeSummary || "{}");scopes=Array.isArray(parsed)?parsed:parsed.scopes;}catch{}
   if(!authorizedSourceUrls(scopes).includes(record.repositoryUrl) || !targetInExplicitScope(program.scopeSummary,record.repositoryUrl+"/"+record.spec.file))
     throw new Error("Reproduction source is outside current program scope");
-  if(!record.result.behavior_observed || record.result.source_sha256!==record.sourceSha256 || !record.result.observations)
-    throw new Error("Reproduction case has no successful observation");
+  if(!['behavior_observed','observation_only'].includes(record.result.status) ||
+     record.result.source_sha256!==record.sourceSha256 || !record.result.observations)
+    throw new Error("Reproduction case has no successful recorded execution");
+  return record;
+}
+export async function readSourceCase(id:string,program:SecurityProgram):Promise<SourceCase> {
+  const record=await readRecordedSourceCase(id,program);
+  if(!record.result.behavior_observed)throw new Error("An observation-only sequence is not verified security evidence");
   return record;
 }
 export async function createProbeSession(program:SecurityProgram,workspace:string,repositories:ProbeRepository[],signal?:AbortSignal) {
@@ -95,7 +115,7 @@ export async function createProbeSession(program:SecurityProgram,workspace:strin
   let unsupportedProbes = 0;
   let failedProbes = 0;
   const workspaceRoot=await realpath(workspace);
-  const probe=async(path:string,functionName:string,kind:string,sequence?:SoliditySequence | JavaSequence):Promise<string> => {
+  const probe=async(path:string,functionName:string,kind:string,sequence?:SoliditySequence | JavaSequence | PolyglotSequence):Promise<string> => {
     signal?.throwIfAborted();
     const file=await realpath(resolve(workspaceRoot,path));
     const repo = repositories.find(candidate => {
@@ -126,7 +146,7 @@ export async function createProbeSession(program:SecurityProgram,workspace:strin
       blockedReason = result.status + (result.detail ? ": " + result.detail : "");
       throw new Error("Reproduction unavailable: " + blockedReason);
     }
-    if(!result.behavior_observed)return JSON.stringify(result);
+    if(!result.behavior_observed && result.status!=='observation_only')return JSON.stringify(result);
     if(result.source_sha256!==sourceSha256 || sha(await readFile(file))!==sourceSha256)throw new Error("Reproduction source changed");
     const record=caseSchema.parse({version:1,programId:program.id,repositoryUrl:repo.url,commit,sourceSha256,spec,result});
     const id=sourceCaseId(record);
@@ -149,7 +169,8 @@ export async function replaySourceCase(record:SourceCase,directory:string,signal
   const rel=relative(await realpath(directory),file);
   if(rel===".." || rel.startsWith(".."+sep) || sha(await readFile(file))!==record.sourceSha256)throw new Error("Reproduction source changed before review");
   const result=await executeProbe(directory,record.spec,signal);
-  if(!result.behavior_observed || result.source_sha256!==record.sourceSha256 ||
+  if(result.status!==record.result.status || result.behavior_observed!==record.result.behavior_observed ||
+     result.source_sha256!==record.sourceSha256 ||
      JSON.stringify(result.observations)!==JSON.stringify(record.result.observations))throw new Error("Independent reproduction did not match recorded observation");
   return result;
 }
