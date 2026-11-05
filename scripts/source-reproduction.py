@@ -21,6 +21,7 @@ import tempfile
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from source_dependencies import prepare_dependencies, prepare_pinned_foundry_submodules, prepare_locked_python_wheels, DependencyError
+from solidity_access_evidence import authorization_transition_observed
 
 SUPPORTED_EXECUTION_STATUS = {
     'behavior_observed',
@@ -393,12 +394,19 @@ def run_probe(repository: Path, specification: dict, _dependency_round: int = 0)
         if kind == 'solidity_sequence':
             if not isinstance(data.get('steps'),list) or not data['steps'] or any(type(step.get('passed')) is not bool for step in data['steps'] if step.get('operation') != 'observe'):
                 raise ValueError('Invalid transaction observations')
-            # Expected-value assertions are test hypotheses, not independent
-            # evidence of a security vulnerability. Preserve every observed
-            # transaction and mismatch for caller/impact review and replay.
-            return {'status':'observation_only','behavior_observed':False,
+            # An arbitrary expected-value mismatch is NOT evidence. A
+            # nonadministrator mutation of a source-proven privileged role,
+            # established by before/after EVM receipts and an independently
+            # inspected role-gated consumer, IS a reproducible security
+            # behavior. Reporting impact still requires separate review.
+            source_proven = authorization_transition_observed(
+                repository,target,specification['function'],data)
+            return {'status':'behavior_observed' if source_proven else 'observation_only',
+                    'behavior_observed':source_proven,
                     'source_sha256':source_hash,'kind':kind,'observations':data,
-                    'limitation':'Only bounded Solidity transactions and assertions were observed. An expected-value mismatch is not a confirmed security reproduction; reachability and impact require independent evidence.'}
+                    'limitation':('Verified nonadministrator role mutation with before/after EVM observations and a source-declared privileged role consumer; reachability and exploit impact still require independent review.'
+                      if source_proven else
+                      'Only bounded Solidity transactions and assertions were observed. An expected-value mismatch is not independent security proof.')}
         if kind == 'java_sequence':
             steps=data.get('steps')
             if not isinstance(steps,list) or not steps or not all(
