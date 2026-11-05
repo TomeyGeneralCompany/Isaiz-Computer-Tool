@@ -56,9 +56,31 @@ try {
     null,'an evidence-limited review must be allowed to reject unproven executable impact');
 
   assert.match(reviewRejectionDefect(reject(
-    'No effective input sanitization or escaping occurs; Codec.encodeFragment returns the input unmodified, so there is no actual security risk.'),evidence)??'',/Returning unescaped user data/,
+    'No effective input sanitization or escaping occurs; Codec.encodeFragment returns the input unmodified, so there is no actual security risk.'),evidence)??'',/Returning unescaped user data|Identity transformation is not sanitization/,
     'identity encoder is not a security mitigation; reviewer must name a real missing link');
 
+  // Level5 Python #42100919715: reviewer falsely called a pass-through
+  // codec a sanitizer even though the observed HTML was returned unescaped.
+  const pythonIdentity={...evidence,language:'python'};
+  assert.match(reviewRejectionDefect(reject(
+    'The codec.py implementation (encode_fragment) returns the input value without modification, acting as a sanitizer that preserves the input. This prevents HTML injection as the output is the raw input wrapped in HTML tags, not unescaped HTML.'),pythonIdentity)??'',
+    /Identity transformation is not sanitization/,
+    'identity-returning helpers must never be treated as an effective sanitizer');
+  assert.match(reviewRejectionDefect(reject(
+    'The downstream consumer has a source-verified text/plain response and cannot interpret markup.'),pythonIdentity)??'',
+    /no source-backed text/,
+    'a claimed text/plain response must be backed by a real source line, not by reviewer assertion');
+  // Regressions from the real post-#146 Level 5 Python/Java run: a
+  // pass-through codec is not a sanitizer and string return != text/plain.
+  assert.match(reviewRejectionDefect(reject(
+    'The codec returns the input value without modification, acting as a sanitizer. This prevents HTML injection.'),evidence)??'',/Identity transformation is not sanitization/,
+    'a reviewer cannot turn return value into an effective sanitizer');
+  assert.match(reviewRejectionDefect(reject(
+    'The output is a text/plain response, not HTML. The handler does not render in a browser.'),evidence)??'',/no source-backed text\/plain/,
+    'a reviewer cannot invent an HTTP content type from a Java String');
+  assert.equal(reviewRejectionDefect(reject(
+    'The returned markup reaches no demonstrated browser rendering sink and the caller has no documented externally deployed route.'),evidence),
+    null,'real limits must remain legitimate independent review grounds');
   assert.equal(reviewRejectionDefect({verdict:'approve',issues:[],reasoning:'Supported by source'},evidence),null);
   const repeated=await buildReviewEvidence(root,input);
   assert.equal(evidence.sourceDigest,repeated.sourceDigest,'verified facts are deterministic and persistent');
