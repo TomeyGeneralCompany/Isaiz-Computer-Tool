@@ -2,7 +2,7 @@ import {prioritizeSourceCandidates} from './source-candidates';
 import {collectStaticLeads} from './local-static-leads';
 import {buildSourceMap} from './source-map';
 import {sourceCandidateEvidence,verifiedProbeSummary} from './source-candidate-evidence';
-import {traceSourceCalls} from './source-flow-facts';
+import {traceSourceCalls,solidityDependentSources,controllerCallerChain} from './source-flow-facts';
 import { LOCAL_REPRODUCTION_CAPABILITY_VERSION } from "../../core/src/program-eligibility";
 import { inspectSourceCapability } from "./source-capability";
 import { SourceReads } from "./source-inspection";
@@ -229,56 +229,35 @@ Do not claim production testing, JavaScript execution, file access or other effe
           if(path!==testedPath)return null;
           if(record.spec.kind==='solidity_sequence') {
             const entry=record.spec.function.split('.').at(-1)||'';
-            if(record.spec.sequence?.steps.some(step=>
+            if(!record.spec.sequence?.steps.some(step=>
               'operation' in step && step.operation==='send' && 'function' in step &&
-              step.function.split('(')[0]===entry))return [testedPath];
-            return null;
+              step.function.split('(')[0]===entry))return null;
+            const ownPrefix=relative(root,repository.directory).split(sep).join('/')+'/';
+            const candidates=[...new Set([...sourceHints,...eligiblePaths])]
+              .filter(candidate=>candidate.startsWith(ownPrefix));
+            const dependents=await solidityDependentSources(root,testedPath,
+              record.spec.function.split('.')[0],candidates,6);
+            await appendFile(logFile,'[CONTROLLER_SOLIDITY_IMPACT_SOURCES] '+
+              JSON.stringify({caseId,testedPath,dependents})+'\n');
+            // The selected ABI entry is already covered by the successful
+            // reproduction. Dependent callers/inheritors still need real reads.
+            return [testedPath,...dependents];
           }
-          const visited=new Set<string>([testedPath]);
-          const chain:string[]=[];
-          let currentSelector=record.spec.function;
-          for(let depth=0;depth<4;depth++){
-            const candidates:Array<{path:string;line:number;code:string;qualified:boolean;source:string}>=[],prefix=
-              relative(root,repository.directory).split(sep).join('/')+'/';
-            for(const candidatePath of [...new Set([...sourceHints,...eligiblePaths])].slice(0,192)) {
-              if(visited.has(candidatePath) || !candidatePath.startsWith(prefix))continue;
-              try {
-                const code=await readFile(join(root,candidatePath),'utf8');
-                if(code.length>256000)continue;
-                const lines=code.split('\n');
-                for(let i=1;i<=lines.length;i++){
-                  if(!callerLineReferences(code,i,currentSelector))continue;
-                  candidates.push({path:candidatePath,line:i,code:lines[i-1],
-                    qualified:qualifiedCallerLineReferences(code,i,currentSelector),source:code});
-                }
-              }catch{}
-            }
-            const precise=candidates.filter(candidate=>candidate.qualified);
-            const chosen=precise.length===1?precise[0]:candidates.length===1?candidates[0]:null;
-            if(!chosen)break;
-            chain.push(chosen.path);visited.add(chosen.path);
-            await appendFile(logFile,'[CONTROLLER_VERIFIED_CALLER] '+
-              JSON.stringify({caseId,selector:currentSelector,caller:chosen.path,
-                line:chosen.line,code:chosen.code.slice(0,400)})+'\n');
-            const prior=chosen.source.split('\n').slice(Math.max(0,chosen.line-12),chosen.line);
-            let enclosing='';
-            for(const line of [...prior].reverse()){
-              const python=/^\s*(?:async\s+)?def\s+([A-Za-z_$][\w$]*)\s*\(/.exec(line);
-              const javascript=/\bfunction\s+([A-Za-z_$][\w$]*)\s*\(/.exec(line) ||
-                /\bexports\.([A-Za-z_$][\w$]*)\s*=/.exec(line);
-              const java=/\b(?:public|protected|private)\s+(?:static\s+)?[A-Za-z_$][\w$<>\[\]]*\s+([A-Za-z_$][\w$]*)\s*\(/.exec(line);
-              enclosing=(python||javascript||java)?.[1]||'';
-              if(enclosing)break;
-            }
-            if(!enclosing)break;
-            currentSelector=chosen.path.endsWith('.java') ?
-              chosen.path.split('/').at(-1)!.slice(0,-5)+'.'+enclosing : enclosing;
-          }
+          const ownPrefix=relative(root,repository.directory).split(sep).join('/')+'/';
+          const chain=await controllerCallerChain(root,ownPrefix,testedPath,
+            record.spec.function,[...new Set([...sourceHints,...eligiblePaths])],4);
           if(!chain.length)return null;
+          for(const item of chain)await appendFile(logFile,'[CONTROLLER_VERIFIED_CALLER] '+
+            JSON.stringify({caseId,selector:item.selector,caller:item.path,
+              line:item.line,code:item.code.slice(0,400)})+'\n');
+          const paths=chain.map(item=>item.path);
+          controllerTraceSummary='CONTROLLER VERIFIED UPSTREAM SOURCE CALLERS (not runtime input proof): '+
+            [testedPath,...paths].join(' -> ')+'. The model must assess entry-point input control and mitigation; it may not discard the recorded reproduction.';
           await writeFile(join(root,'audit-controller-caller-chain.json'),JSON.stringify({
-            caseId,source:testedPath,callers:chain,limitation:'Lexical caller relationships; caller argument trust and application entry require independent verification.'
+            caseId,source:testedPath,callers:chain,
+            limitation:'Import-resolved source references; dynamic dispatch, input control and runtime entry require independent verification.'
           },null,2),{mode:0o600});
-          return chain;
+          return paths;
         },
         verifyPython:async (path,fn,kind,sequence) => {
           if (focus && path !== "source-1/"+focus.file) throw new Error("Probe must target the imported lead file");

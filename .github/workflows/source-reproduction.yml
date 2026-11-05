@@ -33,6 +33,8 @@ jobs:
         run: npx tsx scripts/test-solidity-protocol.ts
       - name: Test local Solidity transaction executor
         run: node scripts/test-solidity-sequence.cjs
+      - name: Test real Level-5 Solidity public state getter and baseline selection
+        run: npx tsx scripts/test-solidity-controller-menu.ts
       - name: Run actual Python, JavaScript, Java and Solidity sandbox probes
         env:
           TOMEY_REPRODUCTION_INTEGRATION: '1'
@@ -59,6 +61,10 @@ jobs:
         run: npx tsx scripts/test-review-evidence-chain.ts
       - name: Validate controller-owned actions and grounded source navigation
         run: npx tsx scripts/test-controller-next-action.ts
+      - name: Validate controller-owned Gauntlet grading
+        run: npx tsx scripts/test-gauntlet-execution-milestones.ts
+      - name: Validate import-resolved polyglot caller chains against decoys
+        run: npx tsx scripts/test-controller-caller-chain.ts
       - name: Test real source audit, report creation and independent replay
         run: npx tsx scripts/test-source-workflow.ts
       - name: Exercise shared production workflow with real isolated probes

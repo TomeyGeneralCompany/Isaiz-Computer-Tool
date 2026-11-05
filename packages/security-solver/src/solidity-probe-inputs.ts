@@ -40,11 +40,19 @@ export function buildBaselineSequence(menu:SolidityProbeDeclaration[],selectedSe
   const reads=declarations.filter(entry=>entry.operation==='call' && fixtureArguments(entry.inputs)!==null);
   // A zero-input getter is preferable to an unrelated parameterized read;
   // these are observations, not invented assertions about correctness.
+  // Observe the actual state field related to this mutation when a public
+  // getter exists. A random view method can revert for unrelated authorization
+  // reasons and tells us nothing about the selected state transition.
+  const mutation=selectedSelector.split('.').at(-1)||'';
+  const tokens=mutation.replace(/([a-z])([A-Z])/g,'$1 $2').toLowerCase().split(/[^a-z0-9]+/).
+    filter(token=>token.length>3 && !['rotate','change','update','transfer','modify','write','reset'].includes(token));
   reads.sort((a,b)=>{
     const rank=(entry:SolidityProbeDeclaration)=>{
       const name=entry.selector.split('.').at(-1)||'';
-      const getter=/^(?:get[A-Z]|value$|balanceOf$|totalSupply$|owner$|count$|stored$|current)/.test(name);
-      return (entry.inputs.length?4:0)+(getter?0:1);
+      const related=tokens.some(token=>name.toLowerCase()===token ||
+        name.toLowerCase()==='get'+token);
+      const getter=/^(?:get[A-Z]|value$|balanceOf$|totalSupply$|owner$|operator$|administrator$|count$|stored$|current)/.test(name);
+      return (related?-10:0)+(entry.inputs.length?4:0)+(getter?0:1);
     };
     return rank(a)-rank(b);
   });
@@ -52,9 +60,18 @@ export function buildBaselineSequence(menu:SolidityProbeDeclaration[],selectedSe
   const readArgs=read?fixtureArguments(read.inputs):null;
   if(!read || !constructorArgs || !sendArgs || !readArgs)return null;
   const signature=(entry:SolidityProbeDeclaration)=>entry.selector.split('.').at(-1)+'('+entry.inputs.join(',')+')';
+  // A privileged-role mutation can be tested by a non-incumbent local signer
+  // without requiring the model to invent expected state values or calldata.
+  // expectRevert is a falsifiable *hypothesis*, not a security verdict.
+  const readName=read.selector.split('.').at(-1)||'';
+  const role=/^(?:owner|operator|administrator|admin|governor|manager|controller)$/i.test(readName);
+  const changesRole=/^(?:set|change|rotate|transfer|assign|replace)(?:Owner|Operator|Administrator|Admin|Governor|Manager|Controller)$/i.test(mutation);
+  const nonIncumbentRoleTest=role && changesRole && selected.inputs.length===1 &&
+    /^(?:address|address payable)$/.test(selected.inputs[0]) && sendArgs[0]==='$account1';
   return {constructorArgs,steps:[
     {operation:'observe' as const,function:signature(read),args:readArgs},
-    {operation:'send' as const,function:signature(selected),args:sendArgs},
+    {operation:'send' as const,function:signature(selected),args:sendArgs,
+      ...(nonIncumbentRoleTest?{sender:1,expectRevert:true}: {})},
     {operation:'observe' as const,function:signature(read),args:readArgs}
   ]};
 }

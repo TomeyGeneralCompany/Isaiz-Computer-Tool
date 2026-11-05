@@ -450,11 +450,17 @@ export async function runLocalAudit(
       // The normal workflow validator and isolated verifier remain mandatory.
       if(!controllerAction && structured && workflow &&
          process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false' &&
-         !workflow.snapshot().verifiedEvidenceFocus && controllerAutoProbeCount<3 &&
+         !workflow.snapshot().verifiedEvidenceFocus &&
+         controllerAutoProbeCount<Math.min(24,(limits.initialSourcePaths||[]).length) &&
          constraints?.action?.includes('plan_probe')) {
-        const inspected=workflow.snapshot().readPaths.filter(path=>
+        const inspected=new Set(workflow.snapshot().readPaths);
+        // Candidate ranking is controller-owned. Iteration in reverse read
+        // order used to favor the last decoy that happened to be prefetched.
+        // Keep prioritized paths first, then other actually inspected paths.
+        const ranked=[...new Set([...(limits.initialSourcePaths||[]),
+          ...workflow.snapshot().readPaths])].filter(path=>inspected.has(path) &&
           path.startsWith('source-') && /\.(?:sol|java|py|js|mjs|cjs)$/.test(path));
-        for(const path of [...inspected].reverse().slice(0,16)) {
+        for(const path of ranked.slice(0,24)) {
           try {
             const full=await safePath(path);
             let plan:{action:string;path:string;query:string;answer:string;hypothesis:string;sequence?:unknown}|null=null;
