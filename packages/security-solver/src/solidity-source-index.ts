@@ -112,6 +112,21 @@ export class SoliditySourceIndex {
     for(const node of unit.ast.children) {
       if(node.type!=='ContractDefinition')continue;
       for(const member of node.subNodes) {
+        // Solidity generates external ABI getters for public state variables.
+        // Include only scalar public fields here; mapping/struct/array getters
+        // need typed indices and must not be guessed from declarations.
+        if(member.type==='StateVariableDeclaration') {
+          for(const variable of (member as any).variables||[]) {
+            if(variable.visibility!=='public'||!variable.name||!variable.typeName)continue;
+            const raw=unit.text.slice(...bounds(variable.typeName)).replace(/\s+/g,' ').trim();
+            if(!/^(?:u?int(?:[0-9]{1,3})?|address(?: payable)?|bool|bytes(?:[1-9]|[12][0-9]|3[012])?|string)$/.test(raw))continue;
+            entries.push({selector:node.name+'.'+variable.name,
+              signature:variable.name+'() public generated getter',
+              operation:'call',visibility:'public',inputs:[]});
+            if(entries.length>=limit)return entries;
+          }
+          continue;
+        }
         if(member.type!=='FunctionDefinition')continue;
         const fn=member as FunctionDefinition;
         const visibility=String(fn.visibility||'default');

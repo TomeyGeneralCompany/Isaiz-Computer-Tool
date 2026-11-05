@@ -4,7 +4,7 @@ import {z} from "zod";
 import {javaSequenceSchema, type JavaSequence} from "./java-sequence";
 import {buildBaselineSequence} from './solidity-probe-inputs';
 import { InvestigationWorkflow } from "./investigation-workflow";
-import {guidedSourceProbe} from './source-guided-probes';
+import {guidedProbeAcrossSourceChain} from './source-guided-probes';
 import {declaredProbeTarget, sourceDeclarationHints, supportedJavaProbeHints, javaProbeSelectorCompatible, probeChoices} from './probe-target-validation';
 import { postQwenAgentJson } from "./qwen-agent-transport";
 import { AuditAllowance } from "./audit-allowance";
@@ -71,7 +71,8 @@ export interface LocalAuditLimits {
   onRead?: (path:string, span:ReadSpan) => void;
   /** Trusted controller source analysis: exact caller path for a reproduced case.
    * No model text can create or change this routing decision. */
-  onVerifiedCase?: (caseId:string,path:string,selector:string,kind:string) => Promise<string[]|null>;
+  onVerifiedCase?: (caseId:string,path:string,selector:string,kind:string) =>
+    Promise<{callers:string[];promoted?:{caseId:string;path:string;selector:string;kind:string}}|null>;
   verifyPython?: (path:string,functionName:string,kind:string,sequence?:SoliditySequence | JavaSequence) => Promise<string>;
 }
 export async function runLocalAudit(
@@ -267,7 +268,7 @@ export async function runLocalAudit(
           events.push(JSON.stringify({tool:'read_file',path,offset,end:delivered.end,nextOffset:delivered.nextOffset,status:'prefetched'}).slice(0,180));
           await appendFile(logFile,'[INITIAL_SOURCE_READ] '+JSON.stringify({path,start:delivered.start,end:delivered.end,nextOffset:delivered.nextOffset})+'\n');
           if(!workflow || process.env.AUTOHACK_GUIDED_SOURCE_PROBES==='false' || delivered.nextOffset!==null || offset!==0 || !limits.verifyPython)continue;
-          const hint=guidedSourceProbe(path,delivered.text);
+          const hint=await guidedProbeAcrossSourceChain(root,path,delivered.text);
           if(!hint)continue;
           const planned={action:'plan_probe',path,query:hint.functionName,answer:hint.kind,hypothesis:hint.hypothesis};
           if(workflow.validate(planned as any))continue;
@@ -290,11 +291,19 @@ export async function runLocalAudit(
           if(result.status==='behavior_observed' &&
              typeof result.caseId==='string' && limits.onVerifiedCase &&
              process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false') {
-            const callers=await limits.onVerifiedCase(result.caseId,path,hint.functionName,hint.kind);
-            if(callers?.length && workflow.focusVerifiedEvidence(result.caseId)) {
-              workflow.requireSources(callers);
+            const handoff=await limits.onVerifiedCase(result.caseId,path,hint.functionName,hint.kind);
+            if(handoff?.promoted) {
+              const promoted=handoff.promoted;
+              workflow.observe({action:'verify_source',path:promoted.path,query:promoted.selector,
+                answer:promoted.kind} as any,
+                JSON.stringify({status:'behavior_observed',behavior_observed:true,caseId:promoted.caseId}));
+            }
+            const focusId=handoff?.promoted?.caseId||result.caseId;
+            if(handoff?.callers.length && workflow.focusVerifiedEvidence(focusId)) {
+              workflow.requireSources(handoff.callers);
               await appendFile(logFile,'[CONTROLLER_GUIDED_CASE_FOCUS] '+
-                JSON.stringify({caseId:result.caseId,callers})+'\n');
+                JSON.stringify({caseId:focusId,sourceCaseId:result.caseId,callers:handoff.callers,
+                  promoted:!!handoff.promoted})+'\n');
             }
           }
           // A controller-initiated negative probe must also advance navigation.
@@ -334,7 +343,10 @@ export async function runLocalAudit(
             messages.push({role:'user',content:'An isolated probe was attempted for '+path+
               '; result status '+String(result.status)+'. Read '+result.evidenceFile+' for the full observation. /no_think'});
           }
-          await appendFile(logFile,'[GUIDED_SOURCE_PROBE] '+JSON.stringify({path,function:hint.functionName,status:result.status,evidenceFile:result.evidenceFile})+'\n');
+          await appendFile(logFile,'[GUIDED_SOURCE_PROBE] '+JSON.stringify({
+            path,function:hint.functionName,kind:hint.kind,status:result.status,
+            caseId:result.caseId||null,evidenceFile:result.evidenceFile,
+            detail:String(result.detail||result.limitation||'').slice(0,240)})+'\n');
         } catch(error) {
           if(controller.signal.aborted)throw error;
           // Bad hints never authorize additional paths or imply a successful read.
@@ -454,7 +466,7 @@ export async function runLocalAudit(
          constraints?.action?.includes('plan_probe')) {
         const inspected=workflow.snapshot().readPaths.filter(path=>
           path.startsWith('source-') && /\.(?:sol|java|py|js|mjs|cjs)$/.test(path));
-        for(const path of [...inspected].reverse().slice(0,16)) {
+        for(const path of inspected.slice(0,16)) {
           try {
             const full=await safePath(path);
             let plan:{action:string;path:string;query:string;answer:string;hypothesis:string;sequence?:unknown}|null=null;
@@ -472,11 +484,13 @@ export async function runLocalAudit(
               }
             }else {
               const code=await readFile(full,'utf8');
-              const hint=guidedSourceProbe(path,code);
+              const hint=await guidedProbeAcrossSourceChain(root,path,code);
               if(hint) {
+                const attempted=workflow.snapshot().observations.some(item=>
+                  item.path===path && item.function===hint.functionName && item.kind===hint.kind);
                 const candidate={action:'plan_probe',path,query:hint.functionName,
                   answer:hint.kind,hypothesis:hint.hypothesis};
-                if(!workflow.validate(candidate as any))plan=candidate;
+                if(!attempted && !workflow.validate(candidate as any))plan=candidate;
               }
             }
             if(!plan)continue;
@@ -1316,20 +1330,29 @@ export async function runLocalAudit(
               // Only the controller can appoint the next caller and lock a
               // verified case. A model's invented paths or negative tests
               // cannot supersede an earlier verified observation.
-              let authoritativeCallers:string[]|null=null;
+              let handoff: {callers:string[];promoted?:{caseId:string;path:string;selector:string;kind:string}}|null=null;
               if(typeof probeResult.caseId==='string' && limits.onVerifiedCase && process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false') {
-                authoritativeCallers=await limits.onVerifiedCase(
+                handoff=await limits.onVerifiedCase(
                   probeResult.caseId,String(call.function.arguments?.path||''),
                   String(call.function.arguments?.query||''),
                   String(call.function.arguments?.kind||''));
               }
-              if(authoritativeCallers?.length && workflow.focusVerifiedEvidence(probeResult.caseId)) {
+              if(handoff?.promoted) {
+                const promoted=handoff.promoted;
+                workflow.observe({action:'verify_source',path:promoted.path,query:promoted.selector,
+                  answer:promoted.kind} as any,
+                  JSON.stringify({status:'behavior_observed',behavior_observed:true,caseId:promoted.caseId}));
+              }
+              const authoritativeCallers=handoff?.callers||null;
+              const focusId=handoff?.promoted?.caseId||probeResult.caseId;
+              if(authoritativeCallers?.length && workflow.focusVerifiedEvidence(focusId)) {
                 const readPaths=new Set(workflow.snapshot().readPaths);
                 workflow.requireSources(authoritativeCallers);
                 requireInvestigationAfterEmpty=false;
                 emptyFinals=0;
                 await appendFile(logFile,'[CONTROLLER_VERIFIED_CASE_FOCUS] '+
-                  JSON.stringify({caseId:probeResult.caseId,callers:authoritativeCallers,
+                  JSON.stringify({caseId:focusId,sourceCaseId:probeResult.caseId,callers:authoritativeCallers,
+                    promoted:!!handoff?.promoted,
                     alreadyRead:authoritativeCallers.filter(path=>readPaths.has(path))})+'\n');
               }
               const testedPath=String(call.function.arguments?.path||'');
@@ -1360,7 +1383,7 @@ export async function runLocalAudit(
                   testedPath:String(call.function.arguments?.path||''),next})+'\\n');
               }
             }
-            await appendFile(logFile,"[PROBE_RESULT] "+JSON.stringify({path:call.function.arguments?.path,function:call.function.arguments?.query,kind:call.function.arguments?.kind,status:probeStatus,evidenceFile:probeResult.evidenceFile,detail:String(probeResult.detail||probeResult.reason||probeResult.error||"").slice(0,400)})+"\n");
+            await appendFile(logFile,"[PROBE_RESULT] "+JSON.stringify({path:call.function.arguments?.path,function:call.function.arguments?.query,kind:call.function.arguments?.kind,status:probeStatus,caseId:probeResult.caseId||null,evidenceFile:probeResult.evidenceFile,detail:String(probeResult.detail||probeResult.limitation||probeResult.reason||probeResult.error||"").slice(-700)})+"\n");
           }catch{}
         }
         await recordToolActivity(logFile,{phase:output.startsWith("Tool error:")?"failed":"completed",

@@ -4,6 +4,7 @@
  */
 import 'dotenv/config';
 import {reviewedTargetFinding} from './gauntlet-reviewed-finding';
+import {inspectGauntletEvents} from './gauntlet-probe-telemetry';
 import {execFileSync} from 'node:child_process';
 import {mkdir,mkdtemp,writeFile,readFile,copyFile,readdir,cp,rm} from 'node:fs/promises';
 import {join,dirname} from 'node:path';
@@ -43,27 +44,18 @@ async function prepare(root:string,level:number,language:Language,seed:string){
 }
 function grade(log:string,result:any,elapsed:number,review:any,answer:Answer){
  const count=(s:string)=>(log.split(s).length-1);
- const modelActions=log.split('\n').filter(line=>line.includes('[MODEL_ACTION]'));
- const targetRead=modelActions.some(line=>line.includes(answer.file) &&
-   (line.includes('read_file')||line.includes('read_solidity')||line.includes('outline_solidity')));
- // The production controller converts accepted probe plans into verify_source.
- // Grade the persisted accepted plan plus its actual verifier result, rather
- // than looking only for model-issued plan_probe labels.
- const events=log.split('\n');
- const targetProbe=events.some(line=>line.includes('[PROBE_PLANNED]') &&
-   line.includes('"query":'+JSON.stringify(answer.selector))) &&
-   events.some(line=>line.includes('[PROBE_RESULT]') &&
-   line.includes('"function":'+JSON.stringify(answer.selector)));
+ const verifiedFinding=result.success===true && Array.isArray(result.findings) &&
+    reviewedTargetFinding(result.findings,Array.isArray(review)?review:review?[review]:[],answer);
+ const telemetry=inspectGauntletEvents(log,answer,verifiedFinding);
  const milestones={
   sourceAcquired:count('[ACQUISITION_REPOSITORY_DONE]')>0,
   sourceMapBuilt:count('[SOURCE_MAP]')>0,
-  sourceRead:count('"action":"read_file"')+count('"action":"read_solidity"')+count('"action":"outline_solidity"')>0,
-  relevantCandidateInspected:targetRead,
-  hypothesisExamined:targetProbe,
-  probePlanned:count('[PROBE_PLANNED]')>0,
-  probeExecuted:count('[PROBE_RESULT]')>0,
-  verifiedFinding:result.success===true && Array.isArray(result.findings) &&
-    reviewedTargetFinding(result.findings,Array.isArray(review)?review:review?[review]:[],answer)
+  sourceRead:telemetry.sourceRead,
+  relevantCandidateInspected:telemetry.targetRead,
+  hypothesisExamined:telemetry.targetProbe,
+  probePlanned:telemetry.plannedAny,
+  probeExecuted:telemetry.executedAny,
+  verifiedFinding:telemetry.verifiedFinding
  };
  const stages:Record<string,string>={sourceAcquired:'acquisition',sourceMapBuilt:'source_mapping',
   sourceRead:'navigation',relevantCandidateInspected:'candidate_selection',
@@ -74,9 +66,10 @@ function grade(log:string,result:any,elapsed:number,review:any,answer:Answer){
  for(const key of ['WORKFLOW_REJECTED','FINAL_REJECTED','EMPTY_FINAL_RETRY','PROBE_PLANNED','PROBE_RESULT',
  'FINAL_UNVERIFIED_FINDINGS_BLOCKED','REJECTED_PLAN_SOURCE_HANDOFF','ALLOWANCE_EXTENDED','MODEL_ACTION'])
    counters[key]=count('['+key+']');
+ Object.assign(counters,telemetry.counters);
  return {version:2,level:result.level??4,language:answer.language,challenge:'gauntlet-blind-v2',
    firstDivergence:firstDivergence?stages[firstDivergence]:null,milestones,counters,
-   resultStatus:result.success?'investigated':'failed_or_incomplete',
+   resultStatus:verifiedFinding?'reviewed_target_verified':result.success?'investigated_without_target_proof':'failed_or_incomplete',
    findingCount:result.findings?.length||0,coverage:result.coverage||null,
    error:result.error||null,elapsedMs:elapsed};
 }
