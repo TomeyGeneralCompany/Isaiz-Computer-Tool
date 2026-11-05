@@ -11,7 +11,8 @@ const examples=[
  {ext:'.java',method:'Renderer.render',inner:'public class Renderer {\n public static String render(String value){return value;}\n}',caller:'public class Pipeline {\n public static String wrapFragment(String value){return Renderer.render(value);}\n}',entry:'public class HttpHandler {\n public static String responseBody(String value){return Pipeline.wrapFragment(value);}\n}'}
 ];
 for(const ex of examples){
- const entryName='http-handler'+ex.ext,callerName='pipeline'+ex.ext;
+ const entryName=ex.ext==='.java'?'HttpHandler.java':'http-handler'+ex.ext;
+ const callerName=ex.ext==='.java'?'Pipeline.java':'pipeline'+ex.ext;
  const src=new Map([[callerName,ex.caller],[entryName,ex.entry]]);
  const callerLine=ex.caller.split('\n').findIndex(x=>x.includes('render(value)'))+1;
  const entryLine=ex.entry.split('\n').findIndex(x=>x.includes('wrapFragment(value)'))+1;
