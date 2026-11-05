@@ -83,6 +83,9 @@ with tempfile.TemporaryDirectory(prefix='lotus-controller-entry-') as dirname:
         assert result['status']=='behavior_not_observed',(path,result)
         assert result['behavior_observed'] is False,(path,result)
 
-    invalid=probe(root,'src/renderer.py','render')
-    assert invalid['status']=='invalid_probe',invalid
+    try:
+        probe(root,'src/renderer.py','render')
+        raise AssertionError('An ordinary renderer may not masquerade as an entry probe')
+    except ValueError as error:
+        assert 'Entry probe requires' in str(error),str(error)
     print('Controller entry-to-output Python/JavaScript/Java sandboxes and escaped negative controls PASSED')
