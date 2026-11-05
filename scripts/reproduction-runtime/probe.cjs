@@ -5,7 +5,7 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const spec = JSON.parse(fs.readFileSync('/spec.json', 'utf8'));
 const control = 'TOMEY_CONTROL_' + spec.nonce;
-const attack = spec.kind === 'html_reflection'
+const attack = ['html_reflection', 'entry_html_reflection'].includes(spec.kind)
   ? '<em data-tomey="' + spec.nonce + '">TOMEY_PROBE</em>'
   : '../../TOMEY_ESCAPE_' + spec.nonce;
 const output = process.stdout.write.bind(process.stdout);
@@ -20,6 +20,11 @@ async function javascript() {
   const module = await import(pathToFileURL(sourceFile(spec.file)).href);
   const fn = module[spec.function] ?? module.default?.[spec.function];
   if (typeof fn !== 'function') throw new Error('Exported function required');
+  if (spec.kind === 'entry_html_reflection') {
+    const controlUrl = 'http://localhost/?message=' + encodeURIComponent(control);
+    const attackUrl = 'http://localhost/?message=' + encodeURIComponent(attack);
+    return [await fn(controlUrl), await fn(attackUrl), controlUrl, attackUrl];
+  }
   return [await fn(control), await fn(attack)];
 }
 const missingImports = new Set();
@@ -96,10 +101,12 @@ async function solidity() {
     output(JSON.stringify(await solidity()));
     return;
   }
-  const [normal, observed] = await (spec.file.endsWith('.sol') ? solidity() : javascript());
+  const [normal, observed, entryControlUrl, entryAttackUrl] = await (spec.file.endsWith('.sol') ? solidity() : javascript());
   if (typeof normal !== 'string' || typeof observed !== 'string')
     throw new Error('Probe requires string return values');
   if (normal.length > 16000 || observed.length > 16000) throw new Error('Probe output too large');
   output(JSON.stringify({control_input: control, control_output: normal,
-    attack_input: attack, attack_output: observed}));
+    attack_input: attack, attack_output: observed,
+    ...(spec.kind === 'entry_html_reflection' ? {entry_control_url:entryControlUrl,
+       entry_attack_url:entryAttackUrl,entry_selector:spec.function} : {})}));
 })().catch(error => { process.stderr.write('\nTOMEY_ERROR ' + JSON.stringify({detail:String(error).slice(0,2000),missingImports:error.missingImports || []})); process.exitCode = 1; });
