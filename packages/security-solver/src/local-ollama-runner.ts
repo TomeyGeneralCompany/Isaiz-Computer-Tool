@@ -266,6 +266,9 @@ export async function runLocalAudit(
           recentActions.set(JSON.stringify(['read_file',path,offset,'']),{turn:-1,nextOffset:delivered.nextOffset,response:fitted.message});
           events.push(JSON.stringify({tool:'read_file',path,offset,end:delivered.end,nextOffset:delivered.nextOffset,status:'prefetched'}).slice(0,180));
           await appendFile(logFile,'[INITIAL_SOURCE_READ] '+JSON.stringify({path,start:delivered.start,end:delivered.end,nextOffset:delivered.nextOffset})+'\n');
+          await recordToolActivity(logFile,{phase:'completed',tool:'read_file',
+            path,offset:delivered.start,end:delivered.end,nextOffset:delivered.nextOffset,
+            origin:'controller_prefetch'});
           if(!workflow || process.env.AUTOHACK_GUIDED_SOURCE_PROBES==='false' || delivered.nextOffset!==null || offset!==0 || !limits.verifyPython)continue;
           const hint=guidedSourceProbe(path,delivered.text);
           if(!hint)continue;
@@ -335,6 +338,10 @@ export async function runLocalAudit(
               '; result status '+String(result.status)+'. Read '+result.evidenceFile+' for the full observation. /no_think'});
           }
           await appendFile(logFile,'[GUIDED_SOURCE_PROBE] '+JSON.stringify({path,function:hint.functionName,status:result.status,evidenceFile:result.evidenceFile})+'\n');
+          await recordToolActivity(logFile,{phase:result.status==='probe_failed'?'failed':'completed',
+            tool:'verify_source',path,query:hint.functionName,kind:hint.kind,
+            status:result.status,origin:'controller_guided',
+            detail:String(result.detail||result.limitation||'').slice(-220)});
         } catch(error) {
           if(controller.signal.aborted)throw error;
           // Bad hints never authorize additional paths or imply a successful read.
@@ -514,7 +521,16 @@ export async function runLocalAudit(
           }catch{}
         }
       }
-      if(controllerAction)await appendFile(logFile,'[CONTROLLER_OWNED_ACTION] '+JSON.stringify(controllerAction)+'\n');
+      if(controllerAction) {
+        await appendFile(logFile,'[CONTROLLER_OWNED_ACTION] '+JSON.stringify(controllerAction)+'\n');
+        await recordToolActivity(logFile,{phase:'completed',tool:'controller_action',
+          path:controllerAction.path,query:controllerAction.query,
+          kind:controllerAction.answer,selectedAction:controllerAction.action,
+          turn:turn+1,origin:'controller'});
+      } else {
+        await recordToolActivity(logFile,{phase:'started',tool:'model_generation',
+          turn:turn+1,model,origin:'model'});
+      }
       const result: {message?:Message;eval_count?:number;prompt_eval_count?:number;done_reason?:string;load_duration?:number;prompt_eval_duration?:number;eval_duration?:number;total_duration?:number;client_queue_ms?:number} = controllerAction ?
         {message:{role:'assistant',content:JSON.stringify(controllerAction)}} :
         await (adapter==='qwen-agent'?postQwenAgentJson:postOllamaChat)(process.env.AUTOHACK_OLLAMA_URL || "http://127.0.0.1:11434/api/chat", { model, stream: false, think: profile.think, messages:requestMessages,
@@ -523,6 +539,11 @@ export async function runLocalAudit(
           options: { num_predict:generationBudget,
             ...(limits.numCtx === undefined ? {} : {num_ctx:settings.numCtx}),
             ...(limits.numThreads === undefined ? {} : {num_thread:settings.numThreads}), ...profile.options } }, controller.signal,{onProgress}) as { message?: Message; eval_count?: number; prompt_eval_count?: number; done_reason?: string; load_duration?:number; prompt_eval_duration?:number; eval_duration?:number; total_duration?:number; client_queue_ms?:number };
+      if(!controllerAction)await recordToolActivity(logFile,{
+        phase:'completed',tool:'model_generation',turn:turn+1,model,
+        durationMs:Date.now()-started,origin:'model',
+        generatedTokens:result.eval_count ?? null,
+        promptTokens:result.prompt_eval_count ?? null});
       await appendFile(logFile, `[OLLAMA] turn ${turn+1}: response received in ${Date.now()-started}ms; prompt_tokens=${result.prompt_eval_count ?? "unknown"}; generated_tokens=${result.eval_count ?? "unknown"}\n`);
       await appendFile(logFile, "[TIMING] " + JSON.stringify({at:new Date().toISOString(),turn:turn+1,
         queueMs:result.client_queue_ms,loadMs:result.load_duration == null ? null : result.load_duration/1e6,
@@ -911,6 +932,9 @@ export async function runLocalAudit(
           await persistMemory();
           if(!automaticProbe && action.hypothesis)hypotheses.push({turn:turn+1,path:action.path,statement:action.hypothesis});
           await appendFile(logFile,'[PROBE_PLANNED] '+JSON.stringify(action)+'\n');
+          await recordToolActivity(logFile,{phase:'completed',tool:'probe_plan',
+            path:action.path,query:action.query,kind:action.answer,
+            origin:controllerAction?'controller':'model',turn:turn+1});
           if(!automaticProbe) {
             messages.push({role:"assistant",content:message.content});
             continue;

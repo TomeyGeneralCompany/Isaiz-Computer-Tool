@@ -17,10 +17,15 @@ export function describeHuntFailure(detail:unknown) {
 
 export function parseWorkEvents(text:string) {
   const events:Array<{at:string|null;tool:string;phase:string;title:string;detail:string;status?:string;durationMs?:number}>=[];
-  const labels:Record<string,string>={read_file:"Read source file",search_files:"Searched source",
-    list_files:"Listed source files",verify_source:"Reproduction test",verify_python:"Reproduction test"};
+  const labels:Record<string,string>={read_file:"Read source file",read_solidity:"Read Solidity function",
+    outline_solidity:"Outlined Solidity declarations",search_files:"Searched source",
+    list_files:"Listed source files",verify_source:"Reproduction test",verify_python:"Reproduction test",
+    controller_action:"Controller selected action",model_generation:"Qwen generation",
+    probe_plan:"Probe planned"};
   const statuses:Record<string,string>={behavior_observed:"Behavior reproduced — requires review",
-    behavior_not_observed:"Behavior not reproduced",probe_failed:"Test could not run successfully",
+    behavior_not_observed:"Behavior not reproduced",
+    observation_only:"Transaction/test observations recorded — security significance not established",
+    unsupported_execution:"Execution adapter unsupported",probe_failed:"Test could not run successfully",
     timeout:"Test timed out",invalid_probe:"Unsupported probe",
     unsupported_dependencies:"Dependencies unsupported",blocked_no_runtime:"Runtime unavailable",
     blocked_no_sandbox:"Sandbox unavailable"};
@@ -35,6 +40,19 @@ export function parseWorkEvents(text:string) {
         let detail=path;
         if(value.tool==="search_files")detail=JSON.stringify(query)+(value.phase==="completed"&&Number.isSafeInteger(value.count)?" · "+value.count+" matches":"");
         else if(value.tool.startsWith("verify_"))detail=[path,query,typeof value.kind==="string"?value.kind.slice(0,80):""].filter(Boolean).join(" · ");
+        else if(value.tool==="probe_plan")detail=[
+          typeof value.origin==="string"?(value.origin==="controller"?"Controller-selected":"Qwen-proposed"):"",
+          path,query,typeof value.kind==="string"?value.kind.slice(0,80):""
+        ].filter(Boolean).join(" · ");
+        else if(value.tool==="controller_action")detail=[
+          typeof value.selectedAction==="string"?value.selectedAction.slice(0,80):"operation",
+          path==="."?"":path,query,typeof value.kind==="string"?value.kind.slice(0,80):""
+        ].filter(Boolean).join(" · ");
+        else if(value.tool==="model_generation")detail=[
+          Number.isSafeInteger(value.turn)?"turn "+value.turn:"",
+          typeof value.model==="string"?value.model.slice(0,80):"",
+          Number.isSafeInteger(value.generatedTokens)?value.generatedTokens+" tokens generated":""
+        ].filter(Boolean).join(" · ");
         if(value.tool==="read_file" && Number.isSafeInteger(value.offset)) {
           detail+=" · offset "+value.offset;
           if(Number.isSafeInteger(value.end))detail+="–"+value.end;
@@ -44,7 +62,10 @@ export function parseWorkEvents(text:string) {
         if(value.phase==="failed")detail+=" · "+describeHuntFailure(value.error).reason;
         events.push({at:typeof value.at==="string"&&Number.isFinite(Date.parse(value.at))?value.at:null,
           tool:value.tool,phase:value.phase,
-          title:(value.phase==="started"?"Started: ":value.phase==="failed"?"Failed: ":"")+labels[value.tool],
+          title:value.tool==="controller_action"?"Controller → "+(typeof value.selectedAction==="string"?value.selectedAction:"operation"):
+            value.tool==="model_generation"?(value.phase==="started"?"Qwen generating":"Qwen responded"):
+            value.tool==="probe_plan"?"Accepted probe plan":
+            (value.phase==="started"?"Started: ":value.phase==="failed"?"Failed: ":"")+labels[value.tool],
           detail,status:typeof value.status==="string"?(statuses[value.status] || "Test returned: "+value.status.slice(0,100)):undefined,
           durationMs:typeof value.durationMs==="number"&&Number.isFinite(value.durationMs)?Math.max(0,value.durationMs):undefined});
       }catch{}
@@ -58,7 +79,7 @@ export function parseWorkEvents(text:string) {
   const deduped=events.filter((event,i)=>!(event.at===null&&event.tool==="read_file"&&
     events.slice(i+1,i+3).some(next=>next.tool==="read_file"&&next.phase==="completed"&&next.detail===event.detail&&next.at)));
   const completed=deduped.filter(e=>e.phase==="completed");
-  return {events:deduped.slice(-16).reverse(),counts:{
+  return {events:deduped.slice(-30).reverse(),counts:{
     filesRead:completed.filter(e=>e.tool==="read_file").length,
     searches:completed.filter(e=>e.tool==="search_files").length,
     tests:completed.filter(e=>e.tool.startsWith("verify_")).length}};

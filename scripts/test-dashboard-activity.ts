@@ -59,6 +59,20 @@ try {
   assert.ok(trail.events.some(e=>e.status==="Test could not run successfully"));
   assert.equal(trail.events[0].phase,"failed");
   assert.equal(JSON.stringify(trail).includes("model commentary"),false);
-  assert.equal(parseWorkEvents(Array(100).fill(event({phase:"completed",tool:"read_file",path:"a.py"})).join("\n")).events.length,16);
+  assert.equal(parseWorkEvents(Array(100).fill(event({phase:"completed",tool:"read_file",path:"a.py"})).join("\n")).events.length,30);
+  const live=parseWorkEvents([
+    event({phase:"started",tool:"model_generation",turn:11,model:"qwen3:4b"}),
+    event({phase:"completed",tool:"model_generation",turn:11,model:"qwen3:4b",generatedTokens:230,durationMs:800}),
+    event({phase:"completed",tool:"controller_action",selectedAction:"read_file",path:"source-1/src/renderer.cjs",turn:12,origin:"controller"}),
+    event({phase:"completed",tool:"probe_plan",path:"source-1/contracts/Vault.sol",query:"Vault.settle",kind:"solidity_sequence",origin:"controller"}),
+    event({phase:"completed",tool:"verify_source",path:"source-1/contracts/Vault.sol",query:"Vault.settle",kind:"solidity_sequence",status:"observation_only"})
+  ].join("\n"));
+  assert.ok(live.events.some(e=>e.title==="Qwen generating"));
+  assert.ok(live.events.some(e=>e.title==="Qwen responded"&&e.detail.includes("230 tokens")));
+  assert.ok(live.events.some(e=>e.title.includes("Controller → read_file")&&e.detail.includes("renderer.cjs")));
+  assert.ok(live.events.some(e=>e.title==="Accepted probe plan"&&e.detail.includes("Vault.settle")));
+  assert.ok(live.events.some(e=>e.tool==="verify_source"&&e.detail.includes("Vault.settle")));
+  assert.equal(live.counts.tests,1);
+  assert.equal(JSON.stringify(live).includes("secret_token"),false);
   console.log("Read-only live progress, stale log exclusion, failure explanations and redaction PASSED");
 }finally{await rm(root,{recursive:true,force:true});}
