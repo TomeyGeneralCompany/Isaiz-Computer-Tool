@@ -89,6 +89,21 @@ try {
     testedFile:'src/web/pipeline.cjs',testedFunction:'wrapFragment',
     callerFile:'src/web/renderer.cjs',callerLine:2,
     kind:'html_reflection',reachability:'caller'});
+  // Include the true helper body, not merely its reassuring encoder name.
+  await writeFile(join(root,'src','web','codec.cjs'),
+    'exports.encodeFragment=function encodeFragment(value){return value;};\n');
+  await writeFile(join(root,'src','web','pipeline.cjs'),
+    'const {encodeFragment}=require("./codec.cjs");\n'+
+    'exports.wrapFragment=function wrapFragment(value){return "<p>"+encodeFragment(value)+"</p>";};\n');
+  const jsDownstream=await buildReviewEvidence(root,{
+    testedFile:'src/web/renderer.cjs',testedFunction:'render',
+    callerFile:'src/web/http-handler.cjs',callerLine:4,
+    kind:'html_reflection',reachability:'caller'});
+  assert.ok(jsDownstream.links.some(link=>link.file==='src/web/codec.cjs' &&
+    link.code.includes('return value;')),
+    'independent reviewer must see the actual identity encoder implementation');
+  assert.ok(jsDownstream.summary.includes('encodeFragment(value)'),
+    'independent reviewer must see the multi-hop JavaScript call graph');
   assert.ok(jsReview.links.some(link=>link.file.endsWith('http-handler.cjs') &&
     link.code.includes('searchParams.get')),
     'reviewer must receive the actual externally controlled request-to-render path');
@@ -141,6 +156,10 @@ try {
   assert.match(entryReviewRejectionDefect(rejected(
     'No attacker control over the output; there is no actual input-to-sink edge.'),entryCase)||'',
     /entry input control|input-to-output path/);
+  assert.match(entryReviewRejectionDefect(rejected(
+    'The source evidence shows that the input is sanitized by encodeFragment. The replay proves the attacker input is not reflected as-is.'),entryCase)||'',
+    /returned the exact attacker-selected HTML marker unmodified/,
+    'JavaScript reviewer may not infer sanitizer from a helper name against raw entry replay');
   assert.match(entryReviewRejectionDefect(rejected(
     'The response is HTML-escaped because the input is inside a <p> paragraph tag.'),entryCase)||'',
     /wrapping it in paragraph tags is not HTML escaping/);
