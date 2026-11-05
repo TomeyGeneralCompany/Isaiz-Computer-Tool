@@ -25,8 +25,8 @@ export function inspectGauntletEvents(log:string,expected:{file:string;selector:
  const sameSelector=(selector:unknown)=>typeof selector==='string' &&
    (selector===expected.selector||selector.endsWith('.'+expected.selector));
  const reads=taggedEvents(log,'READ_OK');
- const modelActions=taggedEvents(log,'MODEL_ACTION');
- const sourceReads=reads.filter(record=>typeof record.path==='string');
+ const prefetched=taggedEvents(log,'INITIAL_SOURCE_READ');
+ const sourceReads=[...reads,...prefetched].filter(record=>typeof record.path==='string');
  // READ_OK has a legacy plain-text format, not JSON.
  const actualReadPaths=log.split('\n').flatMap(line=>{
    const idx=line.indexOf('[READ_OK] ');
@@ -61,7 +61,7 @@ export function inspectGauntletEvents(log:string,expected:{file:string;selector:
    counters:{
      controllerGuidedProbes:guided.length,modelOrControllerPlanned:planned.length,
      modelOrControllerExecuted:executed.length,
-     completed:completed.length,sourcePages:actualReadPaths.length
+     completed:completed.length,sourcePages:actualReadPaths.length+sourceReads.length
    }
  };
 }
