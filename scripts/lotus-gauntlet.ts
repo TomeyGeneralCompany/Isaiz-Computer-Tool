@@ -69,7 +69,7 @@ function grade(log:string,result:any,elapsed:number,review:any,answer:Answer){
    counters[key]=count('['+key+']');
  return {version:3,controllerEvidence:events,level:result.level??4,language:answer.language,challenge:'gauntlet-blind-v2',
    firstDivergence:firstDivergence?stages[firstDivergence]:null,milestones,counters,
-   resultStatus:verifiedFinding?'reviewed_target_verified':result.success?'investigated_without_target_proof':'failed_or_incomplete',
+   resultStatus:milestones.verifiedFinding?'reviewed_target_verified':result.success?'investigated_without_target_proof':'failed_or_incomplete',
    findingCount:result.findings?.length||0,coverage:result.coverage||null,
    error:result.error||null,elapsedMs:elapsed};
 }
