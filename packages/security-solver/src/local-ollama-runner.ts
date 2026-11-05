@@ -8,6 +8,7 @@ import {privilegedRoleMutationCandidate} from './solidity-security-candidates';
 import {rankTracedSourceCandidates} from './controller-source-candidates';
 import { InvestigationWorkflow } from "./investigation-workflow";
 import {guidedProbeAcrossSourceChain,guidedSourceProbe} from './source-guided-probes';
+import {controllerPolyglotPlan} from './controller-polyglot-plan';
 import {declaredProbeTarget, sourceDeclarationHints, supportedJavaProbeHints, javaProbeSelectorCompatible, probeChoices} from './probe-target-validation';
 import { postQwenAgentJson } from "./qwen-agent-transport";
 import { AuditAllowance } from "./audit-allowance";
@@ -533,13 +534,15 @@ export async function runLocalAudit(
             }else {
               const traced=tracedCandidates.find(candidate=>candidate.path===path);
               const code=await readFile(full,'utf8');
+              const controllerPlan=controllerPolyglotPlan(path,code);
               const hint=traced?{functionName:traced.selector,kind:traced.kind,
                 hypothesis:traced.hypothesis}:guidedSourceProbe(path,code);
-              if(hint && await declaredProbeTarget(full,hint.functionName)) {
+              const candidate=controllerPlan ?? (hint ? {action:'plan_probe' as const,
+                path,query:hint.functionName,answer:hint.kind,hypothesis:hint.hypothesis}:null);
+              if(candidate && (candidate.answer.endsWith('_sequence') ||
+                  await declaredProbeTarget(full,candidate.query))) {
                 const attempted=workflow.snapshot().observations.some(item=>
-                  item.path===path && item.function===hint.functionName && item.kind===hint.kind);
-                const candidate={action:'plan_probe',path,query:hint.functionName,
-                  answer:hint.kind,hypothesis:hint.hypothesis};
+                  item.path===path && item.function===candidate.query && item.kind===candidate.answer);
                 if(!attempted && !workflow.validate(candidate as any))plan=candidate;
               }
             }
