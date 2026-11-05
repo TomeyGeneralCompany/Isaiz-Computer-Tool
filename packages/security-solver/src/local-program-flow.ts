@@ -178,6 +178,7 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
     // model. These are candidate source facts, NOT proof of exploitability.
     let controllerTraceSummary='';
     let controllerPromotedCaseId:string|null=null;
+    let controllerPromotedFromCaseId:string|null=null;
     const candidateEvidence=await sourceCandidateEvidence(root,sourceMap.symbols,8);
     await writeFile(join(root,'audit-controller-candidates.json'),JSON.stringify(candidateEvidence,null,2),{mode:0o600});
     await appendFile(logFile,'[SOURCE_MAP] '+JSON.stringify({files:sourceMap.scannedFiles,symbols:sourceMap.symbols.length,skipped:sourceMap.skippedFiles})+'\n');
@@ -313,6 +314,7 @@ Do not claim production testing, JavaScript execution, file access or other effe
                    typeof observation.caseId==='string' && session.cases.has(observation.caseId)){
                   promoted={caseId:observation.caseId,path:callerPath,selector:firstCallerSelector,kind};
                   controllerPromotedCaseId=observation.caseId;
+                  controllerPromotedFromCaseId=caseId;
                 }
               }
             }catch(error) {
@@ -349,7 +351,9 @@ Do not claim production testing, JavaScript execution, file access or other effe
           // This packet is assembled from verifier results and inspected source,
           // never model-authored case identities or invented caller locations.
           const packets:ControllerReportPacket[]=[];
-          for(const [caseId,record] of session.cases) {
+          const prioritizedCases=[...session.cases].sort(([a],[b])=>
+            Number(b===controllerPromotedCaseId)-Number(a===controllerPromotedCaseId));
+          for(const [caseId,record] of prioritizedCases) {
             if(!record.result.behavior_observed || packets.length>=2)continue;
             const repository=repos.find(r=>r.url===record.repositoryUrl);
             if(!repository || !reads.has(sourceFileInWorkspace(repository,record.spec.file,root)))continue;
@@ -408,6 +412,19 @@ Do not claim production testing, JavaScript execution, file access or other effe
               proposed.outcome='no_testable_candidate';
               proposed.reason='No reproduction was recorded. If the inspected source has a compatible declared function, first use plan_probe then verify_source; otherwise inspect the next eligible candidate and record a scoped incomplete result.';
               await appendFile(logFile,'[PROBE_REQUIRED_FOR_FINDING] No recorded case ID; plan a compatible source probe before claiming a vulnerability\\n');
+            }
+            // Source-verified caller reproduction supersedes the helper's
+            // case ID for the SAME observed flow. The controller owns this
+            // exact reference; Qwen may not substitute stale helper evidence.
+            if(controllerPromotedCaseId && controllerPromotedFromCaseId &&
+               proposed && typeof proposed==='object' && Array.isArray(proposed.findings) &&
+               session.cases.has(controllerPromotedCaseId)) {
+              for(const item of proposed.findings) {
+                if(item?.caseId!==controllerPromotedFromCaseId)continue;
+                item.caseId=controllerPromotedCaseId;
+                await appendFile(logFile,'[CONTROLLER_ENTRY_CASE_NORMALIZED] '+
+                  JSON.stringify({from:controllerPromotedFromCaseId,to:controllerPromotedCaseId})+'\n');
+              }
             }
             // Small local models sometimes select the contradictory outcome
             // no_testable_candidate while also supplying reproduced findings.
