@@ -23,6 +23,11 @@ export function referencesProbedFunction(line:string, selector:string):boolean {
 export function callerLineReferences(text:string,line:number,selector:string):boolean {
   const lines=sourceCodeOnly(text).split("\n");
   if(line<1 || line>lines.length)return false;
+  // Reject imports/re-exports *before* considering any cross-line context.
+  // A bare imported identifier is not an invocation, even if a subsequent
+  // line calls it. This is a global caller-evidence rule for all languages.
+  if(/^\\s*(?:from\\s+\\S+\\s+import\\b|import\\b|export\\s+\\{)/.test(lines[line-1]))
+    return false;
   // Prefer the exact inspected line. This keeps evidence tied to a real source
   // location while tolerating whitespace and qualified call expressions.
   if(referencesProbedFunction(lines[line-1],selector))return true;
