@@ -59,6 +59,10 @@ jobs:
         run: npx tsx scripts/test-review-evidence-chain.ts
       - name: Validate controller-owned actions and grounded source navigation
         run: npx tsx scripts/test-controller-next-action.ts
+      - name: Validate polyglot controller trace ranking and Gauntlet event grading
+        run: npx tsx scripts/test-gauntlet-controller-evidence.ts
+      - name: Validate source-grounded Solidity authorization observations
+        run: python3 scripts/test-solidity-access-evidence.py
       - name: Test real source audit, report creation and independent replay
         run: npx tsx scripts/test-source-workflow.ts
       - name: Exercise shared production workflow with real isolated probes
