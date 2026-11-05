@@ -1,0 +1,91 @@
+name: LOTUS Level 5 polyglot post-PR146 maximum Gauntlet
+on:
+  push:
+    branches:
+      - trial/lotus-level5-post146-20261105
+permissions:
+  contents: read
+concurrency:
+  group: lotus-gauntlet-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  gauntlet:
+    name: Level 5 ${{ matrix.language }}
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [solidity, python, javascript, java]
+    if: startsWith(github.event.head_commit.message, 'Run owned LOTUS Level 5 Gauntlet')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      LOCAL_OLLAMA_MODEL: qwen3:4b
+      LOCAL_MODEL_ADAPTER: ollama
+      LOCAL_OLLAMA_TOOL_PROTOCOL: json
+      LOCAL_HUNT_DYNAMIC_ALLOWANCE: 'true'
+      LOCAL_HUNT_MAX_TURNS: '80'
+      LOCAL_HUNT_NUM_PREDICT: '2048'
+      SECURITY_AUTO_SUBMIT: 'false'
+      SECURITY_AUTO_HUNT_ENABLED: 'false'
+      SECURITY_SOURCE_CODE_TIMEOUT_MINUTES: '180'
+      AUTOHACK_OLLAMA_URL: http://127.0.0.1:11434/api/chat
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Record CPU and memory
+        run: |
+          mkdir -p data/gauntlet/latest
+          { nproc; free -h; df -h .; } > data/gauntlet/latest/runner.txt
+      - name: Install locked application runtime
+        run: npm ci
+      - name: Verify owned source acquisition for selected language
+        run: node --import tsx scripts/lotus-gauntlet.ts --smoke --level=5 --language="${{ matrix.language }}" --output=data/gauntlet/smoke
+      - name: Install production runtime
+        if: true
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y bubblewrap default-jdk-headless
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          bash scripts/install-reproduction-runtime.sh
+      - name: Start local CPU model
+        if: true
+        run: |
+          docker run -d --name lotus-gauntlet-ollama -p 127.0.0.1:11434:11434 ollama/ollama:latest
+          for n in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:11434/api/tags >/dev/null; then break; fi
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:11434/api/tags >/dev/null
+          docker exec lotus-gauntlet-ollama ollama pull qwen3:4b
+      - name: Investigate blind synthetic bounty with production controller
+        if: true
+        env:
+          GAUNTLET_LANGUAGE: ${{ matrix.language }}
+          GAUNTLET_SEED: ''
+        run: |
+          set -o pipefail
+          node --import tsx scripts/lotus-gauntlet.ts --run --level=5 --language="$GAUNTLET_LANGUAGE" ${GAUNTLET_SEED:+--seed="$GAUNTLET_SEED"} --output=data/gauntlet/latest 2>&1 | tee data/gauntlet/live-terminal.log
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lotus-gauntlet-level5-${{ matrix.language }}-${{ github.run_id }}
+          path: |
+            data/gauntlet/latest/manifest.json
+            data/gauntlet/latest/grade.json
+            data/gauntlet/latest/result.json
+            data/gauntlet/latest/review.json
+            data/gauntlet/latest/runner.txt
+            data/gauntlet/latest/local-hunt-*.log
+            data/gauntlet/latest/local-review-*.log
+            data/gauntlet/latest/local-hunt-*.json
+            data/gauntlet/live-terminal.log
+          retention-days: 30
+          if-no-files-found: warn
+      - name: Stop model
+        if: always() && true
+        run: docker rm -f lotus-gauntlet-ollama || true
