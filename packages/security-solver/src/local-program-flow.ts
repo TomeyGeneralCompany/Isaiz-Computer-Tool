@@ -3,6 +3,7 @@ import {collectStaticLeads} from './local-static-leads';
 import {buildSourceMap} from './source-map';
 import {sourceCandidateEvidence,verifiedProbeSummary} from './source-candidate-evidence';
 import {traceSourceCalls} from './source-flow-facts';
+import {declaredProbeTarget,supportedJavaProbeHints} from './probe-target-validation';
 import { LOCAL_REPRODUCTION_CAPABILITY_VERSION } from "../../core/src/program-eligibility";
 import { inspectSourceCapability } from "./source-capability";
 import { SourceReads } from "./source-inspection";
@@ -176,6 +177,7 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
     // Controller inspects actual declaration/caller lines before involving the
     // model. These are candidate source facts, NOT proof of exploitability.
     let controllerTraceSummary='';
+    let controllerPromotedCaseId:string|null=null;
     const candidateEvidence=await sourceCandidateEvidence(root,sourceMap.symbols,8);
     await writeFile(join(root,'audit-controller-candidates.json'),JSON.stringify(candidateEvidence,null,2),{mode:0o600});
     await appendFile(logFile,'[SOURCE_MAP] '+JSON.stringify({files:sourceMap.scannedFiles,symbols:sourceMap.symbols.length,skipped:sourceMap.skippedFiles})+'\n');
@@ -216,7 +218,9 @@ Do not claim production testing, JavaScript execution, file access or other effe
         onAllowance:async deadline=>writeSecuritySolverStatus({active:true,programId:program.id,programName:program.name,
           stage:"hunting",startedAt:statusStartedAt,timeoutMinutes:(deadline-Date.parse(statusStartedAt))/60000,pid:process.pid}),
         signal,maxTurns,finalSchema:z.toJSONSchema(huntSchema),productionWorkflow:true,dynamicAllowance:process.env.LOCAL_HUNT_DYNAMIC_ALLOWANCE !== "false",initialSourcePaths:["audit-policy.txt",...sourceHints],initialSourceLocations:selection.locations,checkpointPath:join(checkpointDirectory,checkpointKey+".json"),numCtx:8192,numThreads:4,numPredict:getConfig().LOCAL_HUNT_NUM_PREDICT,onRead:(path,span)=>reads.add(path,span),
-        progressNote:()=>(verifiedProbeSummary(session.cases,2).slice(0,420)+'\n'+controllerTraceSummary.slice(0,420)).slice(0,850),
+        progressNote:()=>(controllerPromotedCaseId?
+          'CONTROLLER VERIFIED ENTRY CASE: '+controllerPromotedCaseId+' (prioritize this observed caller; do not substitute helper case).\n':'')+
+          (verifiedProbeSummary(session.cases,2).slice(0,340)+'\n'+controllerTraceSummary.slice(0,340)).slice(0,730),
         onVerifiedCase:async(caseId,path,selector,kind)=>{
           // This callback is invoked only after the trusted verifier returns
           // behavior_observed. The model cannot nominate the caller.
@@ -231,12 +235,13 @@ Do not claim production testing, JavaScript execution, file access or other effe
             const entry=record.spec.function.split('.').at(-1)||'';
             if(record.spec.sequence?.steps.some(step=>
               'operation' in step && step.operation==='send' && 'function' in step &&
-              step.function.split('(')[0]===entry))return [testedPath];
+              step.function.split('(')[0]===entry))return {callers:[testedPath]};
             return null;
           }
           const visited=new Set<string>([testedPath]);
           const chain:string[]=[];
           let currentSelector=record.spec.function;
+          let firstCallerSelector:string|null=null;
           for(let depth=0;depth<4;depth++){
             const candidates:Array<{path:string;line:number;code:string;qualified:boolean;source:string}>=[],prefix=
               relative(root,repository.directory).split(sep).join('/')+'/';
@@ -273,12 +278,42 @@ Do not claim production testing, JavaScript execution, file access or other effe
             if(!enclosing)break;
             currentSelector=chosen.path.endsWith('.java') ?
               chosen.path.split('/').at(-1)!.slice(0,-5)+'.'+enclosing : enclosing;
+            if(depth===0)firstCallerSelector=currentSelector;
           }
           if(!chain.length)return null;
           await writeFile(join(root,'audit-controller-caller-chain.json'),JSON.stringify({
             caseId,source:testedPath,callers:chain,limitation:'Lexical caller relationships; caller argument trust and application entry require independent verification.'
           },null,2),{mode:0o600});
-          return chain;
+          // A reproduced helper is not necessarily the public/application
+          // entry. Reproduce its uniquely grounded caller through the same
+          // sandbox before asking Qwen to report on the propagated behavior.
+          // The reviewer still independently replays and judges significance.
+          let promoted:{caseId:string;path:string;selector:string;kind:string}|undefined;
+          if(!focus && firstCallerSelector && ['html_reflection','path_construction'].includes(kind)) {
+            const callerPath=chain[0];
+            try {
+              const full=join(root,callerPath);
+              const eligible=callerPath.endsWith('.java')
+                ?(await supportedJavaProbeHints(full)).includes(firstCallerSelector)
+                :await declaredProbeTarget(full,firstCallerSelector);
+              if(eligible) {
+                const observation=JSON.parse(await session.probe(callerPath,firstCallerSelector,kind));
+                await appendFile(logFile,'[CONTROLLER_CALLER_PROBE] '+
+                  JSON.stringify({path:callerPath,function:firstCallerSelector,kind,
+                    status:observation.status,caseId:observation.caseId||null,
+                    detail:String(observation.detail||observation.limitation||'').slice(-500)})+'\n');
+                if(observation.status==='behavior_observed' &&
+                   typeof observation.caseId==='string' && session.cases.has(observation.caseId)){
+                  promoted={caseId:observation.caseId,path:callerPath,selector:firstCallerSelector,kind};
+                  controllerPromotedCaseId=observation.caseId;
+                }
+              }
+            }catch(error) {
+              await appendFile(logFile,'[CONTROLLER_CALLER_PROBE_UNAVAILABLE] '+
+                JSON.stringify({caller:callerPath,selector:firstCallerSelector,error:String(error).slice(-350)})+'\n');
+            }
+          }
+          return {callers:chain,...(promoted?{promoted}:{})};
         },
         verifyPython:async (path,fn,kind,sequence) => {
           if (focus && path !== "source-1/"+focus.file) throw new Error("Probe must target the imported lead file");
