@@ -61,7 +61,7 @@ try {
       path:'source-1/src/renderer.cjs',function:'render',kind:'html_reflection',
       status:'behavior_observed',caseId:digest}),
     '[READ_OK] source-1/src/renderer.cjs offset=0 end=142 nextOffset=null'
-  ].join('\\n');
+  ].join('\n');
   const promoted=inspectGauntletEvents(promotedLog,{file:'src/renderer.cjs',selector:'render'},true);
   assert.ok(promoted.targetRead&&promoted.targetProbe&&promoted.executedAny);
   assert.equal(promoted.counters.controllerCallerProbes,1);
