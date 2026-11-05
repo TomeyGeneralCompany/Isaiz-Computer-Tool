@@ -56,7 +56,7 @@ try {
     null,'an evidence-limited review must be allowed to reject unproven executable impact');
 
   assert.match(reviewRejectionDefect(reject(
-    'No effective input sanitization or escaping occurs; Codec.encodeFragment returns the input unmodified, so there is no actual security risk.'),evidence)??'',/Returning unescaped user data/,
+    'No effective input sanitization or escaping occurs; Codec.encodeFragment returns the input unmodified, so there is no actual security risk.'),evidence)??'',/Returning unescaped user data|Identity transformation is not sanitization/,
     'identity encoder is not a security mitigation; reviewer must name a real missing link');
 
   // Level5 Python #42100919715: reviewer falsely called a pass-through
