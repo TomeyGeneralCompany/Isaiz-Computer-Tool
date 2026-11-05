@@ -146,6 +146,14 @@ try {
   assert.match(entryReviewRejectionDefect(rejected(
     'This is not rendered in a context where markup could be interpreted and has no security-relevant output.'),entryCase)||'',
     /observed unescaped attacker-chosen HTML/);
+  assert.match(entryReviewRejectionDefect(rejected(
+    'The replay is limited to a local function behavior. The evidence does not prove attacker control in a deployed system and the reflection is observed in a controlled environment, not a deployed system.'),entryCase)||'',
+    /Independent controller replay|Offline execution of an owned synthetic handler/);
+  assert.match(entryReviewRejectionDefect(rejected(
+    'The input is not trusted and the output is not a security-relevant context. The attacker input is not reaching a security-relevant output.'),entryCase)||'',
+    /Independent controller replay|source-declared entry handler output/);
+  assert.equal(entryReviewRejectionDefect(rejected(
+    'The route is not registered or exposed, and the source shows no connection from this entry handler to a client.'),entryCase),null);
   assert.equal(entryReviewRejectionDefect(rejected(
     'The handler locally returns unescaped markup but the actual network route is not deployed and the scope excludes its only consumer.'),entryCase),
     null,'independent reviewer must retain authority to reject source-backed limitations');
