@@ -61,9 +61,19 @@ export function buildBaselineSequence(menu:SolidityProbeDeclaration[],selectedSe
   const readArgs=read?fixtureArguments(read.inputs):null;
   if(!read || !constructorArgs || !sendArgs || !readArgs)return null;
   const signature=(entry:SolidityProbeDeclaration)=>entry.selector.split('.').at(-1)+'('+entry.inputs.join(',')+')';
+  const readName=read.selector.split('.').at(-1)||'';
+  // A role setter is expected to reject a non-incumbent signer. That is a
+  // falsifiable expectation, not an assertion that the actual code is unsafe.
+  // Correct guards produce completed negative observations; successful
+  // unauthorized writes remain recorded for replay and independent review.
+  const role=/^(?:owner|operator|administrator|admin|governor|manager|controller)$/i.test(readName);
+  const roleSetter=/^(?:set|change|rotate|transfer|assign|replace)(?:Owner|Operator|Administrator|Admin|Governor|Manager|Controller)$/i.test(operationName);
+  const expectRoleGuard=role && roleSetter && selected.inputs.length===1 &&
+    /^(?:address|address payable)$/.test(selected.inputs[0]) && sendArgs[0]==='$account1';
   return {constructorArgs,steps:[
     {operation:'observe' as const,function:signature(read),args:readArgs},
-    {operation:'send' as const,function:signature(selected),args:sendArgs,sender:1},
+    {operation:'send' as const,function:signature(selected),args:sendArgs,sender:1,
+      ...(expectRoleGuard?{expectRevert:true}:{})},
     {operation:'observe' as const,function:signature(read),args:readArgs}
   ]};
 }
