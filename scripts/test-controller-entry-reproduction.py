@@ -7,7 +7,12 @@ import sys
 import tempfile
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from source_reproduction import run_probe
+import importlib.util
+driver_spec=importlib.util.spec_from_file_location(
+    'source_reproduction',Path(__file__).resolve().parent/'source-reproduction.py')
+driver=importlib.util.module_from_spec(driver_spec)
+driver_spec.loader.exec_module(driver)
+run_probe=driver.run_probe
 
 def files(root, documents):
     for path, content in documents.items():
