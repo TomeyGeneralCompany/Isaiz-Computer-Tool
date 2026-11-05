@@ -41,7 +41,7 @@ const javaSequenceObservations=z.object({constructor:z.array(z.unknown()),steps:
 const resultSchema = z.object({status:z.string(),behavior_observed:z.boolean(),source_sha256:digest.optional(),
   kind:z.string().optional(),observations:z.union([z.object({control_input:z.string(),control_output:z.string(),attack_input:z.string(),attack_output:z.string(),
     entry_control_url:z.string().optional(),entry_attack_url:z.string().optional(),
-    entry_selector:z.string().optional()}),sequenceObservations,javaSequenceObservations]).optional(),
+    entry_selector:z.string().optional(),entry_parameter:z.string().optional()}),sequenceObservations,javaSequenceObservations]).optional(),
   limitation:z.string().optional(),detail:z.string().optional(),exit_code:z.number().optional()});
 const caseSchema = z.object({version:z.literal(1),programId:z.string(),repositoryUrl:z.string(),commit:z.string().regex(/^[a-f0-9]{40}$/),
   sourceSha256:digest,spec:specSchema,result:resultSchema});
