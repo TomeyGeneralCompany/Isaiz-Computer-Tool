@@ -266,6 +266,9 @@ export async function runLocalAudit(
           recentActions.set(JSON.stringify(['read_file',path,offset,'']),{turn:-1,nextOffset:delivered.nextOffset,response:fitted.message});
           events.push(JSON.stringify({tool:'read_file',path,offset,end:delivered.end,nextOffset:delivered.nextOffset,status:'prefetched'}).slice(0,180));
           await appendFile(logFile,'[INITIAL_SOURCE_READ] '+JSON.stringify({path,start:delivered.start,end:delivered.end,nextOffset:delivered.nextOffset})+'\n');
+          await recordToolActivity(logFile,{phase:'completed',tool:'read_file',
+            path,offset:delivered.start,end:delivered.end,nextOffset:delivered.nextOffset,
+            origin:'controller_prefetch'});
           if(!workflow || process.env.AUTOHACK_GUIDED_SOURCE_PROBES==='false' || delivered.nextOffset!==null || offset!==0 || !limits.verifyPython)continue;
           const hint=guidedSourceProbe(path,delivered.text);
           if(!hint)continue;
@@ -335,6 +338,10 @@ export async function runLocalAudit(
               '; result status '+String(result.status)+'. Read '+result.evidenceFile+' for the full observation. /no_think'});
           }
           await appendFile(logFile,'[GUIDED_SOURCE_PROBE] '+JSON.stringify({path,function:hint.functionName,status:result.status,evidenceFile:result.evidenceFile})+'\n');
+          await recordToolActivity(logFile,{phase:result.status==='probe_failed'?'failed':'completed',
+            tool:'verify_source',path,query:hint.functionName,kind:hint.kind,
+            status:result.status,origin:'controller_guided',
+            detail:String(result.detail||result.limitation||'').slice(-220)});
         } catch(error) {
           if(controller.signal.aborted)throw error;
           // Bad hints never authorize additional paths or imply a successful read.
@@ -925,6 +932,9 @@ export async function runLocalAudit(
           await persistMemory();
           if(!automaticProbe && action.hypothesis)hypotheses.push({turn:turn+1,path:action.path,statement:action.hypothesis});
           await appendFile(logFile,'[PROBE_PLANNED] '+JSON.stringify(action)+'\n');
+          await recordToolActivity(logFile,{phase:'completed',tool:'probe_plan',
+            path:action.path,query:action.query,kind:action.answer,
+            origin:controllerAction?'controller':'model',turn:turn+1});
           if(!automaticProbe) {
             messages.push({role:"assistant",content:message.content});
             continue;
