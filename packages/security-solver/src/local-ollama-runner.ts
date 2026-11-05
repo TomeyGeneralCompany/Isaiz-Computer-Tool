@@ -8,6 +8,7 @@ import {privilegedRoleMutationCandidate} from './solidity-security-candidates';
 import {rankTracedSourceCandidates} from './controller-source-candidates';
 import { InvestigationWorkflow } from "./investigation-workflow";
 import {guidedProbeAcrossSourceChain,guidedSourceProbe} from './source-guided-probes';
+import {controllerPolyglotPlan} from './controller-polyglot-plan';
 import {declaredProbeTarget, sourceDeclarationHints, supportedJavaProbeHints, javaProbeSelectorCompatible, probeChoices} from './probe-target-validation';
 import { postQwenAgentJson } from "./qwen-agent-transport";
 import { AuditAllowance } from "./audit-allowance";
@@ -533,13 +534,21 @@ export async function runLocalAudit(
             }else {
               const traced=tracedCandidates.find(candidate=>candidate.path===path);
               const code=await readFile(full,'utf8');
+              const controllerPlan=controllerPolyglotPlan(path,code);
               const hint=traced?{functionName:traced.selector,kind:traced.kind,
                 hypothesis:traced.hypothesis}:guidedSourceProbe(path,code);
-              if(hint && await declaredProbeTarget(full,hint.functionName)) {
+              // An independently traced security lead outranks a generic state
+              // observation in the same file. Both choices are source-derived;
+              // the isolated verifier still determines executable capability.
+              const tracedPlan=traced && await declaredProbeTarget(full,traced.selector)
+                ? {action:'plan_probe' as const,path,query:traced.selector,
+                    answer:traced.kind,hypothesis:traced.hypothesis}:null;
+              const candidate=tracedPlan ?? controllerPlan ?? (hint ? {action:'plan_probe' as const,
+                path,query:hint.functionName,answer:hint.kind,hypothesis:hint.hypothesis}:null);
+              if(candidate && (candidate.answer.endsWith('_sequence') ||
+                  await declaredProbeTarget(full,candidate.query))) {
                 const attempted=workflow.snapshot().observations.some(item=>
-                  item.path===path && item.function===hint.functionName && item.kind===hint.kind);
-                const candidate={action:'plan_probe',path,query:hint.functionName,
-                  answer:hint.kind,hypothesis:hint.hypothesis};
+                  item.path===path && item.function===candidate.query && item.kind===candidate.answer);
                 if(!attempted && !workflow.validate(candidate as any))plan=candidate;
               }
             }
@@ -721,6 +730,28 @@ export async function runLocalAudit(
             continue;
           }
         }
+        // Same controller ownership as Solidity: malformed model sequences
+        // are replaced with a bounded plan constructed from inspected source.
+        // A model may not smuggle its own method names or expected observations.
+        if(workflow && ['plan_probe','probe_intent'].includes(action.action) &&
+           ['python_sequence','javascript_sequence','java_sequence'].includes(action.answer) &&
+           action.path.startsWith('source-')) {
+          try {
+            const full=await safePath(action.path);
+            const grounded=controllerPolyglotPlan(action.path,await readFile(full,'utf8'),
+              {query:action.query,answer:action.answer});
+            if(grounded && JSON.stringify(action.sequence)!==JSON.stringify(grounded.sequence)) {
+              action.query=grounded.query;
+              action.sequence=grounded.sequence;
+              action.hypothesis=grounded.hypothesis;
+              await appendFile(logFile,'[CONTROLLER_POLYGLOT_PROBE_CANONICALIZED] '+
+                JSON.stringify({path:action.path,query:action.query,kind:action.answer})+'\\n');
+            }
+          } catch(error) {
+            await appendFile(logFile,'[CONTROLLER_POLYGLOT_PROBE_UNAVAILABLE] '+
+              JSON.stringify({path:action.path,error:String(error).slice(0,160)})+'\\n');
+          }
+        }
         const automaticProbe=action.action==='probe_intent';
         if(automaticProbe) {
           action.action='plan_probe';
@@ -774,7 +805,7 @@ export async function runLocalAudit(
           await appendFile(logFile,'[JAVA_QUERY_NORMALIZED] '+JSON.stringify({path:action.path,query:action.query})+'\n');
         }
         if(['plan_probe','verify_source','verify_python'].includes(action.action) &&
-            !['solidity_sequence','java_sequence'].includes(action.answer) && action.sequence!==undefined) {
+            !['solidity_sequence','java_sequence','python_sequence','javascript_sequence'].includes(action.answer) && action.sequence!==undefined) {
           // Normalize optional structured-output fields before validation,
           // planning and duplicate detection; they are unused by these probes.
           delete action.sequence;
