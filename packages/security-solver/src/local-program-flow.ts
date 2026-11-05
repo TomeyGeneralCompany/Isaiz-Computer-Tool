@@ -832,6 +832,19 @@ export async function independentReview(finding:SecurityFinding,program:Security
     // authorized remote cloner; all languages share this review path.
     await (fixtureAcquirer || cloneAuthorizedSource)(record.repositoryUrl,repository,{commit:record.commit,signal});
     const replay=await replaySourceCase(record,repository,signal);
+    // An entry proof is not a model-authored statement: independently load,
+    // authorize and replay its recorded isolated handler invocation.
+    const entryId=/^Entry reproduction case: ([0-9a-f]{64})$/m.exec(finding.reportBody!)?.[1];
+    let entryReplay:unknown=null;
+    if(entryId) {
+      const entryRecord=await readSourceCase(entryId,program);
+      if(entryRecord.repositoryUrl!==record.repositoryUrl ||
+         entryRecord.commit!==record.commit ||
+         entryRecord.spec.kind!=='entry_html_reflection' ||
+         !entryRecord.result.behavior_observed)
+        throw new Error('Entry proof does not match reviewed repository and commit');
+      entryReplay=await replaySourceCase(entryRecord,repository,signal);
+    }
     const reachability=/^Reachability: (caller|direct_transaction)$/m.exec(finding.reportBody!)?.[1] || "caller";
     const callerText=await readFile(join(repository,caller[1]),"utf8");
     if(!validReachability({reachability,callerLine:Number(caller[2])} as z.infer<typeof candidateSchema>,record,caller[1],callerText))
@@ -876,6 +889,9 @@ export async function independentReview(finding:SecurityFinding,program:Security
       "CALLER SOURCE (line numbered, includes validated line):\n"+callerExcerpt,
       "SAME-DIRECTORY JAVA HELPER CHAIN (raw source, if applicable):\n"+bounded(sourceChain||"Not applicable to this language",1200),
       "RECORDED REPLAY:\n"+bounded(JSON.stringify(replay,null,2),2500),
+      "INDEPENDENTLY REPLAYED CONTROLLER ENTRY HANDLER:\n"+bounded(
+        entryReplay ? JSON.stringify(entryReplay,null,2) :
+        'No separately executed handler proof was recorded; reachability remains unproven by runtime entry execution.',3500),
       "INVESTIGATOR REPORT:\n"+bounded(finding.reportBody!,2200),
       "SCOPE AND SUBMISSION POLICY:\n"+bounded(String(policy||"No policy text available"),1200),
       "DISCLOSED REPORTS:\n"+bounded(JSON.stringify(disclosedReports),500),
