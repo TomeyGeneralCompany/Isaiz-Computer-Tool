@@ -1,0 +1,4 @@
+Second independent owned Level 5 Gauntlet attempt after verified run 41985748135.
+Production path: qwen3:4b, --run --level=5 --language=random, fresh generated seed.
+External bounty submissions remain disabled.
+This marker triggers the existing trial-only workflow; it is not a grading input.
