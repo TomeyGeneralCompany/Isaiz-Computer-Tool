@@ -8,6 +8,7 @@ import {tmpdir} from 'node:os';
 import {execFileSync} from 'node:child_process';
 import {buildReviewEvidence,reviewRejectionDefect} from '../packages/security-solver/src/review-evidence-chain';
 import {entryReplayFacts,entryReviewRejectionDefect} from '../packages/security-solver/src/entry-review-evidence';
+import {controllerProofCandidate} from '../packages/security-solver/src/controller-proof-candidate';
 
 const root=await mkdtemp(join(tmpdir(),'lotus-review-chain-'));
 const java='src/main/java/org/fixture/';
@@ -162,6 +163,42 @@ try {
   const mitigatedEntry={...entryCase,behavior_observed:false,status:'behavior_not_observed'};
   assert.equal(entryReviewRejectionDefect(rejected('This source escapes HTML.'),mitigatedEntry),null,
     'effective escaping must not be bypassed by stale entry evidence');
+
+
+  // Controller evidence belongs to the controller even if the small model
+  // returns findings=[] or proposes the wrong case. This case is provisional:
+  // the independent reviewer is still required to authorize its validity.
+  const source='const {render}=require("./renderer.cjs");\nexports.responseBody=function responseBody(url){return render(url);};\n';
+  const caseId='a'.repeat(64);
+  const candidate=controllerProofCandidate({
+    caseId,rendererFile:'source-1/src/renderer.cjs',rendererSelector:'render',
+    callerFile:'source-1/src/http-handler.cjs',callerLine:2,callerSource:source,
+    entryCase:{kind:'entry_html_reflection',behaviorObserved:true,
+      observations:{control_input:'TOMEY_CONTROL_abc',
+        control_output:'<p>TOMEY_CONTROL_abc</p>',
+        attack_input:'<em data-tomey="abc">TOMEY_PROBE</em>',
+        attack_output:'<p><em data-tomey="abc">TOMEY_PROBE</em></p>',
+        entry_attack_url:'http://localhost/?message=malicious',
+        entry_parameter:'message'}}});
+  assert.equal(candidate?.caseId,caseId);
+  assert.equal(candidate?.callerLine,2);
+  assert.equal(candidate?.severity,'low');
+  assert.match(candidate?.falsification||'',/content type/);
+  assert.equal(controllerProofCandidate({
+    caseId,rendererFile:'src/renderer.cjs',rendererSelector:'render',
+    callerFile:'src/http-handler.cjs',callerLine:2,callerSource:source,
+    entryCase:{kind:'entry_html_reflection',behaviorObserved:false,
+      observations:{control_input:'normal',control_output:'normal',attack_input:'<em>X</em>',
+        attack_output:'<em>X</em>'}}}),null,
+    'a failed entry reproduction cannot be promoted into a finding');
+  assert.equal(controllerProofCandidate({
+    caseId,rendererFile:'src/renderer.cjs',rendererSelector:'render',
+    callerFile:'src/http-handler.cjs',callerLine:2,
+    callerSource:'line1\nnot_a_real_call_here();\n',
+    entryCase:{kind:'entry_html_reflection',behaviorObserved:true,
+      observations:{control_input:'normal',control_output:'normal',attack_input:'<em>X</em>',
+        attack_output:'<em>X</em>'}}}),null,
+    'the controller cannot claim an unrelated source line as an entry edge');
 
   console.log('Controller source-chain persistence, language-specific reachability and rejection gates PASSED');
 }finally{await rm(root,{recursive:true,force:true});}

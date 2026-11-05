@@ -2,6 +2,7 @@ import {prioritizeSourceCandidates} from './source-candidates';
 import {collectStaticLeads} from './local-static-leads';
 import {buildSourceMap} from './source-map';
 import {sourceCandidateEvidence,verifiedProbeSummary} from './source-candidate-evidence';
+import {rankTracedSourceCandidates} from './controller-source-candidates';
 import {traceSourceCalls,solidityDependentSources,controllerCallerChain} from './source-flow-facts';
 import {declaredProbeTarget,supportedJavaProbeHints} from './probe-target-validation';
 import { LOCAL_REPRODUCTION_CAPABILITY_VERSION } from "../../core/src/program-eligibility";
@@ -27,6 +28,7 @@ import { selectSourceBatch, incompleteProbeCoverage, recoverEmptyUnprobedFinal, 
 import { callerLineReferences, qualifiedCallerLineReferences, transactionEntryLine } from "./source-function-reference";
 import {observedJavaSourceChain} from "./java-source-chain";
 import {buildReviewEvidence,reviewRejectionDefect} from "./review-evidence-chain";
+import {controllerProofCandidate,type ControllerProofCandidate} from './controller-proof-candidate';
 import {entryReplayFacts,entryReviewRejectionDefect} from './entry-review-evidence';
 import {buildControllerReportPacket,controllerReportPacketText,type ControllerReportPacket} from './controller-report-packet';
 import {controllerReportNarrative} from './controller-report-narrative';
@@ -192,6 +194,7 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
     let controllerPromotedFromCaseId:string|null=null;
     // Entry cases are independently executed by the sandbox, not authored by Qwen.
     const controllerEntryCases=new Map<string,string>();
+    let independentlyProvenCandidate:ControllerProofCandidate|null=null;
     const entryEvidenceFor=(caseId:string)=>{
       const entryId=controllerEntryCases.get(caseId);
       const entry=entryId ? session.cases.get(entryId) : undefined;
@@ -203,6 +206,86 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
     const candidateEvidence=await sourceCandidateEvidence(root,sourceMap.symbols,8);
     await writeFile(join(root,'audit-controller-candidates.json'),JSON.stringify(candidateEvidence,null,2),{mode:0o600});
     await appendFile(logFile,'[SOURCE_MAP] '+JSON.stringify({files:sourceMap.scannedFiles,symbols:sourceMap.symbols.length,skipped:sourceMap.skippedFiles})+'\n');
+    // Controller-first bounded investigation: source selection and isolated
+    // execution no longer depend on Qwen to request the first verification.
+    // Lexical ranking is NOT a vulnerability verdict. Only separately executed
+    // entry evidence can become a provisional finding, still subject to review.
+    if(!focus && process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false') {
+      try {
+        const ranked=await rankTracedSourceCandidates(root,
+          [...new Set([...sourceHints,...eligiblePaths])],96);
+        await appendFile(logFile,'[CONTROLLER_SOURCE_RANKING] '+JSON.stringify({
+          inspectedBudget:96,candidates:ranked.length,
+          preview:ranked.slice(0,5).map(c=>({path:c.path,selector:c.selector,score:c.score}))
+        })+'\n');
+        for(const selected of ranked.slice(0,8)) {
+          signal.throwIfAborted();
+          const repo=repos.find(r=>selected.path.startsWith(relative(root,r.directory).split(sep).join('/')+'/'));
+          if(!repo || missingDependencies.has(repo.url))continue;
+          const source=await readFile(join(root,selected.path),'utf8');
+          reads.add(selected.path,{start:0,end:source.length});
+          const output=JSON.parse(await session.probe(selected.path,selected.selector,selected.kind));
+          await appendFile(logFile,'[CONTROLLER_SOURCE_PROBE_SELECTED] '+JSON.stringify({
+            path:selected.path,selector:selected.selector,kind:selected.kind,
+            status:output.status,caseId:output.caseId||null})+'\n');
+          if(output.status!=='behavior_observed' || typeof output.caseId!=='string')continue;
+          const record=session.cases.get(output.caseId);
+          if(!record || !record.result.behavior_observed)continue;
+          const prefix=relative(root,repo.directory).split(sep).join('/')+'/';
+          const chain=await controllerCallerChain(root,prefix,selected.path,
+            selected.selector,[...new Set([...sourceHints,...eligiblePaths])],4);
+          const entry=chain.find(c=>/(?:handler|controller|route|entry|server)/i.test(c.path.split('/').at(-1)||''));
+          if(!entry)continue;
+          const entrySource=await readFile(join(root,entry.path),'utf8');
+          const preceding=entrySource.split('\n').slice(Math.max(0,entry.line-16),entry.line);
+          let selector='';
+          for(const line of [...preceding].reverse()) {
+            const py=/^\s*(?:async\s+)?def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/.exec(line);
+            const js=/\bexports\.([A-Za-z_$][\w$]*)\s*=/.exec(line) ||
+              /\b(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(/.exec(line);
+            const java=/\b(?:public|protected)\s+(?:static\s+)?String\s+([A-Za-z_$][\w$]*)\s*\(/.exec(line);
+            const name=(py||js||java)?.[1];
+            if(name){selector=entry.path.endsWith('.java')?
+              entry.path.split('/').at(-1)!.replace(/\.java$/,'')+'.'+name:name;break;}
+          }
+          if(!selector)continue;
+          reads.add(entry.path,{start:0,end:entrySource.length});
+          const entryOutput=JSON.parse(await session.probe(entry.path,selector,'entry_html_reflection'));
+          await appendFile(logFile,'[CONTROLLER_ENTRY_PROBE] '+JSON.stringify({
+            path:entry.path,function:selector,kind:'entry_html_reflection',
+            status:entryOutput.status,caseId:entryOutput.caseId||null,actor:'controller-prefetch'})+'\n');
+          if(entryOutput.status!=='behavior_observed'||typeof entryOutput.caseId!=='string')continue;
+          const entryRecord=session.cases.get(entryOutput.caseId);
+          if(!entryRecord || !entryRecord.result.behavior_observed)continue;
+          // Only a direct source-verified caller may be claimed. A helper
+          // buried under additional layers must be promoted first; skip it.
+          if(!callerLineReferences(entrySource,entry.line,selected.selector))continue;
+          const candidate=controllerProofCandidate({
+            caseId:output.caseId,rendererFile:selected.path,
+            rendererSelector:selected.selector,callerFile:entry.path,
+            callerLine:entry.line,callerSource:entrySource,
+            entryCase:{kind:entryRecord.spec.kind,
+              behaviorObserved:entryRecord.result.behavior_observed,
+              observations:entryRecord.result.observations}
+          });
+          if(!candidate)continue;
+          controllerEntryCases.set(output.caseId,entryOutput.caseId);
+          independentlyProvenCandidate=candidate;
+          controllerPromotedCaseId=output.caseId;
+          await appendFile(logFile,'[CONTROLLER_PROOF_CANDIDATE] '+JSON.stringify({
+            caseId:output.caseId,entryCaseId:entryOutput.caseId,
+            callerFile:candidate.callerFile,callerLine:candidate.callerLine,
+            source:'controller-first independent source and entry reproduction',
+            autoApproval:false})+'\n');
+          break;
+        }
+      }catch(error){
+        if(signal.aborted)throw error;
+        await appendFile(logFile,'[CONTROLLER_PREFETCH_INCOMPLETE] '+JSON.stringify({
+          error:String(error).slice(0,350),limitation:'Model can continue with supported source probes'
+        })+'\n');
+      }
+    }
     const promptHints:string[]=[];
     for(const hint of sourceHints) {if(JSON.stringify([...promptHints,hint]).length>1800)break;promptHints.push(hint);if(promptHints.length===8)break;}
     // Variable-sized acquisition metadata belongs in pageable workspace data,
@@ -235,7 +318,9 @@ Do not claim production testing, JavaScript execution, file access or other effe
     signal.throwIfAborted();
     beforeInspection?.();
     await note('MODEL_START',{model:process.env.LOCAL_OLLAMA_MODEL||'qwen3:4b',selectedFiles:sourceHints.length});
-    const answer=await runLocalAudit(prompt,logFile,getConfig().SECURITY_SOURCE_CODE_TIMEOUT_MINUTES*60000,root,
+    let answer:string;
+    try {
+      answer=await runLocalAudit(prompt,logFile,getConfig().SECURITY_SOURCE_CODE_TIMEOUT_MINUTES*60000,root,
       process.env.LOCAL_OLLAMA_MODEL || "qwen3:4b",undefined,{
         onAllowance:async deadline=>writeSecuritySolverStatus({active:true,programId:program.id,programName:program.name,
           stage:"hunting",startedAt:statusStartedAt,timeoutMinutes:(deadline-Date.parse(statusStartedAt))/60000,pid:process.pid}),
@@ -362,6 +447,32 @@ Do not claim production testing, JavaScript execution, file access or other effe
                   if(observed.status==='behavior_observed' && typeof observed.caseId==='string' &&
                      session.cases.has(observed.caseId)) {
                     controllerEntryCases.set(proofTarget.caseId,observed.caseId);
+                    // The controller itself now proposes the source-linked
+                    // evidence case, without waiting for the model to nominate
+                    // its case ID or invent a caller. This does NOT approve
+                    // technical impact: independent review remains mandatory.
+                    const handlerSource=await readFile(join(root,entry.path),'utf8');
+                    if(callerLineReferences(handlerSource,entry.line,proofTarget.selector)) {
+                      reads.add(entry.path,{start:0,end:handlerSource.length});
+                      const entryRecord=session.cases.get(observed.caseId)!;
+                      const proposed=controllerProofCandidate({
+                        caseId:proofTarget.caseId,
+                        rendererFile:proofTarget.path,rendererSelector:proofTarget.selector,
+                        callerFile:entry.path,callerLine:entry.line,callerSource:handlerSource,
+                        entryCase:{kind:entryRecord.spec.kind,
+                          behaviorObserved:entryRecord.result.behavior_observed,
+                          observations:entryRecord.result.observations}
+                      });
+                      if(proposed) {
+                        independentlyProvenCandidate=proposed;
+                        await appendFile(logFile,'[CONTROLLER_PROOF_CANDIDATE] '+JSON.stringify({
+                          caseId:proposed.caseId,callerFile:proposed.callerFile,
+                          callerLine:proposed.callerLine,entryCaseId:observed.caseId,
+                          source:'executed entry plus source-verified caller',
+                          review:'required, no automatic approval'})+'\\n');
+                      }
+                    }
+
                     await appendFile(logFile,'[CONTROLLER_ENTRY_PROOF_LINK] '+JSON.stringify({
                       rendererCaseId:proofTarget.caseId,entryCaseId:observed.caseId,
                       file:entry.path,selector:entrySelector})+'\n');
@@ -756,8 +867,37 @@ Do not claim production testing, JavaScript execution, file access or other effe
           }
         },
       });
+    } catch(error) {
+      if(signal.aborted || !independentlyProvenCandidate)throw error;
+      // An actual controller-owned, independently executable entry chain
+      // may not be discarded because the language model exhausted turns or
+      // returned malformed JSON. The technical reviewer remains mandatory;
+      // the controller does not automatically validate exploit significance.
+      parsed={findings:[independentlyProvenCandidate],outcome:'inspected'};
+      answer=JSON.stringify({controllerRecovery:'source-linked and executed entry proof',
+        caseId:independentlyProvenCandidate.caseId,
+        modelError:String(error).slice(0,250),independentReviewRequired:true});
+      await appendFile(logFile,'[CONTROLLER_MODEL_RECOVERY] '+JSON.stringify({
+        caseId:independentlyProvenCandidate.caseId,
+        reason:String(error).slice(0,240),autoApproval:false})+'\\n');
+    }
     signal.throwIfAborted();
     await note('MODEL_DONE',{completedProbes:session.completedProbes});
+    // A language model no longer decides whether the controller's actual
+    // executed and caller-linked entry case is even allowed to reach review.
+    // A model-only negative is not a technical disproof. The independent
+    // reviewer still receives the full source/replay and can reject.
+    if(process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false' && independentlyProvenCandidate) {
+      const candidate=independentlyProvenCandidate;
+      const alreadyPresent=parsed?.findings.some(item=>item.caseId===candidate.caseId);
+      if(!alreadyPresent) {
+        parsed={findings:[candidate,...(parsed?.findings||[])].slice(0,3),outcome:'inspected'};
+        await appendFile(logFile,'[CONTROLLER_PROOF_FOR_REVIEW] '+JSON.stringify({
+          caseId:candidate.caseId,source:'controller independent entry reproduction',
+          reason:'model nomination is not a requirement for independently reviewed evidence',
+          autoApproval:false})+'\\n');
+      }
+    }
     if(parsed?.outcome === "no_testable_candidate")return {auditRecord,success:true,coverage:"partial",acquisitionChecks,capabilityChecks,
       coverageDetail:"Inspection incomplete: "+parsed.reason,findings:[],rawOutput:answer};
     if (session.blockedReason) throw new Error("Reproduction unavailable: " + session.blockedReason);
