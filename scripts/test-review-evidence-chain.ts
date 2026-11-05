@@ -66,9 +66,10 @@ try {
     'The codec.py implementation (encode_fragment) returns the input value without modification, acting as a sanitizer that preserves the input. This prevents HTML injection as the output is the raw input wrapped in HTML tags, not unescaped HTML.'),pythonIdentity)??'',
     /Identity transformation is not sanitization/,
     'identity-returning helpers must never be treated as an effective sanitizer');
-  assert.equal(reviewRejectionDefect(reject(
-    'The downstream consumer has a source-verified text/plain response and cannot interpret markup.'),pythonIdentity),null,
-    'an independent reviewer may still reject for a real output-context boundary');
+  assert.match(reviewRejectionDefect(reject(
+    'The downstream consumer has a source-verified text/plain response and cannot interpret markup.'),pythonIdentity)??'',
+    /no source-backed text\\/plain/,
+    'a claimed text/plain response must be backed by a real source line, not by reviewer assertion');
   // Regressions from the real post-#146 Level 5 Python/Java run: a
   // pass-through codec is not a sanitizer and string return != text/plain.
   assert.match(reviewRejectionDefect(reject(
