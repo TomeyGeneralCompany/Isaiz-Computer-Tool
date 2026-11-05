@@ -32,6 +32,8 @@ export async function runEvidenceOnlyReview(input:{
     {role:'user',content:input.prompt}
   ];
   let lastFeedback='No verdict returned';
+  let previousRejectedContent='';
+  let repeatedRejectionCount=0;
   const url=process.env.AUTOHACK_OLLAMA_URL||'http://127.0.0.1:11434/api/chat';
   for(let attempt=1;attempt<=attempts;attempt++){
     input.signal.throwIfAborted();
@@ -43,7 +45,10 @@ export async function runEvidenceOnlyReview(input:{
     // Under a bounded generation budget reasoning-only responses have empty content.
     const payload={model:input.model,stream:false,think:false,format:input.schema,
       keep_alive:'10m',messages:messages.map(message=>({...message})),
-      options:{num_ctx:input.numCtx,num_predict:input.numPredict,num_thread:4,temperature:0}};
+      options:{num_ctx:input.numCtx,num_predict:input.numPredict,num_thread:4,
+        // A deterministic rejected verdict can recur forever with temperature 0.
+        // Diversify only on a repeated rejected verdict; evidence stays immutable.
+        temperature:repeatedRejectionCount>0 ? 0.25 : 0}};
     const response=await (input.transport
       ?input.transport(payload,input.signal)
       :postOllamaChat(url,payload,input.signal)) as VerdictResponse;
@@ -65,11 +70,26 @@ export async function runEvidenceOnlyReview(input:{
         generatedTokens:response.eval_count??null})+'\n');
       return content;
     }
+    if(content && content===previousRejectedContent) {
+      repeatedRejectionCount++;
+      await appendFile(input.logFile,'[EVIDENCE_ONLY_REVIEW_STALLED] '+JSON.stringify({
+        attempt,repeated:repeatedRejectionCount,
+        note:'Identical rejected verdict; escalate correction, not evidence or approval'})+'\\n');
+    } else repeatedRejectionCount=0;
+    previousRejectedContent=content;
     lastFeedback=feedback.slice(0,600);
     await appendFile(input.logFile,'[EVIDENCE_ONLY_REVIEW_CORRECTED] '+JSON.stringify({attempt,reason:lastFeedback})+'\n');
-    messages.push({role:'assistant',content:content.slice(0,2800)});
-    messages.push({role:'user',content:'The previous verdict failed the controller evidence check: '+lastFeedback+
-      '\nRe-evaluate the verified source packet without asking to read files. Return a complete review JSON object. A technically grounded reject is acceptable.'});
+    // Replace rejected messages instead of accumulating a self-reinforcing
+    // chain of identical invalid judgments. The verified evidence is unchanged.
+    messages.splice(2);
+    const policyConfusion=/external submission prohibition|submission prohibition|policy.*technical defect/i.test(lastFeedback);
+    const corrective=policyConfusion
+      ? 'Your previous verdict was INVALID because its fatal reason concerned whether the finding could be SUBMITTED, not whether the recorded security behavior is technically supported. The controller has already set external submission to DISABLED. This is not a technical defect. Evaluate ONLY the source-replayed behavior and the input-to-sink/authorization path. If the evidence supports the security issue, verdict=approve with recommendation=dont_submit. If it has an actual technical flaw, verdict=reject, name the exact flaw and source line, and recommendation=dont_submit. Never cite submission policy as a fatal issue.'
+      : 'Previous verdict failed factual evidence validation: '+lastFeedback+
+        '. Re-evaluate the same verified source and replay; a well-supported technical rejection is allowed.';
+    messages.push({role:'system',content:corrective+
+      (repeatedRejectionCount>0?' Do NOT repeat the previous rejected verdict unchanged; independently reconsider its fatal technical reason.':'')});
+    messages.push({role:'user',content:'Return a fresh complete schema-valid technical verdict grounded in the unchanged controller evidence. No source navigation or tool requests.'});
   }
   throw new Error('Independent evidence-only review failed validation after '+attempts+
     ' attempts: '+lastFeedback);
