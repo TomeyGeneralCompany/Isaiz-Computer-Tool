@@ -36,8 +36,12 @@ export async function runEvidenceOnlyReview(input:{
   for(let attempt=1;attempt<=attempts;attempt++){
     input.signal.throwIfAborted();
     await appendFile(input.logFile,'[EVIDENCE_ONLY_REVIEW_REQUEST] '+JSON.stringify({attempt,model:input.model})+'\n');
+    // Snapshot the message sequence per request. Reusing the mutable
+    // array lets later feedback retroactively alter an in-flight request
+    // (and makes mock transports observe a different turn than Ollama).
     const payload={model:input.model,stream:false,format:input.schema,
-      keep_alive:'10m',messages,options:{num_ctx:input.numCtx,num_predict:input.numPredict,num_thread:4,temperature:0}};
+      keep_alive:'10m',messages:messages.map(message=>({...message})),
+      options:{num_ctx:input.numCtx,num_predict:input.numPredict,num_thread:4,temperature:0}};
     const response=await (input.transport
       ?input.transport(payload,input.signal)
       :postOllamaChat(url,payload,input.signal)) as VerdictResponse;
