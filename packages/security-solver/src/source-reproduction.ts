@@ -27,7 +27,7 @@ const specSchema = z.object({file:z.string().min(1).max(4096),function:z.string(
     } else if(spec.kind === "entry_html_reflection" &&
         (!/\.(?:py|cjs|js|mjs|java)$/.test(spec.file) ||
          !/(?:handler|controller|route|entry|server)/i.test(spec.file) ||
-         !/(?:responseBody|response_body)/.test(spec.function)))
+         !/^[A-Za-z][A-Za-z0-9_]{0,79}(?:\.[A-Za-z][A-Za-z0-9_]{0,79})?$/.test(spec.function)))
       ctx.addIssue({code:z.ZodIssueCode.custom,message:"Entry probe requires a supported source-declared handler"});
     else if(spec.sequence)ctx.addIssue({code:z.ZodIssueCode.custom,message:"Sequence requires sequence probe kind"});
   });
