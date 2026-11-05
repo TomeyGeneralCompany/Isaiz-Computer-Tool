@@ -45,6 +45,39 @@ async function execute(s) {
  assert.equal((await execute(mismatch)).steps.at(-1).passed,false);
  const unexpected=structuredClone(sequence);unexpected.steps[2].expectRevert=false;
  await assert.rejects(execute(unexpected),/revert/i);
+ // Regression: controller-produced source-derived state observation, rather
+ // than an unrelated gated view function, runs in the real local EVM.
+ const authoritySource=`pragma solidity ^0.8.20;
+ contract Authority {
+   address public administrator;
+   address public operator;
+   constructor(){administrator=msg.sender;operator=msg.sender;}
+   function rotateOperator(address next) external {operator=next;}
+   function changeAdministrator(address next) external {
+     require(msg.sender==administrator,"only admin");administrator=next;
+   }
+ }`;
+ const authorityCompiled=JSON.parse(solc.compile(JSON.stringify({language:'Solidity',
+   sources:{'Authority.sol':{content:authoritySource}},settings:{evmVersion:'shanghai',
+   outputSelection:{'*':{'*':['abi','evm.bytecode.object']}}}})));
+ assert.equal((authorityCompiled.errors||[]).filter(x=>x.severity==='error').length,0);
+ const authority=authorityCompiled.contracts['Authority.sol'].Authority;
+ const authoritySequence={constructorArgs:[],steps:[
+   {operation:'observe',function:'operator()',args:[]},
+   {operation:'send',function:'rotateOperator(address)',args:['$account1'],sender:0},
+   {operation:'observe',function:'operator()',args:[]}
+ ]};
+ const providerForAuthority=()=>ganache.provider({logging:{quiet:true},
+   wallet:{deterministic:true,totalAccounts:3},chain:{hardfork:'shanghai',chainId:1337,
+   time:new Date('2020-01-01T00:00:00Z')},
+   miner:{blockGasLimit:12000000,timestampIncrement:1}});
+ const authorityTransport=providerForAuthority();
+ try {
+   const output=await runSequence(authority,authoritySequence,authorityTransport);
+   assert.equal(output.steps[1].reverted,false);
+   assert.equal(output.steps[2].actual,output.accounts[1]);
+   assert.notEqual(output.steps[0].actual,output.steps[2].actual);
+ } finally {await authorityTransport.disconnect();}
  const wrongArgs=structuredClone(sequence);wrongArgs.steps[2].args=['not an integer'];
  await assert.rejects(execute(wrongArgs),/invalid|argument/i,'Invalid ABI input cannot masquerade as an expected revert');
  const readAsSend={constructorArgs:['0','$account0'],steps:[{operation:'send',function:'value()',args:[]},sequence.steps[0]]};
