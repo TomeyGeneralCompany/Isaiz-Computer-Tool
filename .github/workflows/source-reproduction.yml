@@ -39,6 +39,8 @@ jobs:
         env:
           TOMEY_REPRODUCTION_INTEGRATION: '1'
         run: python3 -m unittest discover -s tests -p test_source_reproduction.py -v
+      - name: Reproduce controller-owned entry-to-output paths in Python JavaScript and Java
+        run: python3 scripts/test-controller-entry-reproduction.py
       - name: Exercise production-sized controller read and probe transitions
         env:
           GITHUB_TOKEN: offline-ci-fixture
