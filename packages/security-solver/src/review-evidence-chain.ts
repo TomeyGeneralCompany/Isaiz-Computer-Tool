@@ -153,7 +153,15 @@ export function reviewRejectionDefect(review:{
   // A positive assertion that a sanitizer exists must be backed by source,
   // not merely by the helper's reassuring name. Missing evidence is a request
   // for further inspection, NEVER grounds for automatic approval.
-  const mitigationAsserted=fatal.some(i=>/\b(?:effective (?:saniti[sz]er|escap(?:ing|er))|saniti[sz]es? (?:the|user|input|value)|escapes? (?:the|user|input|value|html)|mitigated by (?:escap|saniti[sz]))/i.test(i.description));
+  // A sanitizer claim must be positive and actually presented as a mitigation.
+  // Negated claims ("does not sanitize", "no effective escaping") accurately
+  // describe an unprotected flow and must not consume the review retry budget.
+  const mitigationAsserted=fatal.some(issue=>{
+    const claim=issue.description;
+    const assertion=/\b(?:effective (?:saniti[sz]er|escap(?:ing|er))|saniti[sz]es? (?:the|user|input|value)|escapes? (?:the|user|input|value|html)|mitigated by (?:escap|saniti[sz]))/i.test(claim);
+    const denial=/\b(?:no|not|without|never|cannot|can't|does(?:n't| not)|do(?:n't| not)|lack(?:s|ing)?|absen(?:t|ce))\b.{0,85}\b(?:effective|saniti[sz]\w*|escap\w*|mitigat\w*)\b|\b(?:saniti[sz]\w*|escap\w*)\b.{0,65}\b(?:absent|missing|not present|not applied)\b/i.test(claim);
+    return assertion && !denial;
+  });
   if(mitigationAsserted) {
     const matching=evidence.links.filter(link=>/\b(?:replace\s*\(|escape(?:Html|XML|ForHTML)?\s*\(|sanitize\s*\(|encodeForHTML\s*\(|StringEscapeUtils\.)/i.test(link.code));
     if(!matching.length)return 'The fatal rejection asserts an effective sanitizer, but the recorded source chain contains no source-backed sanitization operation. Read the alleged sanitizer implementation and cite its actual file and line before rejecting.';
