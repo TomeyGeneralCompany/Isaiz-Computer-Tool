@@ -40,11 +40,20 @@ export function buildBaselineSequence(menu:SolidityProbeDeclaration[],selectedSe
   const reads=declarations.filter(entry=>entry.operation==='call' && fixtureArguments(entry.inputs)!==null);
   // A zero-input getter is preferable to an unrelated parameterized read;
   // these are observations, not invented assertions about correctness.
+  // Prefer a getter whose name corresponds to the changed entry point.
+  // This chooses what to observe, never what result to expect.
+  const operationName=selected.selector.split('.').at(-1)||'';
+  const normalized=(name:string)=>name.replace(/^(?:rotate|change|set|update|assign|configure|replace|transfer)/i,'')
+    .replace(/^(?:get|read)/i,'').replace(/[^a-z0-9]/gi,'').toLowerCase();
+  const subject=normalized(operationName);
   reads.sort((a,b)=>{
     const rank=(entry:SolidityProbeDeclaration)=>{
       const name=entry.selector.split('.').at(-1)||'';
-      const getter=/^(?:get[A-Z]|value$|balanceOf$|totalSupply$|owner$|count$|stored$|current)/.test(name);
-      return (entry.inputs.length?4:0)+(getter?0:1);
+      const candidate=normalized(name);
+      const related=subject.length>=3 && candidate.length>=3 &&
+        (candidate===subject||candidate.includes(subject)||subject.includes(candidate));
+      const getter=/^(?:get[A-Z]|value$|balanceOf$|totalSupply$|owner$|operator$|administrator$|count$|stored$|current)/.test(name);
+      return (entry.inputs.length?6:0)+(related?-8:0)+(getter?0:2);
     };
     return rank(a)-rank(b);
   });
@@ -54,7 +63,7 @@ export function buildBaselineSequence(menu:SolidityProbeDeclaration[],selectedSe
   const signature=(entry:SolidityProbeDeclaration)=>entry.selector.split('.').at(-1)+'('+entry.inputs.join(',')+')';
   return {constructorArgs,steps:[
     {operation:'observe' as const,function:signature(read),args:readArgs},
-    {operation:'send' as const,function:signature(selected),args:sendArgs},
+    {operation:'send' as const,function:signature(selected),args:sendArgs,sender:1},
     {operation:'observe' as const,function:signature(read),args:readArgs}
   ]};
 }
