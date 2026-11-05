@@ -28,6 +28,7 @@ import { callerLineReferences, qualifiedCallerLineReferences, transactionEntryLi
 import {observedJavaSourceChain} from "./java-source-chain";
 import {buildReviewEvidence,reviewRejectionDefect} from "./review-evidence-chain";
 import {buildControllerReportPacket,controllerReportPacketText,type ControllerReportPacket} from './controller-report-packet';
+import {controllerReportNarrative} from './controller-report-narrative';
 const log=createLogger("local-program-flow");
 const sha=z.string().regex(/^[a-f0-9]{64}$/);
 const severitySchema = z.enum(["critical","high","medium","low","informational"]);
@@ -63,7 +64,15 @@ function validReachability(candidate:z.infer<typeof candidateSchema>,record:Sour
   return callerLineReferences(text,candidate.callerLine,record.spec.function);
 }
 function report(candidate:z.infer<typeof candidateSchema>,record:SourceCase,id:string,caller:string,packet:ControllerReportPacket):string {
-  return `## Summary\n${candidate.title}\n\n${candidate.impact}\n\n## Affected Source\n${record.repositoryUrl}/${record.spec.file}\nCommit: ${record.commit}\nSource SHA256: ${record.sourceSha256}\nCaller: ${caller}:${candidate.callerLine}\nReachability: ${candidate.reachability || "caller"}\n\n${controllerReportPacketText(packet)}\n\n## Steps to Reproduce\nCall ${record.spec.function} in ${record.spec.file} using the recorded inputs or local transaction sequence below.\nProbe kind: ${record.spec.kind}\n${record.spec.sequence ? "Local deployment and transaction sequence:\n"+JSON.stringify(record.spec.sequence,null,2)+"\n" : ""}Reproduction case: ${id}\n\n## Observed Results\n${JSON.stringify(record.result.observations,null,2)}\n\n## Falsification Attempts\n${candidate.falsification}\n\n## Evidence Limits\n${record.result.limitation}\nThis is an isolated source-function reproduction; no production endpoint was tested.\n\n## Impact\n${candidate.impact}\n\n## Evidence Assessment\nSeverity: ${candidate.severity}\nConfidence: ${candidate.confidence}\n${candidate.ratingReason}\n`;
+  // Security-relevant facts come from the trusted controller's recorded case,
+  // inspected caller and actual observations. No model-authored mitigation or
+  // impact assertion can silently enter the independent review packet.
+  const narrative=controllerReportNarrative({
+    kind:record.spec.kind,selector:record.spec.function,file:record.spec.file,
+    caseId:id,callerFile:caller,callerLine:candidate.callerLine,
+    behaviorObserved:record.result.behavior_observed
+  });
+  return `## Summary\n${narrative.title}\n\n${narrative.summary}\n\n## Affected Source\n${record.repositoryUrl}/${record.spec.file}\nCommit: ${record.commit}\nSource SHA256: ${record.sourceSha256}\nCaller: ${caller}:${candidate.callerLine}\nReachability: ${candidate.reachability || "caller"}\n\n${controllerReportPacketText(packet)}\n\n## Steps to Reproduce\nCall ${record.spec.function} in ${record.spec.file} using the recorded inputs or local transaction sequence below.\nProbe kind: ${record.spec.kind}\n${record.spec.sequence ? "Local deployment and transaction sequence:\n"+JSON.stringify(record.spec.sequence,null,2)+"\n" : ""}Reproduction case: ${id}\n\n## Observed Results\n${JSON.stringify(record.result.observations,null,2)}\n\n## Falsification Conditions\n${narrative.falsification}\n\n## Evidence Limits\n${record.result.limitation}\nThis is an isolated source-function reproduction; no production endpoint was tested.\n\n## Security Impact To Verify\n${narrative.impact}\n\n## Provisional Evidence Rating\nSeverity: ${candidate.severity}\nConfidence: ${candidate.confidence}\nThe independent reviewer must assess the source, reachability, reproducibility and impact independently.\n`;
 }
 export interface StaticLeadFocus { id:string; repositoryUrl:string; commit:string; file:string; line:number; rule:string; }
 /** Explicit offline fixture acquisition, supplied only by owned test harnesses.
@@ -714,7 +723,9 @@ Do not claim production testing, JavaScript execution, file access or other effe
       const callerLine=callerText.split("\n")[candidate.callerLine-1];
       if(!callerLine || !validReachability(candidate,record,callerRelative,callerText))throw new Error("Claimed caller line does not reference the probed function");
       const targetAsset=record.repositoryUrl+"/"+record.spec.file;assertAuthorizedTarget(program.scopeSummary,targetAsset);
-      findings.push({title:candidate.title,severity:candidate.severity,vulnerabilityType:record.spec.kind==="html_reflection"?"CWE-116":record.spec.kind==="path_construction"?"CWE-22":"State assertion discrepancy",targetAsset,confidence:candidate.confidence,
+      findings.push({title:controllerReportNarrative({kind:record.spec.kind,selector:record.spec.function,
+        file:record.spec.file,caseId:candidate.caseId,callerFile:callerRelative,
+        callerLine:candidate.callerLine,behaviorObserved:record.result.behavior_observed}).title,severity:candidate.severity,vulnerabilityType:record.spec.kind==="html_reflection"?"CWE-116":record.spec.kind==="path_construction"?"CWE-22":"State assertion discrepancy",targetAsset,confidence:candidate.confidence,
         reproductionCaseId:candidate.caseId,reproductionFingerprint:createHash("sha256").update(JSON.stringify({programId:program.id,repositoryUrl:record.repositoryUrl,commit:record.commit,file:record.spec.file,function:record.spec.function,kind:record.spec.kind,...(record.spec.sequence ? {sequence:record.spec.sequence} : {})})).digest("hex"),reportBody:report(candidate,record,candidate.caseId,callerRelative,
           buildControllerReportPacket({
             caseId:candidate.caseId,repositoryUrl:record.repositoryUrl,commit:record.commit,
@@ -873,6 +884,9 @@ Use one enum value per string. Scores are integers 0..3. bet100=false requires d
     }
     signal.throwIfAborted();
     if(!review)throw new Error("No validated independent review");
+    await appendFile(logFile,'[CONTROLLER_REVIEW_DECISION] '+JSON.stringify({caseId:id,
+      verdict:review.verdict,recommendation:review.recommendation,issues:review.issues,
+      reasoning:review.reasoning,sourceDigest:chainEvidence.sourceDigest})+'\n');
     return {review,replay,caseId:id,policy,sourceSha256:record.sourceSha256,replayedAt:new Date().toISOString()};
   }finally {await rm(root,{recursive:true,force:true});}
 }
