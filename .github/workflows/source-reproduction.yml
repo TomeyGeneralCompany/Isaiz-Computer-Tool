@@ -67,6 +67,8 @@ jobs:
         run: npx tsx scripts/test-level5-direct-transaction.ts
       - name: Validate controller-owned Gauntlet grading
         run: npx tsx scripts/test-gauntlet-execution-milestones.ts
+      - name: Verify deterministic multi-hop polyglot controller execution
+        run: npx tsx scripts/test-controller-investigation-chain.ts
       - name: Validate import-resolved polyglot caller chains against decoys
         run: npx tsx scripts/test-controller-caller-chain.ts
       - name: Regress controller-guided polyglot probes, Solidity ABI state and Gauntlet grading
