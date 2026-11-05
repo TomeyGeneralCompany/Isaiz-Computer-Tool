@@ -65,7 +65,7 @@ def observed_non_deployer_state_transition(steps):
     for index, step in enumerate(steps):
         if not isinstance(step, dict) or step.get('operation') != 'send':
             continue
-        if step.get('sender') not in (1, 2) or step.get('reverted') is not False or step.get('passed') is not True:
+        if step.get('sender') not in (1, 2) or step.get('reverted') is not False or type(step.get('passed')) is not bool:
             continue
         before=next((v for v in reversed(steps[:index])
                      if isinstance(v,dict) and v.get('operation')=='observe'),None)
