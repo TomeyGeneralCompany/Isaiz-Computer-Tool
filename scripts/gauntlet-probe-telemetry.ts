@@ -41,14 +41,16 @@ export function inspectGauntletEvents(log:string,expected:{file:string;selector:
  const planned=taggedEvents(log,'PROBE_PLANNED');
  const executed=taggedEvents(log,'PROBE_RESULT');
  const guided=taggedEvents(log,'GUIDED_SOURCE_PROBE');
+ const promoted=taggedEvents(log,'CONTROLLER_CALLER_PROBE');
  const probes:Array<ProbeTelemetry>=[
    ...executed.map(e=>({path:String(e.path||''),function:String(e.function||''),kind:String(e.kind||''),status:String(e.status||''),caseId:String(e.caseId||'')})),
-   ...guided.map(e=>({path:String(e.path||''),function:String(e.function||''),kind:String(e.kind||''),status:String(e.status||''),caseId:String(e.caseId||'')}))
+   ...guided.map(e=>({path:String(e.path||''),function:String(e.function||''),kind:String(e.kind||''),status:String(e.status||''),caseId:String(e.caseId||'')})),
+   ...promoted.map(e=>({path:String(e.path||''),function:String(e.function||''),kind:String(e.kind||''),status:String(e.status||''),caseId:String(e.caseId||'')}))
  ];
  const targetProbe=probes.some(p=>matchesPath(p.path)&&sameSelector(p.function)&&
    ['behavior_observed','behavior_not_observed','observation_only'].includes(String(p.status)));
  const completed=probes.filter(p=>['behavior_observed','behavior_not_observed','observation_only'].includes(String(p.status)));
- const plannedAny=planned.length>0||guided.length>0;
+ const plannedAny=planned.length>0||guided.length>0||promoted.length>0;
  return {
    sourceRead,
    targetRead,
@@ -59,7 +61,7 @@ export function inspectGauntletEvents(log:string,expected:{file:string;selector:
    attempts:probes.length,
    verifiedFinding:reviewedFinding,
    counters:{
-     controllerGuidedProbes:guided.length,modelOrControllerPlanned:planned.length,
+     controllerGuidedProbes:guided.length,controllerCallerProbes:promoted.length,modelOrControllerPlanned:planned.length,
      modelOrControllerExecuted:executed.length,
      completed:completed.length,sourcePages:actualReadPaths.length+sourceReads.length
    }
