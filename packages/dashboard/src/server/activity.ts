@@ -20,7 +20,8 @@ export function parseWorkEvents(text:string) {
   const labels:Record<string,string>={read_file:"Read source file",read_solidity:"Read Solidity function",
     outline_solidity:"Outlined Solidity declarations",search_files:"Searched source",
     list_files:"Listed source files",verify_source:"Reproduction test",verify_python:"Reproduction test",
-    controller_action:"Controller selected action",model_generation:"Qwen generation"};
+    controller_action:"Controller selected action",model_generation:"Qwen generation",
+    probe_plan:"Probe planned"};
   const statuses:Record<string,string>={behavior_observed:"Behavior reproduced — requires review",
     behavior_not_observed:"Behavior not reproduced",probe_failed:"Test could not run successfully",
     timeout:"Test timed out",invalid_probe:"Unsupported probe",
@@ -37,6 +38,10 @@ export function parseWorkEvents(text:string) {
         let detail=path;
         if(value.tool==="search_files")detail=JSON.stringify(query)+(value.phase==="completed"&&Number.isSafeInteger(value.count)?" · "+value.count+" matches":"");
         else if(value.tool.startsWith("verify_"))detail=[path,query,typeof value.kind==="string"?value.kind.slice(0,80):""].filter(Boolean).join(" · ");
+        else if(value.tool==="probe_plan")detail=[
+          typeof value.origin==="string"?(value.origin==="controller"?"Controller-selected":"Qwen-proposed"):"",
+          path,query,typeof value.kind==="string"?value.kind.slice(0,80):""
+        ].filter(Boolean).join(" · ");
         else if(value.tool==="controller_action")detail=[
           typeof value.selectedAction==="string"?value.selectedAction.slice(0,80):"operation",
           path==="."?"":path,query,typeof value.kind==="string"?value.kind.slice(0,80):""
@@ -57,6 +62,7 @@ export function parseWorkEvents(text:string) {
           tool:value.tool,phase:value.phase,
           title:value.tool==="controller_action"?"Controller → "+(typeof value.selectedAction==="string"?value.selectedAction:"operation"):
             value.tool==="model_generation"?(value.phase==="started"?"Qwen generating":"Qwen responded"):
+            value.tool==="probe_plan"?"Accepted probe plan":
             (value.phase==="started"?"Started: ":value.phase==="failed"?"Failed: ":"")+labels[value.tool],
           detail,status:typeof value.status==="string"?(statuses[value.status] || "Test returned: "+value.status.slice(0,100)):undefined,
           durationMs:typeof value.durationMs==="number"&&Number.isFinite(value.durationMs)?Math.max(0,value.durationMs):undefined});
