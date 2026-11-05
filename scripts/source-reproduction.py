@@ -51,7 +51,25 @@ with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.St
     module=importlib.util.module_from_spec(module_spec)
     module_spec.loader.exec_module(module)
     function=getattr(module,specification['function'])
-    if specification['kind']=='entry_html_reflection':
+    if specification['kind']=='python_sequence':
+        sequence=specification['sequence']
+        factory=sequence.get('factory')
+        receiver=getattr(module,factory)(*sequence.get('constructor',[])) if factory else module
+        steps=[]
+        for step in sequence['steps']:
+            callable_method=getattr(receiver,step['method'])
+            if not callable(callable_method): raise ValueError('Sequence member not callable')
+            actual=callable_method(*step.get('args',[]))
+            if not isinstance(actual,(str,int,float,bool,type(None),list)):
+                raise ValueError('Unsupported stateful sequence output')
+            if isinstance(actual,(str,list)) and len(actual)>16000:
+                raise ValueError('Stateful sequence output too large')
+            entry={'operation':'call','function':step['method'],'actual':actual,
+                   'passed':('expected' not in step or step['expected']==actual)}
+            if 'expected' in step: entry['expected']=step['expected']
+            steps.append(entry)
+        result={'factory':factory,'steps':steps}
+    elif specification['kind']=='entry_html_reflection':
         entry_source=file.read_text()
         entry_keys=set(re.findall(r'\.get\(\s*["\']([A-Za-z_][A-Za-z0-9_-]{0,63})["\']\s*,',entry_source))
         if 'parse_qs' not in entry_source or len(entry_keys)!=1:
@@ -61,9 +79,12 @@ with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.St
         attack_url='http://localhost/?'+entry_parameter+'='+urllib.parse.quote(attack,safe='')
         normal=function(control_url)
         observed=function(attack_url)
-    else:
+    elif specification['kind']!='python_sequence':
         normal=function(control)
         observed=function(attack)
+if specification['kind']=='python_sequence':
+    print(json.dumps(result))
+    sys.exit(0)
 if not isinstance(normal,str) or not isinstance(observed,str): raise ValueError('Probe requires string return values')
 if len(normal)>16000 or len(observed)>16000: raise ValueError('Probe output too large')
 print(json.dumps({'control_input':control,'control_output':normal,'attack_input':attack,'attack_output':observed,
@@ -324,7 +345,7 @@ def run_probe(repository: Path, specification: dict, _dependency_round: int = 0)
     target=(repository/file).resolve(strict=True)
     if not target.is_relative_to(repository) or not target.is_file() or target.stat().st_size>256000: raise ValueError('Source outside repository or too large')
     if not isinstance(function,str) or not re.fullmatch(r'[A-Za-z][A-Za-z0-9_]{0,79}(?:\.[A-Za-z][A-Za-z0-9_]{0,79})?',function): raise ValueError('Public top-level function name required')
-    if kind not in ('html_reflection','entry_html_reflection','path_construction','solidity_sequence','java_sequence'): raise ValueError('Unsupported probe kind')
+    if kind not in ('html_reflection','entry_html_reflection','path_construction','solidity_sequence','java_sequence','python_sequence','javascript_sequence'): raise ValueError('Unsupported probe kind')
     if not isinstance(nonce,str) or not re.fullmatch(r'[a-f0-9]{32}',nonce): raise ValueError('Invalid probe nonce')
     language = 'python' if file.endswith('.py') else 'solidity' if file.endswith('.sol') else 'java' if file.endswith('.java') else 'javascript'
     if kind == 'entry_html_reflection' and (language not in ('python','javascript','java') or
@@ -344,6 +365,21 @@ def run_probe(repository: Path, specification: dict, _dependency_round: int = 0)
         if not isinstance(steps,list) or not 1 <= len(steps) <= 12 or not any(
             isinstance(step,dict) and step.get('method') == function.split('.')[1] for step in steps):
             raise ValueError('Java sequence must invoke selected method')
+    elif kind in ('python_sequence','javascript_sequence'):
+        if language != kind.split('_')[0] or '.' in function:
+            raise ValueError('Polyglot sequence source language mismatch')
+        sequence=specification.get('sequence')
+        if not isinstance(sequence,dict) or len(json.dumps(sequence))>16000:
+            raise ValueError('Invalid stateful sequence')
+        if set(sequence)-{'factory','constructor','steps'} or not isinstance(sequence.get('steps'),list) or not 2<=len(sequence['steps'])<=12:
+            raise ValueError('Invalid declarative stateful steps')
+        if not any(isinstance(step,dict) and step.get('method')==function for step in sequence['steps']):
+            raise ValueError('Selected function not called by sequence')
+        if 'factory' in sequence and not re.fullmatch(r'[A-Za-z][A-Za-z0-9_]{0,79}',str(sequence['factory'])):
+            raise ValueError('Invalid stateful factory')
+        for step in sequence['steps']:
+            if not isinstance(step,dict) or set(step)-{'method','args','expected'} or not re.fullmatch(r'[A-Za-z][A-Za-z0-9_]{0,79}',str(step.get('method',''))) or not isinstance(step.get('args',[]),list) or len(step.get('args',[]))>8:
+                raise ValueError('Invalid stateful method')
     elif 'sequence' in specification: raise ValueError('Sequence requires sequence probe kind')
 
     supported, detail = execution_capability(repository, file, function, kind)
@@ -493,6 +529,15 @@ def run_probe(repository: Path, specification: dict, _dependency_round: int = 0)
                     'limitation':('Verified nonadministrator role mutation with before/after EVM observations and a source-declared privileged role consumer; reachability and exploit impact still require independent review.'
                       if source_proven else
                       'Only bounded Solidity transactions and assertions were observed. An expected-value mismatch is not independent security proof.')}
+        if kind in ('python_sequence','javascript_sequence'):
+            steps=data.get('steps')
+            if not isinstance(steps,list) or len(steps)<2 or not all(
+                isinstance(step,dict) and type(step.get('passed')) is bool and
+                step.get('operation')=='call' for step in steps):
+                raise ValueError('Invalid stateful observations')
+            return {'status':'observation_only','behavior_observed':False,
+                    'source_sha256':source_hash,'kind':kind,'observations':data,
+                    'limitation':'Bounded stateful calls observed in one isolated execution. Expected-value mismatches alone never demonstrate a security defect; additional source-backed impact and independent security review required.'}
         if kind == 'java_sequence':
             steps=data.get('steps')
             if not isinstance(steps,list) or not steps or not all(
