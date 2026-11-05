@@ -7,6 +7,7 @@ import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {execFileSync} from 'node:child_process';
 import {buildReviewEvidence,reviewRejectionDefect} from '../packages/security-solver/src/review-evidence-chain';
+import {entryReplayFacts,entryReviewRejectionDefect} from '../packages/security-solver/src/entry-review-evidence';
 
 const root=await mkdtemp(join(tmpdir(),'lotus-review-chain-'));
 const java='src/main/java/org/fixture/';
@@ -115,5 +116,44 @@ try {
   assert.equal(solidity.language,'solidity');
   assert.match(solidity.reachabilityRequirement,/transaction/);
   assert.equal(reviewRejectionDefect(reject('Missing transaction sequence and state changes'),solidity),null);
+
+  // #138 end-to-end replay must be weighed as an executed entry-to-output
+  // observation, not as an untested lexical handler reference. The reviewer
+  // may reject unproven XSS/remote exploitation but must not negate observed
+  // local attacker-selected input or falsely claim unescaped HTML was escaped.
+  const entryCase={
+    status:'behavior_observed',kind:'entry_html_reflection',behavior_observed:true,
+    observations:{
+      control_input:'TOMEY_CONTROL_abc',
+      control_output:'<p>TOMEY_CONTROL_abc</p>',
+      attack_input:'<em data-tomey="abc">TOMEY_PROBE</em>',
+      attack_output:'<p><em data-tomey="abc">TOMEY_PROBE</em></p>',
+      entry_parameter:'message',
+      entry_control_url:'http://localhost/?message=TOMEY_CONTROL_abc',
+      entry_attack_url:'http://localhost/?message=%3Cem%20data-tomey%3D%22abc%22%3ETOMEY_PROBE%3C%2Fem%3E'
+    }
+  };
+  assert.match(entryReplayFacts(entryCase)||'',/executed the selected source-declared entry function/,
+    'the entry case must establish executed request-controlled source-to-output evidence');
+  const rejected=(reason:string)=>({verdict:'reject',reasoning:reason,
+    issues:[{severity:'fatal',description:reason}]});
+  assert.match(entryReviewRejectionDefect(rejected(
+    'No attacker control over the output; there is no actual input-to-sink edge.'),entryCase)||'',
+    /entry input control|input-to-output path/);
+  assert.match(entryReviewRejectionDefect(rejected(
+    'The response is HTML-escaped because the input is inside a <p> paragraph tag.'),entryCase)||'',
+    /wrapping it in paragraph tags is not HTML escaping/);
+  assert.match(entryReviewRejectionDefect(rejected(
+    'This is not rendered in a context where markup could be interpreted and has no security-relevant output.'),entryCase)||'',
+    /observed unescaped attacker-chosen HTML/);
+  assert.equal(entryReviewRejectionDefect(rejected(
+    'The handler locally returns unescaped markup but the actual network route is not deployed and the scope excludes its only consumer.'),entryCase),
+    null,'independent reviewer must retain authority to reject source-backed limitations');
+  assert.equal(entryReviewRejectionDefect(rejected('No input reaches the sink.'),null),null,
+    'never invent entry proof where the trusted replay is absent');
+  const mitigatedEntry={...entryCase,behavior_observed:false,status:'behavior_not_observed'};
+  assert.equal(entryReviewRejectionDefect(rejected('This source escapes HTML.'),mitigatedEntry),null,
+    'effective escaping must not be bypassed by stale entry evidence');
+
   console.log('Controller source-chain persistence, language-specific reachability and rejection gates PASSED');
 }finally{await rm(root,{recursive:true,force:true});}
