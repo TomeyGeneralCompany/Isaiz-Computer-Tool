@@ -333,14 +333,14 @@ Do not claim production testing, JavaScript execution, file access or other effe
                 const preceding=text.split('\n').slice(Math.max(0,entry.line-16),entry.line);
                 let entrySelector='';
                 for(const line of [...preceding].reverse()) {
-                  const py=/^\\s*(?:async\\s+)?def\\s+(response_body)\\s*\\(/.exec(line);
-                  const js=/\\bexports\\.(responseBody)\\s*=/.exec(line) ||
-                    /\\bfunction\\s+(responseBody)\\s*\\(/.exec(line);
-                  const java=/\\b(?:public|protected)\\s+(?:static\\s+)?String\\s+(responseBody)\\s*\\(/.exec(line);
+                  const py=/^\s*(?:async\s+)?def\s+(response_body)\s*\(/.exec(line);
+                  const js=/\bexports\.(responseBody)\s*=/.exec(line) ||
+                    /\bfunction\s+(responseBody)\s*\(/.exec(line);
+                  const java=/\b(?:public|protected)\s+(?:static\s+)?String\s+(responseBody)\s*\(/.exec(line);
                   const name=(py||js||java)?.[1];
                   if(name) {
                     entrySelector=entry.path.endsWith('.java')?
-                      entry.path.split('/').at(-1)!.replace(/\\.java$/,'')+'.'+name:name;
+                      entry.path.split('/').at(-1)!.replace(/\.java$/,'')+'.'+name:name;
                     break;
                   }
                 }
