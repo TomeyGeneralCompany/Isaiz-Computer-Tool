@@ -10,6 +10,7 @@ before={'operation':'observe','function':'operator()','sender':0,'actual':'0x000
 send={'operation':'send','function':'rotateOperator(address)','sender':1,'reverted':False,'passed':True}
 after={**before,'actual':'0x0000000000000000000000000000000000000002'}
 assert evaluate([before,send,after])
+assert evaluate([before,{**send,'passed':False},after]), 'successful role transfer disproving revert must be preserved'
 assert not evaluate([before,{**send,'reverted':True},after]), 'reverted send cannot establish state mutation'
 assert not evaluate([before,{**send,'sender':0},after]), 'deployer action does not prove cross-account mutation'
 assert not evaluate([before,send,before]), 'no state change cannot be a positive behavior'
