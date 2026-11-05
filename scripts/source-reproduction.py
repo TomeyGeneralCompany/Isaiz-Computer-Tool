@@ -311,7 +311,11 @@ def run_probe(repository: Path, specification: dict, _dependency_round: int = 0)
     target=(repository/file).resolve(strict=True)
     if not target.is_relative_to(repository) or not target.is_file() or target.stat().st_size>256000: raise ValueError('Source outside repository or too large')
     if not isinstance(function,str) or not re.fullmatch(r'[A-Za-z][A-Za-z0-9_]{0,79}(?:\.[A-Za-z][A-Za-z0-9_]{0,79})?',function): raise ValueError('Public top-level function name required')
-    if kind not in ('html_reflection','path_construction','solidity_sequence','java_sequence'): raise ValueError('Unsupported probe kind')
+    if kind not in ('html_reflection','entry_html_reflection','path_construction','solidity_sequence','java_sequence'): raise ValueError('Unsupported probe kind')
+    if kind == 'entry_html_reflection' and (language not in ('python','javascript','java') or
+            not re.search(r'(handler|controller|route|entry|server)',file,re.I) or
+            not re.search(r'response_?body',function,re.I)):
+        raise ValueError('Entry probe requires a supported handler method and source file')
     if not isinstance(nonce,str) or not re.fullmatch(r'[a-f0-9]{32}',nonce): raise ValueError('Invalid probe nonce')
     language = 'python' if file.endswith('.py') else 'solidity' if file.endswith('.sol') else 'java' if file.endswith('.java') else 'javascript'
     if language not in ('solidity','java') and '.' in function: raise ValueError('Top-level function name required')
@@ -491,12 +495,15 @@ def run_probe(repository: Path, specification: dict, _dependency_round: int = 0)
                     'observations':data,
                     'limitation':'Only bounded Java constructor and method calls were executed. Expected-value mismatches are observations, not validated security findings.'}
         normal,observed=data['control_output'],data['attack_output']
-        if kind=='html_reflection':
+        if kind in ('html_reflection','entry_html_reflection'):
             matches=reflected_markup(data, nonce)
         else:
             base=Path(os.path.normpath(normal)).parent
             attack_path=Path(os.path.normpath(observed))
             matches=normal.endswith(data['control_input']) and attack_path.name=='TOMEY_ESCAPE_'+nonce and not attack_path.is_relative_to(base)
+        if kind == 'entry_html_reflection' and language in ('python','javascript'):
+            if not (data.get('entry_control_url') and data.get('entry_attack_url')):
+                raise ValueError('Entry proof requires recorded URL inputs')
         return {'status':'behavior_observed' if matches else 'behavior_not_observed',
                 'behavior_observed':matches,'source_sha256':source_hash,'kind':kind,'observations':data,
                 'limitation':'A local function behavior is not sufficient to establish a reportable vulnerability; call-site reachability, mitigations, policy and impact require independent review.'}
