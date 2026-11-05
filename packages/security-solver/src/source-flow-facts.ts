@@ -71,3 +71,34 @@ export async function traceSourceCalls(repository:string,file:string,selector:st
   }
   return {facts,unresolved,limitation:'Bounded source-resolved call references only. Attacker control, runtime reachability, sanitization and security impact must still be verified.'};
 }
+
+
+/** Controller-selected Solidity dependents for independently assessing impact.
+ * Import/inheritance source is a reason to inspect, not proof of reachability.
+ */
+export async function solidityDependentSources(
+  workspace:string,testedPath:string,contract:string,
+  candidates:string[],limit=6
+):Promise<string[]> {
+  if(!/^[A-Za-z_$][\w$]*$/.test(contract)||!testedPath.endsWith('.sol'))return [];
+  const root=await realpath(workspace);
+  const name=testedPath.split('/').at(-1)||'';
+  const includesBase=new RegExp('\\bis\\s+[^\\{;\\n]*\\b'+contract+'\\b');
+  const importsBase=new RegExp('\\bimport\\s+[^;\\n]*[\\x22\\x27][^\\x22\\x27]*'+name.replaceAll('.','\\.')+'[\\x22\\x27]');
+  const eligible:Array<{path:string;score:number}>=[];
+  for(const candidate of [...new Set(candidates)].slice(0,256)){
+    if(!candidate.endsWith('.sol')||candidate===testedPath||
+       candidate.startsWith('/')||candidate.split(/[\\/]/).includes('..'))continue;
+    try{
+      const full=await realpath(resolve(root,candidate));
+      const rel=relative(root,full);
+      if(rel==='..'||rel.startsWith('..'+sep))continue;
+      const code=await readFile(full,'utf8');
+      if(code.length>256000)continue;
+      const score=(includesBase.test(code)?4:0)+(importsBase.test(code)?3:0);
+      if(score)eligible.push({path:candidate,score});
+    }catch{}
+  }
+  return eligible.sort((a,b)=>b.score-a.score||a.path.localeCompare(b.path))
+    .slice(0,Math.max(0,Math.min(12,limit))).map(x=>x.path);
+}
