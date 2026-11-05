@@ -37,6 +37,14 @@ try {
     'the reviewer must not mistake a helper name for actual escaping');
   assert.match(reviewRejectionDefect(reject('Not enough proof'),evidence)??'',/Fatal rejection/);
 
+  assert.equal(reviewRejectionDefect(reject(
+    'This caller does not sanitize the input and there is no effective escaping in Codec.encodeFragment; executable browser impact still requires source-backed evidence.'),evidence),
+    null,'negative sanitizer claim must not trigger early false-positive assertion detector');
+  assert.equal(reviewRejectionDefect(reject(
+    'No effective sanitizer was observed in the return path; downstream rendering context remains unproven.'),evidence),
+    null,'absence of escaping is not a positive mitigation claim');
+
+
   assert.match(reviewRejectionDefect(reject(
     'The browser does not execute the HTML. The Codec.encodeFragment method returns the input unchanged, so there is no sanitization. Output is only reflected as plain text.'),evidence)??'',
     /inert browser|HTML rendering context/,
