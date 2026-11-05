@@ -144,11 +144,11 @@ def reflected_markup(data, nonce):
 
 
 def observed_nonincumbent_role_transition(data):
-    """Recognize a real local-EVM role takeover, not its security significance.
+    """Recognize a replayable local role transition, not its security significance.
 
-    The controlled signer must differ from the incumbent; the selected role
-    getter must change to the transaction signer despite an expected revert.
-    Review still determines whether this is prohibited by the application.
+    The signer must differ from the incumbent; the recorded getter must change
+    to that signer despite an expected-revert hypothesis. Independent review
+    determines whether reassignment violated an actual security boundary.
     """
     if not isinstance(data,dict):
         return False
@@ -157,7 +157,29 @@ def observed_nonincumbent_role_transition(data):
     if (not isinstance(accounts,list) or len(accounts)<3 or
             not isinstance(steps,list) or len(steps)<3):
         return False
-    role_getter=re.compile(r'^(?:owner|operator|administrator|admin|governor|manager|controller)\\(\\)
+    role_getter=re.compile(r'^(?:owner|operator|administrator|admin|governor|manager|controller)\(\)$',re.I)
+    for before,change,after in zip(steps,steps[1:],steps[2:]):
+        if (before.get('operation')!='observe' or
+                change.get('operation')!='send' or
+                after.get('operation')!='observe' or
+                before.get('function')!=after.get('function') or
+                not role_getter.fullmatch(str(before.get('function',''))) or
+                change.get('reverted') is not False or
+                change.get('passed') is not False):
+            continue
+        sender=change.get('sender')
+        if type(sender) is not int or sender not in (1,2):
+            continue
+        incumbent=str(before.get('actual','')).lower()
+        successor=str(after.get('actual','')).lower()
+        attacker=str(accounts[sender]).lower()
+        if (incumbent.startswith('0x') and len(incumbent)==42 and
+                incumbent!=attacker and successor==attacker):
+            return True
+    return False
+
+
+def limits(node=False, java=False):
     resource.setrlimit(resource.RLIMIT_CPU,(15,15))
     resource.setrlimit(resource.RLIMIT_AS,((32 if node else 4 if java else 1)*1024**3,)*2)
     resource.setrlimit(resource.RLIMIT_FSIZE,(1024**2,1024**2))
