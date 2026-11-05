@@ -3,8 +3,10 @@ import {normalizeForcedOutlineCursor} from './outline-cursor';
 import {z} from "zod";
 import {javaSequenceSchema, type JavaSequence} from "./java-sequence";
 import {buildBaselineSequence} from './solidity-probe-inputs';
+import {privilegedRoleMutationCandidate} from './solidity-security-candidates';
+import {rankTracedSourceCandidates} from './controller-source-candidates';
 import { InvestigationWorkflow } from "./investigation-workflow";
-import {guidedSourceProbe} from './source-guided-probes';
+import {guidedProbeAcrossSourceChain} from './source-guided-probes';
 import {declaredProbeTarget, sourceDeclarationHints, supportedJavaProbeHints, javaProbeSelectorCompatible, probeChoices} from './probe-target-validation';
 import { postQwenAgentJson } from "./qwen-agent-transport";
 import { AuditAllowance } from "./audit-allowance";
@@ -71,7 +73,8 @@ export interface LocalAuditLimits {
   onRead?: (path:string, span:ReadSpan) => void;
   /** Trusted controller source analysis: exact caller path for a reproduced case.
    * No model text can create or change this routing decision. */
-  onVerifiedCase?: (caseId:string,path:string,selector:string,kind:string) => Promise<string[]|null>;
+  onVerifiedCase?: (caseId:string,path:string,selector:string,kind:string) =>
+    Promise<{callers:string[];promoted?:{caseId:string;path:string;selector:string;kind:string}}|null>;
   verifyPython?: (path:string,functionName:string,kind:string,sequence?:SoliditySequence | JavaSequence) => Promise<string>;
 }
 export async function runLocalAudit(
@@ -236,6 +239,29 @@ export async function runLocalAudit(
         } catch {return path;}
       }
     }
+    // Controller-owned bounded scan of authorized Solidity source. It is a
+    // candidate priority signal, not an exploitability verdict. Qwen cannot
+    // change the source-derived role, selector or read order.
+    const privilegedSolidityCandidates=new Map<string,{selector:string;role:string;method:string}>();
+    const accessibleSoliditySources=new Map<string,string>();
+    for(const path of [...new Set(limits.initialSourcePaths||[])].slice(0,200)){
+      if(!path.startsWith('source-')||!path.endsWith('.sol'))continue;
+      try{
+        const content=await readFile(await safePath(path),'utf8');
+        if(content.length<=256000)accessibleSoliditySources.set(path,content);
+      }catch{}
+    }
+    const SolidityCode=[...accessibleSoliditySources.values()];
+    for(const [path,content] of accessibleSoliditySources){
+      const risk=privilegedRoleMutationCandidate(path,content,SolidityCode);
+      if(risk)privilegedSolidityCandidates.set(path,risk);
+    }
+    if(privilegedSolidityCandidates.size)await appendFile(logFile,'[CONTROLLER_SOLIDITY_ROLE_CANDIDATES] '+
+      JSON.stringify([...privilegedSolidityCandidates].map(([path,r])=>({path,selector:r.selector,role:r.role})))+'\n');
+    const tracedCandidates=workflow && process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false'
+      ? await rankTracedSourceCandidates(root,limits.initialSourcePaths||[]) : [];
+    if(tracedCandidates.length)await appendFile(logFile,'[CONTROLLER_TRACED_SOURCE_CANDIDATES] '+
+      JSON.stringify(tracedCandidates.slice(0,8).map(c=>({path:c.path,selector:c.selector,score:c.score,chain:c.chain})))+'\n');
     // Source locations have already been selected from an authorized workspace.
     // Feed real source pages to the model, then run only narrowly recognizable
     // local probes in the same isolated verifier. Never manufacture evidence.
@@ -270,7 +296,7 @@ export async function runLocalAudit(
             path,offset:delivered.start,end:delivered.end,nextOffset:delivered.nextOffset,
             origin:'controller_prefetch'});
           if(!workflow || process.env.AUTOHACK_GUIDED_SOURCE_PROBES==='false' || delivered.nextOffset!==null || offset!==0 || !limits.verifyPython)continue;
-          const hint=guidedSourceProbe(path,delivered.text);
+          const hint=await guidedProbeAcrossSourceChain(root,path,delivered.text);
           if(!hint)continue;
           const planned={action:'plan_probe',path,query:hint.functionName,answer:hint.kind,hypothesis:hint.hypothesis};
           if(workflow.validate(planned as any))continue;
@@ -293,11 +319,19 @@ export async function runLocalAudit(
           if(result.status==='behavior_observed' &&
              typeof result.caseId==='string' && limits.onVerifiedCase &&
              process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false') {
-            const callers=await limits.onVerifiedCase(result.caseId,path,hint.functionName,hint.kind);
-            if(callers?.length && workflow.focusVerifiedEvidence(result.caseId)) {
-              workflow.requireSources(callers);
+            const handoff=await limits.onVerifiedCase(result.caseId,path,hint.functionName,hint.kind);
+            if(handoff?.promoted) {
+              const promoted=handoff.promoted;
+              workflow.observe({action:'verify_source',path:promoted.path,query:promoted.selector,
+                answer:promoted.kind} as any,
+                JSON.stringify({status:'behavior_observed',behavior_observed:true,caseId:promoted.caseId}));
+            }
+            const focusId=handoff?.promoted?.caseId||result.caseId;
+            if(handoff?.callers.length && workflow.focusVerifiedEvidence(focusId)) {
+              workflow.requireSources(handoff.callers);
               await appendFile(logFile,'[CONTROLLER_GUIDED_CASE_FOCUS] '+
-                JSON.stringify({caseId:result.caseId,callers})+'\n');
+                JSON.stringify({caseId:focusId,sourceCaseId:result.caseId,callers:handoff.callers,
+                  promoted:!!handoff.promoted})+'\n');
             }
           }
           // A controller-initiated negative probe must also advance navigation.
@@ -337,7 +371,10 @@ export async function runLocalAudit(
             messages.push({role:'user',content:'An isolated probe was attempted for '+path+
               '; result status '+String(result.status)+'. Read '+result.evidenceFile+' for the full observation. /no_think'});
           }
-          await appendFile(logFile,'[GUIDED_SOURCE_PROBE] '+JSON.stringify({path,function:hint.functionName,status:result.status,evidenceFile:result.evidenceFile})+'\n');
+          await appendFile(logFile,'[GUIDED_SOURCE_PROBE] '+JSON.stringify({
+            path,function:hint.functionName,kind:hint.kind,status:result.status,
+            caseId:result.caseId||null,evidenceFile:result.evidenceFile,
+            detail:String(result.detail||result.limitation||'').slice(0,240)})+'\n');
           await recordToolActivity(logFile,{phase:result.status==='probe_failed'?'failed':'completed',
             tool:'verify_source',path,query:hint.functionName,kind:hint.kind,
             status:result.status,origin:'controller_guided',
@@ -457,33 +494,52 @@ export async function runLocalAudit(
       // The normal workflow validator and isolated verifier remain mandatory.
       if(!controllerAction && structured && workflow &&
          process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false' &&
-         !workflow.snapshot().verifiedEvidenceFocus && controllerAutoProbeCount<3 &&
+         !workflow.snapshot().verifiedEvidenceFocus &&
+         controllerAutoProbeCount<Math.min(24,(limits.initialSourcePaths||[]).length) &&
          constraints?.action?.includes('plan_probe')) {
-        const inspected=workflow.snapshot().readPaths.filter(path=>
+        const inspected=new Set(workflow.snapshot().readPaths);
+        // Candidate ranking is controller-owned. Iteration in reverse read
+        // order used to favor the last decoy that happened to be prefetched.
+        // Keep prioritized paths first, then other actually inspected paths.
+        const ranked=[...new Set([...(limits.initialSourcePaths||[]),
+          ...workflow.snapshot().readPaths])].filter(path=>inspected.has(path) &&
           path.startsWith('source-') && /\.(?:sol|java|py|js|mjs|cjs)$/.test(path));
-        for(const path of [...inspected].reverse().slice(0,16)) {
+        const rankedInspected=[...new Set([...privilegedSolidityCandidates.keys(),...tracedCandidates.map(c=>c.path),...inspected].filter(path=>inspected.includes(path)))];
+        for(const path of rankedInspected.slice(0,24)) {
           try {
             const full=await safePath(path);
             let plan:{action:string;path:string;query:string;answer:string;hypothesis:string;sequence?:unknown}|null=null;
             if(path.endsWith('.sol')) {
-              const menu=await solidityIndex.probeMenu(full,32);
-              for(const entry of menu) {
+              const risk=privilegedSolidityCandidates.get(path);
+              // When source identifies a role mutation with a protected
+              // consumer, test that path before unrelated valid transactions.
+              if(privilegedSolidityCandidates.size && !risk)continue;
+              const menu=await solidityIndex.probeMenu(full,64);
+              const entries=risk?menu.filter(entry=>entry.selector===risk.selector):
+                menu.filter(entry=>entry.operation==='send');
+              for(const entry of entries) {
                 if(entry.operation!=='send')continue;
-                const sequence=buildBaselineSequence(menu,entry.selector);
+                const sequence=buildBaselineSequence(menu,entry.selector,!!risk);
                 if(!sequence)continue;
                 const candidate={action:'plan_probe',path,query:entry.selector,
                   answer:'solidity_sequence',
-                  hypothesis:'Observe this declared state transition and its getter without inventing expected results; compare authorization and state effects against source.',
+                  hypothesis:risk?
+                    'Check whether a nonadministrator can mutate the source-declared privileged '+risk.role+' role. Compare source-proven authority checks and before/after on-chain observations; independent review must establish impact.':
+                    'Observe the declared transaction and getter; check authorization and state effects against source.',
                   sequence};
                 if(!workflow.validate(candidate as any)){plan=candidate;break;}
               }
             }else {
+              const traced=tracedCandidates.find(candidate=>candidate.path===path);
               const code=await readFile(full,'utf8');
-              const hint=guidedSourceProbe(path,code);
-              if(hint) {
+              const hint=traced?{functionName:traced.selector,kind:traced.kind,
+                hypothesis:traced.hypothesis}:guidedSourceProbe(path,code);
+              if(hint && await declaredProbeTarget(full,hint.functionName)) {
+                const attempted=workflow.snapshot().observations.some(item=>
+                  item.path===path && item.function===hint.functionName && item.kind===hint.kind);
                 const candidate={action:'plan_probe',path,query:hint.functionName,
                   answer:hint.kind,hypothesis:hint.hypothesis};
-                if(!workflow.validate(candidate as any))plan=candidate;
+                if(!attempted && !workflow.validate(candidate as any))plan=candidate;
               }
             }
             if(!plan)continue;
@@ -508,7 +564,7 @@ export async function runLocalAudit(
          !workflow.snapshot().verifiedEvidenceFocus && controllerAutoReadCount<8 &&
          constraints?.action?.includes('read_file')) {
         const inspected=new Set(workflow.snapshot().readPaths);
-        for(const candidate of limits.initialSourcePaths||[]) {
+        for(const candidate of [...new Set([...privilegedSolidityCandidates.keys(),...tracedCandidates.map(c=>c.path),...(limits.initialSourcePaths||[])])]) {
           if(!candidate.startsWith('source-') || !/\.(?:java|py|js|mjs|cjs|sol)$/.test(candidate) ||
              inspected.has(candidate))continue;
           try {
@@ -1340,20 +1396,29 @@ export async function runLocalAudit(
               // Only the controller can appoint the next caller and lock a
               // verified case. A model's invented paths or negative tests
               // cannot supersede an earlier verified observation.
-              let authoritativeCallers:string[]|null=null;
+              let handoff: {callers:string[];promoted?:{caseId:string;path:string;selector:string;kind:string}}|null=null;
               if(typeof probeResult.caseId==='string' && limits.onVerifiedCase && process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false') {
-                authoritativeCallers=await limits.onVerifiedCase(
+                handoff=await limits.onVerifiedCase(
                   probeResult.caseId,String(call.function.arguments?.path||''),
                   String(call.function.arguments?.query||''),
                   String(call.function.arguments?.kind||''));
               }
-              if(authoritativeCallers?.length && workflow.focusVerifiedEvidence(probeResult.caseId)) {
+              if(handoff?.promoted) {
+                const promoted=handoff.promoted;
+                workflow.observe({action:'verify_source',path:promoted.path,query:promoted.selector,
+                  answer:promoted.kind} as any,
+                  JSON.stringify({status:'behavior_observed',behavior_observed:true,caseId:promoted.caseId}));
+              }
+              const authoritativeCallers=handoff?.callers||null;
+              const focusId=handoff?.promoted?.caseId||probeResult.caseId;
+              if(authoritativeCallers?.length && workflow.focusVerifiedEvidence(focusId)) {
                 const readPaths=new Set(workflow.snapshot().readPaths);
                 workflow.requireSources(authoritativeCallers);
                 requireInvestigationAfterEmpty=false;
                 emptyFinals=0;
                 await appendFile(logFile,'[CONTROLLER_VERIFIED_CASE_FOCUS] '+
-                  JSON.stringify({caseId:probeResult.caseId,callers:authoritativeCallers,
+                  JSON.stringify({caseId:focusId,sourceCaseId:probeResult.caseId,callers:authoritativeCallers,
+                    promoted:!!handoff?.promoted,
                     alreadyRead:authoritativeCallers.filter(path=>readPaths.has(path))})+'\n');
               }
               const testedPath=String(call.function.arguments?.path||'');
@@ -1384,7 +1449,7 @@ export async function runLocalAudit(
                   testedPath:String(call.function.arguments?.path||''),next})+'\\n');
               }
             }
-            await appendFile(logFile,"[PROBE_RESULT] "+JSON.stringify({path:call.function.arguments?.path,function:call.function.arguments?.query,kind:call.function.arguments?.kind,status:probeStatus,evidenceFile:probeResult.evidenceFile,detail:String(probeResult.detail||probeResult.reason||probeResult.error||"").slice(0,400)})+"\n");
+            await appendFile(logFile,"[PROBE_RESULT] "+JSON.stringify({path:call.function.arguments?.path,function:call.function.arguments?.query,kind:call.function.arguments?.kind,status:probeStatus,caseId:probeResult.caseId||null,evidenceFile:probeResult.evidenceFile,detail:String(probeResult.detail||probeResult.limitation||probeResult.reason||probeResult.error||"").slice(-700)})+"\n");
           }catch{}
         }
         await recordToolActivity(logFile,{phase:output.startsWith("Tool error:")?"failed":"completed",

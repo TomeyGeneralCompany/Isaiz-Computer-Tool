@@ -1,6 +1,8 @@
 import {readFile} from 'node:fs/promises';
 import {dirname,join,relative,resolve,sep} from 'node:path';
 import {createHash} from 'node:crypto';
+import {inspectSourceCapability} from './source-capability';
+import {controllerCallerChain,solidityDependentSources} from './source-flow-facts';
 
 export type ReviewLink = {file:string;line:number;code:string;relationship:string};
 export type ReviewEvidence = {
@@ -84,6 +86,40 @@ export async function buildReviewEvidence(repository:string,input:{
       }
     }
   }
+  // Reconstruct caller reachability from committed source for every language,
+  // rather than stopping at the first caller named in the report. This is
+  // deterministic navigation evidence, not model-supplied taint assertions.
+  try {
+    const capability=await inspectSourceCapability(repository,undefined,false);
+    const paths=capability.sourcePaths.slice(0,256);
+    if(['java','python','javascript'].includes(language)){
+      const upstream=await controllerCallerChain(repository,'',input.testedFile,
+        input.testedFunction,paths,4);
+      for(const edge of upstream){
+        const body=await safeRead(edge.path);
+        if(!body)continue;
+        appendLines(edge.path,body,edge.line-12,edge.line+2,
+          'import-resolved upstream caller of '+edge.selector);
+      }
+      if(!upstream.length)unresolved.push('No additional import-resolved upstream callers found in bounded committed source');
+    }else if(language==='solidity'){
+      const contract=input.testedFunction.split('.')[0];
+      const dependents=await solidityDependentSources(repository,input.testedFile,
+        contract,paths,6);
+      for(const file of dependents){
+        const body=await safeRead(file);
+        if(!body)continue;
+        const lines=body.split('\n');
+        const indices=lines.map((line,index)=>
+          /\b(?:import|is\s+|msg\.sender|require\s*\(|onlyOwner|onlyAdmin|operator|administrator)\b/.test(line)?index:-1)
+          .filter(index=>index>=0).slice(0,8);
+        for(const index of indices)appendLines(file,body,Math.max(0,index-1),index+2,
+          'dependent Solidity contract; independently verify role enforcement');
+      }
+    }
+  }catch(error){
+    unresolved.push('Bounded upstream source scan unavailable: '+String(error).slice(0,180));
+  }
   // Source lines and their digest persist as immutable review facts. A static call
   // edge alone does not prove that the argument can be controlled by an attacker.
   const sourceDigest=createHash('sha256').update(JSON.stringify(links)).digest('hex');
@@ -125,6 +161,17 @@ export function reviewRejectionDefect(review:{
   const deniesRecordedCaller=fatal.some(i=>/\b(?:no caller (?:calls|invokes|references)|caller does not (?:call|invoke|reference))\b/i.test(i.description));
   if(deniesRecordedCaller && evidence.links.some(x=>x.relationship==='recorded caller context' && /\b(?:render|wrap|invoke|call)\s*\(/i.test(x.code)))
     return 'The recorded caller contains an actual invocation. Distinguish an untrusted-input/reachability gap from a claim that no call exists, citing the missing link.';
+  // The verifier's fixed probe strings do not imply the application accepts
+  // only hardcoded input. A demonstrated request-parameter source and an
+  // import-resolved renderer call contradict that specific rejection premise.
+  // This requests a more precise technical explanation; it NEVER approves.
+  const dismissesAsHardcoded=/\b(?:hardcoded (?:test )?input|only (?:static|fixed) (?:test )?input|no (?:external|attacker) (?:input|influence))\b/i.test(prose);
+  const hasRequestInput=evidence.links.some(link=>
+    /\b(?:searchParams\.get\s*\(|parse_qs\s*\(|req\.query\b|request\.(?:GET|args|query)\b)/.test(link.code));
+  const hasRenderedCall=evidence.links.some(link=>
+    /\b(?:return|res\.(?:send|end))\b[^\n]*\b(?:render|responseBody|wrapFragment)\s*\(/.test(link.code));
+  if(dismissesAsHardcoded && hasRequestInput && hasRenderedCall)
+    return 'The source packet contains a request-parameter extraction and a source-resolved call into the renderer. Fixed isolated probe tokens do not establish that application inputs are hardcoded. Name the actual missing source-to-sink edge or effective mitigation and cite its file and line before rejecting.';
   const grounds=/\b(?:unreachab\w*|reachab\w*|untrusted|attacker|input|source|sink|saniti[sz]\w*|escap\w*|mitigat\w*|guard\w*|access|privilege|authorization|state|sequence|replay|observ\w*|scope|impact|evidence|caller|path)\b/i;
   if(!fatal.some(i=>grounds.test(i.description)))
     return 'Fatal rejection must name a specific missing source-to-sink link, mitigation, untrusted-input issue, reproduction discrepancy, or other technical defect.';
