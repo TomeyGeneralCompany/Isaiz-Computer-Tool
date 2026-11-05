@@ -18,10 +18,13 @@ try {
  assert.ok(authority.some(item=>item.selector==='SettlementAuthority.operator' && item.operation==='call'),
    'Public state variable must appear as an executable ABI getter');
  assert.ok(authority.some(item=>item.selector==='SettlementAuthority.administrator' && item.operation==='call'));
- const sequence=buildBaselineSequence(authority,'SettlementAuthority.rotateOperator');
+ const sequence=buildBaselineSequence(authority,'SettlementAuthority.rotateOperator',true);
  assert.ok(sequence,'Controller must construct an executable sequence from the selected source');
  assert.equal((sequence?.steps[1] as any)?.sender,1);
- assert.equal((sequence?.steps[1] as any)?.expectRevert,true);
+ assert.equal((sequence?.steps[1] as any)?.args?.[0],'$account2',
+   'Role-mutation probe must use a distinct target account, not the nonadmin sender');
+ assert.equal((sequence?.steps[1] as any)?.expectRevert,undefined,
+   'Reproduction observes actual authorization behavior rather than prescribing a revert');
  assert.deepEqual(sequence?.steps.map(step=>step.function),[
    'operator()','rotateOperator(address)','operator()'
  ],'Controller should observe the state actually modified by the selected function');
