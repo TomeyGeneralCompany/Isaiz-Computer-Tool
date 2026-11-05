@@ -289,8 +289,15 @@ Do not claim production testing, JavaScript execution, file access or other effe
           // sandbox before asking Qwen to report on the propagated behavior.
           // The reviewer still independently replays and judges significance.
           let promoted:{caseId:string;path:string;selector:string;kind:string}|undefined;
-          if(!focus && firstCallerSelector && ['html_reflection','path_construction'].includes(kind)) {
-            const callerPath=chain[0];
+          const promotedCaller=chain[0];
+          const isEntryBoundary=/(?:handler|controller|route|entry|server)/i.test(
+            promotedCaller?.split('/').at(-1)||'');
+          // Request-handler methods are caller/reachability evidence rather
+          // than another isolated test target. Promote helper -> renderer
+          // once; do not re-probe a handler in place of an existing case.
+          if(!focus && !controllerPromotedCaseId && firstCallerSelector && !isEntryBoundary &&
+             ['html_reflection','path_construction'].includes(kind)) {
+            const callerPath=promotedCaller;
             try {
               const full=join(root,callerPath);
               const eligible=callerPath.endsWith('.java')
