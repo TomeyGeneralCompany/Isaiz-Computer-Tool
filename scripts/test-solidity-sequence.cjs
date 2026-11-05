@@ -64,7 +64,7 @@ async function execute(s) {
  const authority=authorityCompiled.contracts['Authority.sol'].Authority;
  const authoritySequence={constructorArgs:[],steps:[
    {operation:'observe',function:'operator()',args:[]},
-   {operation:'send',function:'rotateOperator(address)',args:['$account1'],sender:0},
+   {operation:'send',function:'rotateOperator(address)',args:['$account1'],sender:1,expectRevert:true},
    {operation:'observe',function:'operator()',args:[]}
  ]};
  const providerForAuthority=()=>ganache.provider({logging:{quiet:true},
@@ -75,6 +75,7 @@ async function execute(s) {
  try {
    const output=await runSequence(authority,authoritySequence,authorityTransport);
    assert.equal(output.steps[1].reverted,false);
+   assert.equal(output.steps[1].passed,false,'Actual non-admin success disproves the expected revert');
    assert.equal(output.steps[2].actual,output.accounts[1]);
    assert.notEqual(output.steps[0].actual,output.steps[2].actual);
  } finally {await authorityTransport.disconnect();}
