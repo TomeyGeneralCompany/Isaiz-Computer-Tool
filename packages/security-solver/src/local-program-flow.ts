@@ -191,6 +191,14 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
     let controllerPromotedFromCaseId:string|null=null;
     // Entry cases are independently executed by the sandbox, not authored by Qwen.
     const controllerEntryCases=new Map<string,string>();
+    const entryEvidenceFor=(caseId:string)=>{
+      const entryId=controllerEntryCases.get(caseId);
+      const entry=entryId ? session.cases.get(entryId) : undefined;
+      if(!entry || !entry.result.behavior_observed) return undefined;
+      return {caseId:entryId!,file:entry.spec.file,selector:entry.spec.function,
+        sourceSha256:entry.sourceSha256,observations:entry.result.observations,
+        limitation:entry.result.limitation||'Only an isolated entry invocation was tested.'};
+    };
     const candidateEvidence=await sourceCandidateEvidence(root,sourceMap.symbols,8);
     await writeFile(join(root,'audit-controller-candidates.json'),JSON.stringify(candidateEvidence,null,2),{mode:0o600});
     await appendFile(logFile,'[SOURCE_MAP] '+JSON.stringify({files:sourceMap.scannedFiles,symbols:sourceMap.symbols.length,skipped:sourceMap.skippedFiles})+'\n');
@@ -422,7 +430,9 @@ Do not claim production testing, JavaScript execution, file access or other effe
               probeKind:record.spec.kind,sourceSha256:record.sourceSha256,
               callerFile:relative(repository.directory,join(root,match.path)).split(sep).join('/'),
               callerLine:match.line,callerCode:match.code,reachability:'caller',
-              observations:record.result.observations,limitation:record.result.limitation ?? 'No additional reproduction limitations recorded.'
+              observations:record.result.observations,limitation:record.result.limitation ?? 'No additional reproduction limitations recorded.',
+            entryProof:entryEvidenceFor(candidate.caseId),
+              entryProof:entryEvidenceFor(caseId)
             }));
           }
           if(!packets.length)return '';
