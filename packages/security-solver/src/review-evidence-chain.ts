@@ -177,7 +177,7 @@ export function reviewRejectionDefect(review:{
   // exploitability and can reject for a genuinely missing security boundary.
   if(evidence.kind==='html_reflection') {
     const lines=evidence.links.map(link=>link.code).join('\n');
-    const actualEscape=/\b(?:escape\s*\(|sanitize\s*\(|encodeForHTML\s*\(|StringEscapeUtils\.|replace\s*\(\s*["'](?:&|<|>)/i.test(lines);
+    const actualEscape=/\b(?:escape\s*\(|sanitize\s*\(|encodeForHTML\s*\(|StringEscapeUtils\.|replace\s*\(\s*["'][&<>])/i.test(lines);
     const requestControlled=/\b(?:searchParams\.get\s*\(|parse_qs\s*\(|req\.query\b|request\.(?:GET|args|query)\b)/.test(lines);
     const treatsParsingAsEscaping=/\b(?:parsing|parsed|parse_qs|searchParams\.get|URL\.searchParams)\b[^.]{0,150}\b(?:saniti[sz]\w*|escap\w*|validat\w*)\b|\b(?:saniti[sz]\w*|escap\w*)\b[^.]{0,100}\b(?:parsing|parsed|parse_qs|searchParams)\b/i.test(prose);
     if(requestControlled && treatsParsingAsEscaping && !actualEscape)
