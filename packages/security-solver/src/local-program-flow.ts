@@ -431,7 +431,6 @@ Do not claim production testing, JavaScript execution, file access or other effe
               callerFile:relative(repository.directory,join(root,match.path)).split(sep).join('/'),
               callerLine:match.line,callerCode:match.code,reachability:'caller',
               observations:record.result.observations,limitation:record.result.limitation ?? 'No additional reproduction limitations recorded.',
-            entryProof:entryEvidenceFor(candidate.caseId),
               entryProof:entryEvidenceFor(caseId)
             }));
           }
@@ -786,7 +785,8 @@ Do not claim production testing, JavaScript execution, file access or other effe
             probeKind:record.spec.kind,sourceSha256:record.sourceSha256,
             callerFile:callerRelative,callerLine:candidate.callerLine,
             callerCode:callerLine,reachability:candidate.reachability||'caller',
-            observations:record.result.observations,limitation:record.result.limitation ?? 'No additional reproduction limitations recorded.'
+            observations:record.result.observations,limitation:record.result.limitation ?? 'No additional reproduction limitations recorded.',
+            entryProof:entryEvidenceFor(candidate.caseId)
           }))});
     }
     return {auditRecord,success:true,coverage:"partial",acquisitionChecks,capabilityChecks,coverageDetail:`${session.completedProbes} supported probes completed; ${session.unsupportedProbes} unsupported probes; ${session.failedProbes} failed probes`,findings,rawOutput:answer};
