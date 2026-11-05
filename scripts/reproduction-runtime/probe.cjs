@@ -21,9 +21,15 @@ async function javascript() {
   const fn = module[spec.function] ?? module.default?.[spec.function];
   if (typeof fn !== 'function') throw new Error('Exported function required');
   if (spec.kind === 'entry_html_reflection') {
-    const controlUrl = 'http://localhost/?message=' + encodeURIComponent(control);
-    const attackUrl = 'http://localhost/?message=' + encodeURIComponent(attack);
-    return [await fn(controlUrl), await fn(attackUrl), controlUrl, attackUrl];
+    const source = fs.readFileSync(sourceFile(spec.file), 'utf8');
+    const params = [...source.matchAll(/\.searchParams\.get\s*\(\s*["']([A-Za-z_][A-Za-z0-9_-]{0,63})["']\s*\)/g)]
+      .map(match => match[1]);
+    if (new Set(params).size !== 1 || !params.length)
+      throw new Error('Unsupported or ambiguous JavaScript request-parameter extraction');
+    const param = params[0];
+    const controlUrl = 'http://localhost/?' + param + '=' + encodeURIComponent(control);
+    const attackUrl = 'http://localhost/?' + param + '=' + encodeURIComponent(attack);
+    return [await fn(controlUrl), await fn(attackUrl), controlUrl, attackUrl, param];
   }
   return [await fn(control), await fn(attack)];
 }
@@ -101,12 +107,12 @@ async function solidity() {
     output(JSON.stringify(await solidity()));
     return;
   }
-  const [normal, observed, entryControlUrl, entryAttackUrl] = await (spec.file.endsWith('.sol') ? solidity() : javascript());
+  const [normal, observed, entryControlUrl, entryAttackUrl, entryParameter] = await (spec.file.endsWith('.sol') ? solidity() : javascript());
   if (typeof normal !== 'string' || typeof observed !== 'string')
     throw new Error('Probe requires string return values');
   if (normal.length > 16000 || observed.length > 16000) throw new Error('Probe output too large');
   output(JSON.stringify({control_input: control, control_output: normal,
     attack_input: attack, attack_output: observed,
     ...(spec.kind === 'entry_html_reflection' ? {entry_control_url:entryControlUrl,
-       entry_attack_url:entryAttackUrl,entry_selector:spec.function} : {})}));
+       entry_attack_url:entryAttackUrl,entry_selector:spec.function,entry_parameter:entryParameter} : {})}));
 })().catch(error => { process.stderr.write('\nTOMEY_ERROR ' + JSON.stringify({detail:String(error).slice(0,2000),missingImports:error.missingImports || []})); process.exitCode = 1; });
