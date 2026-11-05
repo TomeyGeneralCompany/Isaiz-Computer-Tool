@@ -1,3 +1,6 @@
+import {join} from 'node:path';
+import {sourceDeclarationHints,supportedJavaProbeHints,declaredProbeTarget} from './probe-target-validation';
+import {traceSourceCalls} from './source-flow-facts';
 /**
  * Narrow, syntax-guided hints for the fixed source reproduction API.
  * Hints are not findings. Every selected function must be executed in the
@@ -53,6 +56,34 @@ export function guidedSourceProbe(path:string,code:string):GuidedProbe|null {
     if(body.length>6000)continue;
     return {path,functionName:match[1],kind:'html_reflection',
       hypothesis:'Check whether user markup survives paragraph construction; safely escaped output disproves the suspected reflection.'};
+  }
+  return null;
+}
+
+/** Look through source-resolved helper calls before the model chooses a probe.
+ * The returned proposal must still pass the normal verifier; static traces
+ * cannot establish runtime reachability or a vulnerability.
+ */
+export async function guidedProbeAcrossSourceChain(root:string,path:string,code:string):Promise<GuidedProbe|null> {
+  const direct=guidedSourceProbe(path,code);
+  if(direct)return direct;
+  if(!/\.(?:java|py|js|mjs|cjs)$/.test(path))return null;
+  const prefix=path.split('/')[0];
+  if(!/^source-[0-9]+$/.test(prefix))return null;
+  const repoRoot=join(root,prefix);
+  const relativeFile=path.split('/').slice(1).join('/');
+  const full=join(root,path);
+  const names=path.endsWith('.java')?
+    await supportedJavaProbeHints(full,12):await sourceDeclarationHints(full,12);
+  for(const selector of names) {
+    if(!(await declaredProbeTarget(full,selector)))continue;
+    const trace=await traceSourceCalls(repoRoot,relativeFile,selector,4);
+    const files=new Set(trace.facts.map(f=>f.path));
+    if(files.size<2)continue;
+    const lines=trace.facts.map(f=>f.source).join('\n');
+    if(!/<p>/i.test(lines)||!/<\/p>/i.test(lines))continue;
+    return {path,functionName:selector,kind:'html_reflection',
+      hypothesis:'Source-resolved helper constructs HTML output; test whether input markup survives the full exported entry and whether escaping defeats it.'};
   }
   return null;
 }

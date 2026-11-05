@@ -23,6 +23,12 @@ export function referencesProbedFunction(line:string, selector:string):boolean {
 export function callerLineReferences(text:string,line:number,selector:string):boolean {
   const lines=sourceCodeOnly(text).split("\n");
   if(line<1 || line>lines.length)return false;
+  // A Python import that ends with the function name is NOT a call.
+  // Do not join it to an unrelated invocation two lines later and count
+  // both lines as separate caller evidence. The actual call is inspected
+  // independently on its own line.
+  if(/^\s*(?:from\s+[\w.]+\s+import\b|import\s+)/.test(lines[line-1]))
+    return false;
   // Prefer the exact inspected line. This keeps evidence tied to a real source
   // location while tolerating whitespace and qualified call expressions.
   if(referencesProbedFunction(lines[line-1],selector))return true;
@@ -31,6 +37,10 @@ export function callerLineReferences(text:string,line:number,selector:string):bo
   // never borrow an unrelated call farther down the file.
   const name=selector.split(".").at(-1)!;
   const first=lines[line-1].trimEnd();
+  // An import/re-export declaration ending in a symbol name isn't a
+  // multi-line invocation. Treating it as one creates duplicate caller edges
+  // when the next lines actually invoke the imported function.
+  if(/^\\s*(?:from\\s+\\S+\\s+import\\b|import\\b|export\\s+\\{)/.test(first))return false;
   if(!new RegExp("(?:\\.|\\b"+name+")\\s*$").test(first))return false;
   const continuation=lines.slice(line-1,Math.min(lines.length,line+2)).join("\n");
   return referencesProbedFunction(continuation,selector);
