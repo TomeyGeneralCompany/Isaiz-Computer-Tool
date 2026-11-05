@@ -226,6 +226,15 @@ export function reviewRejectionDefect(review:{
       /(?:["']<p>|["']<\/p>|text\/html|innerHTML|document\.write|\.html\s*\()/i.test(link.code));
     if(browserInertClaim && hasHtmlConstruction)
       return 'The reviewer asserts an inert browser or HTML rendering context that is not established by the recorded source. Source constructs markup and reflects input, but a local probe alone does not prove JavaScript execution. Identify an actual text-only content type, rendering boundary, escaping operation, or other source-backed reason the reflected markup cannot be interpreted; otherwise assess the HTML injection significance without asserting browser behavior not observed.';
+    // A pass-through helper does not sanitize merely because the reviewer calls
+    // it a sanitizer. This is a factual contradiction, not an override of the
+    // review verdict. Legitimate context/reachability objections remain valid.
+    const identitySource=evidence.links.some(link=>
+      /\\breturn\\s+(?:input|value|text|fragment|data)\\s*;?\\s*(?:[}#]|$)/i.test(link.code));
+    const identityClaim=/\\b(?:returns? (?:the )?input (?:unchanged|unmodified)|returns? (?:the )?(?:raw|original) input|does not (?:modify|alter|change) (?:the )?input|preserves? (?:the )?input)\\b/i.test(prose);
+    const wronglyCreditsIdentity=/\\b(?:saniti[sz]er|saniti[sz](?:es|ation)|mitigat(?:es|ion)|prevent(?:s|ing)? (?:html )?injection|prevents? security|no (?:injection|vulnerability|security risk))\\b/i.test(prose);
+    if(identitySource && identityClaim && wronglyCreditsIdentity && !actualEscape)
+      return 'The source-declared helper returns the input unchanged. Identity transformation is not sanitization or HTML escaping and cannot itself prevent injection. Identify an actual output-encoding line or an independently supported context/reachability defect instead. The observed reflection is not automatic proof of browser execution.';
     const identityDisprovesRisk=/\b(?:returns? (?:the )?input unmodified|does not modify the input|no sanitization|without any sanitization|without any escaping)\b[\s\S]{0,240}\b(?:no (?:actual )?security (?:risk|impact|vulnerability)|safe|not vulnerable)\b/i.test(prose);
     if(identityDisprovesRisk && !actualEscape)
       return 'Returning unescaped user data does not itself mitigate HTML reflection. If rejecting, identify the actual absent input-to-sink edge, rendering context, or source-backed mitigation rather than treating identity encoding as proof of safety.';
