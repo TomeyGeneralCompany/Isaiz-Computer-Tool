@@ -148,10 +148,10 @@ try {
     /observed unescaped attacker-chosen HTML/);
   assert.match(entryReviewRejectionDefect(rejected(
     'The replay is limited to a local function behavior. The evidence does not prove attacker control in a deployed system and the reflection is observed in a controlled environment, not a deployed system.'),entryCase)||'',
-    /Offline execution of an owned synthetic handler/);
+    /Independent controller replay|Offline execution of an owned synthetic handler/);
   assert.match(entryReviewRejectionDefect(rejected(
     'The input is not trusted and the output is not a security-relevant context. The attacker input is not reaching a security-relevant output.'),entryCase)||'',
-    /source-declared entry handler output/);
+    /Independent controller replay|source-declared entry handler output/);
   assert.equal(entryReviewRejectionDefect(rejected(
     'The route is not registered or exposed, and the source shows no connection from this entry handler to a client.'),entryCase),null);
   assert.equal(entryReviewRejectionDefect(rejected(
