@@ -1383,7 +1383,7 @@ export async function runLocalAudit(
                   testedPath:String(call.function.arguments?.path||''),next})+'\\n');
               }
             }
-            await appendFile(logFile,"[PROBE_RESULT] "+JSON.stringify({path:call.function.arguments?.path,function:call.function.arguments?.query,kind:call.function.arguments?.kind,status:probeStatus,caseId:probeResult.caseId||null,evidenceFile:probeResult.evidenceFile,detail:String(probeResult.detail||probeResult.limitation||probeResult.reason||probeResult.error||"").slice(0,400)})+"\n");
+            await appendFile(logFile,"[PROBE_RESULT] "+JSON.stringify({path:call.function.arguments?.path,function:call.function.arguments?.query,kind:call.function.arguments?.kind,status:probeStatus,caseId:probeResult.caseId||null,evidenceFile:probeResult.evidenceFile,detail:String(probeResult.detail||probeResult.limitation||probeResult.reason||probeResult.error||"").slice(-700)})+"\n");
           }catch{}
         }
         await recordToolActivity(logFile,{phase:output.startsWith("Tool error:")?"failed":"completed",
