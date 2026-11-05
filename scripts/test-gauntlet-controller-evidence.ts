@@ -34,7 +34,22 @@ for(const language of ['python','javascript','java'] as const){
     ].join('\n');
     const events=gradeInvestigationEvents(graderLog,challenge.answer);
     assert.ok(events.targetRead && events.targetPlan && events.targetAttempt && events.targetBehaviorObserved);
-    assert.equal(events.counters.recordedProbeResults,1);
+    assert.equal(events.counters.recordedProbeResults,2);
+    // A controller-probed source with the exact target selector and a
+    // trusted observed result must pass target-attempt accounting, even when
+    // Qwen never calls verify_source or the guided fallback chooses a decoy.
+    const controllerOnly=[
+      '[INITIAL_SOURCE_READ] '+JSON.stringify({path:'source-1/'+challenge.answer.file}),
+      '[CONTROLLER_SOURCE_PROBE_SELECTED] '+JSON.stringify({
+        path:'source-1/'+challenge.answer.file,selector:challenge.answer.selector,
+        status:'behavior_observed',caseId:'f'.repeat(64)})
+    ].join('\n');
+    const confirmed=gradeInvestigationEvents(controllerOnly,challenge.answer);
+    assert.equal(confirmed.targetAttempt,true,'executed controller target cannot be erased from grade');
+    assert.equal(confirmed.targetBehaviorObserved,true,'source probe records actual observed behavior');
+    assert.equal(confirmed.counters.recordedProbeResults,1);
+    const planOnly=gradeInvestigationEvents(controllerOnly.replace('behavior_observed','not_executed'),challenge.answer);
+    assert.equal(planOnly.targetBehaviorObserved,false,'a non-observed plan must never count as proof');
     assert.ok(!gradeInvestigationEvents(graderLog.replace('behavior_observed','observation_only'),challenge.answer).targetBehaviorObserved,
       'an unproven probe remains unproven despite valid execution');
     console.log(language+' source-traced candidate ranking and controller-aware Gauntlet grading PASSED');

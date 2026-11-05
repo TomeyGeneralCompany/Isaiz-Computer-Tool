@@ -1082,7 +1082,7 @@ Use one enum value per string. Scores are integers 0..3. bet100=false requires d
         prompt,schema:z.toJSONSchema(reviewSchema) as Record<string,unknown>,
         model:process.env.LOCAL_OLLAMA_MODEL||'qwen3:4b',
         logFile,signal,numCtx:8192,numPredict:getConfig().LOCAL_HUNT_NUM_PREDICT,
-        validate:validateReviewFinal,maxAttempts:3
+        validate:validateReviewFinal,maxAttempts:entryFacts ? 5 : 3
       });
     } else {
       await runLocalAudit(prompt,logFile,getConfig().SECURITY_HUNT_TIMEOUT_MINUTES*60000,root,process.env.LOCAL_OLLAMA_MODEL || "qwen3:4b",undefined,{

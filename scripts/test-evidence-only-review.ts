@@ -77,5 +77,33 @@ try {
   assert.ok(thirdOptions.temperature>0,'identical invalid verdicts must change retry strategy');
   assert.equal((escalationPayloads[2].messages as Array<unknown>).length,4,
     'review retry must replace stale rejected verdicts rather than accumulate them');
+  // A non-identical sequence of source-contradicted reviewer rationales
+  // should not run forever at temperature zero. The fourth attempt varies
+  // the judgment without changing source evidence or approval conditions.
+  let uniqueCalls=0;
+  const uniquePayloads:Array<Record<string,unknown>>=[];
+  const eventuallyValid=await runEvidenceOnlyReview({
+    prompt:'Replayed handler input-to-output evidence. Technical validity only.',
+    schema,model:'mock',signal:new AbortController().signal,
+    logFile,numCtx:8192,numPredict:800,maxAttempts:5,
+    validate:answer=>{
+      const decision=JSON.parse(answer);
+      return decision.verdict==='approve'?null:
+        'Rejection contradicted independently replayed source input-to-output behavior.';
+    },
+    transport:async payload=>{
+      uniqueCalls++;
+      uniquePayloads.push(payload);
+      return {message:{content:uniqueCalls<4
+        ?JSON.stringify({verdict:'reject',recommendation:'dont_submit',
+          reasoning:'Unsupported technical objection number '+uniqueCalls})
+        :goodTechnical}};
+    }
+  });
+  assert.equal(JSON.parse(eventuallyValid).verdict,'approve');
+  assert.equal(uniqueCalls,4);
+  assert.equal((uniquePayloads[0].options as {temperature:number}).temperature,0);
+  assert.ok((uniquePayloads[3].options as {temperature:number}).temperature>0);
+  assert.equal((uniquePayloads[3].messages as Array<unknown>).length,4);
   console.log('Evidence-only reviewer: schema, no navigation, bounded corrections PASSED');
 }finally{await rm(dir,{recursive:true,force:true});}

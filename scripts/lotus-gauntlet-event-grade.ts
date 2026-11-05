@@ -26,9 +26,15 @@ export function gradeInvestigationEvents(log:string,answer:{file:string;selector
     const p=lineOf(line,'[PROBE_PLANNED] ')||lineOf(line,'[CONTROLLER_SOURCE_PROBE_SELECTED] ');
     return p?.path===target && (matchingSelector(p.query)||matchingSelector(p.selector));
   });
+  // Controller-owned source verification is a *completed sandbox probe*, not
+  // just a plan. Count its observed status using its recorded selector. An
+  // unexecuted selection or an observation_only result earns no proof credit.
   const attempts=lines.map(line=>lineOf(line,'[PROBE_RESULT] ')||lineOf(line,'[GUIDED_SOURCE_PROBE] ')||
-    lineOf(line,'[CONTROLLER_CALLER_PROBE] ')).filter(Boolean) as Array<Record<string,unknown>>;
-  const targetAttempts=attempts.filter(p=>p.path===target && matchingSelector(p.function));
+    lineOf(line,'[CONTROLLER_SOURCE_PROBE_SELECTED] ')||lineOf(line,'[CONTROLLER_CALLER_PROBE] '))
+    .filter(Boolean) as Array<Record<string,unknown>>;
+  const targetAttempts=attempts.filter(p=>p.path===target &&
+    (matchingSelector(p.function)||matchingSelector(p.selector)) &&
+    typeof p.status==='string');
   const observed=targetAttempts.some(p=>p.status==='behavior_observed');
   const anyAttempt=attempts.length>0;
   const anySuccessful=attempts.some(p=>p.status==='behavior_observed'||p.status==='behavior_not_observed'||p.status==='observation_only');
