@@ -724,6 +724,28 @@ export async function runLocalAudit(
             continue;
           }
         }
+        // Same controller ownership as Solidity: malformed model sequences
+        // are replaced with a bounded plan constructed from inspected source.
+        // A model may not smuggle its own method names or expected observations.
+        if(workflow && ['plan_probe','probe_intent'].includes(action.action) &&
+           ['python_sequence','javascript_sequence'].includes(action.answer) &&
+           action.path.startsWith('source-')) {
+          try {
+            const full=await safePath(action.path);
+            const grounded=controllerPolyglotPlan(action.path,await readFile(full,'utf8'),
+              {query:action.query,answer:action.answer});
+            if(grounded && JSON.stringify(action.sequence)!==JSON.stringify(grounded.sequence)) {
+              action.query=grounded.query;
+              action.sequence=grounded.sequence;
+              action.hypothesis=grounded.hypothesis;
+              await appendFile(logFile,'[CONTROLLER_POLYGLOT_PROBE_CANONICALIZED] '+
+                JSON.stringify({path:action.path,query:action.query,kind:action.answer})+'\\n');
+            }
+          } catch(error) {
+            await appendFile(logFile,'[CONTROLLER_POLYGLOT_PROBE_UNAVAILABLE] '+
+              JSON.stringify({path:action.path,error:String(error).slice(0,160)})+'\\n');
+          }
+        }
         const automaticProbe=action.action==='probe_intent';
         if(automaticProbe) {
           action.action='plan_probe';
@@ -777,7 +799,7 @@ export async function runLocalAudit(
           await appendFile(logFile,'[JAVA_QUERY_NORMALIZED] '+JSON.stringify({path:action.path,query:action.query})+'\n');
         }
         if(['plan_probe','verify_source','verify_python'].includes(action.action) &&
-            !['solidity_sequence','java_sequence'].includes(action.answer) && action.sequence!==undefined) {
+            !['solidity_sequence','java_sequence','python_sequence','javascript_sequence'].includes(action.answer) && action.sequence!==undefined) {
           // Normalize optional structured-output fields before validation,
           // planning and duplicate detection; they are unused by these probes.
           delete action.sequence;
