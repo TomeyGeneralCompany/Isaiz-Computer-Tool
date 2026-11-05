@@ -61,6 +61,8 @@ jobs:
         run: npx tsx scripts/test-review-evidence-chain.ts
       - name: Validate controller-owned actions and grounded source navigation
         run: npx tsx scripts/test-controller-next-action.ts
+      - name: Regress owned Level 5 Solidity direct-transaction evidence
+        run: npx tsx scripts/test-level5-direct-transaction.ts
       - name: Validate controller-owned Gauntlet grading
         run: npx tsx scripts/test-gauntlet-execution-milestones.ts
       - name: Validate import-resolved polyglot caller chains against decoys
