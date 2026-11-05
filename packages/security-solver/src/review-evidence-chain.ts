@@ -1,6 +1,8 @@
 import {readFile} from 'node:fs/promises';
 import {dirname,join,relative,resolve,sep} from 'node:path';
 import {createHash} from 'node:crypto';
+import {inspectSourceCapability} from './source-capability';
+import {controllerCallerChain,solidityDependentSources} from './source-flow-facts';
 
 export type ReviewLink = {file:string;line:number;code:string;relationship:string};
 export type ReviewEvidence = {
@@ -83,6 +85,40 @@ export async function buildReviewEvidence(repository:string,input:{
         }else unresolved.push('Java helper method not found in '+helper+': '+match[2]);
       }
     }
+  }
+  // Reconstruct caller reachability from committed source for every language,
+  // rather than stopping at the first caller named in the report. This is
+  // deterministic navigation evidence, not model-supplied taint assertions.
+  try {
+    const capability=await inspectSourceCapability(repository,undefined,false);
+    const paths=capability.sourcePaths.slice(0,256);
+    if(['java','python','javascript'].includes(language)){
+      const upstream=await controllerCallerChain(repository,'',input.testedFile,
+        input.testedFunction,paths,4);
+      for(const edge of upstream){
+        const body=await safeRead(edge.path);
+        if(!body)continue;
+        appendLines(edge.path,body,edge.line-12,edge.line+2,
+          'import-resolved upstream caller of '+edge.selector);
+      }
+      if(!upstream.length)unresolved.push('No additional import-resolved upstream callers found in bounded committed source');
+    }else if(language==='solidity'){
+      const contract=input.testedFunction.split('.')[0];
+      const dependents=await solidityDependentSources(repository,input.testedFile,
+        contract,paths,6);
+      for(const file of dependents){
+        const body=await safeRead(file);
+        if(!body)continue;
+        const lines=body.split('\n');
+        const indices=lines.map((line,index)=>
+          /\b(?:import|is\s+|msg\.sender|require\s*\(|onlyOwner|onlyAdmin|operator|administrator)\b/.test(line)?index:-1)
+          .filter(index=>index>=0).slice(0,8);
+        for(const index of indices)appendLines(file,body,Math.max(0,index-1),index+2,
+          'dependent Solidity contract; independently verify role enforcement');
+      }
+    }
+  }catch(error){
+    unresolved.push('Bounded upstream source scan unavailable: '+String(error).slice(0,180));
   }
   // Source lines and their digest persist as immutable review facts. A static call
   // edge alone does not prove that the argument can be controlled by an attacker.
