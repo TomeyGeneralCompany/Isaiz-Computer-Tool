@@ -32,5 +32,16 @@ for(const [path,code,kind] of [
     'same source and requested method must have same controller-owned probe');
   assert.equal(controllerPolyglotPlan(path,code,{query:'invented',answer:kind}),null);
 }
+const javaState='public class Counter { private int value = 0; '+
+ 'public int advance() {return ++value;} public int current() {return value;} }';
+const javaPlan=controllerPolyglotPlan('src/Counter.java',javaState);
+assert.equal(javaPlan?.answer,'java_sequence');
+assert.equal(javaPlan?.query,'Counter.advance');
+assert.equal((javaPlan?.sequence as any).steps.length,2);
+assert.deepEqual(controllerPolyglotPlan('src/Counter.java',javaState,
+ {query:'Counter.current',answer:'java_sequence'})?.sequence,
+ {constructor:[],steps:[{method:'current',args:[]},{method:'current',args:[]}]});
+assert.equal(controllerPolyglotPlan('src/Counter.java',javaState,
+ {query:'Counter.invented',answer:'java_sequence'}),null);
 assert.equal(controllerPolyglotPlan('src/unrelated.ts','export function x() {}'),null);
 console.log('Source-derived Java/Python/JavaScript controller plans PASSED');
