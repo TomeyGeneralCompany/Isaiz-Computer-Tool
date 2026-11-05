@@ -69,6 +69,17 @@ try {
   assert.equal(reviewRejectionDefect(reject(
     'The downstream consumer has a source-verified text/plain response and cannot interpret markup.'),pythonIdentity),null,
     'an independent reviewer may still reject for a real output-context boundary');
+  // Regressions from the real post-#146 Level 5 Python/Java run: a
+  // pass-through codec is not a sanitizer and string return != text/plain.
+  assert.match(reviewRejectionDefect(reject(
+    'The codec returns the input value without modification, acting as a sanitizer. This prevents HTML injection.'),evidence)??'',/Identity transformation is not sanitization/,
+    'a reviewer cannot turn return value into an effective sanitizer');
+  assert.match(reviewRejectionDefect(reject(
+    'The output is a text/plain response, not HTML. The handler does not render in a browser.'),evidence)??'',/no source-backed text\/plain/,
+    'a reviewer cannot invent an HTTP content type from a Java String');
+  assert.equal(reviewRejectionDefect(reject(
+    'The returned markup reaches no demonstrated browser rendering sink and the caller has no documented externally deployed route.'),evidence),
+    null,'real limits must remain legitimate independent review grounds');
   assert.equal(reviewRejectionDefect({verdict:'approve',issues:[],reasoning:'Supported by source'},evidence),null);
   const repeated=await buildReviewEvidence(root,input);
   assert.equal(evidence.sourceDigest,repeated.sourceDigest,'verified facts are deterministic and persistent');
