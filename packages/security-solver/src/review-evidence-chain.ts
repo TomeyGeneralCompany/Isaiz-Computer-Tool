@@ -179,8 +179,16 @@ export function reviewRejectionDefect(review:{
     const lines=evidence.links.map(link=>link.code).join('\n');
     const actualEscape=/\b(?:escape\s*\(|sanitize\s*\(|encodeForHTML\s*\(|StringEscapeUtils\.|replace\s*\(\s*["'][&<>])/i.test(lines);
     const requestControlled=/\b(?:searchParams\.get\s*\(|parse_qs\s*\(|req\.query\b|request\.(?:GET|args|query)\b)/.test(lines);
-    const treatsParsingAsEscaping=/\b(?:parsing|parsed|parse_qs|searchParams\.get|URL\.searchParams)\b[^.]{0,150}\b(?:saniti[sz]\w*|escap\w*|validat\w*)\b|\b(?:saniti[sz]\w*|escap\w*)\b[^.]{0,100}\b(?:parsing|parsed|parse_qs|searchParams)\b/i.test(prose);
-    if(requestControlled && treatsParsingAsEscaping && !actualEscape)
+    // Test positive mitigation ASSERTIONS only. The previous broad co-occurrence
+    // regex also rejected accurate reviewer statements such as "parsing does not
+    // sanitize", exhausting the three independent review attempts.
+    const parserMitigationClaim=fatal.some(issue=>{
+      const claim=issue.description;
+      const asserted=/\b(?:parsing|parsed|parse_qs|searchParams(?:\.get)?|URL\.searchParams)\b.{0,120}\b(?:saniti[sz](?:es|ed|ing)?|escap(?:es|ed|ing)?|validat(?:es|ed|ion)?)\b|\b(?:saniti[sz](?:es|ed|ing)?|escap(?:es|ed|ing)?|validat(?:es|ed|ion)?)\b.{0,120}\b(?:parsing|parsed|parse_qs|searchParams)\b/i.test(claim);
+      const negated=/\b(?:does not|do not|cannot|can't|not|no|without|doesn't)\b.{0,90}\b(?:saniti[sz]|escap|validat)\w*|\b(?:saniti[sz]|escap|validat)\w*.{0,80}\b(?:not|absent|missing|none)\b/i.test(claim);
+      return asserted && !negated;
+    });
+    if(requestControlled && parserMitigationClaim && !actualEscape)
       return 'The observed request-parameter parser extracts input; parsing does not HTML-escape or sanitize. The recorded source contains no matching escaping operation. Identify a real validation/escaping line or revise the asserted mitigation; independently assess actual reachability and impact.';
     const unsupportedValidation=/\b(?:explicitly validated|validated by the caller|input is sanitized by (?:the application.?s )?context|safe HTML fragment handler)\b/i.test(prose);
     if(unsupportedValidation && !actualEscape)
