@@ -81,6 +81,16 @@ try {
     /parser extracts input|source-backed escaping/,
     'query parsing is not output escaping or evidence of caller validation');
 
+
+  assert.equal(reviewRejectionDefect(reject(
+    'URL.searchParams.get parses the query but does not sanitize, validate or HTML-escape it; the input-to-HTML chain requires an independently supported attacker-controlled sink.'),jsReview),
+    null,'a review denying parser sanitization must not be rejected repeatedly');
+  assert.match(reviewRejectionDefect(reject(
+    'URL.searchParams.get validates the parameter and sanitizes the user text before renderer.'),jsReview)??'',
+    /parser extracts input/,'positive unsupported parser sanitization assertion must be corrected');
+  assert.equal(reviewRejectionDefect(reject(
+    'The request parsing does not sanitize this input, but the downstream client renders only inert text, and there is no active HTML context demonstrated.'),jsReview),
+    null,'source-grounded contextual objections must remain eligible for independent review');
   await writeFile(join(root,'Contract.sol'),'contract Contract { function settle() public {} }\n');
   const solidity=await buildReviewEvidence(root,{
     testedFile:'Contract.sol',testedFunction:'Contract.settle',callerFile:'Contract.sol',
