@@ -33,6 +33,7 @@ try {
   assert.equal(calls,2,'One targeted correction, not an action/read loop');
   assert.equal(packets[0].format,schema,'Real verdict schema, not the generic audit action schema');
   assert.equal(packets[0].tools,undefined,'The reviewer has no source-navigation tools');
+  assert.equal(packets[0].think,false,'Qwen3 must generate verdict content rather than spending output budget in thinking');
   assert.equal((packets[0].messages as Array<unknown>).length,2);
   assert.equal((packets[1].messages as Array<unknown>).length,4);
   const log=await readFile(logFile,'utf8');
