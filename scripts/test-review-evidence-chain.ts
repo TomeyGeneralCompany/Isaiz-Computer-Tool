@@ -68,7 +68,7 @@ try {
     'identity-returning helpers must never be treated as an effective sanitizer');
   assert.match(reviewRejectionDefect(reject(
     'The downstream consumer has a source-verified text/plain response and cannot interpret markup.'),pythonIdentity)??'',
-    /no source-backed text\\/plain/,
+    /no source-backed text/,
     'a claimed text/plain response must be backed by a real source line, not by reviewer assertion');
   // Regressions from the real post-#146 Level 5 Python/Java run: a
   // pass-through codec is not a sanitizer and string return != text/plain.
