@@ -2,7 +2,7 @@ import {readFile} from 'node:fs/promises';
 import {dirname,join,relative,resolve,sep} from 'node:path';
 import {createHash} from 'node:crypto';
 import {inspectSourceCapability} from './source-capability';
-import {controllerCallerChain,solidityDependentSources} from './source-flow-facts';
+import {controllerCallerChain,solidityDependentSources,traceSourceCalls} from './source-flow-facts';
 
 export type ReviewLink = {file:string;line:number;code:string;relationship:string};
 export type ReviewEvidence = {
@@ -65,6 +65,22 @@ export async function buildReviewEvidence(repository:string,input:{
     appendLines(input.testedFile,target,Math.max(0,ix-2),Math.max(0,ix)+12,'reproduced function and nearby source');
     if(ix<0)unresolved.push('Selector not textually found in tested source');
   }else unresolved.push('Tested source file cannot be read');
+  // Every recorded HTML reflection is routed through actual source-defined
+  // helper calls. Show the implementation, not just a reassuring helper name.
+  // In particular JavaScript's encodeFragment can return its input unchanged.
+  // These quoted lines are evidence for review, never automatic approval.
+  if(target && input.kind==='html_reflection' &&
+     ['python','javascript','java'].includes(language)) {
+    try {
+      const trace=await traceSourceCalls(repository,input.testedFile,input.testedFunction,7);
+      for(const fact of trace.facts) {
+        const body=await safeRead(fact.path);
+        if(body)appendLines(fact.path,body,fact.line-1,fact.line,
+          'reproduced downstream source call / helper implementation');
+      }
+      unresolved.push(...trace.unresolved.filter(x=>!x.startsWith('Direct source reference')).slice(0,6));
+    }catch(error){unresolved.push('Downstream helper trace unavailable: '+String(error).slice(0,140));}
+  }
   if(language==='java' && target) {
     const queue:[string,string][]=[[input.testedFile,target]];
     const visited=new Set<string>();

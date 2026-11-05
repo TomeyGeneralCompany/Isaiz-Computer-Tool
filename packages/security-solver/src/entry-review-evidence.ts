@@ -56,6 +56,13 @@ export function entryReviewRejectionDefect(
   const deniesControlledInput=/\b(?:no (?:attacker|external|user)[ -]?(?:controlled|control|influence)|cannot (?:control|influence)|does not (?:prove|show|demonstrate) (?:attacker|user) control|no (?:actual )?input.to.sink (?:path|edge)|input is not (?:attacker|user)[ -]controlled)\b/i.test(prose);
   if(deniesControlledInput)
     return 'Independent controller replay executed the source-declared entry function with attacker-chosen input and observed the exact input in its returned HTML. Do not deny local entry input control or the observed input-to-output path. You may reject if a separate production reachability, authorization, content type, or impact issue is actually missing; name that gap precisely.';
+  // The independent entry replay is an equality observation: when the exact
+  // attacker marker survived unchanged in the returned markup, a reviewer
+  // cannot describe that very output as sanitized or not reflected as-is.
+  // This does not assert browser execution, deployment or exploit severity.
+  const claimsModifiedOutput=/(?:\b(?:input|payload|marker|attack(?:er)?\s+input)\s+(?:is|was|has been)\s+saniti[sz]ed\s+by\s+(?:encodeFragment|codec|helper|renderer)\b|\b(?:saniti[sz](?:ed|es|ation)|filtered|encoded|escaped)\s+(?:by|through|before|at)\s+.{0,75}(?:encodeFragment|codec|helper|renderer)\b|\b(?:input|payload|marker|attack(?:er)?\s+input)\s+(?:is|was|does)\s+not\s+(?:reflected|returned|preserved)\s+as[- ]is\b|\b(?:replay|observation|output)\s+.{0,90}not\s+(?:reflected|returned|preserved)\s+as[- ]is\b)/i.test(prose);
+  if(claimsModifiedOutput)
+    return 'Independent entry-handler replay returned the exact attacker-selected HTML marker unmodified. A helper name is not evidence of escaping, and the claim that this observed output was sanitized or not reflected as-is contradicts the actual replay. Inspect the helper implementation and name a separate real guard, unreachable route or output context if rejecting. No browser script execution is inferred.';
   const assertsEscaping=/\b(?:html[- ]?escap(?:ed|ing)|escaped in (?:the )?(?:html|output|response)|encoded as (?:plain )?text|safely escaped|not (?:interpreted|inserted) as markup|only (?:plain|literal) text)\b/i.test(prose);
   const falselyEquatesWrapping=/\b(?:wrapped|wrapping|inside|within|child|children|<p>|paragraph)\b/i.test(prose);
   if(assertsEscaping && (falselyEquatesWrapping||/html[- ]?escap(?:ed|ing)|safely escaped/.test(prose.toLowerCase())))
