@@ -279,7 +279,7 @@ Do not claim production testing, JavaScript execution, file access or other effe
           // sandbox before asking Qwen to report on the propagated behavior.
           // The reviewer still independently replays and judges significance.
           let promoted:{caseId:string;path:string;selector:string;kind:string}|undefined;
-          const promotedCaller=chain[0];
+          const promotedCaller=paths[0];
           const isEntryBoundary=/(?:handler|controller|route|entry|server)/i.test(
             promotedCaller?.split('/').at(-1)||'');
           // Request-handler methods are caller/reachability evidence rather
@@ -311,7 +311,7 @@ Do not claim production testing, JavaScript execution, file access or other effe
                 JSON.stringify({caller:callerPath,selector:firstCallerSelector,error:String(error).slice(-350)})+'\n');
             }
           }
-          return {callers:chain,...(promoted?{promoted}:{})};
+          return {callers:paths,...(promoted?{promoted}:{})};
         },
         verifyPython:async (path,fn,kind,sequence) => {
           if (focus && path !== "source-1/"+focus.file) throw new Error("Probe must target the imported lead file");
