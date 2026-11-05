@@ -514,7 +514,16 @@ export async function runLocalAudit(
           }catch{}
         }
       }
-      if(controllerAction)await appendFile(logFile,'[CONTROLLER_OWNED_ACTION] '+JSON.stringify(controllerAction)+'\n');
+      if(controllerAction) {
+        await appendFile(logFile,'[CONTROLLER_OWNED_ACTION] '+JSON.stringify(controllerAction)+'\n');
+        await recordToolActivity(logFile,{phase:'completed',tool:'controller_action',
+          path:controllerAction.path,query:controllerAction.query,
+          kind:controllerAction.answer,selectedAction:controllerAction.action,
+          turn:turn+1,origin:'controller'});
+      } else {
+        await recordToolActivity(logFile,{phase:'started',tool:'model_generation',
+          turn:turn+1,model,origin:'model'});
+      }
       const result: {message?:Message;eval_count?:number;prompt_eval_count?:number;done_reason?:string;load_duration?:number;prompt_eval_duration?:number;eval_duration?:number;total_duration?:number;client_queue_ms?:number} = controllerAction ?
         {message:{role:'assistant',content:JSON.stringify(controllerAction)}} :
         await (adapter==='qwen-agent'?postQwenAgentJson:postOllamaChat)(process.env.AUTOHACK_OLLAMA_URL || "http://127.0.0.1:11434/api/chat", { model, stream: false, think: profile.think, messages:requestMessages,
@@ -523,6 +532,11 @@ export async function runLocalAudit(
           options: { num_predict:generationBudget,
             ...(limits.numCtx === undefined ? {} : {num_ctx:settings.numCtx}),
             ...(limits.numThreads === undefined ? {} : {num_thread:settings.numThreads}), ...profile.options } }, controller.signal,{onProgress}) as { message?: Message; eval_count?: number; prompt_eval_count?: number; done_reason?: string; load_duration?:number; prompt_eval_duration?:number; eval_duration?:number; total_duration?:number; client_queue_ms?:number };
+      if(!controllerAction)await recordToolActivity(logFile,{
+        phase:'completed',tool:'model_generation',turn:turn+1,model,
+        durationMs:Date.now()-started,origin:'model',
+        generatedTokens:result.eval_count ?? null,
+        promptTokens:result.prompt_eval_count ?? null});
       await appendFile(logFile, `[OLLAMA] turn ${turn+1}: response received in ${Date.now()-started}ms; prompt_tokens=${result.prompt_eval_count ?? "unknown"}; generated_tokens=${result.eval_count ?? "unknown"}\n`);
       await appendFile(logFile, "[TIMING] " + JSON.stringify({at:new Date().toISOString(),turn:turn+1,
         queueMs:result.client_queue_ms,loadMs:result.load_duration == null ? null : result.load_duration/1e6,
