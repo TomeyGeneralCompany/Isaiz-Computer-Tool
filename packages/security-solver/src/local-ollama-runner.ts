@@ -728,7 +728,7 @@ export async function runLocalAudit(
         // are replaced with a bounded plan constructed from inspected source.
         // A model may not smuggle its own method names or expected observations.
         if(workflow && ['plan_probe','probe_intent'].includes(action.action) &&
-           ['python_sequence','javascript_sequence'].includes(action.answer) &&
+           ['python_sequence','javascript_sequence','java_sequence'].includes(action.answer) &&
            action.path.startsWith('source-')) {
           try {
             const full=await safePath(action.path);
