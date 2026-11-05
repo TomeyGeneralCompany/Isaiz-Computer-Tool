@@ -189,6 +189,8 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
     let controllerTraceSummary='';
     let controllerPromotedCaseId:string|null=null;
     let controllerPromotedFromCaseId:string|null=null;
+    // Entry cases are independently executed by the sandbox, not authored by Qwen.
+    const controllerEntryCases=new Map<string,string>();
     const candidateEvidence=await sourceCandidateEvidence(root,sourceMap.symbols,8);
     await writeFile(join(root,'audit-controller-candidates.json'),JSON.stringify(candidateEvidence,null,2),{mode:0o600});
     await appendFile(logFile,'[SOURCE_MAP] '+JSON.stringify({files:sourceMap.scannedFiles,symbols:sourceMap.symbols.length,skipped:sourceMap.skippedFiles})+'\n');
@@ -318,6 +320,47 @@ Do not claim production testing, JavaScript execution, file access or other effe
             }catch(error) {
               await appendFile(logFile,'[CONTROLLER_CALLER_PROBE_UNAVAILABLE] '+
                 JSON.stringify({caller:callerPath,selector:firstCallerSelector,error:String(error).slice(-350)})+'\n');
+            }
+          }
+          if(promoted && kind==='html_reflection') {
+            // A renderer probe alone does not prove attacker-controlled entry.
+            // Locate the actual import-resolved handler and execute it with
+            // controller-generated query inputs (Java accepts the raw parameter).
+            const entry=chain.find(c=>/(?:handler|controller|route|entry|server)/i.test(c.path.split('/').at(-1)||''));
+            if(entry && entry.path!==promoted.path) {
+              try {
+                const text=await readFile(join(root,entry.path),'utf8');
+                const preceding=text.split('\n').slice(Math.max(0,entry.line-16),entry.line);
+                let entrySelector='';
+                for(const line of [...preceding].reverse()) {
+                  const py=/^\\s*(?:async\\s+)?def\\s+(response_body)\\s*\\(/.exec(line);
+                  const js=/\\bexports\\.(responseBody)\\s*=/.exec(line) ||
+                    /\\bfunction\\s+(responseBody)\\s*\\(/.exec(line);
+                  const java=/\\b(?:public|protected)\\s+(?:static\\s+)?String\\s+(responseBody)\\s*\\(/.exec(line);
+                  const name=(py||js||java)?.[1];
+                  if(name) {
+                    entrySelector=entry.path.endsWith('.java')?
+                      entry.path.split('/').at(-1)!.replace(/\\.java$/,'')+'.'+name:name;
+                    break;
+                  }
+                }
+                if(entrySelector) {
+                  const observed=JSON.parse(await session.probe(entry.path,entrySelector,'entry_html_reflection'));
+                  await appendFile(logFile,'[CONTROLLER_ENTRY_PROBE] '+JSON.stringify({
+                    path:entry.path,function:entrySelector,kind:'entry_html_reflection',
+                    status:observed.status,caseId:observed.caseId||null})+'\n');
+                  if(observed.status==='behavior_observed' && typeof observed.caseId==='string' &&
+                     session.cases.has(observed.caseId)) {
+                    controllerEntryCases.set(promoted.caseId,observed.caseId);
+                    await appendFile(logFile,'[CONTROLLER_ENTRY_PROOF_LINK] '+JSON.stringify({
+                      rendererCaseId:promoted.caseId,entryCaseId:observed.caseId,
+                      file:entry.path,selector:entrySelector})+'\n');
+                  }
+                }
+              }catch(error) {
+                await appendFile(logFile,'[CONTROLLER_ENTRY_PROBE_UNAVAILABLE] '+JSON.stringify({
+                  path:entry.path,error:String(error).slice(0,350)})+'\n');
+              }
             }
           }
           return {callers:paths,...(promoted?{promoted}:{})};
