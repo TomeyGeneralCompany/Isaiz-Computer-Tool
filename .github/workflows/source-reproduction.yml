@@ -63,6 +63,8 @@ jobs:
         run: npx tsx scripts/test-controller-next-action.ts
       - name: Validate controller-owned Gauntlet grading
         run: npx tsx scripts/test-gauntlet-execution-milestones.ts
+      - name: Validate import-resolved polyglot caller chains against decoys
+        run: npx tsx scripts/test-controller-caller-chain.ts
       - name: Test real source audit, report creation and independent replay
         run: npx tsx scripts/test-source-workflow.ts
       - name: Exercise shared production workflow with real isolated probes
