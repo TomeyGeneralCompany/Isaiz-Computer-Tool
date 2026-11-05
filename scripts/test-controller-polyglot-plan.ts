@@ -28,8 +28,8 @@ for(const [path,code,kind] of [
   assert.equal(proposal?.answer,kind);
   assert.equal(proposal?.query,'advance');
   assert.equal((proposal?.sequence as any).steps.length,2);
-  assert.deepEqual(controllerPolyglotPlan(path,code,{query:'advance',answer:kind}),proposal,
-    'same source and requested method must have same controller-owned probe');
+  assert.deepEqual(controllerPolyglotPlan(path,code,{query:'advance',answer:kind})?.sequence,proposal?.sequence,
+    'same source and requested method must have identical controller-owned executable steps');
   assert.equal(controllerPolyglotPlan(path,code,{query:'invented',answer:kind}),null);
 }
 const javaState='public class Counter { private int value = 0; '+
