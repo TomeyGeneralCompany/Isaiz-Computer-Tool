@@ -59,7 +59,10 @@ export async function rankTracedSourceCandidates(
         if(/\b(?:escape|escapeHtml|htmlspecialchars|sanitize|DOMPurify)\s*\(|\.replace\s*\(/i.test(implementation))continue;
         const chain=[...new Set(trace.facts.map(f=>f.path))];
         const score=10+chain.length*4+
-          (/^(?:render|renderHtml|response|responseBody)$/i.test(method)?12:0)+
+          // Sink-adjacent renderers outrank HTTP wrapper functions.
+          // Handler inputs remain crucial reachability/caller evidence but
+          // they do not necessarily implement the vulnerable HTML sink.
+          (/^(?:render|renderHtml)$/i.test(method)?12:0)+
           (chain.length>1?8:0);
         candidates.push({path,selector,kind:'html_reflection',score,
           chain:chain.map(p=>repositoryName+'/'+p),
