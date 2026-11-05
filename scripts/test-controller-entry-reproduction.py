@@ -36,6 +36,18 @@ with tempfile.TemporaryDirectory(prefix='lotus-controller-entry-') as dirname:
             '    text=parse_qs(urlsplit(url).query).get("message", [""])[0]\n'
             '    return render(text)\n'
         ),
+        'src/note_handler.py':(
+            'from urllib.parse import parse_qs, urlsplit\n'
+            'from src.renderer import render\n'
+            'def response_body(url):\n'
+            '    note=parse_qs(urlsplit(url).query).get("note", [""])[0]\n'
+            '    return render(note)\n'
+        ),
+        'src/note-handler.cjs':(
+            'exports.responseBody=function responseBody(url){\n'
+            'const note=new URL(url,"http://localhost").searchParams.get("note")||"";\n'
+            'return "<p>"+note+"</p>";};\n'
+        ),
         'src/handler.cjs':(
             'exports.responseBody=function responseBody(url){\n'
             'const text=new URL(url,"http://localhost").searchParams.get("message")||"";\n'
@@ -61,7 +73,9 @@ with tempfile.TemporaryDirectory(prefix='lotus-controller-entry-') as dirname:
     })
     targets=[
         ('src/http_handler.py','response_body'),
+        ('src/note_handler.py','response_body'),
         ('src/handler.cjs','responseBody'),
+        ('src/note-handler.cjs','responseBody'),
         ('src/main/java/org/lotus/HttpHandler.java','HttpHandler.responseBody')
     ]
     for index,(path,function) in enumerate(targets):
@@ -71,7 +85,9 @@ with tempfile.TemporaryDirectory(prefix='lotus-controller-entry-') as dirname:
         assert 'TOMEY_PROBE' in observed['attack_output'],(path,observed)
         assert observed['control_input'] in observed['control_output'],(path,observed)
         if path.endswith('.py') or path.endswith('.cjs'):
-            assert 'message=' in observed['entry_attack_url'],(path,observed)
+            key='note' if 'note' in path else 'message'
+            assert key+'=' in observed['entry_attack_url'],(path,observed)
+            assert observed['entry_parameter']==key,(path,observed)
             assert '%3Cem' in observed['entry_attack_url'],(path,observed)
             assert observed['entry_selector']==function,(path,observed)
 
