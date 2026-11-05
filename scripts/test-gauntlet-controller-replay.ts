@@ -7,6 +7,8 @@ import {guidedProbeAcrossSourceChain} from '../packages/security-solver/src/sour
 import {SoliditySourceIndex} from '../packages/security-solver/src/solidity-source-index';
 import {buildBaselineSequence} from '../packages/security-solver/src/solidity-probe-inputs';
 import {inspectGauntletEvents} from './gauntlet-probe-telemetry';
+import {gradeInvestigationEvents} from './lotus-gauntlet-event-grade';
+import {controllerReportNarrative} from '../packages/security-solver/src/controller-report-narrative';
 import {callerLineReferences} from '../packages/security-solver/src/source-function-reference';
 
 const pyWithImport='from src.pipeline import wrap_fragment\ndef render(value):\n    return wrap_fragment(value)';
@@ -73,6 +75,40 @@ try {
   const promoted=inspectGauntletEvents(promotedLog,{file:'src/renderer.cjs',selector:'render'},true);
   assert.ok(promoted.targetRead&&promoted.targetProbe&&promoted.executedAny);
   assert.equal(promoted.counters.controllerCallerProbes,1);
+  // A verified controller-promoted renderer is a real target probe even when
+  // the initial guided helper probe had a different path and selector.
+  for(const lang of ['python','javascript','java'] as const) {
+    const fixture=generate(lang,12);
+    const actualTarget='source-1/'+fixture.answer.file;
+    const events=[
+      '[READ_OK] '+actualTarget+' offset=0 end=300 nextOffset=null',
+      '[GUIDED_SOURCE_PROBE] '+JSON.stringify({path:'source-1/other-helper',function:'helper',
+        kind:'html_reflection',status:'behavior_observed',caseId:digest}),
+      '[CONTROLLER_CALLER_PROBE] '+JSON.stringify({path:actualTarget,
+        function:fixture.answer.selector,kind:'html_reflection',status:'behavior_observed',
+        caseId:digest})
+    ].join('\\n');
+    const grade=gradeInvestigationEvents(events,fixture.answer);
+    assert.equal(grade.targetAttempt,true,lang+' promoted renderer must count as real target attempt');
+    assert.equal(grade.targetBehaviorObserved,true,lang+' controller-observed target must count');
+    const narrative=controllerReportNarrative({
+      kind:'html_reflection',selector:fixture.answer.selector,file:fixture.answer.file,
+      caseId:digest,callerFile:fixture.answer.caller,callerLine:3,behaviorObserved:true
+    });
+    assert.ok(narrative.summary.includes(digest)&&narrative.falsification.includes('escaping'));
+    assert.ok(!narrative.impact.includes('proves JavaScript execution'),
+      'isolated reflection must not invent active script execution');
+  }
+  const solidityNarrative=controllerReportNarrative({
+    kind:'solidity_sequence',selector:'SettlementAuthority.rotateOperator',
+    file:'contracts/settlement/SettlementAuthority.sol',caseId:digest,
+    callerFile:'contracts/settlement/SettlementAuthority.sol',callerLine:7,behaviorObserved:true
+  });
+  assert.match(solidityNarrative.falsification,/nonzero destination check alone does not authenticate/);
+  assert.throws(()=>controllerReportNarrative({
+    kind:'html_reflection',selector:'render',file:'renderer.py',caseId:digest,
+    callerFile:'handler.py',callerLine:2,behaviorObserved:false
+  }),/recorded reproduction/);
   const fake=inspectGauntletEvents([
     '[MODEL_ACTION] '+JSON.stringify({action:'read_file',path:'source-1/src/renderer.cjs'}),
     '[GUIDED_SOURCE_PROBE] '+JSON.stringify({path:'source-1/src/adapter.cjs',
