@@ -4,6 +4,7 @@ import {join,dirname} from 'node:path';
 import {tmpdir} from 'node:os';
 import {SoliditySourceIndex} from '../packages/security-solver/src/solidity-source-index';
 import {buildBaselineSequence} from '../packages/security-solver/src/solidity-probe-inputs';
+import {solidityDependentSources} from '../packages/security-solver/src/source-flow-facts';
 import {generate} from './lotus-gauntlet-fixtures';
 const root=await mkdtemp(join(tmpdir(),'lotus-solidity-owned-menu-'));
 try {
@@ -26,6 +27,11 @@ try {
  ],'Controller should observe the state actually modified by the selected function');
  const adapter=await index.probeMenu(join(root,'contracts/modules/AdapterD008.sol'));
  const adapterSeq=buildBaselineSequence(adapter,'AdapterD008.rotateOperator');
+ const dependents=await solidityDependentSources(root,
+   'contracts/settlement/SettlementAuthority.sol','SettlementAuthority',
+   Object.keys(fixture.files),6);
+ assert.ok(dependents.includes('contracts/settlement/SettlementVault.sol'),
+   'Controller must inspect Solidity inheritance site after observed role mutation');
  assert.equal(adapterSeq?.steps[0].function,'operator()',
    'A decoy adapter must not use a separately protected settle call as its state observation');
  console.log('Solidity generated getters, state-related transitions and decoy avoidance PASSED');
