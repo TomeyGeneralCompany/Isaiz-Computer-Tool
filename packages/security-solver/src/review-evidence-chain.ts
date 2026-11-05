@@ -193,6 +193,15 @@ export function reviewRejectionDefect(review:{
     const unsupportedValidation=/\b(?:explicitly validated|validated by the caller|input is sanitized by (?:the application.?s )?context|safe HTML fragment handler)\b/i.test(prose);
     if(unsupportedValidation && !actualEscape)
       return 'The review attributes safety to validation, HTML context or a helper name without identifying a source-backed escaping or validation operation. Cite the actual protection and source line, or assess the unescaped output and attacker-control requirements separately.';
+    // The reviewer must not invent an observed browser or rendering context.
+    // Source-level HTML reflection does not by itself prove script execution,
+    // but neither does it prove the response is inert or not interpreted as HTML.
+    // Demand an actual source-backed boundary for either categorical claim.
+    const browserInertClaim=/\b(?:browser (?:does not|cannot|never) (?:execute|render|interpret)|output (?:is not|is never) (?:rendered|interpreted) as (?:executable )?HTML|(?:just|only) reflected (?:as|in) (?:plain |inert )?text)\b/i.test(prose);
+    const hasHtmlConstruction=evidence.links.some(link=>
+      /(?:["']<p>|["']<\/p>|text\/html|innerHTML|document\.write|\.html\s*\()/i.test(link.code));
+    if(browserInertClaim && hasHtmlConstruction)
+      return 'The reviewer asserts an inert browser or HTML rendering context that is not established by the recorded source. Source constructs markup and reflects input, but a local probe alone does not prove JavaScript execution. Identify an actual text-only content type, rendering boundary, escaping operation, or other source-backed reason the reflected markup cannot be interpreted; otherwise assess the HTML injection significance without asserting browser behavior not observed.';
     const identityDisprovesRisk=/\b(?:returns? (?:the )?input unmodified|does not modify the input|no sanitization|without any sanitization|without any escaping)\b[\s\S]{0,240}\b(?:no (?:actual )?security (?:risk|impact|vulnerability)|safe|not vulnerable)\b/i.test(prose);
     if(identityDisprovesRisk && !actualEscape)
       return 'Returning unescaped user data does not itself mitigate HTML reflection. If rejecting, identify the actual absent input-to-sink edge, rendering context, or source-backed mitigation rather than treating identity encoding as proof of safety.';
