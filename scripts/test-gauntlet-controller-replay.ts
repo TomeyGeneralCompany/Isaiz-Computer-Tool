@@ -43,6 +43,7 @@ try {
   assert.equal(plan!.steps[1].operation,'send');
   assert.equal(plan!.steps[1].function,'rotateOperator(address)');
   assert.equal(plan!.steps[1].sender,1,'challenge must test from non-deployer account');
+  assert.equal(plan!.steps[1].expectRevert,true,'privileged setter must test non-incumbent authorization expectation');
   assert.equal(plan!.steps[2].function,'operator()');
 
   const digest='a'.repeat(64);
