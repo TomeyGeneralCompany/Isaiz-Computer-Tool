@@ -318,7 +318,9 @@ Do not claim production testing, JavaScript execution, file access or other effe
     signal.throwIfAborted();
     beforeInspection?.();
     await note('MODEL_START',{model:process.env.LOCAL_OLLAMA_MODEL||'qwen3:4b',selectedFiles:sourceHints.length});
-    const answer=await runLocalAudit(prompt,logFile,getConfig().SECURITY_SOURCE_CODE_TIMEOUT_MINUTES*60000,root,
+    let answer:string;
+    try {
+      answer=await runLocalAudit(prompt,logFile,getConfig().SECURITY_SOURCE_CODE_TIMEOUT_MINUTES*60000,root,
       process.env.LOCAL_OLLAMA_MODEL || "qwen3:4b",undefined,{
         onAllowance:async deadline=>writeSecuritySolverStatus({active:true,programId:program.id,programName:program.name,
           stage:"hunting",startedAt:statusStartedAt,timeoutMinutes:(deadline-Date.parse(statusStartedAt))/60000,pid:process.pid}),
@@ -865,6 +867,20 @@ Do not claim production testing, JavaScript execution, file access or other effe
           }
         },
       });
+    } catch(error) {
+      if(signal.aborted || !independentlyProvenCandidate)throw error;
+      // An actual controller-owned, independently executable entry chain
+      // may not be discarded because the language model exhausted turns or
+      // returned malformed JSON. The technical reviewer remains mandatory;
+      // the controller does not automatically validate exploit significance.
+      parsed={findings:[independentlyProvenCandidate],outcome:'inspected'};
+      answer=JSON.stringify({controllerRecovery:'source-linked and executed entry proof',
+        caseId:independentlyProvenCandidate.caseId,
+        modelError:String(error).slice(0,250),independentReviewRequired:true});
+      await appendFile(logFile,'[CONTROLLER_MODEL_RECOVERY] '+JSON.stringify({
+        caseId:independentlyProvenCandidate.caseId,
+        reason:String(error).slice(0,240),autoApproval:false})+'\\n');
+    }
     signal.throwIfAborted();
     await note('MODEL_DONE',{completedProbes:session.completedProbes});
     // A language model no longer decides whether the controller's actual
