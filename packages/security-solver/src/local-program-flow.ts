@@ -2,6 +2,7 @@ import {prioritizeSourceCandidates} from './source-candidates';
 import {collectStaticLeads} from './local-static-leads';
 import {buildSourceMap} from './source-map';
 import {sourceCandidateEvidence,verifiedProbeSummary} from './source-candidate-evidence';
+import {rankTracedSourceCandidates} from './controller-source-candidates';
 import {traceSourceCalls,solidityDependentSources,controllerCallerChain} from './source-flow-facts';
 import {declaredProbeTarget,supportedJavaProbeHints} from './probe-target-validation';
 import { LOCAL_REPRODUCTION_CAPABILITY_VERSION } from "../../core/src/program-eligibility";
@@ -205,6 +206,86 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
     const candidateEvidence=await sourceCandidateEvidence(root,sourceMap.symbols,8);
     await writeFile(join(root,'audit-controller-candidates.json'),JSON.stringify(candidateEvidence,null,2),{mode:0o600});
     await appendFile(logFile,'[SOURCE_MAP] '+JSON.stringify({files:sourceMap.scannedFiles,symbols:sourceMap.symbols.length,skipped:sourceMap.skippedFiles})+'\n');
+    // Controller-first bounded investigation: source selection and isolated
+    // execution no longer depend on Qwen to request the first verification.
+    // Lexical ranking is NOT a vulnerability verdict. Only separately executed
+    // entry evidence can become a provisional finding, still subject to review.
+    if(!focus && process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false') {
+      try {
+        const ranked=await rankTracedSourceCandidates(root,
+          [...new Set([...sourceHints,...eligiblePaths])],96);
+        await appendFile(logFile,'[CONTROLLER_SOURCE_RANKING] '+JSON.stringify({
+          inspectedBudget:96,candidates:ranked.length,
+          preview:ranked.slice(0,5).map(c=>({path:c.path,selector:c.selector,score:c.score}))
+        })+'\n');
+        for(const selected of ranked.slice(0,8)) {
+          signal.throwIfAborted();
+          const repo=repos.find(r=>selected.path.startsWith(relative(root,r.directory).split(sep).join('/')+'/'));
+          if(!repo || missingDependencies.has(repo.url))continue;
+          const source=await readFile(join(root,selected.path),'utf8');
+          reads.add(selected.path,{start:0,end:source.length});
+          const output=JSON.parse(await session.probe(selected.path,selected.selector,selected.kind));
+          await appendFile(logFile,'[CONTROLLER_SOURCE_PROBE_SELECTED] '+JSON.stringify({
+            path:selected.path,selector:selected.selector,kind:selected.kind,
+            status:output.status,caseId:output.caseId||null})+'\n');
+          if(output.status!=='behavior_observed' || typeof output.caseId!=='string')continue;
+          const record=session.cases.get(output.caseId);
+          if(!record || !record.result.behavior_observed)continue;
+          const prefix=relative(root,repo.directory).split(sep).join('/')+'/';
+          const chain=await controllerCallerChain(root,prefix,selected.path,
+            selected.selector,[...new Set([...sourceHints,...eligiblePaths])],4);
+          const entry=chain.find(c=>/(?:handler|controller|route|entry|server)/i.test(c.path.split('/').at(-1)||''));
+          if(!entry)continue;
+          const entrySource=await readFile(join(root,entry.path),'utf8');
+          const preceding=entrySource.split('\n').slice(Math.max(0,entry.line-16),entry.line);
+          let selector='';
+          for(const line of [...preceding].reverse()) {
+            const py=/^\s*(?:async\s+)?def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/.exec(line);
+            const js=/\bexports\.([A-Za-z_$][\w$]*)\s*=/.exec(line) ||
+              /\b(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(/.exec(line);
+            const java=/\b(?:public|protected)\s+(?:static\s+)?String\s+([A-Za-z_$][\w$]*)\s*\(/.exec(line);
+            const name=(py||js||java)?.[1];
+            if(name){selector=entry.path.endsWith('.java')?
+              entry.path.split('/').at(-1)!.replace(/\.java$/,'')+'.'+name:name;break;}
+          }
+          if(!selector)continue;
+          reads.add(entry.path,{start:0,end:entrySource.length});
+          const entryOutput=JSON.parse(await session.probe(entry.path,selector,'entry_html_reflection'));
+          await appendFile(logFile,'[CONTROLLER_ENTRY_PROBE] '+JSON.stringify({
+            path:entry.path,function:selector,kind:'entry_html_reflection',
+            status:entryOutput.status,caseId:entryOutput.caseId||null,actor:'controller-prefetch'})+'\n');
+          if(entryOutput.status!=='behavior_observed'||typeof entryOutput.caseId!=='string')continue;
+          const entryRecord=session.cases.get(entryOutput.caseId);
+          if(!entryRecord || !entryRecord.result.behavior_observed)continue;
+          // Only a direct source-verified caller may be claimed. A helper
+          // buried under additional layers must be promoted first; skip it.
+          if(!callerLineReferences(entrySource,entry.line,selected.selector))continue;
+          const candidate=controllerProofCandidate({
+            caseId:output.caseId,rendererFile:selected.path,
+            rendererSelector:selected.selector,callerFile:entry.path,
+            callerLine:entry.line,callerSource:entrySource,
+            entryCase:{kind:entryRecord.spec.kind,
+              behaviorObserved:entryRecord.result.behavior_observed,
+              observations:entryRecord.result.observations}
+          });
+          if(!candidate)continue;
+          controllerEntryCases.set(output.caseId,entryOutput.caseId);
+          independentlyProvenCandidate=candidate;
+          controllerPromotedCaseId=output.caseId;
+          await appendFile(logFile,'[CONTROLLER_PROOF_CANDIDATE] '+JSON.stringify({
+            caseId:output.caseId,entryCaseId:entryOutput.caseId,
+            callerFile:candidate.callerFile,callerLine:candidate.callerLine,
+            source:'controller-first independent source and entry reproduction',
+            autoApproval:false})+'\n');
+          break;
+        }
+      }catch(error){
+        if(signal.aborted)throw error;
+        await appendFile(logFile,'[CONTROLLER_PREFETCH_INCOMPLETE] '+JSON.stringify({
+          error:String(error).slice(0,350),limitation:'Model can continue with supported source probes'
+        })+'\n');
+      }
+    }
     const promptHints:string[]=[];
     for(const hint of sourceHints) {if(JSON.stringify([...promptHints,hint]).length>1800)break;promptHints.push(hint);if(promptHints.length===8)break;}
     // Variable-sized acquisition metadata belongs in pageable workspace data,
