@@ -251,6 +251,8 @@ Do not claim production testing, JavaScript execution, file access or other effe
             JSON.stringify({caseId,selector:item.selector,caller:item.path,
               line:item.line,code:item.code.slice(0,400)})+'\n');
           const paths=chain.map(item=>item.path);
+          controllerTraceSummary='CONTROLLER VERIFIED UPSTREAM SOURCE CALLERS (not runtime input proof): '+
+            [testedPath,...paths].join(' -> ')+'. The model must assess entry-point input control and mitigation; it may not discard the recorded reproduction.';
           await writeFile(join(root,'audit-controller-caller-chain.json'),JSON.stringify({
             caseId,source:testedPath,callers:chain,
             limitation:'Import-resolved source references; dynamic dispatch, input control and runtime entry require independent verification.'
