@@ -48,5 +48,34 @@ try {
     });
   }catch(error){failed=/after 2 attempts/.test(String(error));}
   assert.ok(failed,'Persistent bad review must fail with a bounded explicit reason');
+  // Repeated schema-valid but technically invalid policy verdicts must get a
+  // stronger, non-self-reinforcing correction, never an automatic approval.
+  const badPolicy=JSON.stringify({verdict:'reject',recommendation:'dont_submit',
+    reasoning:'Submission prohibited by benchmark policy; reject on that basis.'});
+  const goodTechnical=JSON.stringify({verdict:'approve',recommendation:'dont_submit',
+    reasoning:'The independent source evidence establishes a security issue; no submission is allowed.'});
+  const escalationPayloads:Array<Record<string,unknown>>=[];
+  let policyCalls=0;
+  const policyReview=await runEvidenceOnlyReview({
+    prompt:'Technical review of a recorded, replayed source case. External reporting disabled.',
+    schema,model:'mock',signal:new AbortController().signal,logFile,numCtx:8192,numPredict:800,
+    validate:answer=>JSON.parse(answer).reasoning.startsWith('Submission prohibited')?
+      'An external submission prohibition is not a technical defect. Reevaluate source and replay; use recommendation=dont_submit if submission is prohibited.':null,
+    transport:async payload=>{
+      escalationPayloads.push(payload);
+      policyCalls++;
+      return {message:{content:policyCalls<3?badPolicy:goodTechnical}};
+    }
+  });
+  assert.equal(JSON.parse(policyReview).verdict,'approve',
+    'only an independently accepted technical verdict can exit reviewer');
+  assert.equal(policyCalls,3);
+  const secondMessages=escalationPayloads[1].messages as Array<{role:string;content:string}>;
+  assert.ok(secondMessages.some(x=>x.role==='system'&&x.content.includes('SUBMITTED')),
+    'a policy-only reject receives targeted technical-review instructions');
+  const thirdOptions=escalationPayloads[2].options as {temperature:number};
+  assert.ok(thirdOptions.temperature>0,'identical invalid verdicts must change retry strategy');
+  assert.equal((escalationPayloads[2].messages as Array<unknown>).length,4,
+    'review retry must replace stale rejected verdicts rather than accumulate them');
   console.log('Evidence-only reviewer: schema, no navigation, bounded corrections PASSED');
 }finally{await rm(dir,{recursive:true,force:true});}

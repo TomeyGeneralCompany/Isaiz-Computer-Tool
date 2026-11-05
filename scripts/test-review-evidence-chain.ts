@@ -36,6 +36,23 @@ try {
   assert.match(reviewRejectionDefect(reject('An effective sanitizer escapes the output at src/main/java/org/fixture/Codec.java:3'),evidence)??'',/no source-backed sanitization/,
     'the reviewer must not mistake a helper name for actual escaping');
   assert.match(reviewRejectionDefect(reject('Not enough proof'),evidence)??'',/Fatal rejection/);
+
+  assert.equal(reviewRejectionDefect(reject(
+    'This caller does not sanitize the input and there is no effective escaping in Codec.encodeFragment; executable browser impact still requires source-backed evidence.'),evidence),
+    null,'negative sanitizer claim must not trigger early false-positive assertion detector');
+  assert.equal(reviewRejectionDefect(reject(
+    'No effective sanitizer was observed in the return path; downstream rendering context remains unproven.'),evidence),
+    null,'absence of escaping is not a positive mitigation claim');
+
+
+  assert.match(reviewRejectionDefect(reject(
+    'The browser does not execute the HTML. The Codec.encodeFragment method returns the input unchanged, so there is no sanitization. Output is only reflected as plain text.'),evidence)??'',
+    /inert browser|HTML rendering context/,
+    'unobserved browser inertness must not be stated as a fact');
+  assert.equal(reviewRejectionDefect(reject(
+    'The isolated source-level reflection does not establish JavaScript execution; actual downstream rendering context and attacker control still need to be established.'),evidence),
+    null,'an evidence-limited review must be allowed to reject unproven executable impact');
+
   assert.match(reviewRejectionDefect(reject(
     'No effective input sanitization or escaping occurs; Codec.encodeFragment returns the input unmodified, so there is no actual security risk.'),evidence)??'',/Returning unescaped user data/,
     'identity encoder is not a security mitigation; reviewer must name a real missing link');
@@ -81,6 +98,16 @@ try {
     /parser extracts input|source-backed escaping/,
     'query parsing is not output escaping or evidence of caller validation');
 
+
+  assert.equal(reviewRejectionDefect(reject(
+    'URL.searchParams.get parses the query but does not sanitize, validate or HTML-escape it; the input-to-HTML chain requires an independently supported attacker-controlled sink.'),jsReview),
+    null,'a review denying parser sanitization must not be rejected repeatedly');
+  assert.match(reviewRejectionDefect(reject(
+    'URL.searchParams.get validates the parameter and sanitizes the user text before renderer.'),jsReview)??'',
+    /parser extracts input|no source-backed sanitization/,'positive unsupported parser sanitization assertion must be corrected');
+  assert.equal(reviewRejectionDefect(reject(
+    'The request parsing does not sanitize this input, but the downstream client renders only inert text, and there is no active HTML context demonstrated.'),jsReview),
+    null,'source-grounded contextual objections must remain eligible for independent review');
   await writeFile(join(root,'Contract.sol'),'contract Contract { function settle() public {} }\n');
   const solidity=await buildReviewEvidence(root,{
     testedFile:'Contract.sol',testedFunction:'Contract.settle',callerFile:'Contract.sol',

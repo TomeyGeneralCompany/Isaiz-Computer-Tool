@@ -153,7 +153,15 @@ export function reviewRejectionDefect(review:{
   // A positive assertion that a sanitizer exists must be backed by source,
   // not merely by the helper's reassuring name. Missing evidence is a request
   // for further inspection, NEVER grounds for automatic approval.
-  const mitigationAsserted=fatal.some(i=>/\b(?:effective (?:saniti[sz]er|escap(?:ing|er))|saniti[sz]es? (?:the|user|input|value)|escapes? (?:the|user|input|value|html)|mitigated by (?:escap|saniti[sz]))/i.test(i.description));
+  // A sanitizer claim must be positive and actually presented as a mitigation.
+  // Negated claims ("does not sanitize", "no effective escaping") accurately
+  // describe an unprotected flow and must not consume the review retry budget.
+  const mitigationAsserted=fatal.some(issue=>{
+    const claim=issue.description;
+    const assertion=/\b(?:effective (?:saniti[sz]er|escap(?:ing|er))|saniti[sz]es? (?:the|user|input|value)|escapes? (?:the|user|input|value|html)|mitigated by (?:escap|saniti[sz]))/i.test(claim);
+    const denial=/\b(?:no|not|without|never|cannot|can't|does(?:n't| not)|do(?:n't| not)|lack(?:s|ing)?|absen(?:t|ce))\b.{0,85}\b(?:effective|saniti[sz]\w*|escap\w*|mitigat\w*)\b|\b(?:saniti[sz]\w*|escap\w*)\b.{0,65}\b(?:absent|missing|not present|not applied)\b/i.test(claim);
+    return assertion && !denial;
+  });
   if(mitigationAsserted) {
     const matching=evidence.links.filter(link=>/\b(?:replace\s*\(|escape(?:Html|XML|ForHTML)?\s*\(|sanitize\s*\(|encodeForHTML\s*\(|StringEscapeUtils\.)/i.test(link.code));
     if(!matching.length)return 'The fatal rejection asserts an effective sanitizer, but the recorded source chain contains no source-backed sanitization operation. Read the alleged sanitizer implementation and cite its actual file and line before rejecting.';
@@ -179,12 +187,29 @@ export function reviewRejectionDefect(review:{
     const lines=evidence.links.map(link=>link.code).join('\n');
     const actualEscape=/\b(?:escape\s*\(|sanitize\s*\(|encodeForHTML\s*\(|StringEscapeUtils\.|replace\s*\(\s*["'][&<>])/i.test(lines);
     const requestControlled=/\b(?:searchParams\.get\s*\(|parse_qs\s*\(|req\.query\b|request\.(?:GET|args|query)\b)/.test(lines);
-    const treatsParsingAsEscaping=/\b(?:parsing|parsed|parse_qs|searchParams\.get|URL\.searchParams)\b[^.]{0,150}\b(?:saniti[sz]\w*|escap\w*|validat\w*)\b|\b(?:saniti[sz]\w*|escap\w*)\b[^.]{0,100}\b(?:parsing|parsed|parse_qs|searchParams)\b/i.test(prose);
-    if(requestControlled && treatsParsingAsEscaping && !actualEscape)
+    // Test positive mitigation ASSERTIONS only. The previous broad co-occurrence
+    // regex also rejected accurate reviewer statements such as "parsing does not
+    // sanitize", exhausting the three independent review attempts.
+    const parserMitigationClaim=fatal.some(issue=>{
+      const claim=issue.description;
+      const asserted=/\b(?:parsing|parsed|parse_qs|searchParams(?:\.get)?|URL\.searchParams)\b.{0,120}\b(?:saniti[sz](?:es|ed|ing)?|escap(?:es|ed|ing)?|validat(?:es|ed|ion)?)\b|\b(?:saniti[sz](?:es|ed|ing)?|escap(?:es|ed|ing)?|validat(?:es|ed|ion)?)\b.{0,120}\b(?:parsing|parsed|parse_qs|searchParams)\b/i.test(claim);
+      const negated=/\b(?:does not|do not|cannot|can't|not|no|without|doesn't)\b.{0,90}\b(?:saniti[sz]|escap|validat)\w*|\b(?:saniti[sz]|escap|validat)\w*.{0,80}\b(?:not|absent|missing|none)\b/i.test(claim);
+      return asserted && !negated;
+    });
+    if(requestControlled && parserMitigationClaim && !actualEscape)
       return 'The observed request-parameter parser extracts input; parsing does not HTML-escape or sanitize. The recorded source contains no matching escaping operation. Identify a real validation/escaping line or revise the asserted mitigation; independently assess actual reachability and impact.';
     const unsupportedValidation=/\b(?:explicitly validated|validated by the caller|input is sanitized by (?:the application.?s )?context|safe HTML fragment handler)\b/i.test(prose);
     if(unsupportedValidation && !actualEscape)
       return 'The review attributes safety to validation, HTML context or a helper name without identifying a source-backed escaping or validation operation. Cite the actual protection and source line, or assess the unescaped output and attacker-control requirements separately.';
+    // The reviewer must not invent an observed browser or rendering context.
+    // Source-level HTML reflection does not by itself prove script execution,
+    // but neither does it prove the response is inert or not interpreted as HTML.
+    // Demand an actual source-backed boundary for either categorical claim.
+    const browserInertClaim=/\b(?:browser (?:does not|cannot|never) (?:execute|render|interpret)|output (?:is not|is never) (?:rendered|interpreted) as (?:executable )?HTML|(?:just|only) reflected (?:as|in) (?:plain |inert )?text)\b/i.test(prose);
+    const hasHtmlConstruction=evidence.links.some(link=>
+      /(?:["']<p>|["']<\/p>|text\/html|innerHTML|document\.write|\.html\s*\()/i.test(link.code));
+    if(browserInertClaim && hasHtmlConstruction)
+      return 'The reviewer asserts an inert browser or HTML rendering context that is not established by the recorded source. Source constructs markup and reflects input, but a local probe alone does not prove JavaScript execution. Identify an actual text-only content type, rendering boundary, escaping operation, or other source-backed reason the reflected markup cannot be interpreted; otherwise assess the HTML injection significance without asserting browser behavior not observed.';
     const identityDisprovesRisk=/\b(?:returns? (?:the )?input unmodified|does not modify the input|no sanitization|without any sanitization|without any escaping)\b[\s\S]{0,240}\b(?:no (?:actual )?security (?:risk|impact|vulnerability)|safe|not vulnerable)\b/i.test(prose);
     if(identityDisprovesRisk && !actualEscape)
       return 'Returning unescaped user data does not itself mitigate HTML reflection. If rejecting, identify the actual absent input-to-sink edge, rendering context, or source-backed mitigation rather than treating identity encoding as proof of safety.';
