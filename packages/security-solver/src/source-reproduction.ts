@@ -87,15 +87,24 @@ async function executeProbe(directory:string,spec:z.infer<typeof specSchema>,sig
     return resultSchema.parse(JSON.parse(output));
   } finally {await rm(temporary,{recursive:true,force:true});}
 }
-export async function readSourceCase(id:string,program:SecurityProgram):Promise<SourceCase> {
+/** Read a tamper-evident observed state transition without implying a
+ * reportable vulnerability. Security findings still use readSourceCase.
+ */
+export async function readRecordedSourceCase(id:string,program:SecurityProgram):Promise<SourceCase> {
   digest.parse(id);
   const record=caseSchema.parse(JSON.parse(await readFile(join(caseDirectory(),id+".json"),"utf8")));
   if(sourceCaseId(record)!==id || record.programId!==program.id) throw new Error("Reproduction record does not match finding/program");
   let scopes:unknown=[];try {const parsed=JSON.parse(program.scopeSummary || "{}");scopes=Array.isArray(parsed)?parsed:parsed.scopes;}catch{}
   if(!authorizedSourceUrls(scopes).includes(record.repositoryUrl) || !targetInExplicitScope(program.scopeSummary,record.repositoryUrl+"/"+record.spec.file))
     throw new Error("Reproduction source is outside current program scope");
-  if(!record.result.behavior_observed || record.result.source_sha256!==record.sourceSha256 || !record.result.observations)
-    throw new Error("Reproduction case has no successful observation");
+  if(!['behavior_observed','observation_only'].includes(record.result.status) ||
+     record.result.source_sha256!==record.sourceSha256 || !record.result.observations)
+    throw new Error("Reproduction case has no successful recorded execution");
+  return record;
+}
+export async function readSourceCase(id:string,program:SecurityProgram):Promise<SourceCase> {
+  const record=await readRecordedSourceCase(id,program);
+  if(!record.result.behavior_observed)throw new Error("An observation-only sequence is not verified security evidence");
   return record;
 }
 export async function createProbeSession(program:SecurityProgram,workspace:string,repositories:ProbeRepository[],signal?:AbortSignal) {
@@ -137,7 +146,7 @@ export async function createProbeSession(program:SecurityProgram,workspace:strin
       blockedReason = result.status + (result.detail ? ": " + result.detail : "");
       throw new Error("Reproduction unavailable: " + blockedReason);
     }
-    if(!result.behavior_observed)return JSON.stringify(result);
+    if(!result.behavior_observed && result.status!=='observation_only')return JSON.stringify(result);
     if(result.source_sha256!==sourceSha256 || sha(await readFile(file))!==sourceSha256)throw new Error("Reproduction source changed");
     const record=caseSchema.parse({version:1,programId:program.id,repositoryUrl:repo.url,commit,sourceSha256,spec,result});
     const id=sourceCaseId(record);
@@ -160,7 +169,8 @@ export async function replaySourceCase(record:SourceCase,directory:string,signal
   const rel=relative(await realpath(directory),file);
   if(rel===".." || rel.startsWith(".."+sep) || sha(await readFile(file))!==record.sourceSha256)throw new Error("Reproduction source changed before review");
   const result=await executeProbe(directory,record.spec,signal);
-  if(!result.behavior_observed || result.source_sha256!==record.sourceSha256 ||
+  if(result.status!==record.result.status || result.behavior_observed!==record.result.behavior_observed ||
+     result.source_sha256!==record.sourceSha256 ||
      JSON.stringify(result.observations)!==JSON.stringify(record.result.observations))throw new Error("Independent reproduction did not match recorded observation");
   return result;
 }
