@@ -60,9 +60,18 @@ export function buildBaselineSequence(menu:SolidityProbeDeclaration[],selectedSe
   const readArgs=read?fixtureArguments(read.inputs):null;
   if(!read || !constructorArgs || !sendArgs || !readArgs)return null;
   const signature=(entry:SolidityProbeDeclaration)=>entry.selector.split('.').at(-1)+'('+entry.inputs.join(',')+')';
+  // A privileged-role mutation can be tested by a non-incumbent local signer
+  // without requiring the model to invent expected state values or calldata.
+  // expectRevert is a falsifiable *hypothesis*, not a security verdict.
+  const readName=read.selector.split('.').at(-1)||'';
+  const role=/^(?:owner|operator|administrator|admin|governor|manager|controller)$/i.test(readName);
+  const changesRole=/^(?:set|change|rotate|transfer|assign|replace)(?:Owner|Operator|Administrator|Admin|Governor|Manager|Controller)$/i.test(mutation);
+  const nonIncumbentRoleTest=role && changesRole && selected.inputs.length===1 &&
+    /^(?:address|address payable)$/.test(selected.inputs[0]) && sendArgs[0]==='$account1';
   return {constructorArgs,steps:[
     {operation:'observe' as const,function:signature(read),args:readArgs},
-    {operation:'send' as const,function:signature(selected),args:sendArgs},
+    {operation:'send' as const,function:signature(selected),args:sendArgs,
+      ...(nonIncumbentRoleTest?{sender:1,expectRevert:true}: {})},
     {operation:'observe' as const,function:signature(read),args:readArgs}
   ]};
 }
