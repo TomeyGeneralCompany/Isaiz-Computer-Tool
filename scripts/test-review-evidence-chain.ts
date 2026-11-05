@@ -36,6 +36,10 @@ try {
   assert.match(reviewRejectionDefect(reject('An effective sanitizer escapes the output at src/main/java/org/fixture/Codec.java:3'),evidence)??'',/no source-backed sanitization/,
     'the reviewer must not mistake a helper name for actual escaping');
   assert.match(reviewRejectionDefect(reject('Not enough proof'),evidence)??'',/Fatal rejection/);
+  assert.match(reviewRejectionDefect(reject(
+    'No effective input sanitization or escaping occurs; Codec.encodeFragment returns the input unmodified, so there is no actual security risk.'),evidence)??'',/Returning unescaped user data/,
+    'identity encoder is not a security mitigation; reviewer must name a real missing link');
+
   assert.equal(reviewRejectionDefect({verdict:'approve',issues:[],reasoning:'Supported by source'},evidence),null);
   const repeated=await buildReviewEvidence(root,input);
   assert.equal(evidence.sourceDigest,repeated.sourceDigest,'verified facts are deterministic and persistent');
@@ -72,6 +76,11 @@ try {
   assert.match(jsReview.summary,/new URL\(/);
   assert.match(reviewRejectionDefect(reject('Only hardcoded test input; no attacker input can reach the sink'),jsReview)??'',/request-parameter extraction/,
     'Independent review must not mistake fixed probe strings for hardcoded application input');
+  assert.match(reviewRejectionDefect(reject(
+    'The input is parsed via URL.searchParams.get("message") and explicitly validated by the caller; it is sanitized by the application context.'),jsReview)??'',
+    /parser extracts input|source-backed escaping/,
+    'query parsing is not output escaping or evidence of caller validation');
+
   await writeFile(join(root,'Contract.sol'),'contract Contract { function settle() public {} }\n');
   const solidity=await buildReviewEvidence(root,{
     testedFile:'Contract.sol',testedFunction:'Contract.settle',callerFile:'Contract.sol',
