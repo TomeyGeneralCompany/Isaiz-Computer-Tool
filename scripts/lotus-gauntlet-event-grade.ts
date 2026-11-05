@@ -26,12 +26,13 @@ export function gradeInvestigationEvents(log:string,answer:{file:string;selector
     const p=lineOf(line,'[PROBE_PLANNED] ')||lineOf(line,'[CONTROLLER_SOURCE_PROBE_SELECTED] ');
     return p?.path===target && (matchingSelector(p.query)||matchingSelector(p.selector));
   });
-  const attempts=lines.map(line=>lineOf(line,'[PROBE_RESULT] ')||lineOf(line,'[GUIDED_SOURCE_PROBE] ')).filter(Boolean) as Array<Record<string,unknown>>;
+  const attempts=lines.map(line=>lineOf(line,'[PROBE_RESULT] ')||lineOf(line,'[GUIDED_SOURCE_PROBE] ')||
+    lineOf(line,'[CONTROLLER_CALLER_PROBE] ')).filter(Boolean) as Array<Record<string,unknown>>;
   const targetAttempts=attempts.filter(p=>p.path===target && matchingSelector(p.function));
   const observed=targetAttempts.some(p=>p.status==='behavior_observed');
   const anyAttempt=attempts.length>0;
   const anySuccessful=attempts.some(p=>p.status==='behavior_observed'||p.status==='behavior_not_observed'||p.status==='observation_only');
-  const anyPlans=lines.some(line=>line.includes('[PROBE_PLANNED]')||line.includes('[CONTROLLER_SOURCE_PROBE_SELECTED]')||line.includes('[GUIDED_SOURCE_PROBE]'));
+  const anyPlans=lines.some(line=>line.includes('[PROBE_PLANNED]')||line.includes('[CONTROLLER_SOURCE_PROBE_SELECTED]')||line.includes('[GUIDED_SOURCE_PROBE]')||line.includes('[CONTROLLER_CALLER_PROBE]'));
   return {targetRead:read,targetPlan:plan||targetAttempts.length>0,targetAttempt:targetAttempts.length>0,
     targetBehaviorObserved:observed,anyAttempt,anySuccessful,anyPlans,
     counters:{guidedProbes:lines.filter(l=>l.includes('[GUIDED_SOURCE_PROBE]')).length,
