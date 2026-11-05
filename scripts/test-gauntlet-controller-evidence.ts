@@ -43,7 +43,7 @@ for(const language of ['python','javascript','java'] as const){
       '[CONTROLLER_SOURCE_PROBE_SELECTED] '+JSON.stringify({
         path:'source-1/'+challenge.answer.file,selector:challenge.answer.selector,
         status:'behavior_observed',caseId:'f'.repeat(64)})
-    ].join('\\n');
+    ].join('\n');
     const confirmed=gradeInvestigationEvents(controllerOnly,challenge.answer);
     assert.equal(confirmed.targetAttempt,true,'executed controller target cannot be erased from grade');
     assert.equal(confirmed.targetBehaviorObserved,true,'source probe records actual observed behavior');
