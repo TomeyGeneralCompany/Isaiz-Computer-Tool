@@ -23,7 +23,9 @@ export function parseWorkEvents(text:string) {
     controller_action:"Controller selected action",model_generation:"Qwen generation",
     probe_plan:"Probe planned"};
   const statuses:Record<string,string>={behavior_observed:"Behavior reproduced — requires review",
-    behavior_not_observed:"Behavior not reproduced",probe_failed:"Test could not run successfully",
+    behavior_not_observed:"Behavior not reproduced",
+    observation_only:"Transaction/test observations recorded — security significance not established",
+    unsupported_execution:"Execution adapter unsupported",probe_failed:"Test could not run successfully",
     timeout:"Test timed out",invalid_probe:"Unsupported probe",
     unsupported_dependencies:"Dependencies unsupported",blocked_no_runtime:"Runtime unavailable",
     blocked_no_sandbox:"Sandbox unavailable"};
