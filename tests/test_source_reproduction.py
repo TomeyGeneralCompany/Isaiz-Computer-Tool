@@ -40,6 +40,32 @@ class ValidationTests(unittest.TestCase):
         self.assertFalse(detected(attack, 'constant output'))
         self.assertFalse(detected(attack, 'TOMEY_CONTROL_'+nonce+attack))
 
+    def test_nonincumbent_role_transition_requires_actual_account_change(self):
+        accounts=['0x'+'11'*20,'0x'+'22'*20,'0x'+'33'*20]
+        steps=[
+            {'operation':'observe','function':'operator()','sender':0,'actual':accounts[0]},
+            {'operation':'send','function':'rotateOperator(address)','sender':1,
+             'reverted':False,'passed':False},
+            {'operation':'observe','function':'operator()','sender':0,'actual':accounts[1]},
+        ]
+        evidence={'accounts':accounts,'steps':steps}
+        self.assertTrue(driver.observed_nonincumbent_role_transition(evidence))
+        guarded={'accounts':accounts,'steps':[
+            steps[0],{**steps[1],'reverted':True,'passed':True},
+            {**steps[2],'actual':accounts[0]}
+        ]}
+        self.assertFalse(driver.observed_nonincumbent_role_transition(guarded))
+        incumbent={'accounts':accounts,'steps':[
+            steps[0],{**steps[1],'sender':0},steps[2]]}
+        self.assertFalse(driver.observed_nonincumbent_role_transition(incumbent))
+        arbitrary={'accounts':accounts,'steps':[
+            {**steps[0],'function':'value()'},steps[1],
+            {**steps[2],'function':'value()'}]}
+        self.assertFalse(driver.observed_nonincumbent_role_transition(arbitrary))
+        unchanged={'accounts':accounts,'steps':[
+            steps[0],steps[1],{**steps[2],'actual':accounts[0]}]}
+        self.assertFalse(driver.observed_nonincumbent_role_transition(unchanged))
+
     def test_foundry_submodule_recovers_exact_gitlink_without_build_scripts(self):
         from source_dependencies import prepare_pinned_foundry_submodules
         with tempfile.TemporaryDirectory() as directory:
