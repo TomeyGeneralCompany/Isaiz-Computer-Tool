@@ -4,11 +4,7 @@
  */
 export type EntryProofCase={
   kind:string;behaviorObserved:boolean;
-  observations?:{
-    control_input?:string;control_output?:string;
-    attack_input?:string;attack_output?:string;
-    entry_attack_url?:string;entry_parameter?:string;
-  };
+  observations?:unknown;
 };
 export type ControllerProofCandidate={
   caseId:string;severity:'low';confidence:number;ratingReason:string;
@@ -24,11 +20,17 @@ export function controllerProofCandidate(args:{
   if(!/^[a-f0-9]{64}$/.test(caseId) || !callerFile || !rendererFile ||
      !Number.isInteger(callerLine) || callerLine<1 || !entryCase ||
      entryCase.kind!=='entry_html_reflection' || !entryCase.behaviorObserved)return null;
-  const o=entryCase.observations;
-  if(!o?.control_input || !o.control_output?.includes(o.control_input) ||
-     !o.attack_input || !o.attack_output?.includes(o.attack_input) ||
-     o.control_output===o.attack_output ||
-     !o.attack_input.includes('<') || !o.attack_input.includes('>'))return null;
+  const value=entryCase.observations;
+  if(!value || typeof value!=='object' || Array.isArray(value))return null;
+  const o=value as Record<string,unknown>;
+  const {control_input:controlInput,control_output:controlOutput,
+    attack_input:attackInput,attack_output:attackOutput}=o;
+  if(typeof controlInput!=='string'||!controlInput ||
+     typeof controlOutput!=='string'||!controlOutput.includes(controlInput) ||
+     typeof attackInput!=='string'||!attackInput ||
+     typeof attackOutput!=='string'||!attackOutput.includes(attackInput) ||
+     controlOutput===attackOutput ||
+     !attackInput.includes('<')||!attackInput.includes('>'))return null;
   // An unrelated same-named method is not a caller. The upper layer verifies
   // the source import graph and the exact workspace-relative call position.
   const sourceLine=callerSource.split('\n')[callerLine-1]||'';
