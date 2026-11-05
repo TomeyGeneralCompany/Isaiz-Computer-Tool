@@ -39,12 +39,12 @@ with tempfile.TemporaryDirectory(prefix='lotus-controller-entry-') as dirname:
         'src/note_handler.py':(
             'from urllib.parse import parse_qs, urlsplit\n'
             'from src.renderer import render\n'
-            'def response_body(url):\n'
+            'def handle(url):\n'
             '    note=parse_qs(urlsplit(url).query).get("note", [""])[0]\n'
             '    return render(note)\n'
         ),
         'src/note-handler.cjs':(
-            'exports.responseBody=function responseBody(url){\n'
+            'exports.handle=function handle(url){\n'
             'const note=new URL(url,"http://localhost").searchParams.get("note")||"";\n'
             'return "<p>"+note+"</p>";};\n'
         ),
@@ -73,9 +73,9 @@ with tempfile.TemporaryDirectory(prefix='lotus-controller-entry-') as dirname:
     })
     targets=[
         ('src/http_handler.py','response_body'),
-        ('src/note_handler.py','response_body'),
+        ('src/note_handler.py','handle'),
         ('src/handler.cjs','responseBody'),
-        ('src/note-handler.cjs','responseBody'),
+        ('src/note-handler.cjs','handle'),
         ('src/main/java/org/lotus/HttpHandler.java','HttpHandler.responseBody')
     ]
     for index,(path,function) in enumerate(targets):
