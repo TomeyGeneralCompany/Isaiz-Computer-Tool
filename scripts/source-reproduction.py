@@ -50,7 +50,7 @@ with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.St
     module_spec=importlib.util.spec_from_file_location('autohack_probe_target',str(file))
     module=importlib.util.module_from_spec(module_spec)
     module_spec.loader.exec_module(module)
-    function=getattr(module,specification['function'])
+    function=getattr(module,specification['function']) if specification['kind']!='python_sequence' else None
     if specification['kind']=='python_sequence':
         sequence=specification['sequence']
         factory=sequence.get('factory')
