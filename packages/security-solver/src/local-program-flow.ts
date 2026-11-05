@@ -2,7 +2,7 @@ import {prioritizeSourceCandidates} from './source-candidates';
 import {collectStaticLeads} from './local-static-leads';
 import {buildSourceMap} from './source-map';
 import {sourceCandidateEvidence,verifiedProbeSummary} from './source-candidate-evidence';
-import {traceSourceCalls,solidityDependentSources} from './source-flow-facts';
+import {traceSourceCalls,solidityDependentSources,sourceImportsTarget} from './source-flow-facts';
 import { LOCAL_REPRODUCTION_CAPABILITY_VERSION } from "../../core/src/program-eligibility";
 import { inspectSourceCapability } from "./source-capability";
 import { SourceReads } from "./source-inspection";
@@ -246,6 +246,7 @@ Do not claim production testing, JavaScript execution, file access or other effe
           const visited=new Set<string>([testedPath]);
           const chain:string[]=[];
           let currentSelector=record.spec.function;
+          let currentSource=testedPath;
           for(let depth=0;depth<4;depth++){
             const candidates:Array<{path:string;line:number;code:string;qualified:boolean;source:string}>=[],prefix=
               relative(root,repository.directory).split(sep).join('/')+'/';
@@ -253,7 +254,7 @@ Do not claim production testing, JavaScript execution, file access or other effe
               if(visited.has(candidatePath) || !candidatePath.startsWith(prefix))continue;
               try {
                 const code=await readFile(join(root,candidatePath),'utf8');
-                if(code.length>256000)continue;
+                if(code.length>256000 || !sourceImportsTarget(candidatePath,currentSource,code))continue;
                 const lines=code.split('\n');
                 for(let i=1;i<=lines.length;i++){
                   if(!callerLineReferences(code,i,currentSelector))continue;
@@ -266,6 +267,7 @@ Do not claim production testing, JavaScript execution, file access or other effe
             const chosen=precise.length===1?precise[0]:candidates.length===1?candidates[0]:null;
             if(!chosen)break;
             chain.push(chosen.path);visited.add(chosen.path);
+            currentSource=chosen.path;
             await appendFile(logFile,'[CONTROLLER_VERIFIED_CALLER] '+
               JSON.stringify({caseId,selector:currentSelector,caller:chosen.path,
                 line:chosen.line,code:chosen.code.slice(0,400)})+'\n');
