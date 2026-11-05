@@ -54,6 +54,17 @@ try {
   assert.ok(grounded.sourceRead && grounded.targetRead && grounded.targetProbe &&
     grounded.executedAny && grounded.plannedAny && grounded.verifiedFinding);
   assert.equal(grounded.completedCount,1);
+  const promotedLog=[
+    '[INITIAL_SOURCE_READ] '+JSON.stringify({path:'source-1/src/pipeline.cjs',
+      start:0,end:140,nextOffset:null}),
+    '[CONTROLLER_CALLER_PROBE] '+JSON.stringify({
+      path:'source-1/src/renderer.cjs',function:'render',kind:'html_reflection',
+      status:'behavior_observed',caseId:digest}),
+    '[READ_OK] source-1/src/renderer.cjs offset=0 end=142 nextOffset=null'
+  ].join('\\n');
+  const promoted=inspectGauntletEvents(promotedLog,{file:'src/renderer.cjs',selector:'render'},true);
+  assert.ok(promoted.targetRead&&promoted.targetProbe&&promoted.executedAny);
+  assert.equal(promoted.counters.controllerCallerProbes,1);
   const fake=inspectGauntletEvents([
     '[MODEL_ACTION] '+JSON.stringify({action:'read_file',path:'source-1/src/renderer.cjs'}),
     '[GUIDED_SOURCE_PROBE] '+JSON.stringify({path:'source-1/src/adapter.cjs',
