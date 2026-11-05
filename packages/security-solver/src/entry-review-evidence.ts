@@ -53,6 +53,16 @@ export function entryReviewRejectionDefect(
     decision.reasoning||'',
     ...(decision.issues||[]).filter(x=>x.severity==='fatal').map(x=>x.description||'')
   ].join(' ');
+  // The absence of trust is the reason to test input sanitization, not a
+  // mitigating control. This fallacy appeared verbatim in Java Level 5
+  // #42122489020 despite independently replayed entry-to-HTML evidence.
+  // Reject only conclusions that expressly use lack of trust as the reason
+  // for harmlessness; an independently supported reachability/context gap is
+  // still an admissible technical rejection.
+  const treatsUntrustedAsSafe=/\b(?:input|payload|data|value)\s+is\s+not\s+trusted\b.{0,130}\b(?:so|therefore|thus|hence|because)\b.{0,85}\b(?:no|not|safe|harmless)\b.{0,70}\b(?:security|issue|risk|vulnerab|impact|injection)\w*/i.test(prose) ||
+    /\b(?:no|not)\s+(?:security\s+)?(?:issue|risk|vulnerab\w*|impact)\b.{0,125}\b(?:because|since)\b.{0,70}\b(?:input|payload|data|value)\s+is\s+not\s+trusted\b/i.test(prose);
+  if(treatsUntrustedAsSafe)
+    return 'The reviewer incorrectly treats untrusted input as evidence of safety. Untrusted input is not an escaping operation, validation rule, or access control. Independent entry replay established attacker-chosen unescaped HTML in the handler output. Reject only for a separately source-supported reachability, rendering-context, scope, or mitigation defect; identify the actual defect instead of treating lack of trust as a mitigation.';
   const deniesControlledInput=/\b(?:no (?:attacker|external|user)[ -]?(?:controlled|control|influence)|cannot (?:control|influence)|does not (?:prove|show|demonstrate) (?:attacker|user) control|no (?:actual )?input.to.sink (?:path|edge)|input is not (?:attacker|user)[ -]controlled)\b/i.test(prose);
   if(deniesControlledInput)
     return 'Independent controller replay executed the source-declared entry function with attacker-chosen input and observed the exact input in its returned HTML. Do not deny local entry input control or the observed input-to-output path. You may reject if a separate production reachability, authorization, content type, or impact issue is actually missing; name that gap precisely.';
