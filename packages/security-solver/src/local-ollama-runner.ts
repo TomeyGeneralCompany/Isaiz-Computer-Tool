@@ -6,7 +6,7 @@ import {buildBaselineSequence} from './solidity-probe-inputs';
 import {privilegedRoleMutationCandidate} from './solidity-security-candidates';
 import {rankTracedSourceCandidates} from './controller-source-candidates';
 import { InvestigationWorkflow } from "./investigation-workflow";
-import {guidedProbeAcrossSourceChain} from './source-guided-probes';
+import {guidedProbeAcrossSourceChain,guidedSourceProbe} from './source-guided-probes';
 import {declaredProbeTarget, sourceDeclarationHints, supportedJavaProbeHints, javaProbeSelectorCompatible, probeChoices} from './probe-target-validation';
 import { postQwenAgentJson } from "./qwen-agent-transport";
 import { AuditAllowance } from "./audit-allowance";
