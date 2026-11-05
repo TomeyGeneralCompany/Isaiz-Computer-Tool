@@ -58,6 +58,26 @@ print(json.dumps({'control_input':control,'control_output':normal,'attack_input'
 '''
 
 
+def observed_non_deployer_state_transition(steps):
+    """Prove only a replayable changed getter after a non-deployer send."""
+    if not isinstance(steps, list):
+        return False
+    for index, step in enumerate(steps):
+        if not isinstance(step, dict) or step.get('operation') != 'send':
+            continue
+        if step.get('sender') not in (1, 2) or step.get('reverted') is not False or step.get('passed') is not True:
+            continue
+        before=next((v for v in reversed(steps[:index])
+                     if isinstance(v,dict) and v.get('operation')=='observe'),None)
+        after=next((v for v in steps[index+1:]
+                    if isinstance(v,dict) and v.get('operation')=='observe' and before and
+                    v.get('function')==before.get('function') and
+                    v.get('sender')==before.get('sender')),None)
+        if before and after and before.get('actual')!=after.get('actual'):
+            return True
+    return False
+
+
 def execution_capability(repository: Path, file: str, function: str, kind: str) -> tuple[bool, str | None]:
     """Allow the implementation to execute the kinds it can actually construct.
 
@@ -398,23 +418,7 @@ def run_probe(repository: Path, specification: dict, _dependency_round: int = 0)
             # classify this narrowly when the SAME getter is observed before
             # and after a successful account-1/2 transaction and its value
             # actually changed. Expected-value mismatches are not evidence.
-            steps=data['steps']
-            transition=False
-            for index, step in enumerate(steps):
-                if step.get('operation') != 'send' or step.get('sender') not in (1,2):
-                    continue
-                if step.get('reverted') is not False or step.get('passed') is not True:
-                    continue
-                before=next((v for v in reversed(steps[:index])
-                             if v.get('operation')=='observe'),None)
-                after=next((v for v in steps[index+1:]
-                            if v.get('operation')=='observe' and before and
-                            v.get('function')==before.get('function') and
-                            v.get('sender')==before.get('sender')),None)
-                if before and after and before.get('actual')!=after.get('actual'):
-                    transition=True
-                    break
-            if transition:
+            if observed_non_deployer_state_transition(data['steps']):
                 return {'status':'behavior_observed','behavior_observed':True,
                         'source_sha256':source_hash,'kind':kind,'observations':data,
                         'limitation':'A non-deployer account changed an observable contract state value. This is a replayed behavior only, not proof of improper authorization or a security issue. Review the intended permission boundary and all inherited guards.'}
