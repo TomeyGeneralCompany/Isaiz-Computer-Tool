@@ -71,7 +71,8 @@ export interface LocalAuditLimits {
   onRead?: (path:string, span:ReadSpan) => void;
   /** Trusted controller source analysis: exact caller path for a reproduced case.
    * No model text can create or change this routing decision. */
-  onVerifiedCase?: (caseId:string,path:string,selector:string,kind:string) => Promise<string[]|null>;
+  onVerifiedCase?: (caseId:string,path:string,selector:string,kind:string) =>
+    Promise<{callers:string[];promoted?:{caseId:string;path:string;selector:string;kind:string}}|null>;
   verifyPython?: (path:string,functionName:string,kind:string,sequence?:SoliditySequence | JavaSequence) => Promise<string>;
 }
 export async function runLocalAudit(
@@ -290,11 +291,19 @@ export async function runLocalAudit(
           if(result.status==='behavior_observed' &&
              typeof result.caseId==='string' && limits.onVerifiedCase &&
              process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false') {
-            const callers=await limits.onVerifiedCase(result.caseId,path,hint.functionName,hint.kind);
-            if(callers?.length && workflow.focusVerifiedEvidence(result.caseId)) {
-              workflow.requireSources(callers);
+            const handoff=await limits.onVerifiedCase(result.caseId,path,hint.functionName,hint.kind);
+            if(handoff?.promoted) {
+              const promoted=handoff.promoted;
+              workflow.observe({action:'verify_source',path:promoted.path,query:promoted.selector,
+                answer:promoted.kind} as any,
+                JSON.stringify({status:'behavior_observed',behavior_observed:true,caseId:promoted.caseId}));
+            }
+            const focusId=handoff?.promoted?.caseId||result.caseId;
+            if(handoff?.callers.length && workflow.focusVerifiedEvidence(focusId)) {
+              workflow.requireSources(handoff.callers);
               await appendFile(logFile,'[CONTROLLER_GUIDED_CASE_FOCUS] '+
-                JSON.stringify({caseId:result.caseId,callers})+'\n');
+                JSON.stringify({caseId:focusId,sourceCaseId:result.caseId,callers:handoff.callers,
+                  promoted:!!handoff.promoted})+'\n');
             }
           }
           // A controller-initiated negative probe must also advance navigation.
@@ -1321,20 +1330,29 @@ export async function runLocalAudit(
               // Only the controller can appoint the next caller and lock a
               // verified case. A model's invented paths or negative tests
               // cannot supersede an earlier verified observation.
-              let authoritativeCallers:string[]|null=null;
+              let handoff: {callers:string[];promoted?:{caseId:string;path:string;selector:string;kind:string}}|null=null;
               if(typeof probeResult.caseId==='string' && limits.onVerifiedCase && process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false') {
-                authoritativeCallers=await limits.onVerifiedCase(
+                handoff=await limits.onVerifiedCase(
                   probeResult.caseId,String(call.function.arguments?.path||''),
                   String(call.function.arguments?.query||''),
                   String(call.function.arguments?.kind||''));
               }
-              if(authoritativeCallers?.length && workflow.focusVerifiedEvidence(probeResult.caseId)) {
+              if(handoff?.promoted) {
+                const promoted=handoff.promoted;
+                workflow.observe({action:'verify_source',path:promoted.path,query:promoted.selector,
+                  answer:promoted.kind} as any,
+                  JSON.stringify({status:'behavior_observed',behavior_observed:true,caseId:promoted.caseId}));
+              }
+              const authoritativeCallers=handoff?.callers||null;
+              const focusId=handoff?.promoted?.caseId||probeResult.caseId;
+              if(authoritativeCallers?.length && workflow.focusVerifiedEvidence(focusId)) {
                 const readPaths=new Set(workflow.snapshot().readPaths);
                 workflow.requireSources(authoritativeCallers);
                 requireInvestigationAfterEmpty=false;
                 emptyFinals=0;
                 await appendFile(logFile,'[CONTROLLER_VERIFIED_CASE_FOCUS] '+
-                  JSON.stringify({caseId:probeResult.caseId,callers:authoritativeCallers,
+                  JSON.stringify({caseId:focusId,sourceCaseId:probeResult.caseId,callers:authoritativeCallers,
+                    promoted:!!handoff?.promoted,
                     alreadyRead:authoritativeCallers.filter(path=>readPaths.has(path))})+'\n');
               }
               const testedPath=String(call.function.arguments?.path||'');
