@@ -1,7 +1,7 @@
 import {appendFile} from 'node:fs/promises';
 import {postOllamaChat} from '../../core/src/ollama-chat';
 
-type VerdictResponse={message?:{content?:string};eval_count?:number;prompt_eval_count?:number};
+type VerdictResponse={message?:{content?:string;thinking?:string};eval_count?:number;prompt_eval_count?:number;done_reason?:string};
 
 /** After source acquisition, replay and caller checking, review is a
  * SCHEMA-BOUND JUDGMENT, NOT another source-navigation agent. No tool or
@@ -48,7 +48,7 @@ export async function runEvidenceOnlyReview(input:{
       ?input.transport(payload,input.signal)
       :postOllamaChat(url,payload,input.signal)) as VerdictResponse;
     const content=response.message?.content?.trim()||'';
-    await appendFile(input.logFile,'[EVIDENCE_ONLY_REVIEW_RESPONSE] '+JSON.stringify({attempt,contentCharacters:content.length,thinkingCharacters:typeof (response.message as {thinking?:string}|undefined)?.thinking==='string'?(response.message as {thinking?:string}).thinking!.length:0,generatedTokens:response.eval_count??null,finishReason:(response as {done_reason?:string}).done_reason??null})+'\n');
+    await appendFile(input.logFile,'[EVIDENCE_ONLY_REVIEW_RESPONSE] '+JSON.stringify({attempt,contentCharacters:content.length,thinkingCharacters:response.message?.thinking?.length??0,generatedTokens:response.eval_count??null,finishReason:response.done_reason??null})+'\n');
     let feedback:string|null;
     if(!content)feedback='The review returned empty content. Return a JSON review object, not an audit action.';
     else {
