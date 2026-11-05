@@ -320,12 +320,12 @@ def run_probe(repository: Path, specification: dict, _dependency_round: int = 0)
     if not target.is_relative_to(repository) or not target.is_file() or target.stat().st_size>256000: raise ValueError('Source outside repository or too large')
     if not isinstance(function,str) or not re.fullmatch(r'[A-Za-z][A-Za-z0-9_]{0,79}(?:\.[A-Za-z][A-Za-z0-9_]{0,79})?',function): raise ValueError('Public top-level function name required')
     if kind not in ('html_reflection','entry_html_reflection','path_construction','solidity_sequence','java_sequence'): raise ValueError('Unsupported probe kind')
+    if not isinstance(nonce,str) or not re.fullmatch(r'[a-f0-9]{32}',nonce): raise ValueError('Invalid probe nonce')
+    language = 'python' if file.endswith('.py') else 'solidity' if file.endswith('.sol') else 'java' if file.endswith('.java') else 'javascript'
     if kind == 'entry_html_reflection' and (language not in ('python','javascript','java') or
             not re.search(r'(handler|controller|route|entry|server)',file,re.I) or
             not re.search(r'response_?body',function,re.I)):
         raise ValueError('Entry probe requires a supported handler method and source file')
-    if not isinstance(nonce,str) or not re.fullmatch(r'[a-f0-9]{32}',nonce): raise ValueError('Invalid probe nonce')
-    language = 'python' if file.endswith('.py') else 'solidity' if file.endswith('.sol') else 'java' if file.endswith('.java') else 'javascript'
     if language not in ('solidity','java') and '.' in function: raise ValueError('Top-level function name required')
     if kind == 'solidity_sequence':
         if language != 'solidity' or '.' not in function: raise ValueError('Solidity Contract.function required')
