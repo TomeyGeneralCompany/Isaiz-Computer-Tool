@@ -40,11 +40,19 @@ export function buildBaselineSequence(menu:SolidityProbeDeclaration[],selectedSe
   const reads=declarations.filter(entry=>entry.operation==='call' && fixtureArguments(entry.inputs)!==null);
   // A zero-input getter is preferable to an unrelated parameterized read;
   // these are observations, not invented assertions about correctness.
+  // Observe the actual state field related to this mutation when a public
+  // getter exists. A random view method can revert for unrelated authorization
+  // reasons and tells us nothing about the selected state transition.
+  const mutation=selectedSelector.split('.').at(-1)||'';
+  const tokens=mutation.replace(/([a-z])([A-Z])/g,'$1 $2').toLowerCase().split(/[^a-z0-9]+/).
+    filter(token=>token.length>3 && !['rotate','change','update','transfer','modify','write','reset'].includes(token));
   reads.sort((a,b)=>{
     const rank=(entry:SolidityProbeDeclaration)=>{
       const name=entry.selector.split('.').at(-1)||'';
-      const getter=/^(?:get[A-Z]|value$|balanceOf$|totalSupply$|owner$|count$|stored$|current)/.test(name);
-      return (entry.inputs.length?4:0)+(getter?0:1);
+      const related=tokens.some(token=>name.toLowerCase()===token ||
+        name.toLowerCase()==='get'+token);
+      const getter=/^(?:get[A-Z]|value$|balanceOf$|totalSupply$|owner$|operator$|administrator$|count$|stored$|current)/.test(name);
+      return (related?-10:0)+(entry.inputs.length?4:0)+(getter?0:1);
     };
     return rank(a)-rank(b);
   });
