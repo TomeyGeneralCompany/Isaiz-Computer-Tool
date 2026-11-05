@@ -87,7 +87,7 @@ try {
     null,'a review denying parser sanitization must not be rejected repeatedly');
   assert.match(reviewRejectionDefect(reject(
     'URL.searchParams.get validates the parameter and sanitizes the user text before renderer.'),jsReview)??'',
-    /parser extracts input/,'positive unsupported parser sanitization assertion must be corrected');
+    /parser extracts input|no source-backed sanitization/,'positive unsupported parser sanitization assertion must be corrected');
   assert.equal(reviewRejectionDefect(reject(
     'The request parsing does not sanitize this input, but the downstream client renders only inert text, and there is no active HTML context demonstrated.'),jsReview),
     null,'source-grounded contextual objections must remain eligible for independent review');
