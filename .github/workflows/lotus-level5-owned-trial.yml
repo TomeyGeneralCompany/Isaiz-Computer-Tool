@@ -1,4 +1,4 @@
-name: LOTUS Level 5 owned trial after PR 133
+name: LOTUS Level 5 polyglot owned Gauntlet
 on:
   push:
     branches:
@@ -7,9 +7,14 @@ permissions:
   contents: read
 concurrency:
   group: lotus-gauntlet-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 jobs:
   gauntlet:
+    name: Level 5 ${{ matrix.language }}
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [solidity, python, javascript, java]
     if: startsWith(github.event.head_commit.message, 'Run owned LOTUS Level 5 Gauntlet')
     runs-on: ubuntu-24.04
     timeout-minutes: 360
@@ -37,19 +42,8 @@ jobs:
           { nproc; free -h; df -h .; } > data/gauntlet/latest/runner.txt
       - name: Install locked application runtime
         run: npm ci
-      - name: Verify owned acquisition across all languages without model
-        if: true
-        run: |
-          for lang in solidity python javascript java; do
-            node --import tsx scripts/lotus-gauntlet.ts --smoke --level=4 --language="$lang" --output="data/gauntlet/smoke-$lang"
-          done
-      - name: Prepare owned source without model inference
-        if: false
-        env:
-          GAUNTLET_LANGUAGE: random
-          GAUNTLET_SEED: ''
-        run: |
-          node --import tsx scripts/lotus-gauntlet.ts --prepare --level=5 --language="$GAUNTLET_LANGUAGE" ${GAUNTLET_SEED:+--seed="$GAUNTLET_SEED"} --output=data/gauntlet/latest
+      - name: Verify owned source acquisition for selected language
+        run: node --import tsx scripts/lotus-gauntlet.ts --smoke --level=5 --language="${{ matrix.language }}" --output=data/gauntlet/smoke
       - name: Install production runtime
         if: true
         run: |
@@ -70,7 +64,7 @@ jobs:
       - name: Investigate blind synthetic bounty with production controller
         if: true
         env:
-          GAUNTLET_LANGUAGE: random
+          GAUNTLET_LANGUAGE: ${{ matrix.language }}
           GAUNTLET_SEED: ''
         run: |
           set -o pipefail
@@ -79,7 +73,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: lotus-gauntlet-run-level-5-${{ github.run_id }}
+          name: lotus-gauntlet-level5-${{ matrix.language }}-${{ github.run_id }}
           path: |
             data/gauntlet/latest/manifest.json
             data/gauntlet/latest/grade.json
