@@ -27,6 +27,7 @@ import { selectSourceBatch, incompleteProbeCoverage, recoverEmptyUnprobedFinal, 
 import { callerLineReferences, qualifiedCallerLineReferences, transactionEntryLine } from "./source-function-reference";
 import {observedJavaSourceChain} from "./java-source-chain";
 import {buildReviewEvidence,reviewRejectionDefect} from "./review-evidence-chain";
+import {entryReplayFacts,entryReviewRejectionDefect} from './entry-review-evidence';
 import {buildControllerReportPacket,controllerReportPacketText,type ControllerReportPacket} from './controller-report-packet';
 import {controllerReportNarrative} from './controller-report-narrative';
 const log=createLogger("local-program-flow");
@@ -864,6 +865,7 @@ export async function independentReview(finding:SecurityFinding,program:Security
       testedFile:record.spec.file,testedFunction:record.spec.function,
       callerFile:caller[1],callerLine:Number(caller[2]),kind:record.spec.kind,reachability
     });
+    const entryFacts=entryReplayFacts(entryReplay as Parameters<typeof entryReplayFacts>[0]);
     const evidenceDirectory=join(root,"evidence");await mkdir(evidenceDirectory,{mode:0o700});
     const evidenceFiles={"report.txt":finding.reportBody!,"replay.json":JSON.stringify(replay,null,2),
       "policy.txt":policy || "No policy text available", "known-reports.json":JSON.stringify(disclosedReports,null,2),
@@ -890,6 +892,8 @@ export async function independentReview(finding:SecurityFinding,program:Security
       "CALLER SOURCE (line numbered, includes validated line):\n"+callerExcerpt,
       "SAME-DIRECTORY JAVA HELPER CHAIN (raw source, if applicable):\n"+bounded(sourceChain||"Not applicable to this language",1200),
       "RECORDED REPLAY:\n"+bounded(JSON.stringify(replay,null,2),2500),
+      "CONTROLLER ENTRY-TO-OUTPUT OBSERVATIONS (independent sandbox replay, NOT inference): "+
+        (entryFacts||"No controller entry observation available; do not infer an executed entry."),
       "INDEPENDENTLY REPLAYED CONTROLLER ENTRY HANDLER:\n"+bounded(
         entryReplay ? JSON.stringify(entryReplay,null,2) :
         'No separately executed handler proof was recorded; reachability remains unproven by runtime entry execution.',3500),
@@ -922,6 +926,8 @@ Use one enum value per string. Scores are integers 0..3. bet100=false requires d
         if(submissionPolicyFatal)return "An external submission prohibition is not a technical defect. Reevaluate source and replay; use recommendation=dont_submit if submission is prohibited.";
         const defect=reviewRejectionDefect(value,chainEvidence);
         if(defect)return defect;
+        const entryDefect=entryReviewRejectionDefect(value,entryReplay as Parameters<typeof entryReviewRejectionDefect>[1]);
+        if(entryDefect)return entryDefect;
         review=value;
         return null;
       }catch{return "Return the requested review JSON with valid enum values and integer rubric scores.";}
