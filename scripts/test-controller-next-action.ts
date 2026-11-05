@@ -153,7 +153,7 @@ try {
   assert.ok(baseline);
   assert.equal(baseline.steps[0].function,'operator()');
   assert.equal(baseline.steps[1].operation,'send');
-  assert.equal(baseline.steps[1].sender,1);
+  assert.equal((baseline.steps[1] as {sender?:number}).sender,1);
   assert.deepEqual(baseline.steps[1].args,['$account2']);
   console.log('Controller owned-next-action, grounded source citations and verified probe memory PASSED');
 } finally {await rm(root,{recursive:true,force:true});}
