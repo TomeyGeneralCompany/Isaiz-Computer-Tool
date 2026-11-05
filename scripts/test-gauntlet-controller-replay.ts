@@ -87,7 +87,7 @@ try {
       '[CONTROLLER_CALLER_PROBE] '+JSON.stringify({path:actualTarget,
         function:fixture.answer.selector,kind:'html_reflection',status:'behavior_observed',
         caseId:digest})
-    ].join('\\n');
+    ].join('\n');
     const grade=gradeInvestigationEvents(events,fixture.answer);
     assert.equal(grade.targetAttempt,true,lang+' promoted renderer must count as real target attempt');
     assert.equal(grade.targetBehaviorObserved,true,lang+' controller-observed target must count');
