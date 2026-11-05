@@ -1,4 +1,4 @@
-import {join,relative,sep} from 'node:path';
+import {join} from 'node:path';
 import {sourceDeclarationHints,supportedJavaProbeHints,declaredProbeTarget} from './probe-target-validation';
 import {traceSourceCalls} from './source-flow-facts';
 /**
