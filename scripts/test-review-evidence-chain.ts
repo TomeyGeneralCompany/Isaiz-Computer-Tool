@@ -70,6 +70,8 @@ try {
     link.code.includes('searchParams.get')),
     'reviewer must receive the actual externally controlled request-to-render path');
   assert.match(jsReview.summary,/new URL\(/);
+  assert.match(reviewRejectionDefect(reject('Only hardcoded test input; no attacker input can reach the sink'),jsReview)??'',/request-parameter extraction/,
+    'Independent review must not mistake fixed probe strings for hardcoded application input');
   await writeFile(join(root,'Contract.sol'),'contract Contract { function settle() public {} }\n');
   const solidity=await buildReviewEvidence(root,{
     testedFile:'Contract.sol',testedFunction:'Contract.settle',callerFile:'Contract.sol',
