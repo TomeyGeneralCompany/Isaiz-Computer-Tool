@@ -172,6 +172,23 @@ export function reviewRejectionDefect(review:{
     /\b(?:return|res\.(?:send|end))\b[^\n]*\b(?:render|responseBody|wrapFragment)\s*\(/.test(link.code));
   if(dismissesAsHardcoded && hasRequestInput && hasRenderedCall)
     return 'The source packet contains a request-parameter extraction and a source-resolved call into the renderer. Fixed isolated probe tokens do not establish that application inputs are hardcoded. Name the actual missing source-to-sink edge or effective mitigation and cite its file and line before rejecting.';
+  // Reject factual contradictions in the review itself, NOT negative verdicts.
+  // These are source-derived sanity checks; the reviewer must still decide
+  // exploitability and can reject for a genuinely missing security boundary.
+  if(evidence.kind==='html_reflection') {
+    const lines=evidence.links.map(link=>link.code).join('\n');
+    const actualEscape=/\\b(?:escape\\s*\\(|sanitize\\s*\\(|encodeForHTML\\s*\\(|StringEscapeUtils\\.|replace\\s*\\(\\s*["'](?:&|<|>)/i.test(lines);
+    const requestControlled=/\\b(?:searchParams\\.get\\s*\\(|parse_qs\\s*\\(|req\\.query\\b|request\\.(?:GET|args|query)\\b)/.test(lines);
+    const treatsParsingAsEscaping=/\\b(?:parsing|parsed|parse_qs|searchParams\\.get|URL\\.searchParams)\\b[^.]{0,150}\\b(?:saniti[sz]\\w*|escap\\w*|validat\\w*)\\b|\\b(?:saniti[sz]\\w*|escap\\w*)\\b[^.]{0,100}\\b(?:parsing|parsed|parse_qs|searchParams)\\b/i.test(prose);
+    if(requestControlled && treatsParsingAsEscaping && !actualEscape)
+      return 'The observed request-parameter parser extracts input; parsing does not HTML-escape or sanitize. The recorded source contains no matching escaping operation. Identify a real validation/escaping line or revise the asserted mitigation; independently assess actual reachability and impact.';
+    const unsupportedValidation=/\\b(?:explicitly validated|validated by the caller|input is sanitized by (?:the application.?s )?context|safe HTML fragment handler)\\b/i.test(prose);
+    if(unsupportedValidation && !actualEscape)
+      return 'The review attributes safety to validation, HTML context or a helper name without identifying a source-backed escaping or validation operation. Cite the actual protection and source line, or assess the unescaped output and attacker-control requirements separately.';
+    const identityDisprovesRisk=/\\b(?:returns? (?:the )?input unmodified|does not modify the input|no sanitization|without any sanitization|without any escaping)\\b[\\s\\S]{0,240}\\b(?:no (?:actual )?security (?:risk|impact|vulnerability)|safe|not vulnerable)\\b/i.test(prose);
+    if(identityDisprovesRisk && !actualEscape)
+      return 'Returning unescaped user data does not itself mitigate HTML reflection. If rejecting, identify the actual absent input-to-sink edge, rendering context, or source-backed mitigation rather than treating identity encoding as proof of safety.';
+  }
   const grounds=/\b(?:unreachab\w*|reachab\w*|untrusted|attacker|input|source|sink|saniti[sz]\w*|escap\w*|mitigat\w*|guard\w*|access|privilege|authorization|state|sequence|replay|observ\w*|scope|impact|evidence|caller|path)\b/i;
   if(!fatal.some(i=>grounds.test(i.description)))
     return 'Fatal rejection must name a specific missing source-to-sink link, mitigation, untrusted-input issue, reproduction discrepancy, or other technical defect.';
