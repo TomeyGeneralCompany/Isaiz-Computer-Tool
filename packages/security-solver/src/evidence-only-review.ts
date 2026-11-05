@@ -74,7 +74,7 @@ export async function runEvidenceOnlyReview(input:{
       repeatedRejectionCount++;
       await appendFile(input.logFile,'[EVIDENCE_ONLY_REVIEW_STALLED] '+JSON.stringify({
         attempt,repeated:repeatedRejectionCount,
-        note:'Identical rejected verdict; escalate correction, not evidence or approval'})+'\\n');
+        note:'Identical rejected verdict; escalate correction, not evidence or approval'})+'\n');
     } else repeatedRejectionCount=0;
     previousRejectedContent=content;
     lastFeedback=feedback.slice(0,600);
