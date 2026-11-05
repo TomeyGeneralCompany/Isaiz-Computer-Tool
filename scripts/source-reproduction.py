@@ -37,7 +37,7 @@ SUPPORTED_EXECUTION_STATUS = {
 }
 
 PROBE = r'''
-import contextlib, importlib.util, io, json, os, pathlib, sys, resource, urllib.parse
+import contextlib, importlib.util, io, json, os, pathlib, sys, resource, urllib.parse, re
 resource.setrlimit(resource.RLIMIT_NPROC,(0,0))
 specification=json.loads(pathlib.Path('/spec.json').read_text())
 file=pathlib.Path('/repo',specification['file']).resolve()
@@ -52,8 +52,13 @@ with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.St
     module_spec.loader.exec_module(module)
     function=getattr(module,specification['function'])
     if specification['kind']=='entry_html_reflection':
-        control_url='http://localhost/?message='+urllib.parse.quote(control,safe='')
-        attack_url='http://localhost/?message='+urllib.parse.quote(attack,safe='')
+        entry_source=file.read_text()
+        entry_keys=set(re.findall(r'\.get\(\s*["\']([A-Za-z_][A-Za-z0-9_-]{0,63})["\']\s*,',entry_source))
+        if 'parse_qs' not in entry_source or len(entry_keys)!=1:
+            raise ValueError('Unsupported or ambiguous Python request-parameter extraction')
+        entry_parameter=next(iter(entry_keys))
+        control_url='http://localhost/?'+entry_parameter+'='+urllib.parse.quote(control,safe='')
+        attack_url='http://localhost/?'+entry_parameter+'='+urllib.parse.quote(attack,safe='')
         normal=function(control_url)
         observed=function(attack_url)
     else:
@@ -62,7 +67,7 @@ with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.St
 if not isinstance(normal,str) or not isinstance(observed,str): raise ValueError('Probe requires string return values')
 if len(normal)>16000 or len(observed)>16000: raise ValueError('Probe output too large')
 print(json.dumps({'control_input':control,'control_output':normal,'attack_input':attack,'attack_output':observed,
-  **({'entry_control_url':control_url,'entry_attack_url':attack_url,'entry_selector':specification['function']}
+  **({'entry_control_url':control_url,'entry_attack_url':attack_url,'entry_selector':specification['function'],'entry_parameter':entry_parameter}
      if specification['kind']=='entry_html_reflection' else {})}))
 '''
 
