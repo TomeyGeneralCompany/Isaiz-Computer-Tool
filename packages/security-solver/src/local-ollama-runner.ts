@@ -3,6 +3,8 @@ import {normalizeForcedOutlineCursor} from './outline-cursor';
 import {z} from "zod";
 import {javaSequenceSchema, type JavaSequence} from "./java-sequence";
 import {buildBaselineSequence} from './solidity-probe-inputs';
+import {privilegedRoleMutationCandidate} from './solidity-security-candidates';
+import {rankTracedSourceCandidates} from './controller-source-candidates';
 import { InvestigationWorkflow } from "./investigation-workflow";
 import {guidedSourceProbe} from './source-guided-probes';
 import {declaredProbeTarget, sourceDeclarationHints, supportedJavaProbeHints, javaProbeSelectorCompatible, probeChoices} from './probe-target-validation';
@@ -236,6 +238,29 @@ export async function runLocalAudit(
         } catch {return path;}
       }
     }
+    // Controller-owned bounded scan of authorized Solidity source. It is a
+    // candidate priority signal, not an exploitability verdict. Qwen cannot
+    // change the source-derived role, selector or read order.
+    const privilegedSolidityCandidates=new Map<string,{selector:string;role:string;method:string}>();
+    const accessibleSoliditySources=new Map<string,string>();
+    for(const path of [...new Set(limits.initialSourcePaths||[])].slice(0,200)){
+      if(!path.startsWith('source-')||!path.endsWith('.sol'))continue;
+      try{
+        const content=await readFile(await safePath(path),'utf8');
+        if(content.length<=256000)accessibleSoliditySources.set(path,content);
+      }catch{}
+    }
+    const SolidityCode=[...accessibleSoliditySources.values()];
+    for(const [path,content] of accessibleSoliditySources){
+      const risk=privilegedRoleMutationCandidate(path,content,SolidityCode);
+      if(risk)privilegedSolidityCandidates.set(path,risk);
+    }
+    if(privilegedSolidityCandidates.size)await appendFile(logFile,'[CONTROLLER_SOLIDITY_ROLE_CANDIDATES] '+
+      JSON.stringify([...privilegedSolidityCandidates].map(([path,r])=>({path,selector:r.selector,role:r.role})))+'\n');
+    const tracedCandidates=workflow && process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false'
+      ? await rankTracedSourceCandidates(root,limits.initialSourcePaths||[]) : [];
+    if(tracedCandidates.length)await appendFile(logFile,'[CONTROLLER_TRACED_SOURCE_CANDIDATES] '+
+      JSON.stringify(tracedCandidates.slice(0,8).map(c=>({path:c.path,selector:c.selector,score:c.score,chain:c.chain})))+'\n');
     // Source locations have already been selected from an authorized workspace.
     // Feed real source pages to the model, then run only narrowly recognizable
     // local probes in the same isolated verifier. Never manufacture evidence.
@@ -454,26 +479,37 @@ export async function runLocalAudit(
          constraints?.action?.includes('plan_probe')) {
         const inspected=workflow.snapshot().readPaths.filter(path=>
           path.startsWith('source-') && /\.(?:sol|java|py|js|mjs|cjs)$/.test(path));
-        for(const path of [...inspected].reverse().slice(0,16)) {
+        const rankedInspected=[...new Set([...privilegedSolidityCandidates.keys(),...tracedCandidates.map(c=>c.path),...inspected].filter(path=>inspected.includes(path)))];
+        for(const path of rankedInspected.slice(0,24)) {
           try {
             const full=await safePath(path);
             let plan:{action:string;path:string;query:string;answer:string;hypothesis:string;sequence?:unknown}|null=null;
             if(path.endsWith('.sol')) {
-              const menu=await solidityIndex.probeMenu(full,32);
-              for(const entry of menu) {
+              const risk=privilegedSolidityCandidates.get(path);
+              // When source identifies a role mutation with a protected
+              // consumer, test that path before unrelated valid transactions.
+              if(privilegedSolidityCandidates.size && !risk)continue;
+              const menu=await solidityIndex.probeMenu(full,64);
+              const entries=risk?menu.filter(entry=>entry.selector===risk.selector):
+                menu.filter(entry=>entry.operation==='send');
+              for(const entry of entries) {
                 if(entry.operation!=='send')continue;
-                const sequence=buildBaselineSequence(menu,entry.selector);
+                const sequence=buildBaselineSequence(menu,entry.selector,!!risk);
                 if(!sequence)continue;
                 const candidate={action:'plan_probe',path,query:entry.selector,
                   answer:'solidity_sequence',
-                  hypothesis:'Observe this declared state transition and its getter without inventing expected results; compare authorization and state effects against source.',
+                  hypothesis:risk?
+                    'Check whether a nonadministrator can mutate the source-declared privileged '+risk.role+' role. Compare source-proven authority checks and before/after on-chain observations; independent review must establish impact.':
+                    'Observe the declared transaction and getter; check authorization and state effects against source.',
                   sequence};
                 if(!workflow.validate(candidate as any)){plan=candidate;break;}
               }
             }else {
+              const traced=tracedCandidates.find(candidate=>candidate.path===path);
               const code=await readFile(full,'utf8');
-              const hint=guidedSourceProbe(path,code);
-              if(hint) {
+              const hint=traced?{functionName:traced.selector,kind:traced.kind,
+                hypothesis:traced.hypothesis}:guidedSourceProbe(path,code);
+              if(hint && await declaredProbeTarget(full,hint.functionName)) {
                 const candidate={action:'plan_probe',path,query:hint.functionName,
                   answer:hint.kind,hypothesis:hint.hypothesis};
                 if(!workflow.validate(candidate as any))plan=candidate;
@@ -501,7 +537,7 @@ export async function runLocalAudit(
          !workflow.snapshot().verifiedEvidenceFocus && controllerAutoReadCount<8 &&
          constraints?.action?.includes('read_file')) {
         const inspected=new Set(workflow.snapshot().readPaths);
-        for(const candidate of limits.initialSourcePaths||[]) {
+        for(const candidate of [...new Set([...privilegedSolidityCandidates.keys(),...tracedCandidates.map(c=>c.path),...(limits.initialSourcePaths||[])])]) {
           if(!candidate.startsWith('source-') || !/\.(?:java|py|js|mjs|cjs|sol)$/.test(candidate) ||
              inspected.has(candidate))continue;
           try {

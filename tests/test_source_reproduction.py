@@ -436,6 +436,43 @@ contract Store {
             {"operation":"send","function":"deposit()","args":[],"sender":2,"valueWei":"5"},
             {"operation":"call","function":"balance()","args":[],"expect":"15"}]}
 
+    def test_source_proven_nonadmin_role_change_is_reproduced(self):
+        # The same owned role transition used by the Gauntlet is exercised
+        # in the real isolated EVM, not just with mock observation JSON.
+        with tempfile.TemporaryDirectory() as directory:
+            repo=Path(directory)
+            (repo/"Authority.sol").write_text("""pragma solidity ^0.8.20;
+contract Authority {
+ address public administrator; address public operator;
+ constructor(){administrator=msg.sender;operator=msg.sender;}
+ function rotateOperator(address next) external {require(next!=address(0),"zero");operator=next;}
+ function changeAdministrator(address next) external {require(msg.sender==administrator,"admin");administrator=next;}
+}""")
+            (repo/"Vault.sol").write_text("""pragma solidity ^0.8.20;
+contract Vault {
+ address public operator;
+ function settle() external {require(msg.sender==operator,"operator only");}
+}""")
+            sequence={"constructorArgs":[],"steps":[
+                {"operation":"observe","function":"operator()","args":[]},
+                {"operation":"send","function":"rotateOperator(address)","args":["$account2"],"sender":1},
+                {"operation":"observe","function":"operator()","args":[]}
+            ]}
+            spec={"file":"Authority.sol","function":"Authority.rotateOperator","kind":"solidity_sequence",
+                  "nonce":"a"*32,"sequence":sequence}
+            result=driver.run_probe(repo,spec)
+            self.assertEqual(result["status"],"behavior_observed",result)
+            self.assertTrue(result["behavior_observed"])
+            self.assertNotEqual(result["observations"]["steps"][0]["actual"],
+                                result["observations"]["steps"][2]["actual"])
+            self.assertEqual(driver.run_probe(repo,spec)["observations"],result["observations"])
+            # Removing source evidence of a privileged consumer must not
+            # permit the same observed transition to be called a violation.
+            (repo/"Vault.sol").unlink()
+            negative=driver.run_probe(repo,spec)
+            self.assertEqual(negative["status"],"observation_only",negative)
+            self.assertFalse(negative["behavior_observed"])
+
     def test_constructor_state_changes_payable_and_deterministic_replay(self):
         sequence=self.sequence()
         first=self.run_sequence(sequence)

@@ -112,6 +112,23 @@ export class SoliditySourceIndex {
     for(const node of unit.ast.children) {
       if(node.type!=='ContractDefinition')continue;
       for(const member of node.subNodes) {
+        // Public scalar state variables have implicit ABI getters. The parser
+        // does not represent them as FunctionDefinition nodes, but the EVM
+        // compiler exposes them as real zero-argument view methods.
+        // Without this, the controller cannot observe state transitions on
+        // the common "address public operator" pattern.
+        if(member.type==='StateVariableDeclaration'){
+          for(const variable of (member as any).variables||[]) {
+            if(variable?.visibility!=='public' || typeof variable.name!=='string')continue;
+            let declaredType='';
+            try {declaredType=unit.text.slice(...bounds(variable.typeName)).trim();}catch{}
+            if(!/^(?:address(?: payable)?|bool|u?int(?:\d{0,3})?|bytes(?:[1-9]|[12]\d|3[012])?)$/.test(declaredType))continue;
+            entries.push({selector:node.name+'.'+variable.name,signature:variable.name+'()',operation:'call',
+              visibility:'public',inputs:[]});
+            if(entries.length>=limit)return entries;
+          }
+          continue;
+        }
         if(member.type!=='FunctionDefinition')continue;
         const fn=member as FunctionDefinition;
         const visibility=String(fn.visibility||'default');

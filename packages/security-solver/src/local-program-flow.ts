@@ -18,6 +18,7 @@ import { authorizedSourceUrls, assertAuthorizedTarget, getConfig, getDb, schema,
 import { fetchProgramScopes, fetchProgramPolicy, fetchProgramSignalRequirement, prepareSubmission, submitReport } from "@bounty/security-discovery";
 import { cloneAuthorizedSource, describeSourceAcquisitionFailure, acquisitionRetryAfter } from "./authorized-source";
 import { runLocalAudit } from "./local-ollama-runner";
+import {runEvidenceOnlyReview} from './evidence-only-review';
 import { createProbeSession, readSourceCase, replaySourceCase, type SourceCase, type ProbeRepository } from "./source-reproduction";
 import { writeSecuritySolverStatus, clearSecuritySolverStatus, writeAdversarialReviewStatus, clearAdversarialReviewStatus } from "./status";
 import type { SecuritySolveResult, ParsedFinding } from "./claude-runner";
@@ -215,7 +216,7 @@ Do not claim production testing, JavaScript execution, file access or other effe
       process.env.LOCAL_OLLAMA_MODEL || "qwen3:4b",undefined,{
         onAllowance:async deadline=>writeSecuritySolverStatus({active:true,programId:program.id,programName:program.name,
           stage:"hunting",startedAt:statusStartedAt,timeoutMinutes:(deadline-Date.parse(statusStartedAt))/60000,pid:process.pid}),
-        signal,maxTurns,finalSchema:z.toJSONSchema(huntSchema),productionWorkflow:true,dynamicAllowance:process.env.LOCAL_HUNT_DYNAMIC_ALLOWANCE !== "false",initialSourcePaths:["audit-policy.txt",...sourceHints],initialSourceLocations:selection.locations,checkpointPath:join(checkpointDirectory,checkpointKey+".json"),numCtx:8192,numThreads:4,numPredict:getConfig().LOCAL_HUNT_NUM_PREDICT,onRead:(path,span)=>reads.add(path,span),
+        signal,maxTurns,finalSchema:z.toJSONSchema(huntSchema),productionWorkflow:true,dynamicAllowance:process.env.LOCAL_HUNT_DYNAMIC_ALLOWANCE !== "false",initialSourcePaths:["audit-policy.txt",...new Set([...sourceHints,...eligiblePaths])],initialSourceLocations:selection.locations,checkpointPath:join(checkpointDirectory,checkpointKey+".json"),numCtx:8192,numThreads:4,numPredict:getConfig().LOCAL_HUNT_NUM_PREDICT,onRead:(path,span)=>reads.add(path,span),
         progressNote:()=>(verifiedProbeSummary(session.cases,2).slice(0,420)+'\n'+controllerTraceSummary.slice(0,420)).slice(0,850),
         onVerifiedCase:async(caseId,path,selector,kind)=>{
           // This callback is invoked only after the trusted verifier returns
@@ -758,30 +759,45 @@ Return final JSON only:
 {"verdict":"approve|reject","recommendation":"submit|submit_cautiously|dont_submit","severity":"medium","confidence":0.7,"ratingReason":"Independently explain severity and confidence from the report evidence and remaining uncertainty.","bet100":true,"rubric":{"exploitability":0,"impactSeverity":0,"evidenceQuality":0,"novelty":0,"scopeAlignment":0},"issues":[{"category":"reason","severity":"fatal|warning|info","description":"specific issue"}],"reasoning":"specific evidence-based conclusion"}
 Independently assign severity and confidence from observed impact, source reachability and evidence limits. Do not copy the hunter ratings or raise them to pass a threshold.
 Use one enum value per string. Scores are integers 0..3. bet100=false requires dont_submit. Approval requires a demonstrated technically valid security issue in scope, not just a passing probe. External submission eligibility must never change verdict.\n\n${packet}`;
-    await runLocalAudit(prompt,logFile,getConfig().SECURITY_HUNT_TIMEOUT_MINUTES*60000,root,process.env.LOCAL_OLLAMA_MODEL || "qwen3:4b",undefined,{
-      signal,maxTurns:40,dynamicAllowance:process.env.LOCAL_HUNT_DYNAMIC_ALLOWANCE !== "false",prefetchReadOnly:true,finalSchema:z.toJSONSchema(reviewSchema),numCtx:8192,numThreads:4,numPredict:getConfig().LOCAL_HUNT_NUM_PREDICT,
-      initialSourcePaths:[],
-      // Short source facts recur after every compaction, and the full immutable
-      // chain is preserved in evidence/verified-chain.json.
-      progressNote:()=>("Verified evidence digest: "+chainEvidence.sourceDigest+
-        "; language: "+chainEvidence.language+"; reachability rule: "+chainEvidence.reachabilityRequirement+
-        "; caller: "+caller[1]+":"+caller[2]+
-        "; actual source citations: "+chainEvidence.links.slice(0,5).map(x=>x.file+":"+x.line).join(", ")+
-        ". Full source-backed chain remains in the initial controller packet and evidence/verified-chain.json."),
-      validateFinal:async text=>{
-        try {
-          const value=reviewSchema.parse(JSON.parse(text));
-          const submissionPolicyFatal=value.verdict==="reject" && value.issues.some(issue=>
-            issue.severity==="fatal" &&
-            /(?:policy|synthetic|owned).*(?:submi|report)|(?:submi|report).*(?:prohibit|forbid|policy)/i.test(issue.description));
-          if(submissionPolicyFatal)return "An external submission prohibition is not a technical defect. Reevaluate source and replay; use recommendation=dont_submit if submission is prohibited.";
-          const defect=reviewRejectionDefect(value,chainEvidence);
-          if(defect)return defect;
-          review=value;
-          return null;
-        }catch{return "Return the requested review JSON with valid enum values and integer rubric scores.";}
-      },
-    });
+    const validateReviewFinal=async(text:string):Promise<string|null>=>{
+      try {
+        const value=reviewSchema.parse(JSON.parse(text));
+        const submissionPolicyFatal=value.verdict==="reject" && value.issues.some(issue=>
+          issue.severity==="fatal" &&
+          /(?:policy|synthetic|owned).*(?:submi|report)|(?:submi|report).*(?:prohibit|forbid|policy)/i.test(issue.description));
+        if(submissionPolicyFatal)return "An external submission prohibition is not a technical defect. Reevaluate source and replay; use recommendation=dont_submit if submission is prohibited.";
+        const defect=reviewRejectionDefect(value,chainEvidence);
+        if(defect)return defect;
+        review=value;
+        return null;
+      }catch{return "Return the requested review JSON with valid enum values and integer rubric scores.";}
+    };
+    const directReview=process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false' &&
+      !!chainEvidence.sourceDigest && !!record.result.observations;
+    if(directReview) {
+      // No investigation action schema is exposed here. The controller has
+      // already collected and replayed every source and caller fact. The old
+      // source-read gate was deadlocking a fully prepared independent review.
+      await runEvidenceOnlyReview({
+        prompt,schema:z.toJSONSchema(reviewSchema) as Record<string,unknown>,
+        model:process.env.LOCAL_OLLAMA_MODEL||'qwen3:4b',
+        logFile,signal,numCtx:8192,numPredict:getConfig().LOCAL_HUNT_NUM_PREDICT,
+        validate:validateReviewFinal,maxAttempts:3
+      });
+    } else {
+      await runLocalAudit(prompt,logFile,getConfig().SECURITY_HUNT_TIMEOUT_MINUTES*60000,root,process.env.LOCAL_OLLAMA_MODEL || "qwen3:4b",undefined,{
+        signal,maxTurns:40,dynamicAllowance:process.env.LOCAL_HUNT_DYNAMIC_ALLOWANCE !== "false",
+        prefetchReadOnly:true,finalSchema:z.toJSONSchema(reviewSchema),
+        numCtx:8192,numThreads:4,numPredict:getConfig().LOCAL_HUNT_NUM_PREDICT,
+        initialSourcePaths:[],
+        progressNote:()=>("Verified evidence digest: "+chainEvidence.sourceDigest+
+          "; language: "+chainEvidence.language+"; reachability rule: "+chainEvidence.reachabilityRequirement+
+          "; caller: "+caller[1]+":"+caller[2]+
+          "; actual source citations: "+chainEvidence.links.slice(0,5).map(x=>x.file+":"+x.line).join(", ")+
+          ". Full source-backed chain remains in the initial controller packet and evidence/verified-chain.json."),
+        validateFinal:validateReviewFinal
+      });
+    }
     signal.throwIfAborted();
     if(!review)throw new Error("No validated independent review");
     return {review,replay,caseId:id,policy,sourceSha256:record.sourceSha256,replayedAt:new Date().toISOString()};
