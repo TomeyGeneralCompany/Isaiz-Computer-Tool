@@ -1,5 +1,6 @@
 import {readFile,realpath} from 'node:fs/promises';
 import {dirname,join,resolve,relative,sep} from 'node:path';
+import {callerLineReferences,qualifiedCallerLineReferences} from './source-function-reference';
 
 export type FlowFact={path:string;line:number;source:string;relationship:string};
 export type FlowTrace={facts:FlowFact[];unresolved:string[];limitation:string};
@@ -138,4 +139,60 @@ export function sourceImportsTarget(callerPath:string,targetPath:string,code:str
       new RegExp('\\bimport\\s+[A-Za-z0-9_.]*\\.'+className+'\\s*;').test(code);
   }
   return true;
+}
+
+
+export type CallerEvidence={path:string;line:number;code:string;selector:string};
+/** Resolve upstream callers through actual import/class dependencies.
+ * A same-named decoy without a reference to the selected module is excluded.
+ * Evidence is syntax/source-backed; runtime reachability remains for review.
+ */
+export async function controllerCallerChain(
+  workspace:string,repositoryPrefix:string,testedPath:string,selector:string,
+  sourcePaths:string[],maxDepth=4
+):Promise<CallerEvidence[]> {
+  const root=await realpath(workspace);
+  const visited=new Set<string>([testedPath]);
+  const chain:CallerEvidence[]=[];
+  let currentSource=testedPath,currentSelector=selector;
+  for(let depth=0;depth<Math.min(8,Math.max(1,maxDepth));depth++){
+    const found:Array<CallerEvidence & {qualified:boolean;source:string}>=[];
+    for(const path of [...new Set(sourcePaths)].slice(0,256)) {
+      if(visited.has(path) || !path.startsWith(repositoryPrefix) ||
+         path.startsWith('/') || path.split(/[\\/]/).includes('..'))continue;
+      try {
+        const full=await realpath(resolve(root,path));
+        const local=relative(root,full);
+        if(local==='..'||local.startsWith('..'+sep))continue;
+        const code=await readFile(full,'utf8');
+        if(code.length>256000 || !sourceImportsTarget(path,currentSource,code))continue;
+        const lines=code.split('\n');
+        for(let i=1;i<=lines.length;i++){
+          if(!callerLineReferences(code,i,currentSelector))continue;
+          found.push({path,line:i,code:lines[i-1],selector:currentSelector,
+            source:code,qualified:qualifiedCallerLineReferences(code,i,currentSelector)});
+        }
+      }catch{}
+    }
+    const qualified=found.filter(site=>site.qualified);
+    const chosen=qualified.length===1?qualified[0]:found.length===1?found[0]:null;
+    if(!chosen)break;
+    chain.push({path:chosen.path,line:chosen.line,code:chosen.code,selector:currentSelector});
+    visited.add(chosen.path);
+    currentSource=chosen.path;
+    const preceding=chosen.source.split('\n').slice(Math.max(0,chosen.line-12),chosen.line);
+    let enclosing='';
+    for(const line of [...preceding].reverse()){
+      const py=/^\s*(?:async\s+)?def\s+([A-Za-z_$][\w$]*)\s*\(/.exec(line);
+      const js=/\bfunction\s+([A-Za-z_$][\w$]*)\s*\(/.exec(line) ||
+        /\bexports\.([A-Za-z_$][\w$]*)\s*=/.exec(line);
+      const java=/\b(?:public|protected|private)\s+(?:static\s+)?[A-Za-z_$][\w$<>\[\]]*\s+([A-Za-z_$][\w$]*)\s*\(/.exec(line);
+      enclosing=(py||js||java)?.[1]||'';
+      if(enclosing)break;
+    }
+    if(!enclosing)break;
+    currentSelector=chosen.path.endsWith('.java') ?
+      chosen.path.split('/').at(-1)!.slice(0,-5)+'.'+enclosing : enclosing;
+  }
+  return chain;
 }
