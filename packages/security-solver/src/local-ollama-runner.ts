@@ -504,7 +504,7 @@ export async function runLocalAudit(
         const ranked=[...new Set([...(limits.initialSourcePaths||[]),
           ...workflow.snapshot().readPaths])].filter(path=>inspected.has(path) &&
           path.startsWith('source-') && /\.(?:sol|java|py|js|mjs|cjs)$/.test(path));
-        const rankedInspected=[...new Set([...privilegedSolidityCandidates.keys(),...tracedCandidates.map(c=>c.path),...inspected].filter(path=>inspected.includes(path)))];
+        const rankedInspected=[...new Set([...privilegedSolidityCandidates.keys(),...tracedCandidates.map(c=>c.path),...inspected].filter(path=>inspected.has(path)))];
         for(const path of rankedInspected.slice(0,24)) {
           try {
             const full=await safePath(path);
