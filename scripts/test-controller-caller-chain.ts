@@ -4,6 +4,7 @@ import {dirname,join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {generate} from './lotus-gauntlet-fixtures';
 import {controllerCallerChain,sourceImportsTarget} from '../packages/security-solver/src/source-flow-facts';
+import {callerLineReferences} from '../packages/security-solver/src/source-function-reference';
 
 const cases=[
  {lang:'javascript' as const,target:'src/pipeline.cjs',selector:'wrapFragment',
@@ -14,6 +15,10 @@ const cases=[
   selector:'Pipeline.wrapFragment',callers:[
    'src/main/java/org/lotus/Renderer.java','src/main/java/org/lotus/HttpHandler.java']}
 ];
+const pythonImport='from src.pipeline import wrap_fragment\ndef render(value):\n    return wrap_fragment(value)';
+assert.equal(callerLineReferences(pythonImport,1,'wrap_fragment'),false,
+ 'Import statements are declarations, not multiline calls');
+assert.equal(callerLineReferences(pythonImport,3,'wrap_fragment'),true);
 assert.equal(sourceImportsTarget('source-1/src/modules/decoy.cjs',
   'source-1/src/renderer.cjs','exports.inspect=function inspect(x){return render(x)}'),false);
 for(const test of cases){
