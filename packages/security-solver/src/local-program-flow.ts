@@ -27,6 +27,7 @@ import { selectSourceBatch, incompleteProbeCoverage, recoverEmptyUnprobedFinal, 
 import { callerLineReferences, qualifiedCallerLineReferences, transactionEntryLine } from "./source-function-reference";
 import {observedJavaSourceChain} from "./java-source-chain";
 import {buildReviewEvidence,reviewRejectionDefect} from "./review-evidence-chain";
+import {controllerProofCandidate,type ControllerProofCandidate} from './controller-proof-candidate';
 import {entryReplayFacts,entryReviewRejectionDefect} from './entry-review-evidence';
 import {buildControllerReportPacket,controllerReportPacketText,type ControllerReportPacket} from './controller-report-packet';
 import {controllerReportNarrative} from './controller-report-narrative';
@@ -192,6 +193,7 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
     let controllerPromotedFromCaseId:string|null=null;
     // Entry cases are independently executed by the sandbox, not authored by Qwen.
     const controllerEntryCases=new Map<string,string>();
+    let independentlyProvenCandidate:ControllerProofCandidate|null=null;
     const entryEvidenceFor=(caseId:string)=>{
       const entryId=controllerEntryCases.get(caseId);
       const entry=entryId ? session.cases.get(entryId) : undefined;
@@ -362,6 +364,32 @@ Do not claim production testing, JavaScript execution, file access or other effe
                   if(observed.status==='behavior_observed' && typeof observed.caseId==='string' &&
                      session.cases.has(observed.caseId)) {
                     controllerEntryCases.set(proofTarget.caseId,observed.caseId);
+                    // The controller itself now proposes the source-linked
+                    // evidence case, without waiting for the model to nominate
+                    // its case ID or invent a caller. This does NOT approve
+                    // technical impact: independent review remains mandatory.
+                    const handlerSource=await readFile(join(root,entry.path),'utf8');
+                    if(callerLineReferences(handlerSource,entry.line,proofTarget.selector)) {
+                      reads.add(entry.path,{start:0,end:handlerSource.length});
+                      const entryRecord=session.cases.get(observed.caseId)!;
+                      const proposed=controllerProofCandidate({
+                        caseId:proofTarget.caseId,
+                        rendererFile:proofTarget.path,rendererSelector:proofTarget.selector,
+                        callerFile:entry.path,callerLine:entry.line,callerSource:handlerSource,
+                        entryCase:{kind:entryRecord.spec.kind,
+                          behaviorObserved:entryRecord.result.behavior_observed,
+                          observations:entryRecord.result.observations}
+                      });
+                      if(proposed) {
+                        independentlyProvenCandidate=proposed;
+                        await appendFile(logFile,'[CONTROLLER_PROOF_CANDIDATE] '+JSON.stringify({
+                          caseId:proposed.caseId,callerFile:proposed.callerFile,
+                          callerLine:proposed.callerLine,entryCaseId:observed.caseId,
+                          source:'executed entry plus source-verified caller',
+                          review:'required, no automatic approval'})+'\\n');
+                      }
+                    }
+
                     await appendFile(logFile,'[CONTROLLER_ENTRY_PROOF_LINK] '+JSON.stringify({
                       rendererCaseId:proofTarget.caseId,entryCaseId:observed.caseId,
                       file:entry.path,selector:entrySelector})+'\n');
@@ -758,6 +786,21 @@ Do not claim production testing, JavaScript execution, file access or other effe
       });
     signal.throwIfAborted();
     await note('MODEL_DONE',{completedProbes:session.completedProbes});
+    // A language model no longer decides whether the controller's actual
+    // executed and caller-linked entry case is even allowed to reach review.
+    // A model-only negative is not a technical disproof. The independent
+    // reviewer still receives the full source/replay and can reject.
+    if(process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false' && independentlyProvenCandidate) {
+      const candidate=independentlyProvenCandidate;
+      const alreadyPresent=parsed?.findings.some(item=>item.caseId===candidate.caseId);
+      if(!alreadyPresent) {
+        parsed={findings:[candidate,...(parsed?.findings||[])].slice(0,3),outcome:'inspected'};
+        await appendFile(logFile,'[CONTROLLER_PROOF_FOR_REVIEW] '+JSON.stringify({
+          caseId:candidate.caseId,source:'controller independent entry reproduction',
+          reason:'model nomination is not a requirement for independently reviewed evidence',
+          autoApproval:false})+'\\n');
+      }
+    }
     if(parsed?.outcome === "no_testable_candidate")return {auditRecord,success:true,coverage:"partial",acquisitionChecks,capabilityChecks,
       coverageDetail:"Inspection incomplete: "+parsed.reason,findings:[],rawOutput:answer};
     if (session.blockedReason) throw new Error("Reproduction unavailable: " + session.blockedReason);
