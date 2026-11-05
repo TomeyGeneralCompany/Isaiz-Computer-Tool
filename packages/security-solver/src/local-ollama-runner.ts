@@ -537,7 +537,13 @@ export async function runLocalAudit(
               const controllerPlan=controllerPolyglotPlan(path,code);
               const hint=traced?{functionName:traced.selector,kind:traced.kind,
                 hypothesis:traced.hypothesis}:guidedSourceProbe(path,code);
-              const candidate=controllerPlan ?? (hint ? {action:'plan_probe' as const,
+              // An independently traced security lead outranks a generic state
+              // observation in the same file. Both choices are source-derived;
+              // the isolated verifier still determines executable capability.
+              const tracedPlan=traced && await declaredProbeTarget(full,traced.selector)
+                ? {action:'plan_probe' as const,path,query:traced.selector,
+                    answer:traced.kind,hypothesis:traced.hypothesis}:null;
+              const candidate=tracedPlan ?? controllerPlan ?? (hint ? {action:'plan_probe' as const,
                 path,query:hint.functionName,answer:hint.kind,hypothesis:hint.hypothesis}:null);
               if(candidate && (candidate.answer.endsWith('_sequence') ||
                   await declaredProbeTarget(full,candidate.query))) {
