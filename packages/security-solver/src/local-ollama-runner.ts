@@ -4,6 +4,7 @@ import {z} from "zod";
 import {javaSequenceSchema, type JavaSequence} from "./java-sequence";
 import {buildBaselineSequence} from './solidity-probe-inputs';
 import {privilegedRoleMutationCandidate} from './solidity-security-candidates';
+import {rankTracedSourceCandidates} from './controller-source-candidates';
 import { InvestigationWorkflow } from "./investigation-workflow";
 import {guidedSourceProbe} from './source-guided-probes';
 import {declaredProbeTarget, sourceDeclarationHints, supportedJavaProbeHints, javaProbeSelectorCompatible, probeChoices} from './probe-target-validation';
@@ -256,6 +257,10 @@ export async function runLocalAudit(
     }
     if(privilegedSolidityCandidates.size)await appendFile(logFile,'[CONTROLLER_SOLIDITY_ROLE_CANDIDATES] '+
       JSON.stringify([...privilegedSolidityCandidates].map(([path,r])=>({path,selector:r.selector,role:r.role})))+'\n');
+    const tracedCandidates=workflow && process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false'
+      ? await rankTracedSourceCandidates(root,limits.initialSourcePaths||[]) : [];
+    if(tracedCandidates.length)await appendFile(logFile,'[CONTROLLER_TRACED_SOURCE_CANDIDATES] '+
+      JSON.stringify(tracedCandidates.slice(0,8).map(c=>({path:c.path,selector:c.selector,score:c.score,chain:c.chain})))+'\n');
     // Source locations have already been selected from an authorized workspace.
     // Feed real source pages to the model, then run only narrowly recognizable
     // local probes in the same isolated verifier. Never manufacture evidence.
@@ -474,7 +479,7 @@ export async function runLocalAudit(
          constraints?.action?.includes('plan_probe')) {
         const inspected=workflow.snapshot().readPaths.filter(path=>
           path.startsWith('source-') && /\.(?:sol|java|py|js|mjs|cjs)$/.test(path));
-        const rankedInspected=[...new Set([...privilegedSolidityCandidates.keys(),...inspected].filter(path=>inspected.includes(path)))];
+        const rankedInspected=[...new Set([...privilegedSolidityCandidates.keys(),...tracedCandidates.map(c=>c.path),...inspected].filter(path=>inspected.includes(path)))];
         for(const path of rankedInspected.slice(0,24)) {
           try {
             const full=await safePath(path);
@@ -500,9 +505,11 @@ export async function runLocalAudit(
                 if(!workflow.validate(candidate as any)){plan=candidate;break;}
               }
             }else {
+              const traced=tracedCandidates.find(candidate=>candidate.path===path);
               const code=await readFile(full,'utf8');
-              const hint=guidedSourceProbe(path,code);
-              if(hint) {
+              const hint=traced?{functionName:traced.selector,kind:traced.kind,
+                hypothesis:traced.hypothesis}:guidedSourceProbe(path,code);
+              if(hint && await declaredProbeTarget(full,hint.functionName)) {
                 const candidate={action:'plan_probe',path,query:hint.functionName,
                   answer:hint.kind,hypothesis:hint.hypothesis};
                 if(!workflow.validate(candidate as any))plan=candidate;
@@ -530,7 +537,7 @@ export async function runLocalAudit(
          !workflow.snapshot().verifiedEvidenceFocus && controllerAutoReadCount<8 &&
          constraints?.action?.includes('read_file')) {
         const inspected=new Set(workflow.snapshot().readPaths);
-        for(const candidate of [...new Set([...privilegedSolidityCandidates.keys(),...(limits.initialSourcePaths||[])])]) {
+        for(const candidate of [...new Set([...privilegedSolidityCandidates.keys(),...tracedCandidates.map(c=>c.path),...(limits.initialSourcePaths||[])])]) {
           if(!candidate.startsWith('source-') || !/\.(?:java|py|js|mjs|cjs|sol)$/.test(candidate) ||
              inspected.has(candidate))continue;
           try {
