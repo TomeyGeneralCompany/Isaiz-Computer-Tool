@@ -177,15 +177,15 @@ export function reviewRejectionDefect(review:{
   // exploitability and can reject for a genuinely missing security boundary.
   if(evidence.kind==='html_reflection') {
     const lines=evidence.links.map(link=>link.code).join('\n');
-    const actualEscape=/\\b(?:escape\\s*\\(|sanitize\\s*\\(|encodeForHTML\\s*\\(|StringEscapeUtils\\.|replace\\s*\\(\\s*["'](?:&|<|>)/i.test(lines);
-    const requestControlled=/\\b(?:searchParams\\.get\\s*\\(|parse_qs\\s*\\(|req\\.query\\b|request\\.(?:GET|args|query)\\b)/.test(lines);
-    const treatsParsingAsEscaping=/\\b(?:parsing|parsed|parse_qs|searchParams\\.get|URL\\.searchParams)\\b[^.]{0,150}\\b(?:saniti[sz]\\w*|escap\\w*|validat\\w*)\\b|\\b(?:saniti[sz]\\w*|escap\\w*)\\b[^.]{0,100}\\b(?:parsing|parsed|parse_qs|searchParams)\\b/i.test(prose);
+    const actualEscape=/\b(?:escape\s*\(|sanitize\s*\(|encodeForHTML\s*\(|StringEscapeUtils\.|replace\s*\(\s*["'](?:&|<|>)/i.test(lines);
+    const requestControlled=/\b(?:searchParams\.get\s*\(|parse_qs\s*\(|req\.query\b|request\.(?:GET|args|query)\b)/.test(lines);
+    const treatsParsingAsEscaping=/\b(?:parsing|parsed|parse_qs|searchParams\.get|URL\.searchParams)\b[^.]{0,150}\b(?:saniti[sz]\w*|escap\w*|validat\w*)\b|\b(?:saniti[sz]\w*|escap\w*)\b[^.]{0,100}\b(?:parsing|parsed|parse_qs|searchParams)\b/i.test(prose);
     if(requestControlled && treatsParsingAsEscaping && !actualEscape)
       return 'The observed request-parameter parser extracts input; parsing does not HTML-escape or sanitize. The recorded source contains no matching escaping operation. Identify a real validation/escaping line or revise the asserted mitigation; independently assess actual reachability and impact.';
-    const unsupportedValidation=/\\b(?:explicitly validated|validated by the caller|input is sanitized by (?:the application.?s )?context|safe HTML fragment handler)\\b/i.test(prose);
+    const unsupportedValidation=/\b(?:explicitly validated|validated by the caller|input is sanitized by (?:the application.?s )?context|safe HTML fragment handler)\b/i.test(prose);
     if(unsupportedValidation && !actualEscape)
       return 'The review attributes safety to validation, HTML context or a helper name without identifying a source-backed escaping or validation operation. Cite the actual protection and source line, or assess the unescaped output and attacker-control requirements separately.';
-    const identityDisprovesRisk=/\\b(?:returns? (?:the )?input unmodified|does not modify the input|no sanitization|without any sanitization|without any escaping)\\b[\\s\\S]{0,240}\\b(?:no (?:actual )?security (?:risk|impact|vulnerability)|safe|not vulnerable)\\b/i.test(prose);
+    const identityDisprovesRisk=/\b(?:returns? (?:the )?input unmodified|does not modify the input|no sanitization|without any sanitization|without any escaping)\b[\s\S]{0,240}\b(?:no (?:actual )?security (?:risk|impact|vulnerability)|safe|not vulnerable)\b/i.test(prose);
     if(identityDisprovesRisk && !actualEscape)
       return 'Returning unescaped user data does not itself mitigate HTML reflection. If rejecting, identify the actual absent input-to-sink edge, rendering context, or source-backed mitigation rather than treating identity encoding as proof of safety.';
   }
