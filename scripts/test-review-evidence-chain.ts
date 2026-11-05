@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp,mkdir,writeFile,rm} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
+import {execFileSync} from 'node:child_process';
 import {buildReviewEvidence,reviewRejectionDefect} from '../packages/security-solver/src/review-evidence-chain';
 
 const root=await mkdtemp(join(tmpdir(),'lotus-review-chain-'));
@@ -48,6 +49,27 @@ try {
   assert.notEqual(escaped.sourceDigest,evidence.sourceDigest,'changed mitigations must change verified evidence');
   assert.equal(reviewRejectionDefect(reject('Effective escaping in src/main/java/org/fixture/Codec.java:3 prevents raw markup reflection'),escaped),null);
 
+  // Independent review must see the real upstream request entry point,
+  // not only the locally reproduced helper and its first direct caller.
+  await mkdir(join(root,'src','web'),{recursive:true});
+  await writeFile(join(root,'src','web','pipeline.cjs'),
+    'exports.wrapFragment=function wrapFragment(value){return "<p>"+value+"</p>";};\n');
+  await writeFile(join(root,'src','web','renderer.cjs'),
+    'const {wrapFragment}=require("./pipeline.cjs");\nexports.render=function render(value){return wrapFragment(value);};\n');
+  await writeFile(join(root,'src','web','http-handler.cjs'),
+    'const {render}=require("./renderer.cjs");\nexports.responseBody=function responseBody(url){\n'+
+    'const userText=new URL(url,"http://localhost").searchParams.get("message")||"";\n'+
+    'return render(userText);};\n');
+  execFileSync('git',['init','-q',root]);
+  execFileSync('git',['-C',root,'add','.']);
+  const jsReview=await buildReviewEvidence(root,{
+    testedFile:'src/web/pipeline.cjs',testedFunction:'wrapFragment',
+    callerFile:'src/web/renderer.cjs',callerLine:2,
+    kind:'html_reflection',reachability:'caller'});
+  assert.ok(jsReview.links.some(link=>link.file.endsWith('http-handler.cjs') &&
+    link.code.includes('searchParams.get')),
+    'reviewer must receive the actual externally controlled request-to-render path');
+  assert.match(jsReview.summary,/new URL\(/);
   await writeFile(join(root,'Contract.sol'),'contract Contract { function settle() public {} }\n');
   const solidity=await buildReviewEvidence(root,{
     testedFile:'Contract.sol',testedFunction:'Contract.settle',callerFile:'Contract.sol',
