@@ -39,13 +39,16 @@ export async function runEvidenceOnlyReview(input:{
     // Snapshot the message sequence per request. Reusing the mutable
     // array lets later feedback retroactively alter an in-flight request
     // (and makes mock transports observe a different turn than Ollama).
-    const payload={model:input.model,stream:false,format:input.schema,
+    // This reviewer needs a JSON verdict, not Qwen3's hidden thinking output.
+    // Under a bounded generation budget reasoning-only responses have empty content.
+    const payload={model:input.model,stream:false,think:false,format:input.schema,
       keep_alive:'10m',messages:messages.map(message=>({...message})),
       options:{num_ctx:input.numCtx,num_predict:input.numPredict,num_thread:4,temperature:0}};
     const response=await (input.transport
       ?input.transport(payload,input.signal)
       :postOllamaChat(url,payload,input.signal)) as VerdictResponse;
     const content=response.message?.content?.trim()||'';
+    await appendFile(input.logFile,'[EVIDENCE_ONLY_REVIEW_RESPONSE] '+JSON.stringify({attempt,contentCharacters:content.length,thinkingCharacters:typeof (response.message as {thinking?:string}|undefined)?.thinking==='string'?(response.message as {thinking?:string}).thinking!.length:0,generatedTokens:response.eval_count??null,finishReason:(response as {done_reason?:string}).done_reason??null})+'\n');
     let feedback:string|null;
     if(!content)feedback='The review returned empty content. Return a JSON review object, not an audit action.';
     else {
