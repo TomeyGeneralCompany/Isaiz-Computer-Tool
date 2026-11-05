@@ -2,7 +2,7 @@ import {prioritizeSourceCandidates} from './source-candidates';
 import {collectStaticLeads} from './local-static-leads';
 import {buildSourceMap} from './source-map';
 import {sourceCandidateEvidence,verifiedProbeSummary} from './source-candidate-evidence';
-import {traceSourceCalls} from './source-flow-facts';
+import {traceSourceCalls,solidityDependentSources} from './source-flow-facts';
 import { LOCAL_REPRODUCTION_CAPABILITY_VERSION } from "../../core/src/program-eligibility";
 import { inspectSourceCapability } from "./source-capability";
 import { SourceReads } from "./source-inspection";
@@ -229,10 +229,19 @@ Do not claim production testing, JavaScript execution, file access or other effe
           if(path!==testedPath)return null;
           if(record.spec.kind==='solidity_sequence') {
             const entry=record.spec.function.split('.').at(-1)||'';
-            if(record.spec.sequence?.steps.some(step=>
+            if(!record.spec.sequence?.steps.some(step=>
               'operation' in step && step.operation==='send' && 'function' in step &&
-              step.function.split('(')[0]===entry))return [testedPath];
-            return null;
+              step.function.split('(')[0]===entry))return null;
+            const ownPrefix=relative(root,repository.directory).split(sep).join('/')+'/';
+            const candidates=[...new Set([...sourceHints,...eligiblePaths])]
+              .filter(candidate=>candidate.startsWith(ownPrefix));
+            const dependents=await solidityDependentSources(root,testedPath,
+              record.spec.function.split('.')[0],candidates,6);
+            await appendFile(logFile,'[CONTROLLER_SOLIDITY_IMPACT_SOURCES] '+
+              JSON.stringify({caseId,testedPath,dependents})+'\n');
+            // The selected ABI entry is already covered by the successful
+            // reproduction. Dependent callers/inheritors still need real reads.
+            return [testedPath,...dependents];
           }
           const visited=new Set<string>([testedPath]);
           const chain:string[]=[];
