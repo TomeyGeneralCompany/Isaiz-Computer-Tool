@@ -36,14 +36,17 @@ try {
   const menu=await index.probeMenu(sourcePath,30);
   assert.ok(menu.some(item=>item.selector==='SettlementAuthority.operator'&&item.operation==='call'),
     'ABI-generated public state getter must be offered as a read');
-  const plan=buildBaselineSequence(menu,'SettlementAuthority.rotateOperator');
+  const plan=buildBaselineSequence(menu,'SettlementAuthority.rotateOperator',true);
   assert.ok(plan,'controller must construct an executable ABI-backed state transition');
   assert.equal(plan!.steps[0].operation,'observe');
   assert.equal(plan!.steps[0].function,'operator()');
   assert.equal(plan!.steps[1].operation,'send');
   assert.equal(plan!.steps[1].function,'rotateOperator(address)');
   assert.equal(plan!.steps[1].sender,1,'challenge must test from non-deployer account');
-  assert.equal(plan!.steps[1].expectRevert,true,'privileged setter must test non-incumbent authorization expectation');
+  assert.deepEqual(plan!.steps[1].args,['$account2'],'adversarial role mutation must target a distinct third account');
+  const ordinary=buildBaselineSequence(menu,'SettlementAuthority.rotateOperator');
+  assert.ok(ordinary,'ordinary sequence remains available for non-authorization probes');
+  assert.equal(ordinary!.steps[1].sender,undefined,'ordinary baseline must not misrepresent the caller as an attacker');
   assert.equal(plan!.steps[2].function,'operator()');
 
   const digest='a'.repeat(64);
