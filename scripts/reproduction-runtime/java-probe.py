@@ -325,7 +325,7 @@ if sequence_mode:
     raise SystemExit(0)
 control = 'TOMEY_CONTROL_' + spec['nonce']
 attack = ('<em data-tomey="'+spec['nonce']+'">TOMEY_PROBE</em>'
-          if spec['kind'] == 'html_reflection' else '../../TOMEY_ESCAPE_'+spec['nonce'])
+          if spec['kind'] in ('html_reflection','entry_html_reflection') else '../../TOMEY_ESCAPE_'+spec['nonce'])
 result = subprocess.run(['/jdk/bin/java', *jvm, '-cp', os.pathsep.join([str(classes), *spec.get('javaClasspath', [])]), 'TomeyJavaProbe',
                          (package+'.' if package else '')+parts[0], parts[1],
                          *[base64.b64encode(x.encode()).decode() for x in (control, attack)]],
