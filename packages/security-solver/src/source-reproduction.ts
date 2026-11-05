@@ -14,7 +14,7 @@ const sha = (value:string | Buffer) => createHash("sha256").update(value).digest
 const digest = z.string().regex(/^[a-f0-9]{64}$/);
 import {javaSequenceSchema, type JavaSequence} from "./java-sequence";
 const specSchema = z.object({file:z.string().min(1).max(4096),function:z.string().regex(/^[A-Za-z][A-Za-z0-9_]{0,79}(?:\.[A-Za-z][A-Za-z0-9_]{0,79})?$/),
-  kind:z.enum(["html_reflection","path_construction","solidity_sequence","java_sequence"]),sequence:z.union([soliditySequenceSchema,javaSequenceSchema]).optional(),nonce:z.string().regex(/^[a-f0-9]{32}$/)}).strict().superRefine((spec,ctx)=>{
+  kind:z.enum(["html_reflection","entry_html_reflection","path_construction","solidity_sequence","java_sequence"]),sequence:z.union([soliditySequenceSchema,javaSequenceSchema]).optional(),nonce:z.string().regex(/^[a-f0-9]{32}$/)}).strict().superRefine((spec,ctx)=>{
     if(spec.kind === "solidity_sequence") {
       if(!spec.file.endsWith(".sol") || !spec.function.includes(".") || !spec.sequence ||
          !soliditySequenceSchema.safeParse(spec.sequence).success ||
@@ -24,7 +24,12 @@ const specSchema = z.object({file:z.string().min(1).max(4096),function:z.string(
       if(!spec.file.endsWith(".java") || !spec.function.includes(".") || !javaSequenceSchema.safeParse(spec.sequence).success ||
          !(spec.sequence as JavaSequence)?.steps?.some(step=>step.method===spec.function.split(".")[1]))
         ctx.addIssue({code:z.ZodIssueCode.custom,message:"Java sequence must exercise selected Class.method"});
-    } else if(spec.sequence)ctx.addIssue({code:z.ZodIssueCode.custom,message:"Sequence requires sequence probe kind"});
+    } else if(spec.kind === "entry_html_reflection" &&
+        (!/\.(?:py|cjs|js|mjs|java)$/.test(spec.file) ||
+         !/(?:handler|controller|route|entry|server)/i.test(spec.file) ||
+         !/^[A-Za-z][A-Za-z0-9_]{0,79}(?:\.[A-Za-z][A-Za-z0-9_]{0,79})?$/.test(spec.function)))
+      ctx.addIssue({code:z.ZodIssueCode.custom,message:"Entry probe requires a supported source-declared handler"});
+    else if(spec.sequence)ctx.addIssue({code:z.ZodIssueCode.custom,message:"Sequence requires sequence probe kind"});
   });
 const sequenceObservations = z.object({contract:z.string(),accounts:z.array(z.string()).length(3),deploymentGasUsed:z.string(),
   steps:z.array(z.union([
@@ -34,7 +39,9 @@ const sequenceObservations = z.object({contract:z.string(),accounts:z.array(z.st
   ])).min(1).max(16)});
 const javaSequenceObservations=z.object({constructor:z.array(z.unknown()),steps:z.array(z.object({operation:z.literal("call"),function:z.string(),actual:z.string(),expected:z.unknown().optional(),passed:z.boolean()})).min(1).max(12)});
 const resultSchema = z.object({status:z.string(),behavior_observed:z.boolean(),source_sha256:digest.optional(),
-  kind:z.string().optional(),observations:z.union([z.object({control_input:z.string(),control_output:z.string(),attack_input:z.string(),attack_output:z.string()}),sequenceObservations,javaSequenceObservations]).optional(),
+  kind:z.string().optional(),observations:z.union([z.object({control_input:z.string(),control_output:z.string(),attack_input:z.string(),attack_output:z.string(),
+    entry_control_url:z.string().optional(),entry_attack_url:z.string().optional(),
+    entry_selector:z.string().optional(),entry_parameter:z.string().optional()}),sequenceObservations,javaSequenceObservations]).optional(),
   limitation:z.string().optional(),detail:z.string().optional(),exit_code:z.number().optional()});
 const caseSchema = z.object({version:z.literal(1),programId:z.string(),repositoryUrl:z.string(),commit:z.string().regex(/^[a-f0-9]{40}$/),
   sourceSha256:digest,spec:specSchema,result:resultSchema});

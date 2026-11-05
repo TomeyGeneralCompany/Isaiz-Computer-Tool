@@ -189,6 +189,16 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
     let controllerTraceSummary='';
     let controllerPromotedCaseId:string|null=null;
     let controllerPromotedFromCaseId:string|null=null;
+    // Entry cases are independently executed by the sandbox, not authored by Qwen.
+    const controllerEntryCases=new Map<string,string>();
+    const entryEvidenceFor=(caseId:string)=>{
+      const entryId=controllerEntryCases.get(caseId);
+      const entry=entryId ? session.cases.get(entryId) : undefined;
+      if(!entry || !entry.result.behavior_observed) return undefined;
+      return {caseId:entryId!,file:entry.spec.file,selector:entry.spec.function,
+        sourceSha256:entry.sourceSha256,observations:entry.result.observations,
+        limitation:entry.result.limitation||'Only an isolated entry invocation was tested.'};
+    };
     const candidateEvidence=await sourceCandidateEvidence(root,sourceMap.symbols,8);
     await writeFile(join(root,'audit-controller-candidates.json'),JSON.stringify(candidateEvidence,null,2),{mode:0o600});
     await appendFile(logFile,'[SOURCE_MAP] '+JSON.stringify({files:sourceMap.scannedFiles,symbols:sourceMap.symbols.length,skipped:sourceMap.skippedFiles})+'\n');
@@ -320,6 +330,48 @@ Do not claim production testing, JavaScript execution, file access or other effe
                 JSON.stringify({caller:callerPath,selector:firstCallerSelector,error:String(error).slice(-350)})+'\n');
             }
           }
+          const proofTarget=promoted ?? {caseId,path,selector,kind};
+          if(kind==='html_reflection') {
+            // A renderer probe alone does not prove attacker-controlled entry.
+            // Locate the actual import-resolved handler and execute it with
+            // controller-generated query inputs (Java accepts the raw parameter).
+            const entry=chain.find(c=>/(?:handler|controller|route|entry|server)/i.test(c.path.split('/').at(-1)||''));
+            if(entry && entry.path!==proofTarget.path) {
+              try {
+                const text=await readFile(join(root,entry.path),'utf8');
+                const preceding=text.split('\n').slice(Math.max(0,entry.line-16),entry.line);
+                let entrySelector='';
+                for(const line of [...preceding].reverse()) {
+                  const py=/^\s*(?:async\s+)?def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/.exec(line);
+                  const js=/\bexports\.([A-Za-z_$][\w$]*)\s*=/.exec(line) ||
+                    /\b(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(/.exec(line);
+                  const java=/\b(?:public|protected)\s+(?:static\s+)?String\s+([A-Za-z_$][\w$]*)\s*\(/.exec(line);
+                  const name=(py||js||java)?.[1];
+                  if(name) {
+                    entrySelector=entry.path.endsWith('.java')?
+                      entry.path.split('/').at(-1)!.replace(/\.java$/,'')+'.'+name:name;
+                    break;
+                  }
+                }
+                if(entrySelector) {
+                  const observed=JSON.parse(await session.probe(entry.path,entrySelector,'entry_html_reflection'));
+                  await appendFile(logFile,'[CONTROLLER_ENTRY_PROBE] '+JSON.stringify({
+                    path:entry.path,function:entrySelector,kind:'entry_html_reflection',
+                    status:observed.status,caseId:observed.caseId||null})+'\n');
+                  if(observed.status==='behavior_observed' && typeof observed.caseId==='string' &&
+                     session.cases.has(observed.caseId)) {
+                    controllerEntryCases.set(proofTarget.caseId,observed.caseId);
+                    await appendFile(logFile,'[CONTROLLER_ENTRY_PROOF_LINK] '+JSON.stringify({
+                      rendererCaseId:proofTarget.caseId,entryCaseId:observed.caseId,
+                      file:entry.path,selector:entrySelector})+'\n');
+                  }
+                }
+              }catch(error) {
+                await appendFile(logFile,'[CONTROLLER_ENTRY_PROBE_UNAVAILABLE] '+JSON.stringify({
+                  path:entry.path,error:String(error).slice(0,350)})+'\n');
+              }
+            }
+          }
           return {callers:paths,...(promoted?{promoted}:{})};
         },
         verifyPython:async (path,fn,kind,sequence) => {
@@ -379,7 +431,8 @@ Do not claim production testing, JavaScript execution, file access or other effe
               probeKind:record.spec.kind,sourceSha256:record.sourceSha256,
               callerFile:relative(repository.directory,join(root,match.path)).split(sep).join('/'),
               callerLine:match.line,callerCode:match.code,reachability:'caller',
-              observations:record.result.observations,limitation:record.result.limitation ?? 'No additional reproduction limitations recorded.'
+              observations:record.result.observations,limitation:record.result.limitation ?? 'No additional reproduction limitations recorded.',
+              entryProof:entryEvidenceFor(caseId)
             }));
           }
           if(!packets.length)return '';
@@ -733,7 +786,8 @@ Do not claim production testing, JavaScript execution, file access or other effe
             probeKind:record.spec.kind,sourceSha256:record.sourceSha256,
             callerFile:callerRelative,callerLine:candidate.callerLine,
             callerCode:callerLine,reachability:candidate.reachability||'caller',
-            observations:record.result.observations,limitation:record.result.limitation ?? 'No additional reproduction limitations recorded.'
+            observations:record.result.observations,limitation:record.result.limitation ?? 'No additional reproduction limitations recorded.',
+            entryProof:entryEvidenceFor(candidate.caseId)
           }))});
     }
     return {auditRecord,success:true,coverage:"partial",acquisitionChecks,capabilityChecks,coverageDetail:`${session.completedProbes} supported probes completed; ${session.unsupportedProbes} unsupported probes; ${session.failedProbes} failed probes`,findings,rawOutput:answer};
@@ -779,6 +833,19 @@ export async function independentReview(finding:SecurityFinding,program:Security
     // authorized remote cloner; all languages share this review path.
     await (fixtureAcquirer || cloneAuthorizedSource)(record.repositoryUrl,repository,{commit:record.commit,signal});
     const replay=await replaySourceCase(record,repository,signal);
+    // An entry proof is not a model-authored statement: independently load,
+    // authorize and replay its recorded isolated handler invocation.
+    const entryId=/^Entry reproduction case: ([0-9a-f]{64})$/m.exec(finding.reportBody!)?.[1];
+    let entryReplay:unknown=null;
+    if(entryId) {
+      const entryRecord=await readSourceCase(entryId,program);
+      if(entryRecord.repositoryUrl!==record.repositoryUrl ||
+         entryRecord.commit!==record.commit ||
+         entryRecord.spec.kind!=='entry_html_reflection' ||
+         !entryRecord.result.behavior_observed)
+        throw new Error('Entry proof does not match reviewed repository and commit');
+      entryReplay=await replaySourceCase(entryRecord,repository,signal);
+    }
     const reachability=/^Reachability: (caller|direct_transaction)$/m.exec(finding.reportBody!)?.[1] || "caller";
     const callerText=await readFile(join(repository,caller[1]),"utf8");
     if(!validReachability({reachability,callerLine:Number(caller[2])} as z.infer<typeof candidateSchema>,record,caller[1],callerText))
@@ -823,6 +890,9 @@ export async function independentReview(finding:SecurityFinding,program:Security
       "CALLER SOURCE (line numbered, includes validated line):\n"+callerExcerpt,
       "SAME-DIRECTORY JAVA HELPER CHAIN (raw source, if applicable):\n"+bounded(sourceChain||"Not applicable to this language",1200),
       "RECORDED REPLAY:\n"+bounded(JSON.stringify(replay,null,2),2500),
+      "INDEPENDENTLY REPLAYED CONTROLLER ENTRY HANDLER:\n"+bounded(
+        entryReplay ? JSON.stringify(entryReplay,null,2) :
+        'No separately executed handler proof was recorded; reachability remains unproven by runtime entry execution.',3500),
       "INVESTIGATOR REPORT:\n"+bounded(finding.reportBody!,2200),
       "SCOPE AND SUBMISSION POLICY:\n"+bounded(String(policy||"No policy text available"),1200),
       "DISCLOSED REPORTS:\n"+bounded(JSON.stringify(disclosedReports),500),

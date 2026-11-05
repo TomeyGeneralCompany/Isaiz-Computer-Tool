@@ -37,7 +37,7 @@ SUPPORTED_EXECUTION_STATUS = {
 }
 
 PROBE = r'''
-import contextlib, importlib.util, io, json, os, pathlib, sys, resource
+import contextlib, importlib.util, io, json, os, pathlib, sys, resource, urllib.parse, re
 resource.setrlimit(resource.RLIMIT_NPROC,(0,0))
 specification=json.loads(pathlib.Path('/spec.json').read_text())
 file=pathlib.Path('/repo',specification['file']).resolve()
@@ -45,17 +45,30 @@ if not file.is_relative_to('/repo'): raise ValueError('Source outside repository
 sys.path[:0]=['/repo/.tomey-python-deps','/repo',str(file.parent)]
 control='TOMEY_CONTROL_'+specification['nonce']
 attack=('<em data-tomey="'+specification['nonce']+'">TOMEY_PROBE</em>'
-        if specification['kind']=='html_reflection' else '../../TOMEY_ESCAPE_'+specification['nonce'])
+        if specification['kind'] in ('html_reflection','entry_html_reflection') else '../../TOMEY_ESCAPE_'+specification['nonce'])
 with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
     module_spec=importlib.util.spec_from_file_location('autohack_probe_target',str(file))
     module=importlib.util.module_from_spec(module_spec)
     module_spec.loader.exec_module(module)
     function=getattr(module,specification['function'])
-    normal=function(control)
-    observed=function(attack)
+    if specification['kind']=='entry_html_reflection':
+        entry_source=file.read_text()
+        entry_keys=set(re.findall(r'\.get\(\s*["\']([A-Za-z_][A-Za-z0-9_-]{0,63})["\']\s*,',entry_source))
+        if 'parse_qs' not in entry_source or len(entry_keys)!=1:
+            raise ValueError('Unsupported or ambiguous Python request-parameter extraction')
+        entry_parameter=next(iter(entry_keys))
+        control_url='http://localhost/?'+entry_parameter+'='+urllib.parse.quote(control,safe='')
+        attack_url='http://localhost/?'+entry_parameter+'='+urllib.parse.quote(attack,safe='')
+        normal=function(control_url)
+        observed=function(attack_url)
+    else:
+        normal=function(control)
+        observed=function(attack)
 if not isinstance(normal,str) or not isinstance(observed,str): raise ValueError('Probe requires string return values')
 if len(normal)>16000 or len(observed)>16000: raise ValueError('Probe output too large')
-print(json.dumps({'control_input':control,'control_output':normal,'attack_input':attack,'attack_output':observed}))
+print(json.dumps({'control_input':control,'control_output':normal,'attack_input':attack,'attack_output':observed,
+  **({'entry_control_url':control_url,'entry_attack_url':attack_url,'entry_selector':specification['function'],'entry_parameter':entry_parameter}
+     if specification['kind']=='entry_html_reflection' else {})}))
 '''
 
 
@@ -311,9 +324,13 @@ def run_probe(repository: Path, specification: dict, _dependency_round: int = 0)
     target=(repository/file).resolve(strict=True)
     if not target.is_relative_to(repository) or not target.is_file() or target.stat().st_size>256000: raise ValueError('Source outside repository or too large')
     if not isinstance(function,str) or not re.fullmatch(r'[A-Za-z][A-Za-z0-9_]{0,79}(?:\.[A-Za-z][A-Za-z0-9_]{0,79})?',function): raise ValueError('Public top-level function name required')
-    if kind not in ('html_reflection','path_construction','solidity_sequence','java_sequence'): raise ValueError('Unsupported probe kind')
+    if kind not in ('html_reflection','entry_html_reflection','path_construction','solidity_sequence','java_sequence'): raise ValueError('Unsupported probe kind')
     if not isinstance(nonce,str) or not re.fullmatch(r'[a-f0-9]{32}',nonce): raise ValueError('Invalid probe nonce')
     language = 'python' if file.endswith('.py') else 'solidity' if file.endswith('.sol') else 'java' if file.endswith('.java') else 'javascript'
+    if kind == 'entry_html_reflection' and (language not in ('python','javascript','java') or
+            not re.search(r'(handler|controller|route|entry|server)',file,re.I) or
+            not re.fullmatch(r'[A-Za-z][A-Za-z0-9_]{0,79}(?:\.[A-Za-z][A-Za-z0-9_]{0,79})?',function)):
+        raise ValueError('Entry probe requires a supported handler method and source file')
     if language not in ('solidity','java') and '.' in function: raise ValueError('Top-level function name required')
     if kind == 'solidity_sequence':
         if language != 'solidity' or '.' not in function: raise ValueError('Solidity Contract.function required')
@@ -491,12 +508,15 @@ def run_probe(repository: Path, specification: dict, _dependency_round: int = 0)
                     'observations':data,
                     'limitation':'Only bounded Java constructor and method calls were executed. Expected-value mismatches are observations, not validated security findings.'}
         normal,observed=data['control_output'],data['attack_output']
-        if kind=='html_reflection':
+        if kind in ('html_reflection','entry_html_reflection'):
             matches=reflected_markup(data, nonce)
         else:
             base=Path(os.path.normpath(normal)).parent
             attack_path=Path(os.path.normpath(observed))
             matches=normal.endswith(data['control_input']) and attack_path.name=='TOMEY_ESCAPE_'+nonce and not attack_path.is_relative_to(base)
+        if kind == 'entry_html_reflection' and language in ('python','javascript'):
+            if not (data.get('entry_control_url') and data.get('entry_attack_url')):
+                raise ValueError('Entry proof requires recorded URL inputs')
         return {'status':'behavior_observed' if matches else 'behavior_not_observed',
                 'behavior_observed':matches,'source_sha256':source_hash,'kind':kind,'observations':data,
                 'limitation':'A local function behavior is not sufficient to establish a reportable vulnerability; call-site reachability, mitigations, policy and impact require independent review.'}
