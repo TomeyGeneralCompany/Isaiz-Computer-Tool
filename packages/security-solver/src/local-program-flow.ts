@@ -817,8 +817,15 @@ Return final JSON only:
 {"verdict":"approve|reject","recommendation":"submit|submit_cautiously|dont_submit","severity":"medium","confidence":0.7,"ratingReason":"Independently explain severity and confidence from the report evidence and remaining uncertainty.","bet100":true,"rubric":{"exploitability":0,"impactSeverity":0,"evidenceQuality":0,"novelty":0,"scopeAlignment":0},"issues":[{"category":"reason","severity":"fatal|warning|info","description":"specific issue"}],"reasoning":"specific evidence-based conclusion"}
 Independently assign severity and confidence from observed impact, source reachability and evidence limits. Do not copy the hunter ratings or raise them to pass a threshold.
 Use one enum value per string. Scores are integers 0..3. bet100=false requires dont_submit. Approval requires a demonstrated technically valid security issue in scope, not just a passing probe. External submission eligibility must never change verdict.\n\n${packet}`;
+    // The controller has already read and replayed the case, validated the
+    // caller line and supplied the full bounded packet. In this condition
+    // Qwen must issue a verdict, not repeatedly navigate completed files.
+    // Scripted legacy model fixtures separately exercise navigation recovery.
+    const directReview=process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false' &&
+      !!chainEvidence.sourceDigest && !!record.result.observations;
     await runLocalAudit(prompt,logFile,getConfig().SECURITY_HUNT_TIMEOUT_MINUTES*60000,root,process.env.LOCAL_OLLAMA_MODEL || "qwen3:4b",undefined,{
-      signal,maxTurns:40,dynamicAllowance:process.env.LOCAL_HUNT_DYNAMIC_ALLOWANCE !== "false",prefetchReadOnly:true,finalSchema:z.toJSONSchema(reviewSchema),numCtx:8192,numThreads:4,numPredict:getConfig().LOCAL_HUNT_NUM_PREDICT,
+      signal,maxTurns:directReview?12:40,dynamicAllowance:process.env.LOCAL_HUNT_DYNAMIC_ALLOWANCE !== "false",prefetchReadOnly:true,finalSchema:z.toJSONSchema(reviewSchema),numCtx:8192,numThreads:4,numPredict:getConfig().LOCAL_HUNT_NUM_PREDICT,
+      ...(directReview?{actionConstraints:()=>({action:['final']})}:{}),
       initialSourcePaths:[],
       // Short source facts recur after every compaction, and the full immutable
       // chain is preserved in evidence/verified-chain.json.
