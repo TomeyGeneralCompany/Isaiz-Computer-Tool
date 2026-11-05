@@ -31,6 +31,10 @@ export function callerLineReferences(text:string,line:number,selector:string):bo
   // never borrow an unrelated call farther down the file.
   const name=selector.split(".").at(-1)!;
   const first=lines[line-1].trimEnd();
+  // An import/re-export declaration ending in a symbol name isn't a
+  // multi-line invocation. Treating it as one creates duplicate caller edges
+  // when the next lines actually invoke the imported function.
+  if(/^\\s*(?:from\\s+\\S+\\s+import\\b|import\\b|export\\s+\\{)/.test(first))return false;
   if(!new RegExp("(?:\\.|\\b"+name+")\\s*$").test(first))return false;
   const continuation=lines.slice(line-1,Math.min(lines.length,line+2)).join("\n");
   return referencesProbedFunction(continuation,selector);
