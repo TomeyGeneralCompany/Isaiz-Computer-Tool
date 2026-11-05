@@ -2,7 +2,8 @@ import {prioritizeSourceCandidates} from './source-candidates';
 import {collectStaticLeads} from './local-static-leads';
 import {buildSourceMap} from './source-map';
 import {sourceCandidateEvidence,verifiedProbeSummary} from './source-candidate-evidence';
-import {traceSourceCalls} from './source-flow-facts';
+import {traceSourceCalls,solidityDependentSources,controllerCallerChain} from './source-flow-facts';
+import {declaredProbeTarget,supportedJavaProbeHints} from './probe-target-validation';
 import { LOCAL_REPRODUCTION_CAPABILITY_VERSION } from "../../core/src/program-eligibility";
 import { inspectSourceCapability } from "./source-capability";
 import { SourceReads } from "./source-inspection";
@@ -18,6 +19,7 @@ import { authorizedSourceUrls, assertAuthorizedTarget, getConfig, getDb, schema,
 import { fetchProgramScopes, fetchProgramPolicy, fetchProgramSignalRequirement, prepareSubmission, submitReport } from "@bounty/security-discovery";
 import { cloneAuthorizedSource, describeSourceAcquisitionFailure, acquisitionRetryAfter } from "./authorized-source";
 import { runLocalAudit } from "./local-ollama-runner";
+import {runEvidenceOnlyReview} from './evidence-only-review';
 import { createProbeSession, readSourceCase, replaySourceCase, type SourceCase, type ProbeRepository } from "./source-reproduction";
 import { writeSecuritySolverStatus, clearSecuritySolverStatus, writeAdversarialReviewStatus, clearAdversarialReviewStatus } from "./status";
 import type { SecuritySolveResult, ParsedFinding } from "./claude-runner";
@@ -176,6 +178,8 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
     // Controller inspects actual declaration/caller lines before involving the
     // model. These are candidate source facts, NOT proof of exploitability.
     let controllerTraceSummary='';
+    let controllerPromotedCaseId:string|null=null;
+    let controllerPromotedFromCaseId:string|null=null;
     const candidateEvidence=await sourceCandidateEvidence(root,sourceMap.symbols,8);
     await writeFile(join(root,'audit-controller-candidates.json'),JSON.stringify(candidateEvidence,null,2),{mode:0o600});
     await appendFile(logFile,'[SOURCE_MAP] '+JSON.stringify({files:sourceMap.scannedFiles,symbols:sourceMap.symbols.length,skipped:sourceMap.skippedFiles})+'\n');
@@ -215,8 +219,10 @@ Do not claim production testing, JavaScript execution, file access or other effe
       process.env.LOCAL_OLLAMA_MODEL || "qwen3:4b",undefined,{
         onAllowance:async deadline=>writeSecuritySolverStatus({active:true,programId:program.id,programName:program.name,
           stage:"hunting",startedAt:statusStartedAt,timeoutMinutes:(deadline-Date.parse(statusStartedAt))/60000,pid:process.pid}),
-        signal,maxTurns,finalSchema:z.toJSONSchema(huntSchema),productionWorkflow:true,dynamicAllowance:process.env.LOCAL_HUNT_DYNAMIC_ALLOWANCE !== "false",initialSourcePaths:["audit-policy.txt",...sourceHints],initialSourceLocations:selection.locations,checkpointPath:join(checkpointDirectory,checkpointKey+".json"),numCtx:8192,numThreads:4,numPredict:getConfig().LOCAL_HUNT_NUM_PREDICT,onRead:(path,span)=>reads.add(path,span),
-        progressNote:()=>(verifiedProbeSummary(session.cases,2).slice(0,420)+'\n'+controllerTraceSummary.slice(0,420)).slice(0,850),
+        signal,maxTurns,finalSchema:z.toJSONSchema(huntSchema),productionWorkflow:true,dynamicAllowance:process.env.LOCAL_HUNT_DYNAMIC_ALLOWANCE !== "false",initialSourcePaths:["audit-policy.txt",...new Set([...sourceHints,...eligiblePaths])],initialSourceLocations:selection.locations,checkpointPath:join(checkpointDirectory,checkpointKey+".json"),numCtx:8192,numThreads:4,numPredict:getConfig().LOCAL_HUNT_NUM_PREDICT,onRead:(path,span)=>reads.add(path,span),
+        progressNote:()=>(controllerPromotedCaseId?
+          'CONTROLLER VERIFIED ENTRY CASE: '+controllerPromotedCaseId+' (prioritize this observed caller; do not substitute helper case).\n':'')+
+          (verifiedProbeSummary(session.cases,2).slice(0,340)+'\n'+controllerTraceSummary.slice(0,340)).slice(0,730),
         onVerifiedCase:async(caseId,path,selector,kind)=>{
           // This callback is invoked only after the trusted verifier returns
           // behavior_observed. The model cannot nominate the caller.
@@ -229,56 +235,83 @@ Do not claim production testing, JavaScript execution, file access or other effe
           if(path!==testedPath)return null;
           if(record.spec.kind==='solidity_sequence') {
             const entry=record.spec.function.split('.').at(-1)||'';
-            if(record.spec.sequence?.steps.some(step=>
+            if(!record.spec.sequence?.steps.some(step=>
               'operation' in step && step.operation==='send' && 'function' in step &&
-              step.function.split('(')[0]===entry))return [testedPath];
+              step.function.split('(')[0]===entry))return {callers:[testedPath]};
             return null;
           }
-          const visited=new Set<string>([testedPath]);
-          const chain:string[]=[];
-          let currentSelector=record.spec.function;
-          for(let depth=0;depth<4;depth++){
-            const candidates:Array<{path:string;line:number;code:string;qualified:boolean;source:string}>=[],prefix=
-              relative(root,repository.directory).split(sep).join('/')+'/';
-            for(const candidatePath of [...new Set([...sourceHints,...eligiblePaths])].slice(0,192)) {
-              if(visited.has(candidatePath) || !candidatePath.startsWith(prefix))continue;
-              try {
-                const code=await readFile(join(root,candidatePath),'utf8');
-                if(code.length>256000)continue;
-                const lines=code.split('\n');
-                for(let i=1;i<=lines.length;i++){
-                  if(!callerLineReferences(code,i,currentSelector))continue;
-                  candidates.push({path:candidatePath,line:i,code:lines[i-1],
-                    qualified:qualifiedCallerLineReferences(code,i,currentSelector),source:code});
-                }
-              }catch{}
-            }
-            const precise=candidates.filter(candidate=>candidate.qualified);
-            const chosen=precise.length===1?precise[0]:candidates.length===1?candidates[0]:null;
-            if(!chosen)break;
-            chain.push(chosen.path);visited.add(chosen.path);
-            await appendFile(logFile,'[CONTROLLER_VERIFIED_CALLER] '+
-              JSON.stringify({caseId,selector:currentSelector,caller:chosen.path,
-                line:chosen.line,code:chosen.code.slice(0,400)})+'\n');
-            const prior=chosen.source.split('\n').slice(Math.max(0,chosen.line-12),chosen.line);
-            let enclosing='';
-            for(const line of [...prior].reverse()){
+          const ownPrefix=relative(root,repository.directory).split(sep).join('/')+'/';
+          const chain=await controllerCallerChain(root,ownPrefix,testedPath,
+            record.spec.function,[...new Set([...sourceHints,...eligiblePaths])],4);
+          if(!chain.length)return null;
+          for(const item of chain)await appendFile(logFile,'[CONTROLLER_VERIFIED_CALLER] '+
+            JSON.stringify({caseId,selector:item.selector,caller:item.path,
+              line:item.line,code:item.code.slice(0,400)})+'\n');
+          // Import-resolved callers replace the older competing lexical traversal.
+          // Keep the first enclosing function so a reproduced helper can be promoted.
+          let firstCallerSelector='';
+          if(chain[0]) {
+            const first=chain[0];
+            const source=await readFile(join(root,first.path),'utf8');
+            const preceding=source.split('\n').slice(Math.max(0,first.line-12),first.line);
+            for(const line of [...preceding].reverse()) {
               const python=/^\s*(?:async\s+)?def\s+([A-Za-z_$][\w$]*)\s*\(/.exec(line);
               const javascript=/\bfunction\s+([A-Za-z_$][\w$]*)\s*\(/.exec(line) ||
                 /\bexports\.([A-Za-z_$][\w$]*)\s*=/.exec(line);
               const java=/\b(?:public|protected|private)\s+(?:static\s+)?[A-Za-z_$][\w$<>\[\]]*\s+([A-Za-z_$][\w$]*)\s*\(/.exec(line);
-              enclosing=(python||javascript||java)?.[1]||'';
-              if(enclosing)break;
+              const enclosing=(python||javascript||java)?.[1];
+              if(enclosing) {
+                firstCallerSelector=first.path.endsWith('.java')
+                  ?first.path.split('/').at(-1)!.slice(0,-5)+'.'+enclosing:enclosing;
+                break;
+              }
             }
-            if(!enclosing)break;
-            currentSelector=chosen.path.endsWith('.java') ?
-              chosen.path.split('/').at(-1)!.slice(0,-5)+'.'+enclosing : enclosing;
           }
-          if(!chain.length)return null;
+          const paths=chain.map(item=>item.path);
+          controllerTraceSummary='CONTROLLER VERIFIED UPSTREAM SOURCE CALLERS (not runtime input proof): '+
+            [testedPath,...paths].join(' -> ')+'. The model must assess entry-point input control and mitigation; it may not discard the recorded reproduction.';
           await writeFile(join(root,'audit-controller-caller-chain.json'),JSON.stringify({
-            caseId,source:testedPath,callers:chain,limitation:'Lexical caller relationships; caller argument trust and application entry require independent verification.'
+            caseId,source:testedPath,callers:chain,
+            limitation:'Import-resolved source references; dynamic dispatch, input control and runtime entry require independent verification.'
           },null,2),{mode:0o600});
-          return chain;
+          // A reproduced helper is not necessarily the public/application
+          // entry. Reproduce its uniquely grounded caller through the same
+          // sandbox before asking Qwen to report on the propagated behavior.
+          // The reviewer still independently replays and judges significance.
+          let promoted:{caseId:string;path:string;selector:string;kind:string}|undefined;
+          const promotedCaller=paths[0];
+          const isEntryBoundary=/(?:handler|controller|route|entry|server)/i.test(
+            promotedCaller?.split('/').at(-1)||'');
+          // Request-handler methods are caller/reachability evidence rather
+          // than another isolated test target. Promote helper -> renderer
+          // once; do not re-probe a handler in place of an existing case.
+          if(!focus && !controllerPromotedCaseId && firstCallerSelector && !isEntryBoundary &&
+             ['html_reflection','path_construction'].includes(kind)) {
+            const callerPath=promotedCaller;
+            try {
+              const full=join(root,callerPath);
+              const eligible=callerPath.endsWith('.java')
+                ?(await supportedJavaProbeHints(full)).includes(firstCallerSelector)
+                :await declaredProbeTarget(full,firstCallerSelector);
+              if(eligible) {
+                const observation=JSON.parse(await session.probe(callerPath,firstCallerSelector,kind));
+                await appendFile(logFile,'[CONTROLLER_CALLER_PROBE] '+
+                  JSON.stringify({path:callerPath,function:firstCallerSelector,kind,
+                    status:observation.status,caseId:observation.caseId||null,
+                    detail:String(observation.detail||observation.limitation||'').slice(-500)})+'\n');
+                if(observation.status==='behavior_observed' &&
+                   typeof observation.caseId==='string' && session.cases.has(observation.caseId)){
+                  promoted={caseId:observation.caseId,path:callerPath,selector:firstCallerSelector,kind};
+                  controllerPromotedCaseId=observation.caseId;
+                  controllerPromotedFromCaseId=caseId;
+                }
+              }
+            }catch(error) {
+              await appendFile(logFile,'[CONTROLLER_CALLER_PROBE_UNAVAILABLE] '+
+                JSON.stringify({caller:callerPath,selector:firstCallerSelector,error:String(error).slice(-350)})+'\n');
+            }
+          }
+          return {callers:paths,...(promoted?{promoted}:{})};
         },
         verifyPython:async (path,fn,kind,sequence) => {
           if (focus && path !== "source-1/"+focus.file) throw new Error("Probe must target the imported lead file");
@@ -307,7 +340,9 @@ Do not claim production testing, JavaScript execution, file access or other effe
           // This packet is assembled from verifier results and inspected source,
           // never model-authored case identities or invented caller locations.
           const packets:ControllerReportPacket[]=[];
-          for(const [caseId,record] of session.cases) {
+          const prioritizedCases=[...session.cases].sort(([a],[b])=>
+            Number(b===controllerPromotedCaseId)-Number(a===controllerPromotedCaseId));
+          for(const [caseId,record] of prioritizedCases) {
             if(!record.result.behavior_observed || packets.length>=2)continue;
             const repository=repos.find(r=>r.url===record.repositoryUrl);
             if(!repository || !reads.has(sourceFileInWorkspace(repository,record.spec.file,root)))continue;
@@ -366,6 +401,19 @@ Do not claim production testing, JavaScript execution, file access or other effe
               proposed.outcome='no_testable_candidate';
               proposed.reason='No reproduction was recorded. If the inspected source has a compatible declared function, first use plan_probe then verify_source; otherwise inspect the next eligible candidate and record a scoped incomplete result.';
               await appendFile(logFile,'[PROBE_REQUIRED_FOR_FINDING] No recorded case ID; plan a compatible source probe before claiming a vulnerability\\n');
+            }
+            // Source-verified caller reproduction supersedes the helper's
+            // case ID for the SAME observed flow. The controller owns this
+            // exact reference; Qwen may not substitute stale helper evidence.
+            if(controllerPromotedCaseId && controllerPromotedFromCaseId &&
+               proposed && typeof proposed==='object' && Array.isArray(proposed.findings) &&
+               session.cases.has(controllerPromotedCaseId)) {
+              for(const item of proposed.findings) {
+                if(item?.caseId!==controllerPromotedFromCaseId)continue;
+                item.caseId=controllerPromotedCaseId;
+                await appendFile(logFile,'[CONTROLLER_ENTRY_CASE_NORMALIZED] '+
+                  JSON.stringify({from:controllerPromotedFromCaseId,to:controllerPromotedCaseId})+'\n');
+              }
             }
             // Small local models sometimes select the contradictory outcome
             // no_testable_candidate while also supplying reproduced findings.
@@ -758,30 +806,45 @@ Return final JSON only:
 {"verdict":"approve|reject","recommendation":"submit|submit_cautiously|dont_submit","severity":"medium","confidence":0.7,"ratingReason":"Independently explain severity and confidence from the report evidence and remaining uncertainty.","bet100":true,"rubric":{"exploitability":0,"impactSeverity":0,"evidenceQuality":0,"novelty":0,"scopeAlignment":0},"issues":[{"category":"reason","severity":"fatal|warning|info","description":"specific issue"}],"reasoning":"specific evidence-based conclusion"}
 Independently assign severity and confidence from observed impact, source reachability and evidence limits. Do not copy the hunter ratings or raise them to pass a threshold.
 Use one enum value per string. Scores are integers 0..3. bet100=false requires dont_submit. Approval requires a demonstrated technically valid security issue in scope, not just a passing probe. External submission eligibility must never change verdict.\n\n${packet}`;
-    await runLocalAudit(prompt,logFile,getConfig().SECURITY_HUNT_TIMEOUT_MINUTES*60000,root,process.env.LOCAL_OLLAMA_MODEL || "qwen3:4b",undefined,{
-      signal,maxTurns:40,dynamicAllowance:process.env.LOCAL_HUNT_DYNAMIC_ALLOWANCE !== "false",prefetchReadOnly:true,finalSchema:z.toJSONSchema(reviewSchema),numCtx:8192,numThreads:4,numPredict:getConfig().LOCAL_HUNT_NUM_PREDICT,
-      initialSourcePaths:[],
-      // Short source facts recur after every compaction, and the full immutable
-      // chain is preserved in evidence/verified-chain.json.
-      progressNote:()=>("Verified evidence digest: "+chainEvidence.sourceDigest+
-        "; language: "+chainEvidence.language+"; reachability rule: "+chainEvidence.reachabilityRequirement+
-        "; caller: "+caller[1]+":"+caller[2]+
-        "; actual source citations: "+chainEvidence.links.slice(0,5).map(x=>x.file+":"+x.line).join(", ")+
-        ". Full source-backed chain remains in the initial controller packet and evidence/verified-chain.json."),
-      validateFinal:async text=>{
-        try {
-          const value=reviewSchema.parse(JSON.parse(text));
-          const submissionPolicyFatal=value.verdict==="reject" && value.issues.some(issue=>
-            issue.severity==="fatal" &&
-            /(?:policy|synthetic|owned).*(?:submi|report)|(?:submi|report).*(?:prohibit|forbid|policy)/i.test(issue.description));
-          if(submissionPolicyFatal)return "An external submission prohibition is not a technical defect. Reevaluate source and replay; use recommendation=dont_submit if submission is prohibited.";
-          const defect=reviewRejectionDefect(value,chainEvidence);
-          if(defect)return defect;
-          review=value;
-          return null;
-        }catch{return "Return the requested review JSON with valid enum values and integer rubric scores.";}
-      },
-    });
+    const validateReviewFinal=async(text:string):Promise<string|null>=>{
+      try {
+        const value=reviewSchema.parse(JSON.parse(text));
+        const submissionPolicyFatal=value.verdict==="reject" && value.issues.some(issue=>
+          issue.severity==="fatal" &&
+          /(?:policy|synthetic|owned).*(?:submi|report)|(?:submi|report).*(?:prohibit|forbid|policy)/i.test(issue.description));
+        if(submissionPolicyFatal)return "An external submission prohibition is not a technical defect. Reevaluate source and replay; use recommendation=dont_submit if submission is prohibited.";
+        const defect=reviewRejectionDefect(value,chainEvidence);
+        if(defect)return defect;
+        review=value;
+        return null;
+      }catch{return "Return the requested review JSON with valid enum values and integer rubric scores.";}
+    };
+    const directReview=process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false' &&
+      !!chainEvidence.sourceDigest && !!record.result.observations;
+    if(directReview) {
+      // No investigation action schema is exposed here. The controller has
+      // already collected and replayed every source and caller fact. The old
+      // source-read gate was deadlocking a fully prepared independent review.
+      await runEvidenceOnlyReview({
+        prompt,schema:z.toJSONSchema(reviewSchema) as Record<string,unknown>,
+        model:process.env.LOCAL_OLLAMA_MODEL||'qwen3:4b',
+        logFile,signal,numCtx:8192,numPredict:getConfig().LOCAL_HUNT_NUM_PREDICT,
+        validate:validateReviewFinal,maxAttempts:3
+      });
+    } else {
+      await runLocalAudit(prompt,logFile,getConfig().SECURITY_HUNT_TIMEOUT_MINUTES*60000,root,process.env.LOCAL_OLLAMA_MODEL || "qwen3:4b",undefined,{
+        signal,maxTurns:40,dynamicAllowance:process.env.LOCAL_HUNT_DYNAMIC_ALLOWANCE !== "false",
+        prefetchReadOnly:true,finalSchema:z.toJSONSchema(reviewSchema),
+        numCtx:8192,numThreads:4,numPredict:getConfig().LOCAL_HUNT_NUM_PREDICT,
+        initialSourcePaths:[],
+        progressNote:()=>("Verified evidence digest: "+chainEvidence.sourceDigest+
+          "; language: "+chainEvidence.language+"; reachability rule: "+chainEvidence.reachabilityRequirement+
+          "; caller: "+caller[1]+":"+caller[2]+
+          "; actual source citations: "+chainEvidence.links.slice(0,5).map(x=>x.file+":"+x.line).join(", ")+
+          ". Full source-backed chain remains in the initial controller packet and evidence/verified-chain.json."),
+        validateFinal:validateReviewFinal
+      });
+    }
     signal.throwIfAborted();
     if(!review)throw new Error("No validated independent review");
     return {review,replay,caseId:id,policy,sourceSha256:record.sourceSha256,replayedAt:new Date().toISOString()};

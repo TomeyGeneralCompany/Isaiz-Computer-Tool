@@ -8,6 +8,9 @@ import {traceSourceCalls} from '../packages/security-solver/src/source-flow-fact
 import {InvestigationWorkflow} from '../packages/security-solver/src/investigation-workflow';
 import {guidedSourceProbe} from '../packages/security-solver/src/source-guided-probes';
 import {buildSourceMap} from '../packages/security-solver/src/source-map';
+import {SoliditySourceIndex} from '../packages/security-solver/src/solidity-source-index';
+import {buildBaselineSequence} from '../packages/security-solver/src/solidity-probe-inputs';
+import {privilegedRoleMutationCandidate} from '../packages/security-solver/src/solidity-security-candidates';
 
 const pending={path:'source-1/src/render.py',query:'render',answer:'html_reflection'};
 assert.deepEqual(controllerOwnedNextAction({
@@ -126,5 +129,31 @@ try {
   const map=await buildSourceMap(root,manyFiles);
   assert.equal(map.scannedFiles,144,'controller must index the entire 144-file challenge');
   assert.equal(map.skippedFiles,0);
+  const authSource='pragma solidity ^0.8.20;\n'+
+    'contract Authority {\naddress public administrator;address public operator;\n'+
+    'constructor(){administrator=msg.sender;operator=msg.sender;}\n'+
+    'function rotateOperator(address next) external {require(next!=address(0),"zero");operator=next;}\n'+
+    'function changeAdministrator(address next) external {require(msg.sender==administrator,"admin");administrator=next;}\n}';
+  const consumerSource='pragma solidity ^0.8.20;contract Vault {\n'+
+    'address public operator; function settle() external {require(msg.sender==operator,"operator only");}\n}';
+  await writeFile(join(root,'source-1','Authority.sol'),authSource);
+  const risk=privilegedRoleMutationCandidate('source-1/Authority.sol',authSource,[authSource,consumerSource]);
+  assert.equal(risk?.selector,'Authority.rotateOperator','unguarded role mutation is a controller candidate');
+  assert.equal(privilegedRoleMutationCandidate('source-1/Authority.sol',authSource,[authSource]),null,
+    'lack of a source-proven privileged role consumer cannot create a security candidate');
+  const safeSource=authSource.replace('require(next!=address(0),"zero");operator=next;',
+    'require(msg.sender==administrator,"admin");operator=next;');
+  assert.equal(privilegedRoleMutationCandidate('source-1/Authority.sol',safeSource,[safeSource,consumerSource]),null,
+    'explicit authorization guard must suppress the candidate');
+  const solidityIndex=new SoliditySourceIndex(root);
+  const abi=await solidityIndex.probeMenu(join(root,'source-1','Authority.sol'),64);
+  assert.ok(abi.some(entry=>entry.selector==='Authority.operator'&&entry.operation==='call'),
+    'public state getter is a real Solidity ABI function');
+  const baseline=buildBaselineSequence(abi,'Authority.rotateOperator',true);
+  assert.ok(baseline);
+  assert.equal(baseline.steps[0].function,'operator()');
+  assert.equal(baseline.steps[1].operation,'send');
+  assert.equal((baseline.steps[1] as {sender?:number}).sender,1);
+  assert.deepEqual(baseline.steps[1].args,['$account2']);
   console.log('Controller owned-next-action, grounded source citations and verified probe memory PASSED');
 } finally {await rm(root,{recursive:true,force:true});}

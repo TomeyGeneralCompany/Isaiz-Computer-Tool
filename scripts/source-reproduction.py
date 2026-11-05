@@ -21,6 +21,7 @@ import tempfile
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from source_dependencies import prepare_dependencies, prepare_pinned_foundry_submodules, prepare_locked_python_wheels, DependencyError
+from solidity_access_evidence import authorization_transition_observed
 
 SUPPORTED_EXECUTION_STATUS = {
     'behavior_observed',
@@ -56,6 +57,26 @@ if not isinstance(normal,str) or not isinstance(observed,str): raise ValueError(
 if len(normal)>16000 or len(observed)>16000: raise ValueError('Probe output too large')
 print(json.dumps({'control_input':control,'control_output':normal,'attack_input':attack,'attack_output':observed}))
 '''
+
+
+def observed_non_deployer_state_transition(steps):
+    """Prove only a replayable changed getter after a non-deployer send."""
+    if not isinstance(steps, list):
+        return False
+    for index, step in enumerate(steps):
+        if not isinstance(step, dict) or step.get('operation') != 'send':
+            continue
+        if step.get('sender') not in (1, 2) or step.get('reverted') is not False or type(step.get('passed')) is not bool:
+            continue
+        before=next((v for v in reversed(steps[:index])
+                     if isinstance(v,dict) and v.get('operation')=='observe'),None)
+        after=next((v for v in steps[index+1:]
+                    if isinstance(v,dict) and v.get('operation')=='observe' and before and
+                    v.get('function')==before.get('function') and
+                    v.get('sender')==before.get('sender')),None)
+        if before and after and before.get('actual')!=after.get('actual'):
+            return True
+    return False
 
 
 def execution_capability(repository: Path, file: str, function: str, kind: str) -> tuple[bool, str | None]:
@@ -141,6 +162,42 @@ def reflected_markup(data, nonce):
     control_parser.feed(normal)
     control_parser.close()
     return attack_parser.found and not control_parser.found
+
+
+def observed_nonincumbent_role_transition(data):
+    """Recognize a replayable local role transition, not its security significance.
+
+    The signer must differ from the incumbent; the recorded getter must change
+    to that signer despite an expected-revert hypothesis. Independent review
+    determines whether reassignment violated an actual security boundary.
+    """
+    if not isinstance(data,dict):
+        return False
+    accounts=data.get('accounts')
+    steps=data.get('steps')
+    if (not isinstance(accounts,list) or len(accounts)<3 or
+            not isinstance(steps,list) or len(steps)<3):
+        return False
+    role_getter=re.compile(r'^(?:owner|operator|administrator|admin|governor|manager|controller)\(\)$',re.I)
+    for before,change,after in zip(steps,steps[1:],steps[2:]):
+        if (before.get('operation')!='observe' or
+                change.get('operation')!='send' or
+                after.get('operation')!='observe' or
+                before.get('function')!=after.get('function') or
+                not role_getter.fullmatch(str(before.get('function',''))) or
+                change.get('reverted') is not False or
+                change.get('passed') is not False):
+            continue
+        sender=change.get('sender')
+        if type(sender) is not int or sender not in (1,2):
+            continue
+        incumbent=str(before.get('actual','')).lower()
+        successor=str(after.get('actual','')).lower()
+        attacker=str(accounts[sender]).lower()
+        if (incumbent.startswith('0x') and len(incumbent)==42 and
+                incumbent!=attacker and successor==attacker):
+            return True
+    return False
 
 
 def limits(node=False, java=False):
@@ -386,19 +443,39 @@ def run_probe(repository: Path, specification: dict, _dependency_round: int = 0)
                 return {'status':'unsupported_dependencies','behavior_observed':False,
                         'detail':'Java project types missing from isolated compiler classpath: '+diagnostic[-700:]}
         if code:
-            return {'status':'probe_failed','behavior_observed':False,'exit_code':code,
-                    'detail':(work/'stderr').read_text(errors='replace')[-1200:]}
+            diagnostic=(work/'stderr').read_text(errors='replace')
+            # Ganache may print an optional native-module warning before the
+            # actual TOMEY_ERROR. Keep the structured root cause first, rather
+            # than truncating it behind unrelated compatibility chatter.
+            if language == 'solidity' and 'TOMEY_ERROR ' in diagnostic:
+                try:
+                    cause=json.loads(diagnostic.rsplit('TOMEY_ERROR ',1)[1])
+                    detail=str(cause.get('detail','Solidity runtime failure'))[:1200]
+                    if isinstance(cause.get('missingImports'),list) and cause['missingImports']:
+                        detail+='; missing imports: '+repr(cause['missingImports'][:8])[:350]
+                except (ValueError,TypeError,AttributeError):
+                    detail=diagnostic[-1200:]
+            else:
+                detail=diagnostic[-1200:]
+            return {'status':'probe_failed','behavior_observed':False,'exit_code':code,'detail':detail}
         if hashlib.sha256(target.read_bytes()).hexdigest()!=source_hash: raise ValueError('Source changed during probe')
         data=json.loads((work/'stdout').read_text())
         if kind == 'solidity_sequence':
             if not isinstance(data.get('steps'),list) or not data['steps'] or any(type(step.get('passed')) is not bool for step in data['steps'] if step.get('operation') != 'observe'):
                 raise ValueError('Invalid transaction observations')
-            # Expected-value assertions are test hypotheses, not independent
-            # evidence of a security vulnerability. Preserve every observed
-            # transaction and mismatch for caller/impact review and replay.
-            return {'status':'observation_only','behavior_observed':False,
+            # An arbitrary expected-value mismatch is NOT evidence. A
+            # nonadministrator mutation of a source-proven privileged role,
+            # established by before/after EVM receipts and an independently
+            # inspected role-gated consumer, IS a reproducible security
+            # behavior. Reporting impact still requires separate review.
+            source_proven = authorization_transition_observed(
+                repository,target,specification['function'],data)
+            return {'status':'behavior_observed' if source_proven else 'observation_only',
+                    'behavior_observed':source_proven,
                     'source_sha256':source_hash,'kind':kind,'observations':data,
-                    'limitation':'Only bounded Solidity transactions and assertions were observed. An expected-value mismatch is not a confirmed security reproduction; reachability and impact require independent evidence.'}
+                    'limitation':('Verified nonadministrator role mutation with before/after EVM observations and a source-declared privileged role consumer; reachability and exploit impact still require independent review.'
+                      if source_proven else
+                      'Only bounded Solidity transactions and assertions were observed. An expected-value mismatch is not independent security proof.')}
         if kind == 'java_sequence':
             steps=data.get('steps')
             if not isinstance(steps,list) or not steps or not all(

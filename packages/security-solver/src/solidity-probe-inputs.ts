@@ -28,7 +28,7 @@ export interface SolidityProbeDeclaration {
 }
 /** Construct a local baseline/transition test from declarations, not imagined
  * state expectations. Unresolved ABI setup returns null. */
-export function buildBaselineSequence(menu:SolidityProbeDeclaration[],selectedSelector:string) {
+export function buildBaselineSequence(menu:SolidityProbeDeclaration[],selectedSelector:string,adversarialRoleTest=false) {
   const selected=menu.find(entry=>entry.selector===selectedSelector && entry.operation==='send');
   if(!selected)return null;
   const contract=selectedSelector.split('.')[0];
@@ -40,11 +40,14 @@ export function buildBaselineSequence(menu:SolidityProbeDeclaration[],selectedSe
   const reads=declarations.filter(entry=>entry.operation==='call' && fixtureArguments(entry.inputs)!==null);
   // A zero-input getter is preferable to an unrelated parameterized read;
   // these are observations, not invented assertions about correctness.
+  const selectedMethod=selectedSelector.split('.').at(-1)||'';
+  const roleName=/^(?:rotate|change|set|update|transfer|assign)([A-Z][A-Za-z0-9_]*)$/.exec(selectedMethod)?.[1];
+  const expectedGetter=roleName?roleName[0].toLowerCase()+roleName.slice(1):'';
   reads.sort((a,b)=>{
     const rank=(entry:SolidityProbeDeclaration)=>{
       const name=entry.selector.split('.').at(-1)||'';
       const getter=/^(?:get[A-Z]|value$|balanceOf$|totalSupply$|owner$|count$|stored$|current)/.test(name);
-      return (entry.inputs.length?4:0)+(getter?0:1);
+      return (entry.inputs.length?4:0)+(getter?0:1)-(name===expectedGetter?10:0);
     };
     return rank(a)-rank(b);
   });
@@ -52,9 +55,15 @@ export function buildBaselineSequence(menu:SolidityProbeDeclaration[],selectedSe
   const readArgs=read?fixtureArguments(read.inputs):null;
   if(!read || !constructorArgs || !sendArgs || !readArgs)return null;
   const signature=(entry:SolidityProbeDeclaration)=>entry.selector.split('.').at(-1)+'('+entry.inputs.join(',')+')';
+  // This is only an authorization *observation* when the caller has source
+  // evidence of a protected role consumer. A nonadmin sender and a distinct
+  // target role make the before/after state interpretable.
+  const args=adversarialRoleTest ? sendArgs.map((v,i)=>
+    /^(?:address|address payable)$/.test(selected.inputs[i])?'$account2':v) : sendArgs;
   return {constructorArgs,steps:[
     {operation:'observe' as const,function:signature(read),args:readArgs},
-    {operation:'send' as const,function:signature(selected),args:sendArgs},
+    {operation:'send' as const,function:signature(selected),args,
+      ...(adversarialRoleTest?{sender:1}: {})},
     {operation:'observe' as const,function:signature(read),args:readArgs}
   ]};
 }
