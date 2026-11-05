@@ -394,6 +394,69 @@ Do not claim production testing, JavaScript execution, file access or other effe
           // entry. Reproduce its uniquely grounded caller through the same
           // sandbox before asking Qwen to report on the propagated behavior.
           // The reviewer still independently replays and judges significance.
+          // Identical deterministic controller progression for model-initiated
+          // verified probes. Qwen does not nominate a caller or evidence ID.
+          if(!focus && record.spec.kind==='html_reflection') {
+            const progression=await promoteControllerCallChain({
+              start:{path:testedPath,selector:record.spec.function,
+                caseId,kind:record.spec.kind},
+              chain,maxSteps:6,
+              read:path=>readFile(join(root,path),'utf8'),
+              references:callerLineReferences,
+              supported:async(path,selected)=>path.endsWith('.java')
+                ?(await supportedJavaProbeHints(join(root,path))).includes(selected)
+                :declaredProbeTarget(join(root,path),selected),
+              probe:async(path,selected,probeKind)=>{
+                const output=JSON.parse(await session.probe(path,selected,probeKind));
+                await appendFile(logFile,'[CONTROLLER_CHAIN_PROBE] '+JSON.stringify({
+                  path,selector:selected,kind:probeKind,status:output.status,
+                  caseId:output.caseId||null,initiator:'model-observed-case'})+'\n');
+                return output;
+              },
+              onStep:async(step,edge)=>{
+                const body=await readFile(join(root,step.path),'utf8');
+                reads.add(step.path,{start:0,end:body.length});
+                await appendFile(logFile,'[CONTROLLER_CHAIN_STEP] '+JSON.stringify({
+                  path:step.path,selector:step.selector,caseId:step.caseId,
+                  sourceCallerLine:edge.line,initiator:'model-observed-case'})+'\n');
+              }
+            });
+            await appendFile(logFile,'[CONTROLLER_CHAIN_OUTCOME] '+JSON.stringify({
+              initialCaseId:caseId,stopped:progression.stopped,
+              steps:progression.history.length,
+              entryCaseId:progression.entry?.caseId||null})+'\n');
+            if(progression.entry && progression.caller) {
+              const finalCase=progression.promoted,handler=progression.entry;
+              const entryRecord=session.cases.get(handler.caseId);
+              const testedRecord=session.cases.get(finalCase.caseId);
+              if(entryRecord?.result.behavior_observed && testedRecord?.result.behavior_observed) {
+                const entrySource=await readFile(join(root,handler.path),'utf8');
+                const proposed=controllerProofCandidate({
+                  caseId:finalCase.caseId,rendererFile:finalCase.path,
+                  rendererSelector:finalCase.selector,callerFile:handler.path,
+                  callerLine:progression.caller.line,callerSource:entrySource,
+                  entryCase:{kind:entryRecord.spec.kind,
+                    behaviorObserved:entryRecord.result.behavior_observed,
+                    observations:entryRecord.result.observations}
+                });
+                if(proposed) {
+                  controllerEntryCases.set(finalCase.caseId,handler.caseId);
+                  independentlyProvenCandidate=proposed;
+                  controllerPromotedCaseId=finalCase.caseId;
+                  controllerPromotedFromCaseId=caseId;
+                  await appendFile(logFile,'[CONTROLLER_PROOF_CANDIDATE] '+JSON.stringify({
+                    caseId:proposed.caseId,entryCaseId:handler.caseId,
+                    callerFile:proposed.callerFile,callerLine:proposed.callerLine,
+                    chain:progression.history.map(x=>({path:x.path,caseId:x.caseId})),
+                    actor:'shared controller, model-initiated probe',
+                    autoApproval:false})+'\n');
+                  return {callers:paths,promoted:{
+                    caseId:finalCase.caseId,path:finalCase.path,
+                    selector:finalCase.selector,kind:finalCase.kind}};
+                }
+              }
+            }
+          }
           let promoted:{caseId:string;path:string;selector:string;kind:string}|undefined;
           const promotedCaller=paths[0];
           const isEntryBoundary=/(?:handler|controller|route|entry|server)/i.test(
