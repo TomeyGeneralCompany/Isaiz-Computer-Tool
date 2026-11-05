@@ -393,9 +393,33 @@ def run_probe(repository: Path, specification: dict, _dependency_round: int = 0)
         if kind == 'solidity_sequence':
             if not isinstance(data.get('steps'),list) or not data['steps'] or any(type(step.get('passed')) is not bool for step in data['steps'] if step.get('operation') != 'observe'):
                 raise ValueError('Invalid transaction observations')
-            # Expected-value assertions are test hypotheses, not independent
-            # evidence of a security vulnerability. Preserve every observed
-            # transaction and mismatch for caller/impact review and replay.
+            # A completed, non-deployer state transition is an independently
+            # replayable behavior, NOT by itself an authorization flaw. Only
+            # classify this narrowly when the SAME getter is observed before
+            # and after a successful account-1/2 transaction and its value
+            # actually changed. Expected-value mismatches are not evidence.
+            steps=data['steps']
+            transition=False
+            for index, step in enumerate(steps):
+                if step.get('operation') != 'send' or step.get('sender') not in (1,2):
+                    continue
+                if step.get('reverted') is not False or step.get('passed') is not True:
+                    continue
+                before=next((v for v in reversed(steps[:index])
+                             if v.get('operation')=='observe'),None)
+                after=next((v for v in steps[index+1:]
+                            if v.get('operation')=='observe' and before and
+                            v.get('function')==before.get('function') and
+                            v.get('sender')==before.get('sender')),None)
+                if before and after and before.get('actual')!=after.get('actual'):
+                    transition=True
+                    break
+            if transition:
+                return {'status':'behavior_observed','behavior_observed':True,
+                        'source_sha256':source_hash,'kind':kind,'observations':data,
+                        'limitation':'A non-deployer account changed an observable contract state value. This is a replayed behavior only, not proof of improper authorization or a security issue. Review the intended permission boundary and all inherited guards.'}
+            # Preserve all other transaction results as observations without
+            # turning arbitrary state changes or failed assertions into findings.
             return {'status':'observation_only','behavior_observed':False,
                     'source_sha256':source_hash,'kind':kind,'observations':data,
                     'limitation':'Only bounded Solidity transactions and assertions were observed. An expected-value mismatch is not a confirmed security reproduction; reachability and impact require independent evidence.'}
