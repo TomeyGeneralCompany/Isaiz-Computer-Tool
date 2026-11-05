@@ -161,6 +161,17 @@ export function reviewRejectionDefect(review:{
   const deniesRecordedCaller=fatal.some(i=>/\b(?:no caller (?:calls|invokes|references)|caller does not (?:call|invoke|reference))\b/i.test(i.description));
   if(deniesRecordedCaller && evidence.links.some(x=>x.relationship==='recorded caller context' && /\b(?:render|wrap|invoke|call)\s*\(/i.test(x.code)))
     return 'The recorded caller contains an actual invocation. Distinguish an untrusted-input/reachability gap from a claim that no call exists, citing the missing link.';
+  // The verifier's fixed probe strings do not imply the application accepts
+  // only hardcoded input. A demonstrated request-parameter source and an
+  // import-resolved renderer call contradict that specific rejection premise.
+  // This requests a more precise technical explanation; it NEVER approves.
+  const dismissesAsHardcoded=/\b(?:hardcoded (?:test )?input|only (?:static|fixed) (?:test )?input|no (?:external|attacker) (?:input|influence))\b/i.test(prose);
+  const hasRequestInput=evidence.links.some(link=>
+    /\b(?:searchParams\.get\s*\(|parse_qs\s*\(|req\.query\b|request\.(?:GET|args|query)\b)/.test(link.code));
+  const hasRenderedCall=evidence.links.some(link=>
+    /\b(?:return|res\.(?:send|end))\b[^\n]*\b(?:render|responseBody|wrapFragment)\s*\(/.test(link.code));
+  if(dismissesAsHardcoded && hasRequestInput && hasRenderedCall)
+    return 'The source packet contains a request-parameter extraction and a source-resolved call into the renderer. Fixed isolated probe tokens do not establish that application inputs are hardcoded. Name the actual missing source-to-sink edge or effective mitigation and cite its file and line before rejecting.';
   const grounds=/\b(?:unreachab\w*|reachab\w*|untrusted|attacker|input|source|sink|saniti[sz]\w*|escap\w*|mitigat\w*|guard\w*|access|privilege|authorization|state|sequence|replay|observ\w*|scope|impact|evidence|caller|path)\b/i;
   if(!fatal.some(i=>grounds.test(i.description)))
     return 'Fatal rejection must name a specific missing source-to-sink link, mitigation, untrusted-input issue, reproduction discrepancy, or other technical defect.';
