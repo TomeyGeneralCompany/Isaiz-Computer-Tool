@@ -15,6 +15,8 @@ export function gradeInvestigationEvents(log:string,answer:{file:string;selector
     const readOk=lineOf(line,'[READ_OK] ');
     if(readOk)return readOk.path===target;
     if(line.includes('[READ_OK] '))return line.includes('[READ_OK] '+target+' ');
+    const prefetched=lineOf(line,'[INITIAL_SOURCE_READ] ');
+    if(prefetched?.path===target)return true;
     const original=lineOf(line,'[MODEL_ACTION] ');
     return original?.path===target && ['read_file','read_solidity','outline_solidity'].includes(String(original.action));
   });
