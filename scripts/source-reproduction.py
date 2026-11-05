@@ -127,6 +127,18 @@ def execution_capability(repository: Path, file: str, function: str, kind: str) 
     if not target.is_file() or target.stat().st_size > 256000:
         return False, 'Probe source is missing or too large'
     source = target.read_text(errors='replace')
+    if kind in ('python_sequence','javascript_sequence'):
+        selected=function
+        if kind=='python_sequence':
+            declared=bool(re.search(r'(?m)^\s*(?:async\s+)?def\s+'+
+                                    re.escape(selected)+r'\s*\(',source))
+        else:
+            declared=bool(re.search(r'\b(?:exports\.'+re.escape(selected)+
+                r'\s*=|(?:async\s+)?function\s+'+re.escape(selected)+
+                r'\s*\(|'+re.escape(selected)+r'\s*\([^)]*\)\s*\{)',source))
+        if not declared:
+            return False,'Selected stateful method is not declared in the recorded source'
+        return True,None
     if file.endswith('.java'):
         parts = function.split('.')
         if len(parts) != 2:
@@ -377,6 +389,15 @@ def run_probe(repository: Path, specification: dict, _dependency_round: int = 0)
             raise ValueError('Selected function not called by sequence')
         if 'factory' in sequence and not re.fullmatch(r'[A-Za-z][A-Za-z0-9_]{0,79}',str(sequence['factory'])):
             raise ValueError('Invalid stateful factory')
+        if 'factory' in sequence:
+            code=target.read_text(errors='replace')
+            chosen=re.escape(sequence['factory'])
+            if kind=='python_sequence':
+                declared=re.search(r'(?m)^def\s+'+chosen+r'\s*\(',code)
+            else:
+                declared=re.search(r'\b(?:exports\.'+chosen+
+                    r'\s*=|(?:async\s+)?function\s+'+chosen+r'\s*\()',code)
+            if not declared: raise ValueError('Stateful factory not declared by source')
         for step in sequence['steps']:
             if not isinstance(step,dict) or set(step)-{'method','args','expected'} or not re.fullmatch(r'[A-Za-z][A-Za-z0-9_]{0,79}',str(step.get('method',''))) or not isinstance(step.get('args',[]),list) or len(step.get('args',[]))>8:
                 raise ValueError('Invalid stateful method')
