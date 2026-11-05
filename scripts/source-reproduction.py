@@ -386,8 +386,21 @@ def run_probe(repository: Path, specification: dict, _dependency_round: int = 0)
                 return {'status':'unsupported_dependencies','behavior_observed':False,
                         'detail':'Java project types missing from isolated compiler classpath: '+diagnostic[-700:]}
         if code:
-            return {'status':'probe_failed','behavior_observed':False,'exit_code':code,
-                    'detail':(work/'stderr').read_text(errors='replace')[-1200:]}
+            diagnostic=(work/'stderr').read_text(errors='replace')
+            # Ganache may print an optional native-module warning before the
+            # actual TOMEY_ERROR. Keep the structured root cause first, rather
+            # than truncating it behind unrelated compatibility chatter.
+            if language == 'solidity' and 'TOMEY_ERROR ' in diagnostic:
+                try:
+                    cause=json.loads(diagnostic.rsplit('TOMEY_ERROR ',1)[1])
+                    detail=str(cause.get('detail','Solidity runtime failure'))[:1200]
+                    if isinstance(cause.get('missingImports'),list) and cause['missingImports']:
+                        detail+='; missing imports: '+repr(cause['missingImports'][:8])[:350]
+                except (ValueError,TypeError,AttributeError):
+                    detail=diagnostic[-1200:]
+            else:
+                detail=diagnostic[-1200:]
+            return {'status':'probe_failed','behavior_observed':False,'exit_code':code,'detail':detail}
         if hashlib.sha256(target.read_bytes()).hexdigest()!=source_hash: raise ValueError('Source changed during probe')
         data=json.loads((work/'stdout').read_text())
         if kind == 'solidity_sequence':
