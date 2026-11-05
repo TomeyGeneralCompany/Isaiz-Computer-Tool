@@ -15,7 +15,7 @@ export function controllerEnclosingSelector(path:string,source:string,line:numbe
   if(!Number.isSafeInteger(line)||line<1)return null;
   const lines=source.split('\n');
   if(line>lines.length)return null;
-  const preceding=lines.slice(Math.max(0,line-24),line-1);
+  const preceding=lines.slice(Math.max(0,line-24),line);
   for(const text of preceding.reverse()){
     const py=/^\s*(?:async\s+)?def\s+([A-Za-z_][\w$]*)\s*\(/.exec(text);
     const js=/\bexports\.([A-Za-z_$][\w$]*)\s*=/.exec(text) ||
