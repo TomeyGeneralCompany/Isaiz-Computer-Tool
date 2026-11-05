@@ -4,6 +4,8 @@
 export function gradeInvestigationEvents(log:string,answer:{file:string;selector:string}){
   const lines=log.split('\n');
   const target='source-1/'+answer.file;
+  const targetMethod=answer.selector.split('.').at(-1);
+  const matchingSelector=(value:unknown)=>typeof value==='string'&&value.split('.').at(-1)===targetMethod;
   const containsTarget=(s:string)=>s.includes(target);
   const lineOf=(line:string,marker:string)=>{
     const i=line.indexOf(marker);
@@ -22,10 +24,10 @@ export function gradeInvestigationEvents(log:string,answer:{file:string;selector
   });
   const plan=lines.some(line=>{
     const p=lineOf(line,'[PROBE_PLANNED] ')||lineOf(line,'[CONTROLLER_SOURCE_PROBE_SELECTED] ');
-    return p?.path===target && (p.query===answer.selector||p.selector===answer.selector);
+    return p?.path===target && (matchingSelector(p.query)||matchingSelector(p.selector));
   });
   const attempts=lines.map(line=>lineOf(line,'[PROBE_RESULT] ')||lineOf(line,'[GUIDED_SOURCE_PROBE] ')).filter(Boolean) as Array<Record<string,unknown>>;
-  const targetAttempts=attempts.filter(p=>p.path===target && p.function===answer.selector);
+  const targetAttempts=attempts.filter(p=>p.path===target && matchingSelector(p.function));
   const observed=targetAttempts.some(p=>p.status==='behavior_observed');
   const anyAttempt=attempts.length>0;
   const anySuccessful=attempts.some(p=>p.status==='behavior_observed'||p.status==='behavior_not_observed'||p.status==='observation_only');
