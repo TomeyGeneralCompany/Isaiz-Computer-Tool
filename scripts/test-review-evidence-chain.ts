@@ -194,6 +194,17 @@ try {
   assert.match(entryReviewRejectionDefect(rejected(
     'The input is not trusted and the output is not a security-relevant context. The attacker input is not reaching a security-relevant output.'),entryCase)||'',
     /Independent controller replay|source-declared entry handler output/);
+  assert.match(entryReviewRejectionDefect(rejected(
+    'The input is not trusted, so there is no security issue.'),entryCase)??'',
+    /incorrectly treats untrusted input as evidence of safety/,
+    'Java Level 5 #42122489020: untrusted input is not a security mitigation');
+  assert.match(entryReviewRejectionDefect(rejected(
+    'The controller replay shows verbatim reflection, but the input is not trusted. The evidence does not prove a security-relevant output. The input is not trusted, so there is no security issue.'),entryCase)??'',
+    /incorrectly treats untrusted input as evidence of safety/,
+    'a repeated logical reversal must be corrected against immutable entry replay');
+  assert.equal(entryReviewRejectionDefect(rejected(
+    'The input is untrusted and is reflected, but the source explicitly discards the output before any client receives it.'),entryCase),null,
+    'a genuine output-reachability limitation must remain eligible for review');
   assert.equal(entryReviewRejectionDefect(rejected(
     'The route is not registered or exposed, and the source shows no connection from this entry handler to a client.'),entryCase),null);
   assert.equal(entryReviewRejectionDefect(rejected(
