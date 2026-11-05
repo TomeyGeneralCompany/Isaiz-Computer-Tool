@@ -19,6 +19,8 @@ try {
  assert.ok(authority.some(item=>item.selector==='SettlementAuthority.administrator' && item.operation==='call'));
  const sequence=buildBaselineSequence(authority,'SettlementAuthority.rotateOperator');
  assert.ok(sequence,'Controller must construct an executable sequence from the selected source');
+ assert.equal((sequence?.steps[1] as any)?.sender,1);
+ assert.equal((sequence?.steps[1] as any)?.expectRevert,true);
  assert.deepEqual(sequence?.steps.map(step=>step.function),[
    'operator()','rotateOperator(address)','operator()'
  ],'Controller should observe the state actually modified by the selected function');
