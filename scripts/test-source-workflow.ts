@@ -558,7 +558,7 @@ try {
   assert.deepEqual(baseline.observations.steps.filter((step:any)=>step.operation==="observe").map((step:any)=>step.actual),["5","7"]);
   assert.match(baseline.caseId,/^[a-f0-9]{64}$/,
     "Observed state transitions are retained as tamper-evident cases, not as findings");
-  const {readRecordedSourceCase,readSourceCase,replaySourceCase}=await import("../packages/security-solver/src/source-reproduction");
+  const {readRecordedSourceCase}=await import("../packages/security-solver/src/source-reproduction");
   const recorded=await readRecordedSourceCase(baseline.caseId,program);
   assert.equal(recorded.result.status,"observation_only");
   await assert.rejects(readSourceCase(baseline.caseId,program),/not verified security evidence/,
