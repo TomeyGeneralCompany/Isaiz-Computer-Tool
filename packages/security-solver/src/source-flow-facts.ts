@@ -102,3 +102,40 @@ export async function solidityDependentSources(
   return eligible.sort((a,b)=>b.score-a.score||a.path.localeCompare(b.path))
     .slice(0,Math.max(0,Math.min(12,limit))).map(x=>x.path);
 }
+
+
+/** Check a real source dependency before attributing a caller to a probed
+ * module. Same-named methods in unrelated decoys are not caller edges.
+ * Dynamic imports remain unresolved instead of becoming evidence.
+ */
+export function sourceImportsTarget(callerPath:string,targetPath:string,code:string):boolean {
+  const target=targetPath.replaceAll('\\','/');
+  const caller=callerPath.replaceAll('\\','/');
+  if(/\.(?:js|cjs|mjs|jsx|ts|tsx)$/.test(target)){
+    for(const match of code.matchAll(/(?:\brequire\s*\(|\bfrom\s+|\bimport\s*\()\s*["']([^"']+)["']/g)){
+      const spec=match[1];
+      if(!spec.startsWith('.'))continue;
+      const imported=join(dirname(caller),spec).split(sep).join('/');
+      if([imported,imported+'.js',imported+'.cjs',imported+'.mjs',
+          imported+'/index.js',imported+'/index.cjs'].includes(target))return true;
+    }
+    return false;
+  }
+  if(target.endsWith('.py')){
+    const pathInRepo=target.split('/').slice(1).join('/');
+    const module=pathInRepo.slice(0,-3).replaceAll('/','.');
+    const filename=target.split('/').at(-1)!.slice(0,-3);
+    // Package and local-relative imports. The target is still verified by
+    // an exact source path and read, so this is only a navigation signal.
+    const escaped=module.replaceAll('.','\\.');
+    const local=filename.replaceAll('.','\\.');
+    return new RegExp('(?:^|\\n)\\s*(?:from\\s+(?:'+escaped+
+      '|\\.'+local+')\\s+import\\s+|import\\s+'+escaped+'\\b)','m').test(code);
+  }
+  if(target.endsWith('.java')){
+    const className=target.split('/').at(-1)!.slice(0,-5);
+    return new RegExp('\\b'+className+'\\s*\\.\\s*[A-Za-z_$][\\w$]*\\s*\\(').test(code) ||
+      new RegExp('\\bimport\\s+[A-Za-z0-9_.]*\\.'+className+'\\s*;').test(code);
+  }
+  return true;
+}
