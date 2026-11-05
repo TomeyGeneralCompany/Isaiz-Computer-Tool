@@ -36,6 +36,15 @@ try {
   assert.match(reviewRejectionDefect(reject('An effective sanitizer escapes the output at src/main/java/org/fixture/Codec.java:3'),evidence)??'',/no source-backed sanitization/,
     'the reviewer must not mistake a helper name for actual escaping');
   assert.match(reviewRejectionDefect(reject('Not enough proof'),evidence)??'',/Fatal rejection/);
+
+  assert.match(reviewRejectionDefect(reject(
+    'The browser does not execute the HTML. The Codec.encodeFragment method returns the input unchanged, so there is no sanitization. Output is only reflected as plain text.'),evidence)??'',
+    /inert browser|HTML rendering context/,
+    'unobserved browser inertness must not be stated as a fact');
+  assert.equal(reviewRejectionDefect(reject(
+    'The isolated source-level reflection does not establish JavaScript execution; actual downstream rendering context and attacker control still need to be established.'),evidence),
+    null,'an evidence-limited review must be allowed to reject unproven executable impact');
+
   assert.match(reviewRejectionDefect(reject(
     'No effective input sanitization or escaping occurs; Codec.encodeFragment returns the input unmodified, so there is no actual security risk.'),evidence)??'',/Returning unescaped user data/,
     'identity encoder is not a security mitigation; reviewer must name a real missing link');
