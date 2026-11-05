@@ -33,6 +33,8 @@ jobs:
         run: npx tsx scripts/test-solidity-protocol.ts
       - name: Test local Solidity transaction executor
         run: node scripts/test-solidity-sequence.cjs
+      - name: Test real Level-5 Solidity public state getter and baseline selection
+        run: npx tsx scripts/test-solidity-controller-menu.ts
       - name: Run actual Python, JavaScript, Java and Solidity sandbox probes
         env:
           TOMEY_REPRODUCTION_INTEGRATION: '1'
