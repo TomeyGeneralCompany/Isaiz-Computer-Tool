@@ -240,47 +240,6 @@ Do not claim production testing, JavaScript execution, file access or other effe
               step.function.split('(')[0]===entry))return {callers:[testedPath]};
             return null;
           }
-          const visited=new Set<string>([testedPath]);
-          const chain:string[]=[];
-          let currentSelector=record.spec.function;
-          for(let depth=0;depth<4;depth++){
-            const candidates:Array<{path:string;line:number;code:string;qualified:boolean;source:string}>=[],prefix=
-              relative(root,repository.directory).split(sep).join('/')+'/';
-            for(const candidatePath of [...new Set([...sourceHints,...eligiblePaths])].slice(0,192)) {
-              if(visited.has(candidatePath) || !candidatePath.startsWith(prefix))continue;
-              try {
-                const code=await readFile(join(root,candidatePath),'utf8');
-                if(code.length>256000)continue;
-                const lines=code.split('\n');
-                for(let i=1;i<=lines.length;i++){
-                  if(!callerLineReferences(code,i,currentSelector))continue;
-                  candidates.push({path:candidatePath,line:i,code:lines[i-1],
-                    qualified:qualifiedCallerLineReferences(code,i,currentSelector),source:code});
-                }
-              }catch{}
-            }
-            const precise=candidates.filter(candidate=>candidate.qualified);
-            const chosen=precise.length===1?precise[0]:candidates.length===1?candidates[0]:null;
-            if(!chosen)break;
-            chain.push(chosen.path);visited.add(chosen.path);
-            await appendFile(logFile,'[CONTROLLER_VERIFIED_CALLER] '+
-              JSON.stringify({caseId,selector:currentSelector,caller:chosen.path,
-                line:chosen.line,code:chosen.code.slice(0,400)})+'\n');
-            const prior=chosen.source.split('\n').slice(Math.max(0,chosen.line-12),chosen.line);
-            let enclosing='';
-            for(const line of [...prior].reverse()){
-              const python=/^\s*(?:async\s+)?def\s+([A-Za-z_$][\w$]*)\s*\(/.exec(line);
-              const javascript=/\bfunction\s+([A-Za-z_$][\w$]*)\s*\(/.exec(line) ||
-                /\bexports\.([A-Za-z_$][\w$]*)\s*=/.exec(line);
-              const java=/\b(?:public|protected|private)\s+(?:static\s+)?[A-Za-z_$][\w$<>\[\]]*\s+([A-Za-z_$][\w$]*)\s*\(/.exec(line);
-              enclosing=(python||javascript||java)?.[1]||'';
-              if(enclosing)break;
-            }
-            if(!enclosing)break;
-            currentSelector=chosen.path.endsWith('.java') ?
-              chosen.path.split('/').at(-1)!.slice(0,-5)+'.'+enclosing : enclosing;
-            if(depth===0)firstCallerSelector=currentSelector;
-          }
           const ownPrefix=relative(root,repository.directory).split(sep).join('/')+'/';
           const chain=await controllerCallerChain(root,ownPrefix,testedPath,
             record.spec.function,[...new Set([...sourceHints,...eligiblePaths])],4);
@@ -288,6 +247,26 @@ Do not claim production testing, JavaScript execution, file access or other effe
           for(const item of chain)await appendFile(logFile,'[CONTROLLER_VERIFIED_CALLER] '+
             JSON.stringify({caseId,selector:item.selector,caller:item.path,
               line:item.line,code:item.code.slice(0,400)})+'\n');
+          // Import-resolved callers replace the older competing lexical traversal.
+          // Keep the first enclosing function so a reproduced helper can be promoted.
+          let firstCallerSelector='';
+          if(chain[0]) {
+            const first=chain[0];
+            const source=await readFile(join(root,first.path),'utf8');
+            const preceding=source.split('\n').slice(Math.max(0,first.line-12),first.line);
+            for(const line of [...preceding].reverse()) {
+              const python=/^\s*(?:async\s+)?def\s+([A-Za-z_$][\w$]*)\s*\(/.exec(line);
+              const javascript=/\bfunction\s+([A-Za-z_$][\w$]*)\s*\(/.exec(line) ||
+                /\bexports\.([A-Za-z_$][\w$]*)\s*=/.exec(line);
+              const java=/\b(?:public|protected|private)\s+(?:static\s+)?[A-Za-z_$][\w$<>\[\]]*\s+([A-Za-z_$][\w$]*)\s*\(/.exec(line);
+              const enclosing=(python||javascript||java)?.[1];
+              if(enclosing) {
+                firstCallerSelector=first.path.endsWith('.java')
+                  ?first.path.split('/').at(-1)!.slice(0,-5)+'.'+enclosing:enclosing;
+                break;
+              }
+            }
+          }
           const paths=chain.map(item=>item.path);
           controllerTraceSummary='CONTROLLER VERIFIED UPSTREAM SOURCE CALLERS (not runtime input proof): '+
             [testedPath,...paths].join(' -> ')+'. The model must assess entry-point input control and mitigation; it may not discard the recorded reproduction.';
