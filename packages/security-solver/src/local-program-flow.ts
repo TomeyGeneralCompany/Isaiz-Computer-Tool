@@ -29,6 +29,7 @@ import { callerLineReferences, qualifiedCallerLineReferences, transactionEntryLi
 import {observedJavaSourceChain} from "./java-source-chain";
 import {buildReviewEvidence,reviewRejectionDefect} from "./review-evidence-chain";
 import {controllerProofCandidate,type ControllerProofCandidate} from './controller-proof-candidate';
+import {promoteControllerCallChain} from './controller-investigation-chain';
 import {entryReplayFacts,entryReviewRejectionDefect} from './entry-review-evidence';
 import {buildControllerReportPacket,controllerReportPacketText,type ControllerReportPacket} from './controller-report-packet';
 import {controllerReportNarrative} from './controller-report-narrative';
@@ -234,48 +235,58 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
           const prefix=relative(root,repo.directory).split(sep).join('/')+'/';
           const chain=await controllerCallerChain(root,prefix,selected.path,
             selected.selector,[...new Set([...sourceHints,...eligiblePaths])],4);
-          const entry=chain.find(c=>/(?:handler|controller|route|entry|server)/i.test(c.path.split('/').at(-1)||''));
-          if(!entry)continue;
+          // Reproduce each import-resolved intermediate caller, rather than
+          // jumping directly from a nested helper to a handler.
+          const progression=await promoteControllerCallChain({
+            start:{path:selected.path,selector:selected.selector,kind:selected.kind,caseId:output.caseId},
+            chain,maxSteps:6,
+            read:path=>readFile(join(root,path),'utf8'),
+            references:callerLineReferences,
+            supported:async(path,selector)=>path.endsWith('.java')
+              ?(await supportedJavaProbeHints(join(root,path))).includes(selector)
+              :declaredProbeTarget(join(root,path),selector),
+            probe:async(path,selector,kind)=>{
+              const result=JSON.parse(await session.probe(path,selector,kind));
+              await appendFile(logFile,'[CONTROLLER_CHAIN_PROBE] '+JSON.stringify({
+                path,selector,kind,status:result.status,caseId:result.caseId||null})+'\n');
+              return result;
+            },
+            onStep:async(step,edge)=>{
+              const code=await readFile(join(root,step.path),'utf8');
+              reads.add(step.path,{start:0,end:code.length});
+              await appendFile(logFile,'[CONTROLLER_CHAIN_STEP] '+JSON.stringify({
+                path:step.path,selector:step.selector,caseId:step.caseId,
+                sourceCallerLine:edge.line})+'\n');
+            }
+          });
+          await appendFile(logFile,'[CONTROLLER_CHAIN_OUTCOME] '+JSON.stringify({
+            path:selected.path,stopped:progression.stopped,steps:progression.history.length,
+            entryCaseId:progression.entry?.caseId||null})+'\n');
+          if(!progression.entry||!progression.caller)continue;
+          const target=progression.promoted;
+          const entry=progression.entry;
+          const caller=progression.caller;
+          const entryRecord=session.cases.get(entry.caseId);
+          const targetRecord=session.cases.get(target.caseId);
+          if(!entryRecord?.result.behavior_observed || !targetRecord?.result.behavior_observed)continue;
           const entrySource=await readFile(join(root,entry.path),'utf8');
-          const preceding=entrySource.split('\n').slice(Math.max(0,entry.line-16),entry.line);
-          let selector='';
-          for(const line of [...preceding].reverse()) {
-            const py=/^\s*(?:async\s+)?def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/.exec(line);
-            const js=/\bexports\.([A-Za-z_$][\w$]*)\s*=/.exec(line) ||
-              /\b(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(/.exec(line);
-            const java=/\b(?:public|protected)\s+(?:static\s+)?String\s+([A-Za-z_$][\w$]*)\s*\(/.exec(line);
-            const name=(py||js||java)?.[1];
-            if(name){selector=entry.path.endsWith('.java')?
-              entry.path.split('/').at(-1)!.replace(/\.java$/,'')+'.'+name:name;break;}
-          }
-          if(!selector)continue;
-          reads.add(entry.path,{start:0,end:entrySource.length});
-          const entryOutput=JSON.parse(await session.probe(entry.path,selector,'entry_html_reflection'));
-          await appendFile(logFile,'[CONTROLLER_ENTRY_PROBE] '+JSON.stringify({
-            path:entry.path,function:selector,kind:'entry_html_reflection',
-            status:entryOutput.status,caseId:entryOutput.caseId||null,actor:'controller-prefetch'})+'\n');
-          if(entryOutput.status!=='behavior_observed'||typeof entryOutput.caseId!=='string')continue;
-          const entryRecord=session.cases.get(entryOutput.caseId);
-          if(!entryRecord || !entryRecord.result.behavior_observed)continue;
-          // Only a direct source-verified caller may be claimed. A helper
-          // buried under additional layers must be promoted first; skip it.
-          if(!callerLineReferences(entrySource,entry.line,selected.selector))continue;
           const candidate=controllerProofCandidate({
-            caseId:output.caseId,rendererFile:selected.path,
-            rendererSelector:selected.selector,callerFile:entry.path,
-            callerLine:entry.line,callerSource:entrySource,
+            caseId:target.caseId,rendererFile:target.path,
+            rendererSelector:target.selector,callerFile:entry.path,
+            callerLine:caller.line,callerSource:entrySource,
             entryCase:{kind:entryRecord.spec.kind,
               behaviorObserved:entryRecord.result.behavior_observed,
               observations:entryRecord.result.observations}
           });
           if(!candidate)continue;
-          controllerEntryCases.set(output.caseId,entryOutput.caseId);
+          controllerEntryCases.set(target.caseId,entry.caseId);
           independentlyProvenCandidate=candidate;
-          controllerPromotedCaseId=output.caseId;
+          controllerPromotedCaseId=target.caseId;
           await appendFile(logFile,'[CONTROLLER_PROOF_CANDIDATE] '+JSON.stringify({
-            caseId:output.caseId,entryCaseId:entryOutput.caseId,
+            caseId:target.caseId,entryCaseId:entry.caseId,
             callerFile:candidate.callerFile,callerLine:candidate.callerLine,
-            source:'controller-first independent source and entry reproduction',
+            chain:progression.history.map(step=>({path:step.path,caseId:step.caseId})),
+            source:'controller-executed multi-hop caller and entry reproduction',
             autoApproval:false})+'\n');
           break;
         }
