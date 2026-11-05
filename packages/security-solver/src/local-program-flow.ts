@@ -441,8 +441,34 @@ Do not claim production testing, JavaScript execution, file access or other effe
                Array.isArray((recovered as {findings?:unknown}).findings)) {
               for(const candidate of (recovered as {findings:any[]}).findings) {
                 const record=session.cases.get(candidate?.caseId);
-                if(!record || !record.result.behavior_observed ||
-                   candidate.reachability==='direct_transaction')continue;
+                if(!record || !record.result.behavior_observed)continue;
+                // A Solidity send is an externally reachable transaction, not
+                // a source-code caller. Reconcile only the recorded transaction
+                // and a uniquely inspected declaration in the tested file.
+                if(record.spec.kind==='solidity_sequence' &&
+                   record.spec.sequence?.steps.some(step=>
+                     'operation' in step && step.operation==='send' &&
+                     'function' in step &&
+                     step.function.split('(')[0]===record.spec.function.split('.').at(-1))) {
+                  const sourcePath=sourceFileInWorkspace(
+                    repos.find(repo=>repo.url===record.repositoryUrl)!,record.spec.file,root);
+                  if(reads.has(sourcePath)) {
+                    const sourceText=await readFile(join(root,sourcePath),'utf8');
+                    const declarations=sourceText.split('\n').flatMap((_,index)=>
+                      transactionEntryLine(sourceText,index+1,record.spec.function) &&
+                      reads.sawLine(sourcePath,sourceText,index+1) ? [index+1] : []);
+                    if(declarations.length===1) {
+                      candidate.reachability='direct_transaction';
+                      candidate.callerFile=sourcePath;
+                      candidate.callerLine=declarations[0];
+                      await appendFile(logFile,'[CONTROLLER_DIRECT_TRANSACTION] '+
+                        JSON.stringify({caseId:candidate.caseId,file:sourcePath,
+                          line:declarations[0],reason:'recorded send and inspected declaration'})+'\n');
+                    }
+                  }
+                  if(candidate.reachability==='direct_transaction')continue;
+                }
+                if(candidate.reachability==='direct_transaction')continue;
                 const sites:{file:string,line:number,qualified:boolean}[]=[];
                 for(const path of [...new Set([...sourceHints,...eligiblePaths])].slice(0,192)) {
                   const sourceRepo=repos.find(r=>path.startsWith(relative(root,r.directory).split(sep).join('/')+'/'));
