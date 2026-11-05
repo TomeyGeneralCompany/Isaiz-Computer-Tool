@@ -48,7 +48,7 @@ export async function runEvidenceOnlyReview(input:{
       options:{num_ctx:input.numCtx,num_predict:input.numPredict,num_thread:4,
         // A deterministic rejected verdict can recur forever with temperature 0.
         // Diversify only on a repeated rejected verdict; evidence stays immutable.
-        temperature:repeatedRejectionCount>0 ? 0.25 : 0}};
+        temperature:(repeatedRejectionCount>0 || attempt>=4) ? 0.25 : 0}};
     const response=await (input.transport
       ?input.transport(payload,input.signal)
       :postOllamaChat(url,payload,input.signal)) as VerdictResponse;
