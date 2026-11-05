@@ -7,7 +7,11 @@ import {guidedProbeAcrossSourceChain} from '../packages/security-solver/src/sour
 import {SoliditySourceIndex} from '../packages/security-solver/src/solidity-source-index';
 import {buildBaselineSequence} from '../packages/security-solver/src/solidity-probe-inputs';
 import {inspectGauntletEvents} from './gauntlet-probe-telemetry';
+import {callerLineReferences} from '../packages/security-solver/src/source-function-reference';
 
+const pyWithImport='from src.pipeline import wrap_fragment\ndef render(value):\n    return wrap_fragment(value)';
+assert.equal(callerLineReferences(pyWithImport,1,'wrap_fragment'),false);
+assert.equal(callerLineReferences(pyWithImport,3,'wrap_fragment'),true);
 const repo=await mkdtemp(join(tmpdir(),'lotus-polyglot-replay-'));
 try {
   for(const language of ['javascript','python','java'] as const) {
