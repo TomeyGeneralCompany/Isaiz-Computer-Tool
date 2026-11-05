@@ -37,7 +37,7 @@ SUPPORTED_EXECUTION_STATUS = {
 }
 
 PROBE = r'''
-import contextlib, importlib.util, io, json, os, pathlib, sys, resource
+import contextlib, importlib.util, io, json, os, pathlib, sys, resource, urllib.parse
 resource.setrlimit(resource.RLIMIT_NPROC,(0,0))
 specification=json.loads(pathlib.Path('/spec.json').read_text())
 file=pathlib.Path('/repo',specification['file']).resolve()
@@ -45,17 +45,25 @@ if not file.is_relative_to('/repo'): raise ValueError('Source outside repository
 sys.path[:0]=['/repo/.tomey-python-deps','/repo',str(file.parent)]
 control='TOMEY_CONTROL_'+specification['nonce']
 attack=('<em data-tomey="'+specification['nonce']+'">TOMEY_PROBE</em>'
-        if specification['kind']=='html_reflection' else '../../TOMEY_ESCAPE_'+specification['nonce'])
+        if specification['kind'] in ('html_reflection','entry_html_reflection') else '../../TOMEY_ESCAPE_'+specification['nonce'])
 with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
     module_spec=importlib.util.spec_from_file_location('autohack_probe_target',str(file))
     module=importlib.util.module_from_spec(module_spec)
     module_spec.loader.exec_module(module)
     function=getattr(module,specification['function'])
-    normal=function(control)
-    observed=function(attack)
+    if specification['kind']=='entry_html_reflection':
+        control_url='http://localhost/?message='+urllib.parse.quote(control,safe='')
+        attack_url='http://localhost/?message='+urllib.parse.quote(attack,safe='')
+        normal=function(control_url)
+        observed=function(attack_url)
+    else:
+        normal=function(control)
+        observed=function(attack)
 if not isinstance(normal,str) or not isinstance(observed,str): raise ValueError('Probe requires string return values')
 if len(normal)>16000 or len(observed)>16000: raise ValueError('Probe output too large')
-print(json.dumps({'control_input':control,'control_output':normal,'attack_input':attack,'attack_output':observed}))
+print(json.dumps({'control_input':control,'control_output':normal,'attack_input':attack,'attack_output':observed,
+  **({'entry_control_url':control_url,'entry_attack_url':attack_url,'entry_selector':specification['function']}
+     if specification['kind']=='entry_html_reflection' else {})}))
 '''
 
 
