@@ -330,12 +330,13 @@ Do not claim production testing, JavaScript execution, file access or other effe
                 JSON.stringify({caller:callerPath,selector:firstCallerSelector,error:String(error).slice(-350)})+'\n');
             }
           }
-          if(promoted && kind==='html_reflection') {
+          const proofTarget=promoted ?? {caseId,path,selector,kind};
+          if(kind==='html_reflection') {
             // A renderer probe alone does not prove attacker-controlled entry.
             // Locate the actual import-resolved handler and execute it with
             // controller-generated query inputs (Java accepts the raw parameter).
             const entry=chain.find(c=>/(?:handler|controller|route|entry|server)/i.test(c.path.split('/').at(-1)||''));
-            if(entry && entry.path!==promoted.path) {
+            if(entry && entry.path!==proofTarget.path) {
               try {
                 const text=await readFile(join(root,entry.path),'utf8');
                 const preceding=text.split('\n').slice(Math.max(0,entry.line-16),entry.line);
@@ -359,9 +360,9 @@ Do not claim production testing, JavaScript execution, file access or other effe
                     status:observed.status,caseId:observed.caseId||null})+'\n');
                   if(observed.status==='behavior_observed' && typeof observed.caseId==='string' &&
                      session.cases.has(observed.caseId)) {
-                    controllerEntryCases.set(promoted.caseId,observed.caseId);
+                    controllerEntryCases.set(proofTarget.caseId,observed.caseId);
                     await appendFile(logFile,'[CONTROLLER_ENTRY_PROOF_LINK] '+JSON.stringify({
-                      rendererCaseId:promoted.caseId,entryCaseId:observed.caseId,
+                      rendererCaseId:proofTarget.caseId,entryCaseId:observed.caseId,
                       file:entry.path,selector:entrySelector})+'\n');
                   }
                 }
