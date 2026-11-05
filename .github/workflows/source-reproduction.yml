@@ -69,6 +69,8 @@ jobs:
         run: npx tsx scripts/test-gauntlet-execution-milestones.ts
       - name: Regress source-grounded stateful Python JavaScript controller planning
         run: npx tsx scripts/test-controller-stateful-candidates.ts
+      - name: Verify shared deterministic source-based polyglot probe plans
+        run: npx tsx scripts/test-controller-polyglot-plan.ts
       - name: Verify deterministic multi-hop polyglot controller execution
         run: npx tsx scripts/test-controller-investigation-chain.ts
       - name: Validate import-resolved polyglot caller chains against decoys
