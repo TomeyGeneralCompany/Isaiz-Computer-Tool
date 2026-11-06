@@ -1268,7 +1268,7 @@ export async function runLocalAudit(
           let path = String(call.function.arguments?.path ?? ".");
           if (["read_file","list_files","search_files","outline_solidity","read_solidity"].includes(name))
             path=await canonicalSourceReadPath(path);
-          const full = await safePath(path);
+          let full = await safePath(path);
           call.function.arguments.path=path;
           let offset = pageOffset(call.function.arguments?.offset);
           const keyAt=(at:number)=>JSON.stringify([name,relative(root,full),at,String(call.function.arguments?.query ?? "")]);
@@ -1282,7 +1282,7 @@ export async function runLocalAudit(
             // In a compacted prompt a completed page may be replayed once for
             // genuine context recovery. Never reset a live pagination cursor,
             // and never permit unlimited identical recovery reads.
-            if(previous.nextOffset===null && (sourceReadCounts.get(actionKey)||0)<2)previous=undefined;
+            if(!workflow && previous.nextOffset===null && (sourceReadCounts.get(actionKey)||0)<2)previous=undefined;
           }
           // Recover a repeated page request using the tool's actual cursor.
           // Stay on the same action/path/query and record the effective span.
@@ -1293,6 +1293,27 @@ export async function runLocalAudit(
             }
             call.function.arguments.offset=offset;
             await appendFile(logFile,"[PAGE_ADVANCE] "+JSON.stringify({tool:name,path,requestedOffset,offset})+"\n");
+          }
+          // A completed source page remains completed across model context
+          // compaction. The controller, not Qwen, chooses an unread in-scope
+          // source when Qwen repeats that page; do not spend another model
+          // turn on the same text or pretend this creates new evidence.
+          if(name==='read_file' && workflow && previous?.nextOffset===null) {
+            const readPaths=new Set(workflow.snapshot().readPaths);
+            const next=(limits.initialSourcePaths||[]).find(candidate=>
+              candidate.startsWith('source-') &&
+              /\.(?:py|js|mjs|cjs|java|sol)$/.test(candidate) &&
+              candidate!==path && !readPaths.has(candidate));
+            if(next) {
+              const nextFull=await safePath(next);
+              await appendFile(logFile,'[CONTROLLER_READ_REDIRECT] '+
+                JSON.stringify({from:path,requestedOffset:offset,to:next,turn:turn+1})+'\\n');
+              path=next;full=nextFull;offset=0;
+              call.function.arguments.path=path;
+              call.function.arguments.offset=0;
+              actionKey=keyAt(0);
+              previous=recentActions.get(actionKey);
+            }
           }
           const repeatCount=sourceReadCounts.get(actionKey)||0;
           if(inspection && previous && (turn-previous.turn<=8 || previous.nextOffset===null || repeatCount>=2)) {
