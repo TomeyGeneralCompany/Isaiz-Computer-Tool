@@ -55,10 +55,9 @@ assert.ok((await rejected.constraints()).action.includes('read_file'));
 rejected.finalRejected('The required evidence is still missing.');
 assert.match(rejected.validate(missingContext)!,/already attempted/);
 assert.ok((await rejected.constraints()).action.includes('final'));
-// A completed caller page may be forced again after model compaction. When
-// bounded duplicate-read recovery recognizes the recorded completed page,
-// acknowledging that prior read must release the read_file-only constraint.
-// It must not manufacture a new source span or a reproduction observation.
+// A completed caller page must never become a mandatory reread after context
+// compaction. Its existing source span remains recorded without fabricating a
+// fresh inspection or a reproduction observation.
 // Level 6 context compaction must retain a bounded ledger of actual probe
 // results without mistaking those observations for approved findings.
 const ledgerFlow=new InvestigationWorkflow();
@@ -77,9 +76,12 @@ callerRecovery.read(callerPath);
 callerRecovery.observe({...action,path:callerPath},JSON.stringify({start:0,end:457,nextOffset:null}));
 const priorProgress=callerRecovery.snapshot().sourceProgress;
 callerRecovery.requireSource(callerPath);
-assert.deepEqual((await callerRecovery.constraints()).action,['read_file']);
-callerRecovery.read(callerPath);
-assert.ok((await callerRecovery.constraints()).action.includes('final'));
+const alreadyReadConstraints=await callerRecovery.constraints();
+assert.ok(alreadyReadConstraints.action.includes('final'));
+assert.ok(alreadyReadConstraints.action.length!==1 || alreadyReadConstraints.action[0]!=='read_file',
+  'Completed caller source must not become a forced navigation action');
+assert.deepEqual(callerRecovery.snapshot().readPaths,[callerPath],
+  'Recorded source remains available to the controller without rereading');
 assert.equal(callerRecovery.snapshot().sourceProgress,priorProgress);
 assert.equal(callerRecovery.snapshot().observations.length,0);
 assert.equal(decodeAuditAction(JSON.stringify({...action,action:'final',result:{findings:[]}})).answer,'{"findings":[]}');
