@@ -13,6 +13,9 @@ export const CRUCIBLE_REQUIREMENTS=Object.freeze({
   minimumFalseLeads:200,
   minimumNegativeControls:50,
   minimumSealedTrials:33,
+  minimumExploitChains:3,
+  minimumChainStages:3,
+  maximumChainStages:7,
 });
 
 export type CrucibleOracleCase={
@@ -69,7 +72,10 @@ export function validateCrucibleChallenge(challenge:CrucibleChallenge):{
     throw new Error('Crucible unsafe source path');
   if(paths.length<r.minimumSourceFiles||paths.length>r.maximumSourceFiles)
     throw new Error('Crucible substantive source file count outside specification: '+paths.length);
-  if(paths.some(p=>typeof files[p]!=='string'||files[p].trim().split('\n').length<8))
+  const extension:Record<Language,string>={solidity:'.sol',python:'.py',javascript:'.js',java:'.java'};
+  if(paths.some(p=>!p.endsWith(extension[key.language]) && !(key.language==='javascript' && /\\.(?:mjs|cjs)$/.test(p))))
+    throw new Error('Crucible mixed-language source files violate single-language trial contract');
+  if(paths.some(p=>typeof files[p]!=='string'||files[p].trim().split('\\n').length<8))
     throw new Error('Crucible source file too small; placeholder padding not accepted');
   if(key.kind==='vulnerable'&&(key.defects.length<r.minimumDefects||key.defects.length>r.maximumDefects))
     throw new Error('Crucible vulnerable challenge requires 5–8 distinct oracle cases');
@@ -83,11 +89,17 @@ export function validateCrucibleChallenge(challenge:CrucibleChallenge):{
   assertUnique(key.falseLeads.map(x=>x.id),'false-lead IDs');
   assertUnique(key.negativeControls.map(x=>x.id),'negative-control IDs');
   assertUnique([...key.defects,...key.falseLeads,...key.negativeControls].map(x=>x.id),'global oracle IDs');
+  let qualifyingChains=0;
   for(const d of key.defects){
     if(d.language!==key.language||!d.requiredChains.length||d.requiredChains.some(x=>x.length<2))
       throw new Error('Crucible defect requires a multi-component oracle chain');
     assertReferenced([d.entryPath,...d.affectedPaths,...d.requiredChains.flat()],files,'defect');
+    for(const chain of d.requiredChains){
+      if(chain.length>=r.minimumChainStages&&chain.length<=r.maximumChainStages&&new Set(chain).size===chain.length)qualifyingChains++;
+    }
   }
+  if(key.kind==='vulnerable'&&qualifyingChains<r.minimumExploitChains)
+    throw new Error('Crucible requires three distinct 3–7-stage causal chains');
   for(const c of [...key.falseLeads,...key.negativeControls]){
     if(c.language!==key.language||!c.safetyReason.trim()||!c.replayExpectation.trim())
       throw new Error('Crucible negative control lacks grounded counterevidence');
