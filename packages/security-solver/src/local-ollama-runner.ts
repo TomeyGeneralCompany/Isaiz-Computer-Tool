@@ -1597,10 +1597,19 @@ export async function runLocalAudit(
                 Number(/(?:caller|handler|route|controller|entry|server)/i.test(a)));
               const caller=authoritativeCallers?.[0] || candidates[0];
               if(caller && !workflow.snapshot().verifiedEvidenceFocus) {
+                const callerAlreadyRead=readPaths.has(caller);
                 workflow.requireSource(caller);
-                requireInvestigationAfterEmpty=true;
-                emptyFinals=0;
-                await appendFile(logFile,'[POST_PROBE_CALLER_REQUIRED] '+JSON.stringify({testedPath,caller})+'\n');
+                // A completed caller read satisfies the source requirement.
+                // Do not suppress final forever when the controller already
+                // holds its exact source and observed probe evidence.
+                if(!callerAlreadyRead) {
+                  requireInvestigationAfterEmpty=true;
+                  emptyFinals=0;
+                } else {
+                  requireInvestigationAfterEmpty=false;
+                }
+                await appendFile(logFile,'[POST_PROBE_CALLER_REQUIRED] '+
+                  JSON.stringify({testedPath,caller,alreadyRead:callerAlreadyRead})+'\n');
               }
             }
 
