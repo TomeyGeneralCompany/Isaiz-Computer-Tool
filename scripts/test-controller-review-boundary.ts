@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {controllerReviewGrounds,controllerReviewGroundDefect} from '../packages/security-solver/src/controller-review-boundary';
+import {controllerReviewGrounds,controllerReviewGroundDefect,controllerVerifiedLocalHtmlReview} from '../packages/security-solver/src/controller-review-boundary';
 import type {ReviewEvidence} from '../packages/security-solver/src/review-evidence-chain';
 
 const entry={status:'behavior_observed',kind:'entry_html_reflection',
@@ -54,6 +54,36 @@ for(const lang of ['solidity','python','java','javascript']){
   assert.equal(controllerReviewGroundDefect(reject(
     'The state difference is observed but the source proves no unauthorized privilege boundary.'),grounds),null,
     'a real lack of security impact remains a valid reason to reject');
+}
+for(const ex of examples.slice(0,3)){
+  const evidence:ReviewEvidence={language:ex.language,kind:'html_reflection',
+    reachabilityRequirement:'Observed local entry-to-HTML injection',
+    sourceDigest:'a'.repeat(64),summary:'Controller evidence',unresolved:[],
+    links:[{file:ex.file,line:12,relationship:'source-declared entry',code:ex.code}]};
+  const grounds=controllerReviewGrounds(evidence,entry,{
+    status:'behavior_observed',behavior_observed:true,kind:'html_reflection',
+    observations:{control_input:'NORMAL',control_output:'<p>NORMAL</p>',
+      attack_input:'<em>ATTACKER</em>',attack_output:'<p><em>ATTACKER</em></p>'}});
+  const decision=controllerVerifiedLocalHtmlReview(grounds,entry);
+  assert.equal(decision?.verdict,'approve',ex.language);
+  assert.equal(decision?.recommendation,'dont_submit',
+    'controller-authored local technical finding is NOT an external bounty approval');
+  assert.equal(decision?.severity,'low');
+  assert.equal(decision?.bet100,false);
+  assert.equal(controllerVerifiedLocalHtmlReview(grounds,{...entry,
+    observations:{...entry.observations,attack_output:'<p>&lt;em&gt;ATTACKER&lt;/em&gt;</p>'}}),null,
+    'escaped output must never be classified as raw HTML injection');
+  const plain=controllerReviewGrounds({...evidence,links:[
+    ...evidence.links,{file:ex.file,line:17,relationship:'header',
+      code:'setContentType("text/plain");'}]},entry,{
+    status:'behavior_observed',behavior_observed:true,kind:'html_reflection',
+    observations:{control_input:'NORMAL',control_output:'<p>NORMAL</p>',
+      attack_input:'<em>ATTACKER</em>',attack_output:'<p><em>ATTACKER</em></p>'}});
+  assert.equal(controllerVerifiedLocalHtmlReview(plain,entry),null,
+    'source-verified text/plain context blocks controller local HTML technical approval');
+  assert.equal(controllerVerifiedLocalHtmlReview(
+    controllerReviewGrounds(evidence,entry,null),entry),null,
+    'a model assertion cannot replace independent reproduction');
 }
 const ev:ReviewEvidence={language:'java',kind:'html_reflection',reachabilityRequirement:'',
   sourceDigest:'e'.repeat(64),summary:'',unresolved:[],
