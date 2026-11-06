@@ -104,3 +104,76 @@ jobs:
           SEMGREP_SEND_METRICS=off SEMGREP_ENABLE_VERSION_CHECK=0 .venv-static/bin/semgrep --test --config scripts/vendor/semgrep-rules scripts/vendor/semgrep-rules
       - name: Exercise offline static leads on owned source
         run: python3 scripts/test-static-leads.py
+  crucible-level6-production:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'feat/lotus-crucible-level6-20261105'
+    name: Crucible Level 6 ${{ matrix.language }} production
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [solidity, python, javascript, java]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      LOCAL_OLLAMA_MODEL: qwen3:4b
+      LOCAL_MODEL_ADAPTER: ollama
+      LOCAL_OLLAMA_TOOL_PROTOCOL: json
+      LOCAL_HUNT_DYNAMIC_ALLOWANCE: 'true'
+      LOCAL_HUNT_MAX_TURNS: '80'
+      LOCAL_HUNT_NUM_PREDICT: '2048'
+      SECURITY_AUTO_SUBMIT: 'false'
+      SECURITY_AUTO_HUNT_ENABLED: 'false'
+      SECURITY_SOURCE_CODE_TIMEOUT_MINUTES: '180'
+      AUTOHACK_OLLAMA_URL: http://127.0.0.1:11434/api/chat
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked application dependencies
+        run: npm ci
+      - name: Validate Level 6 source acquisition
+        run: node --import tsx scripts/lotus-crucible-run.ts --smoke --level=6 --language="${{ matrix.language }}" --output=data/crucible/smoke
+      - name: Install sandbox reproduction runtimes
+        timeout-minutes: 45
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y bubblewrap default-jdk-headless
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          timeout 2100 bash scripts/install-reproduction-runtime.sh
+      - name: Start local Qwen3 4B model on CPU
+        timeout-minutes: 45
+        run: |
+          docker run -d --name lotus-crucible-ollama -p 127.0.0.1:11434:11434 ollama/ollama:latest
+          for n in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:11434/api/tags >/dev/null; then break; fi
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:11434/api/tags >/dev/null
+          docker exec lotus-crucible-ollama ollama pull qwen3:4b
+      - name: Run actual Level 6 production investigation
+        timeout-minutes: 230
+        env:
+          CRUCIBLE_LANGUAGE: ${{ matrix.language }}
+        run: |
+          set -o pipefail
+          mkdir -p data/crucible/latest
+          node --import tsx scripts/lotus-crucible-run.ts --run --level=6 --language="$CRUCIBLE_LANGUAGE" --output=data/crucible/latest 2>&1 | tee data/crucible/live-terminal.log
+      - name: Upload Level 6 diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crucible-six-${{ matrix.language }}-${{ github.run_id }}
+          path: |
+            data/crucible/latest/manifest.json
+            data/crucible/latest/grade.json
+            data/crucible/latest/result.json
+            data/crucible/latest/review.json
+            data/crucible/latest/local-hunt-*.log
+            data/crucible/latest/local-review-*.log
+            data/crucible/live-terminal.log
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Stop local Qwen model
+        if: always()
+        run: docker rm -f lotus-crucible-ollama || true
