@@ -1,4 +1,5 @@
 name: Source reproduction languages
+# Crucible trigger: post-merge Level 6 qualification on main; ordinary PR checks remain independent.
 on:
   pull_request:
   push:
