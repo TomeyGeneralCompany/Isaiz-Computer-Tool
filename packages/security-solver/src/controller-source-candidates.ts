@@ -66,7 +66,7 @@ export async function rankTracedSourceCandidates(
         const implementation=trace.facts.map(f=>f.source).join('\n');
         // Require an actual source-traced HTML result. Sanitizers in any
         // inspected hop defeat this particular unsanitized-reflection hint.
-        if(!/<p>/i.test(implementation)||!/<\/p>/i.test(implementation) ||
+        if(!/<p(?:\s|>)/i.test(implementation)||!/<\/p\s*>/i.test(implementation) ||
            !/\breturn\b/.test(implementation))continue;
         if(/\b(?:escape|escapeHtml|htmlspecialchars|sanitize|DOMPurify)\s*\(|\.replace\s*\(/i.test(implementation))continue;
         const chain=[...new Set(trace.facts.map(f=>f.path))];
