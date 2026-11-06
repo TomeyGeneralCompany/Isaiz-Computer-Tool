@@ -140,7 +140,7 @@ export function controllerVerifiedLocalHtmlReview(
   // return HTML markup in its cited source, not merely an arbitrary string.
   const sourceConstructsHtml=grounds.immutableFacts.some(line=>
     /^.+:\d+: /.test(line) &&
-    /(?:['"\`]<(?:p|div|span|article|section|body|html|em|strong)\b|text\/html\b|innerHTML\b|document\.write\b)/i.test(line));
+    /(?:['"\x60]<(?:p|div|span|article|section|body|html|em|strong)\b|text\/html\b|innerHTML\b|document\.write\b)/i.test(line));
   if(!sourceConstructsHtml)return null;
   return {
     verdict:'approve' as const,recommendation:'dont_submit' as const,
