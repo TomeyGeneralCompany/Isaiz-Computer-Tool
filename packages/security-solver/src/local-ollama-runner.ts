@@ -1331,8 +1331,11 @@ export async function runLocalAudit(
             requireInvestigationAfterEmpty=true;
             emptyFinals=0;
           }
-          const rejected=message;
-          rejected.content="Previous final answer rejected; follow the validation feedback.";
+          // A controller-owned caller read can append source exchanges after the
+          // rejected final. Start a separate bounded correction exchange instead
+          // of attaching validation output to the caller-page read group.
+          const rejected:Message={role:"assistant",content:"Final rejected; reassess recorded source and probe evidence."};
+          messages.push(rejected);
           await appendFile(logFile, "[FINAL_REJECTED] " + feedback + "\n");
           const evidencePacket=limits.finalEvidencePacket ? await limits.finalEvidencePacket() : '';
           if(evidencePacket)await appendFile(logFile,'[CONTROLLER_FINAL_EVIDENCE_HANDOFF] '+
