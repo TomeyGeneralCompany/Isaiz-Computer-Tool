@@ -361,7 +361,7 @@ def run_probe(repository: Path, specification: dict, _dependency_round: int = 0)
     if not isinstance(nonce,str) or not re.fullmatch(r'[a-f0-9]{32}',nonce): raise ValueError('Invalid probe nonce')
     language = 'python' if file.endswith('.py') else 'solidity' if file.endswith('.sol') else 'java' if file.endswith('.java') else 'javascript'
     if kind == 'entry_html_reflection' and (language not in ('python','javascript','java') or
-            not re.search(r'(handler|controller|route|entry|server)',file,re.I) or
+            not re.search(r'(handler|controller|gateway|route|entry|server)',file,re.I) or
             not re.fullmatch(r'[A-Za-z][A-Za-z0-9_]{0,79}(?:\.[A-Za-z][A-Za-z0-9_]{0,79})?',function)):
         raise ValueError('Entry probe requires a supported handler method and source file')
     if language not in ('solidity','java') and '.' in function: raise ValueError('Top-level function name required')
