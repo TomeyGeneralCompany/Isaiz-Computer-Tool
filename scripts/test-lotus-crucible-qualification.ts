@@ -23,7 +23,7 @@ function rejects(change:(copy:CrucibleTrialReceipt[])=>void,label:string){
   const copy=structuredClone(receipts);change(copy);
   assert.equal(assessCrucibleQualification(copy).qualified,false,label);
 }
-rejects(x=>x.pop(),'insufficient trials');
+rejects(x=>x.splice(32),'insufficient trials');
 rejects(x=>x[1].productionCommit='b'.repeat(40),'changed production SHA');
 rejects(x=>x[1].sealedSeedCommitment=x[0].sealedSeedCommitment,'reused seed');
 rejects(x=>x[1].challengeDigest=x[0].challengeDigest,'reused source');
