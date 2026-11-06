@@ -102,6 +102,8 @@ export async function runLocalAudit(
   let rejectedRequiredProbeFinals = 0;
   let controllerAutoProbeCount = 0;
   let controllerAutoReadCount = 0;
+  let indexedLastProgressKey = '';
+  let indexedSyntheticStalls = 0;
   let generationBudget = settings.numPredict;
   const root = await realpath(cwd);
   const controller = new AbortController();
@@ -343,12 +345,12 @@ export async function runLocalAudit(
           // A controller-initiated negative probe must also advance navigation.
           // Previously only model-initiated negative probes triggered the
           // mandatory source handoff, leaving Qwen free to cycle on decoys.
-          if(result.status==='behavior_not_observed') {
+          if(result.status==='behavior_not_observed' && !fullIndexMode) {
             const next=workflow.requireNextUnreadSource(limits.initialSourcePaths||[]);
             if(next)await appendFile(logFile,'[GUIDED_NEGATIVE_PROBE_SOURCE_HANDOFF] '+
               JSON.stringify({testedPath:path,next})+'\\n');
           }
-          if(result.status==='behavior_observed' && !workflow.snapshot().verifiedEvidenceFocus) {
+          if(result.status==='behavior_observed' && !workflow.snapshot().verifiedEvidenceFocus && !fullIndexMode) {
             const paths=(limits.initialSourcePaths||[]).filter(p=>p.startsWith('source-') &&
               p!==path && /\.(?:py|js|mjs|cjs|java|sol)$/.test(p));
             paths.sort((a,b)=>Number(/(?:caller|handler|route|controller|entry|server)/i.test(b))-
@@ -510,6 +512,16 @@ export async function runLocalAudit(
       const requestMessages=profile.think ? turnMessages.map(m=>({...m,content:m.content.replaceAll('/no_think','')})) : turnMessages;
       // The graph has already specified the exact next read/verification.
       // Execute it rather than spending a Qwen turn asking for known arguments.
+      const fullIndexMode=!!workflow && process.env.LOCAL_CONTROLLER_FULL_SOURCE_INDEX==='true';
+      if(fullIndexMode && constraints?.action?.length===1 &&
+         constraints.action[0]==='read_file' && constraints.path?.length===1 &&
+         workflow.snapshot().readPaths.includes(constraints.path[0])) {
+        const alreadyRead=constraints.path[0];
+        workflow.read(alreadyRead);
+        constraints=await workflow.constraints();
+        await appendFile(logFile,'[INDEXED_COMPLETED_REQUIREMENT_RELEASED] '+
+          JSON.stringify({path:alreadyRead,turn:turn+1})+'\\n');
+      }
       let controllerAction=structured && workflow && process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false' ?
         controllerOwnedNextAction(constraints,workflow.snapshot().pending) : null;
       // The controller has already inspected actual source and knows the
@@ -593,7 +605,7 @@ export async function runLocalAudit(
       // belong to the model.
       if(!controllerAction && structured && workflow &&
          process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false' &&
-         !workflow.snapshot().verifiedEvidenceFocus && controllerAutoReadCount<8 &&
+         !fullIndexMode && !workflow.snapshot().verifiedEvidenceFocus && controllerAutoReadCount<8 &&
          constraints?.action?.includes('read_file')) {
         const inspected=new Set(workflow.snapshot().readPaths);
         for(const candidate of [...new Set([...privilegedSolidityCandidates.keys(),...tracedCandidates.map(c=>c.path),...(limits.initialSourcePaths||[])])]) {
@@ -609,6 +621,20 @@ export async function runLocalAudit(
           }catch{}
         }
       }
+      if(controllerAction && fullIndexMode) {
+        const snapshot=workflow.snapshot();
+        const progressKey=JSON.stringify([snapshot.sourceProgress,
+          snapshot.observations.length,snapshot.pending?.path||'',
+          snapshot.pending?.query||'',snapshot.verifiedEvidenceFocus||'']);
+        indexedSyntheticStalls=progressKey===indexedLastProgressKey
+          ? indexedSyntheticStalls+1:0;
+        indexedLastProgressKey=progressKey;
+        if(indexedSyntheticStalls>=12) {
+          await appendFile(logFile,'[INDEXED_CONTROLLER_PROGRESS_STALL] '+
+            JSON.stringify({turn:turn+1,action:controllerAction,progressKey})+'\\n');
+          throw new Error('INDEXED_CONTROLLER_PROGRESS_STALL: 12 consecutive controller actions without new source or probe evidence; turn extension cannot repair this');
+        }
+      } else if(fullIndexMode && !controllerAction)indexedSyntheticStalls=0;
       if(controllerAction) {
         await appendFile(logFile,'[CONTROLLER_OWNED_ACTION] '+JSON.stringify(controllerAction)+'\n');
         await recordToolActivity(logFile,{phase:'completed',tool:'controller_action',
@@ -1320,7 +1346,14 @@ export async function runLocalAudit(
           // compaction. The controller, not Qwen, chooses an unread in-scope
           // source when Qwen repeats that page; do not spend another model
           // turn on the same text or pretend this creates new evidence.
-          if(name==='read_file' && workflow &&
+          if(name==='read_file' && fullIndexMode &&
+             (terminalReadPages.has(path) || previous?.nextOffset===null)) {
+            await appendFile(logFile,'[INDEXED_COMPLETED_READ_REJECTED] '+
+              JSON.stringify({path,turn:turn+1})+'\\n');
+            throw new Error('INDEXED_COMPLETED_READ_REJECTED: '+path+
+              ' is already indexed and inspected. Do not redirect to an unrelated source or repeat the completed page.');
+          }
+          if(name==='read_file' && workflow && !fullIndexMode &&
              (terminalReadPages.has(path) || previous?.nextOffset===null)) {
             const completed=terminalReadPages.get(path);
             const recordedResponse=completed?.response || (completed
