@@ -12,7 +12,7 @@ const oldCwd=process.cwd(),oldProject=process.env.PROJECT_ROOT;
 try {
   // The target's working directory must never become the installation root
   // for the packaged static scanner's configuration files.
-  delete process.env.PROJECT_ROOT;
+  process.env.PROJECT_ROOT=root; // Crucible explicitly points this at a temporary workspace.
   process.chdir(root);
   const staticLeads=await collectStaticLeads(root,[],[],join(root,'static-cache.json'),
     new AbortController().signal);
