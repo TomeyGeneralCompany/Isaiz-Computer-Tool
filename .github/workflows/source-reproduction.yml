@@ -43,10 +43,9 @@ jobs:
         run: python3 -m unittest discover -s tests -p test_source_reproduction.py -v
       - name: Reproduce controller-owned entry-to-output paths in Python JavaScript and Java
         run: python3 scripts/test-controller-entry-reproduction.py
-      - name: Exercise production controller with full-index source acquisition enabled
+      - name: Exercise production-sized controller read and probe transitions
         env:
           GITHUB_TOKEN: offline-ci-fixture
-          LOCAL_CONTROLLER_FULL_SOURCE_INDEX: 'true'
         run: npx tsx scripts/test-local-controller.ts --mock
       - name: Validate blind reasoning harness with real isolated probes
         env:
@@ -92,7 +91,9 @@ jobs:
         run: python3 scripts/test-solidity-access-evidence.py
       - name: Validate bounded evidence-only independent reviewer
         run: npx tsx scripts/test-evidence-only-review.ts
-      - name: Test real source audit, report creation and independent replay
+      - name: Test real source audit and review with controller full indexing
+        env:
+          LOCAL_CONTROLLER_FULL_SOURCE_INDEX: 'true'
         run: npx tsx scripts/test-source-workflow.ts
       - name: Exercise shared production workflow with real isolated probes
         run: |
