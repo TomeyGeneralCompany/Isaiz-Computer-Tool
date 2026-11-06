@@ -58,5 +58,36 @@ function settle() external {require(msg.sender==operator,"operator only");}
             self.assertFalse(authorization_transition_observed(root,authority,"Authority.rotateOperator",d))
 
 
+    def test_privileged_consumer_in_late_source_file(self):
+        with tempfile.TemporaryDirectory(prefix="lotus-solidity-index-scale-") as directory:
+            root=Path(directory)
+            for i in range(240):
+                (root/("Unrelated%04d.sol"%i)).write_text(
+                    "pragma solidity ^0.8.20; contract Unrelated%04d {}"%i)
+            target=root/"Service2048.sol"
+            target.write_text("""pragma solidity ^0.8.20;
+contract Service2048 {
+address public administrator;
+address public operator;
+constructor(){administrator=msg.sender;operator=msg.sender;}
+function rotateOperator(address candidate) public {
+require(candidate!=address(0),"zero");operator=candidate;
+}
+function settle(address receiver,uint256 amount) external {
+require(msg.sender==operator,"operator only");
+}
+}""")
+            accounts=["0x"+"11"*20,"0x"+"22"*20,"0x"+"33"*20]
+            events=[
+                {"operation":"observe","function":"operator()","actual":accounts[0]},
+                {"operation":"send","function":"rotateOperator(address)","sender":1,"passed":True,"reverted":False},
+                {"operation":"observe","function":"operator()","actual":accounts[2]}
+            ]
+            self.assertTrue(authorization_transition_observed(
+                root,target,"Service2048.rotateOperator",
+                {"accounts":accounts,"steps":events}),
+                "The tested source must not be excluded by the first-200-file scan")
+
+
 if __name__=="__main__":
     unittest.main()

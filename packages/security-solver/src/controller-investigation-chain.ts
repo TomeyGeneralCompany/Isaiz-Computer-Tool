@@ -45,7 +45,7 @@ export async function promoteControllerCallChain(input:{
       return {promoted:current,history,stopped:'unverified_source_edge'};
     const selector=controllerEnclosingSelector(edge.path,source,edge.line);
     if(!selector)return {promoted:current,history,stopped:'unresolved_enclosing_function'};
-    const entry=/(?:handler|controller|route|entry|server)/i.test(edge.path.split('/').at(-1)||'');
+    const entry=/(?:handler|controller|gateway|route|entry|server)/i.test(edge.path.split('/').at(-1)||'');
     if(!entry && !await input.supported(edge.path,selector))
       return {promoted:current,history,stopped:'unsupported_intermediate_reproduction'};
     const kind=entry?'entry_html_reflection':current.kind;
