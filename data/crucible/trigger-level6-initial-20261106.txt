@@ -1,0 +1,1 @@
+Owned Level 6 four-language production-controller trial. 2000 substantive generated services per language; fully isolated fixtures; Qwen3:4b; local independent review; external submissions disabled. Trigger only after generator acceptance passes.
