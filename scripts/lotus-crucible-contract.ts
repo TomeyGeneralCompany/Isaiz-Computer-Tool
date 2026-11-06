@@ -65,7 +65,7 @@ export function validateCrucibleChallenge(challenge:CrucibleChallenge):{
   const paths=Object.keys(files).filter(p=>/\.(?:sol|py|js|mjs|cjs|java)$/.test(p));
   const r=CRUCIBLE_REQUIREMENTS;
   if(!key.challengeId.trim()||!key.seed.trim())throw new Error('Crucible missing challenge identity or seed');
-  if(Object.keys(files).some(p=>p.startsWith('/')||p.includes('\\\\')||p.split('/').some(x=>x==='..'||x==='.'||!x)))
+  if(Object.keys(files).some(p=>p.startsWith('/')||p.includes('\\')||p.split('/').some(x=>x==='..'||x==='.'||!x)))
     throw new Error('Crucible unsafe source path');
   if(paths.length<r.minimumSourceFiles||paths.length>r.maximumSourceFiles)
     throw new Error('Crucible substantive source file count outside specification: '+paths.length);
