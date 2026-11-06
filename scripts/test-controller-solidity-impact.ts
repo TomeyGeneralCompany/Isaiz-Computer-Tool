@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {generateCrucible} from './lotus-crucible-generator';
 import {roleConsumerImpactSequence,roleConsumerImpactObserved} from '../packages/security-solver/src/controller-solidity-consumer-impact';
 import {soliditySequenceSchema} from '../packages/security-solver/src/solidity-sequence';
+import {controllerVerifiedLocalSolidityConsumerReview} from '../packages/security-solver/src/controller-review-boundary';
 const trial=generateCrucible({language:'solidity',seed:'verified-consumer-impact-20261106'});
 const sink=trial.privateAnswerKey.defects[0].affectedPaths.at(-1)!;
 const source=trial.files[sink];
@@ -21,6 +22,22 @@ const observations={accounts,steps:[
  {operation:'observe',function:'credit(address)',actual:'1'}
 ]};
 assert.ok(roleConsumerImpactObserved(observations,'operator','rotateOperator'));
+const selector=sink.split('/').at(-1)!.replace(/\.sol$/,'')+'.rotateOperator';
+const reviewed=controllerVerifiedLocalSolidityConsumerReview({
+ source,selector,sequence,replay:{
+  status:'behavior_observed',kind:'solidity_sequence',
+  behavior_observed:true,observations
+ }
+});
+assert.equal(reviewed?.verdict,'approve','Independent replay plus protected-consumer proof supports local technical approval');
+assert.equal(reviewed?.recommendation,'dont_submit','Offline technical proof must not enable bounty submission');
+assert.equal(controllerVerifiedLocalSolidityConsumerReview({
+ source,selector,sequence,replay:{
+  status:'observation_only',kind:'solidity_sequence',
+  behavior_observed:false,observations
+ }
+}),null,'An unverified role assertion cannot be approved');
+
 for(const patch of [
  {index:2,field:'reverted',value:false},
  {index:4,field:'passed',value:false},
