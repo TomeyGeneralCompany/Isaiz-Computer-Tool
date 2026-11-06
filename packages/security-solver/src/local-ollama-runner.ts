@@ -8,7 +8,7 @@ import {privilegedRoleMutationCandidate} from './solidity-security-candidates';
 import {rankTracedSourceCandidates} from './controller-source-candidates';
 import { InvestigationWorkflow } from "./investigation-workflow";
 import {guidedProbeAcrossSourceChain,guidedSourceProbe} from './source-guided-probes';
-import {controllerPolyglotPlan} from './controller-polyglot-plan';
+import {controllerPolyglotPlan,canonicalControllerPolyglotIntent} from './controller-polyglot-plan';
 import {declaredProbeTarget, sourceDeclarationHints, supportedJavaProbeHints, javaProbeSelectorCompatible, probeChoices} from './probe-target-validation';
 import { postQwenAgentJson } from "./qwen-agent-transport";
 import { AuditAllowance } from "./audit-allowance";
@@ -730,22 +730,24 @@ export async function runLocalAudit(
             continue;
           }
         }
-        // Same controller ownership as Solidity: malformed model sequences
-        // are replaced with a bounded plan constructed from inspected source.
-        // A model may not smuggle its own method names or expected observations.
+        // All three non-Solidity languages obey the same source-owned probe
+        // request contract as Solidity. The model may choose an actual method,
+        // but its guessed kind, typed arguments and sequence are never trusted.
         if(workflow && ['plan_probe','probe_intent'].includes(action.action) &&
-           ['python_sequence','javascript_sequence','java_sequence'].includes(action.answer) &&
-           action.path.startsWith('source-')) {
+           action.path.startsWith('source-') && /\\.(?:java|py|js|mjs|cjs)$/.test(action.path)) {
           try {
             const full=await safePath(action.path);
-            const grounded=controllerPolyglotPlan(action.path,await readFile(full,'utf8'),
-              {query:action.query,answer:action.answer});
-            if(grounded && JSON.stringify(action.sequence)!==JSON.stringify(grounded.sequence)) {
-              action.query=grounded.query;
-              action.sequence=grounded.sequence;
+            const grounded=canonicalControllerPolyglotIntent(action.path,
+              await readFile(full,'utf8'),{query:action.query,answer:action.answer});
+            if(grounded) {
+              const prior={query:action.query,answer:action.answer,sequence:action.sequence};
+              action.query=grounded.query;action.answer=grounded.answer;
               action.hypothesis=grounded.hypothesis;
-              await appendFile(logFile,'[CONTROLLER_POLYGLOT_PROBE_CANONICALIZED] '+
-                JSON.stringify({path:action.path,query:action.query,kind:action.answer})+'\\n');
+              if(grounded.sequence===undefined)delete action.sequence;
+              else action.sequence=grounded.sequence;
+              if(JSON.stringify(prior)!==JSON.stringify({query:action.query,answer:action.answer,sequence:action.sequence}))
+                await appendFile(logFile,'[CONTROLLER_POLYGLOT_PROBE_CANONICALIZED] '+
+                  JSON.stringify({path:action.path,from:prior,query:action.query,kind:action.answer})+'\\n');
             }
           } catch(error) {
             await appendFile(logFile,'[CONTROLLER_POLYGLOT_PROBE_UNAVAILABLE] '+
