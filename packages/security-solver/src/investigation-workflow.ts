@@ -148,7 +148,18 @@ export class InvestigationWorkflow {
     return true;
   }
   rejectedDuplicateProbe() {this.duplicateProbeRejections++;this.feedback('The already attempted probe cannot be repeated. Return outcome=no_testable_candidate with a specific reason and findings=[]; do not claim an unverified vulnerability.');}
-  requireSource(path:string) {this.requiredSource=path;this.feedback('Read '+path+' before planning its test.',true);}
+  requireSource(path:string) {
+    // A page already inspected by the workflow is not an outstanding
+    // requirement. Requiring it again creates a forced-read feedback loop:
+    // the controller asks for the completed page, navigation redirects it,
+    // and the outstanding requirement is never released.
+    if(this.readPaths.has(path)){
+      if(this.requiredSource===path)this.requiredSource=this.requiredSourceQueue.shift()||null;
+      this.feedback('Source '+path+' is already inspected. Use the recorded evidence, trace a real caller, or plan a supported probe.');
+      return;
+    }
+    this.requiredSource=path;this.feedback('Read '+path+' before planning its test.',true);
+  }
   requireSources(paths:string[]) {
     const fresh=[...new Set(paths)].filter(path=>!this.readPaths.has(path));
     this.requiredSource=fresh.shift()||null;

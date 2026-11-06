@@ -34,9 +34,15 @@ def authorization_transition_observed(repository: Path, file: Path, selector: st
             return False
         # Source proof that this variable acts as a privileged authority.
         # Search only bounded .sol files in the same checked-out repository.
-        privileged=False
+        # The tested contract is authoritative and may appear after thousands
+        # of unrelated contracts in the repository walk. Check its own
+        # privileged consumer before scanning any other authorized file.
+        privileged=bool(re.search(
+            r"\\brequire\\s*\\(\\s*msg\\s*\\.\\s*sender\\s*==\\s*"+re.escape(role)+r"\\b",source))
         count=0
         for candidate in repository.rglob("*.sol"):
+            if privileged:
+                break
             count+=1
             if count>200:
                 break

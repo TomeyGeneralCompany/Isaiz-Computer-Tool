@@ -102,6 +102,8 @@ export async function runLocalAudit(
   let rejectedRequiredProbeFinals = 0;
   let controllerAutoProbeCount = 0;
   let controllerAutoReadCount = 0;
+  let indexedLastProgressKey = '';
+  let indexedSyntheticStalls = 0;
   let generationBudget = settings.numPredict;
   const root = await realpath(cwd);
   const controller = new AbortController();
@@ -510,6 +512,16 @@ export async function runLocalAudit(
       const requestMessages=profile.think ? turnMessages.map(m=>({...m,content:m.content.replaceAll('/no_think','')})) : turnMessages;
       // The graph has already specified the exact next read/verification.
       // Execute it rather than spending a Qwen turn asking for known arguments.
+      const fullIndexMode=!!workflow && process.env.LOCAL_CONTROLLER_FULL_SOURCE_INDEX==='true';
+      if(fullIndexMode && constraints?.action?.length===1 &&
+         constraints.action[0]==='read_file' && constraints.path?.length===1 &&
+         workflow.snapshot().readPaths.includes(constraints.path[0])) {
+        const alreadyRead=constraints.path[0];
+        workflow.read(alreadyRead);
+        constraints=await workflow.constraints();
+        await appendFile(logFile,'[INDEXED_COMPLETED_REQUIREMENT_RELEASED] '+
+          JSON.stringify({path:alreadyRead,turn:turn+1})+'\\n');
+      }
       let controllerAction=structured && workflow && process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false' ?
         controllerOwnedNextAction(constraints,workflow.snapshot().pending) : null;
       // The controller has already inspected actual source and knows the
@@ -593,7 +605,7 @@ export async function runLocalAudit(
       // belong to the model.
       if(!controllerAction && structured && workflow &&
          process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false' &&
-         !workflow.snapshot().verifiedEvidenceFocus && controllerAutoReadCount<8 &&
+         !fullIndexMode && !workflow.snapshot().verifiedEvidenceFocus && controllerAutoReadCount<8 &&
          constraints?.action?.includes('read_file')) {
         const inspected=new Set(workflow.snapshot().readPaths);
         for(const candidate of [...new Set([...privilegedSolidityCandidates.keys(),...tracedCandidates.map(c=>c.path),...(limits.initialSourcePaths||[])])]) {
@@ -609,6 +621,20 @@ export async function runLocalAudit(
           }catch{}
         }
       }
+      if(controllerAction && fullIndexMode) {
+        const snapshot=workflow.snapshot();
+        const progressKey=JSON.stringify([snapshot.sourceProgress,
+          snapshot.observations.length,snapshot.pending?.path||'',
+          snapshot.pending?.query||'',snapshot.verifiedEvidenceFocus||'']);
+        indexedSyntheticStalls=progressKey===indexedLastProgressKey
+          ? indexedSyntheticStalls+1:0;
+        indexedLastProgressKey=progressKey;
+        if(indexedSyntheticStalls>=12) {
+          await appendFile(logFile,'[INDEXED_CONTROLLER_PROGRESS_STALL] '+
+            JSON.stringify({turn:turn+1,action:controllerAction,progressKey})+'\\n');
+          throw new Error('INDEXED_CONTROLLER_PROGRESS_STALL: 12 consecutive controller actions without new source or probe evidence; turn extension cannot repair this');
+        }
+      } else if(fullIndexMode && !controllerAction)indexedSyntheticStalls=0;
       if(controllerAction) {
         await appendFile(logFile,'[CONTROLLER_OWNED_ACTION] '+JSON.stringify(controllerAction)+'\n');
         await recordToolActivity(logFile,{phase:'completed',tool:'controller_action',
@@ -1115,6 +1141,68 @@ export async function runLocalAudit(
         emptyFinals=0;
         const feedback = await limits.validateFinal?.(message.content);
         if (feedback) {
+          // A final claiming an unread caller line cannot be repaired by another
+          // model-only final. Read the *actual* authorized caller page first.
+          // This is navigation evidence, never a finding or a reviewer verdict.
+          if (workflow && /Read the page containing the entire claimed caller line before reporting/i.test(feedback)) {
+            let claimed:{callerFile?:unknown;callerLine?:unknown}|undefined;
+            try {
+              const answer=JSON.parse(message.content) as {findings?:Array<{callerFile?:unknown;callerLine?:unknown}>};
+              claimed=answer.findings?.[0];
+            } catch {}
+            const caller=typeof claimed?.callerFile==='string' ? claimed.callerFile : '';
+            const line=claimed?.callerLine;
+            if (caller && Number.isSafeInteger(line) && Number(line)>0 &&
+                (limits.initialSourcePaths||[]).includes(caller)) {
+              try {
+                const full=await safePath(caller);
+                let offset=0, pages=0, seenLines=0, reached=false;
+                while(pages++<32) {
+                  const page=await readSourcePage(full,offset,pageSize);
+                  if(!page.text || page.end<=page.start)break;
+                  const action={action:'read_file',path:caller,query:'',answer:'',offset};
+                  const request:Message={role:'assistant',content:JSON.stringify(action)};
+                  const fitted=fitAuditToolOutput(messages.slice(0,2),request,'read_file',
+                    JSON.stringify(page),exchangeBudget,true);
+                  const delivered=JSON.parse(fitted.output) as typeof page;
+                  if(!delivered.text || delivered.end<=delivered.start)break;
+                  // Track the real source span through the same controller
+                  // callbacks as an ordinary tool read; do not synthesize it.
+                  workflow.read(caller);
+                  workflow.observe(action,fitted.output);
+                  limits.onRead?.(caller,{start:delivered.start,end:delivered.end});
+                  navigation.observe('read_file',caller,offset,'',delivered);
+                  allowance.read(caller,delivered.start,delivered.end,turn);
+                  successfulReads++;
+                  sourceTotals.set(caller,delivered.totalCharacters);
+                  recentActions.set(JSON.stringify(['read_file',caller,offset,'']),
+                    {turn,nextOffset:delivered.nextOffset,response:fitted.message});
+                  if(delivered.nextOffset===null)
+                    terminalReadPages.set(caller,{offset,response:fitted.message});
+                  messages.push(request,fitted.message);
+                  await appendFile(logFile,'[CONTROLLER_CALLER_PAGE_READ] '+
+                    JSON.stringify({path:caller,start:delivered.start,end:delivered.end,
+                      nextOffset:delivered.nextOffset,claimedLine:line})+'\n');
+                  seenLines+=(delivered.text.match(/\n/g)||[]).length;
+                  if(seenLines>=Number(line) || delivered.nextOffset===null) {
+                    reached=seenLines>=Number(line)-1;
+                    break;
+                  }
+                  if(delivered.nextOffset===null || delivered.nextOffset<=offset)break;
+                  offset=delivered.nextOffset;
+                }
+                if(reached) {
+                  repeatedRejectedConclusions=0;
+                  lastRejectedConclusion='';
+                  await appendFile(logFile,'[CONTROLLER_CALLER_PAGE_READY] '+
+                    JSON.stringify({path:caller,line})+'\n');
+                }
+              } catch(error) {
+                await appendFile(logFile,'[CONTROLLER_CALLER_PAGE_UNAVAILABLE] '+
+                  JSON.stringify({path:caller,error:String(error).slice(0,250)})+'\n');
+              }
+            }
+          }
           const observations=workflow?.snapshot().observations.filter(o=>o.status==='behavior_observed')||[];
           if(observations.length) {
             const normalizedConclusion=message.content.replace(/\s+/g,' ').trim().slice(0,1000);
@@ -1243,8 +1331,11 @@ export async function runLocalAudit(
             requireInvestigationAfterEmpty=true;
             emptyFinals=0;
           }
-          const rejected=messages.at(-1)!;
-          rejected.content="Previous final answer rejected; follow the validation feedback.";
+          // A controller-owned caller read can append source exchanges after the
+          // rejected final. Start a separate bounded correction exchange instead
+          // of attaching validation output to the caller-page read group.
+          const rejected:Message={role:"assistant",content:"Final rejected; reassess recorded source and probe evidence."};
+          messages.push(rejected);
           await appendFile(logFile, "[FINAL_REJECTED] " + feedback + "\n");
           const evidencePacket=limits.finalEvidencePacket ? await limits.finalEvidencePacket() : '';
           if(evidencePacket)await appendFile(logFile,'[CONTROLLER_FINAL_EVIDENCE_HANDOFF] '+
@@ -1320,7 +1411,32 @@ export async function runLocalAudit(
           // compaction. The controller, not Qwen, chooses an unread in-scope
           // source when Qwen repeats that page; do not spend another model
           // turn on the same text or pretend this creates new evidence.
-          if(name==='read_file' && workflow &&
+          if(name==='read_file' && fullIndexMode &&
+             (terminalReadPages.has(path) || previous?.nextOffset===null)) {
+            const complete=terminalReadPages.get(path);
+            const prior=complete?.response;
+            // Exactly one source-page replay is permitted when compaction has
+            // genuinely evicted the prior evidence. Do not substitute a
+            // different file for an already-satisfied required caller.
+            if(complete && prior && !messages.includes(prior) &&
+               !terminalPageRecoveries.has(path)) {
+              terminalPageRecoveries.add(path);
+              offset=complete.offset;
+              call.function.arguments.offset=offset;
+              actionKey=keyAt(offset);
+              previous=undefined;
+              await appendFile(logFile,'[INDEXED_CONTEXT_RECOVERY] '+
+                JSON.stringify({path,offset,turn:turn+1})+'\\n');
+            } else {
+              await appendFile(logFile,'[INDEXED_COMPLETED_READ_REJECTED] '+
+                JSON.stringify({path,turn:turn+1})+'\\n');
+              // Unlike the old controller, do not spend hundreds of synthetic
+              // actions satisfying a read requirement that is already done.
+              throw new Error('AUDIT_STALLED: indexed source '+path+
+                ' was already inspected. A caller or probe transition is required; no unrelated redirect is permitted.');
+            }
+          }
+          if(name==='read_file' && workflow && !fullIndexMode &&
              (terminalReadPages.has(path) || previous?.nextOffset===null)) {
             const completed=terminalReadPages.get(path);
             const recordedResponse=completed?.response || (completed
@@ -1546,10 +1662,19 @@ export async function runLocalAudit(
                 Number(/(?:caller|handler|route|controller|entry|server)/i.test(a)));
               const caller=authoritativeCallers?.[0] || candidates[0];
               if(caller && !workflow.snapshot().verifiedEvidenceFocus) {
+                const callerAlreadyRead=readPaths.has(caller);
                 workflow.requireSource(caller);
-                requireInvestigationAfterEmpty=true;
-                emptyFinals=0;
-                await appendFile(logFile,'[POST_PROBE_CALLER_REQUIRED] '+JSON.stringify({testedPath,caller})+'\n');
+                // A completed caller read satisfies the source requirement.
+                // Do not suppress final forever when the controller already
+                // holds its exact source and observed probe evidence.
+                if(!callerAlreadyRead) {
+                  requireInvestigationAfterEmpty=true;
+                  emptyFinals=0;
+                } else {
+                  requireInvestigationAfterEmpty=false;
+                }
+                await appendFile(logFile,'[POST_PROBE_CALLER_REQUIRED] '+
+                  JSON.stringify({testedPath,caller,alreadyRead:callerAlreadyRead})+'\n');
               }
             }
 

@@ -7,6 +7,7 @@
  */
 import type {ReviewEvidence} from './review-evidence-chain';
 import {entryReplayFacts,type EntryReviewObservation} from './entry-review-evidence';
+import {roleConsumerImpactSequence,roleConsumerImpactObserved} from './controller-solidity-consumer-impact';
 
 export interface ControllerReviewGrounds {
   sourceDigest:string;
@@ -150,5 +151,42 @@ export function controllerVerifiedLocalHtmlReview(
     issues:[{category:'evidence_limit',severity:'warning' as const,
       description:'Only source-level entry-to-HTML injection is established. Deployed routing, output content type, browser behavior, and external exploitation remain unverified.'}],
     reasoning:'The controller independently re-executed the recorded case and the entry handler, observed differential control and attacker-selected HTML passing into constructed markup, and verified the cited source chain. This technically verifies the local injection, not browser script execution or a reportable external impact. External submission is prohibited pending further evidence.'
+  };
+}
+
+/** An independent replay can establish a local privileged-consumer
+ * authorization failure without asking a language model to reconstruct
+ * transaction order. The source, exact declared sequence, full EVM receipts,
+ * and already-validated direct transaction must all agree. This authorizes
+ * neither a claim about deployment nor an external bounty submission.
+ */
+export function controllerVerifiedLocalSolidityConsumerReview(input:{
+ source:string;selector:string;sequence:unknown;
+ replay:{status?:string;kind?:string;behavior_observed?:boolean;observations?:unknown}
+}) {
+  const {source,selector,sequence,replay}=input;
+  if(replay.status!=='behavior_observed'||replay.kind!=='solidity_sequence'||
+     replay.behavior_observed!==true||!sequence||typeof sequence!=='object')return null;
+  const mutator=selector.split('.').at(-1)||'';
+  if(!/^[A-Za-z_]\w*$/.test(mutator))return null;
+  const declaration=new RegExp('\\bfunction\\s+'+mutator+'\\s*\\([^)]*\\)[^{]*\\{').exec(source);
+  if(!declaration)return null;
+  const bodyStart=declaration.index+declaration[0].length;
+  const close=source.indexOf('}',bodyStart);
+  if(close<0||close-bodyStart>2600)return null;
+  const assigned=/\b(operator|owner|administrator|admin|manager|guardian|controller|authority)\s*=\s*[A-Za-z_]\w*\s*;/i.exec(source.slice(bodyStart,close));
+  if(!assigned)return null;
+  const role=assigned[1];
+  const expected=roleConsumerImpactSequence(source,role,mutator);
+  if(!expected || JSON.stringify(expected)!==JSON.stringify(sequence) ||
+     !roleConsumerImpactObserved(replay.observations,role,mutator))return null;
+  return {
+    verdict:'approve' as const,recommendation:'dont_submit' as const,
+    severity:'low' as const,confidence:0.78,bet100:false,
+    ratingReason:'Independent EVM replay confirmed a role-gated operation denied to an account before a nonadministrator role mutation, then allowed to that account after mutation, with a measured beneficiary balance increase. Actual deployment impact is unverified.',
+    rubric:{exploitability:2,impactSeverity:1,evidenceQuality:3,novelty:0,scopeAlignment:2},
+    issues:[{category:'evidence_limit',severity:'warning' as const,
+      description:'Verified on a fresh isolated EVM. Actual deployment configuration, privileges, upgrade/proxy behavior and off-chain impact are not established.'}],
+    reasoning:'A source-declared privilege guard, identical authorization-sensitive operation, expected initial revert, nonadministrator role mutation, subsequent successful operation, and changed state were independently replayed from the exact recorded declarative sequence. This technically verifies the local authorization consequence but does not establish a live-chain exploit or authorize submission.'
   };
 }

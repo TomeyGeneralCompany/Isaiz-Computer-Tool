@@ -2,7 +2,10 @@ import {prioritizeSourceCandidates} from './source-candidates';
 import {collectStaticLeads} from './local-static-leads';
 import {buildSourceMap} from './source-map';
 import {buildControllerSourceIndex,controllerEvidencePacket} from './controller-source-index';
+import {indexedEntryRoutes} from './controller-indexed-route';
+import {privilegedRoleMutationCandidate} from './solidity-security-candidates';
 import {controllerIndexedAuditPrompt} from './controller-index-prompt';
+import {roleConsumerImpactSequence,roleConsumerImpactObserved} from './controller-solidity-consumer-impact';
 import {sourceCandidateEvidence,verifiedProbeSummary} from './source-candidate-evidence';
 import {rankTracedSourceCandidates} from './controller-source-candidates';
 import {traceSourceCalls,solidityDependentSources,controllerCallerChain} from './source-flow-facts';
@@ -30,7 +33,7 @@ import { selectSourceBatch, incompleteProbeCoverage, recoverEmptyUnprobedFinal, 
 import { callerLineReferences, qualifiedCallerLineReferences, transactionEntryLine } from "./source-function-reference";
 import {observedJavaSourceChain} from "./java-source-chain";
 import {buildReviewEvidence,reviewRejectionDefect} from "./review-evidence-chain";
-import {controllerReviewGrounds,controllerReviewGroundDefect,controllerVerifiedLocalHtmlReview} from './controller-review-boundary';
+import {controllerReviewGrounds,controllerReviewGroundDefect,controllerVerifiedLocalHtmlReview,controllerVerifiedLocalSolidityConsumerReview} from './controller-review-boundary';
 import {controllerProofCandidate,type ControllerProofCandidate} from './controller-proof-candidate';
 import {promoteControllerCallChain} from './controller-investigation-chain';
 import {sourceStatefulPlans} from './controller-stateful-candidates';
@@ -218,6 +221,7 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
     // Entry cases are independently executed by the sandbox, not authored by Qwen.
     const controllerEntryCases=new Map<string,string>();
     let independentlyProvenCandidate:ControllerProofCandidate|null=null;
+    const indexedVerifiedCandidates:Array<z.infer<typeof candidateSchema>>=[];
     const entryEvidenceFor=(caseId:string)=>{
       const entryId=controllerEntryCases.get(caseId);
       const entry=entryId ? session.cases.get(entryId) : undefined;
@@ -229,6 +233,157 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
     const candidateEvidence=await sourceCandidateEvidence(root,sourceMap.symbols,8);
     await writeFile(join(root,'audit-controller-candidates.json'),JSON.stringify(candidateEvidence,null,2),{mode:0o600});
     await appendFile(logFile,'[SOURCE_MAP] '+JSON.stringify({files:sourceMap.scannedFiles,symbols:sourceMap.symbols.length,skipped:sourceMap.skippedFiles})+'\n');
+    // Full-index mode supplies source-grounded entry routes BEFORE Qwen.
+    // Each route is syntax only; a real sandboxed entry call must reproduce
+    // the behavior. A failed probe cannot be promoted as a finding.
+    if(fullSourceIndex && !focus) {
+      const routes=await indexedEntryRoutes(root,eligiblePaths);
+      await writeFile(join(root,'audit-source-routes.json'),JSON.stringify(routes),
+        {mode:0o600});
+      let attempted=0,observed=0;
+      for(const route of routes.slice(0,16)){
+        signal.throwIfAborted();
+        const repo=repos.find(r=>route.entry.startsWith(
+          relative(root,r.directory).split(sep).join('/')+'/'));
+        if(!repo || missingDependencies.has(repo.url))continue;
+        try {
+          const source=await readFile(join(root,route.entry),'utf8');
+          reads.add(route.entry,{start:0,end:source.length});
+          const result=JSON.parse(await session.probe(
+            route.entry,route.selector,'entry_html_reflection'));
+          attempted++;
+          const valid=result.status==='behavior_observed' &&
+            typeof result.caseId==='string' && session.cases.has(result.caseId);
+          if(valid){
+            observed++;
+            controllerTraceSummary+='Entry '+route.entry+' -> '+route.sink+
+              ' observed with case '+result.caseId+'. ';
+            await appendFile(logFile,'[PROBE_RESULT] '+JSON.stringify({
+              path:route.entry,function:route.selector,kind:'entry_html_reflection',
+              status:result.status,caseId:result.caseId,
+              origin:'controller-indexed-entry'})+'\\n');
+            // Source graph and executed entry prove only a candidate. Reproduce
+            // the exact terminal function separately; attach its real caseId
+            // and a source-line call from the terminal transform. Independent
+            // review must still approve the complete packet.
+            const terminalCode=await readFile(join(root,route.sink),'utf8');
+            const terminalLines=terminalCode.split('\n');
+            const callLine=terminalLines.findIndex((line,index)=>
+              index>0 && /\bproject\s*\(/.test(line) &&
+              !/\b(?:def|function|String)\s+project\s*\(/.test(line))+1;
+            if(callLine>0) {
+              const selector=route.sink.endsWith('.java')
+                ? route.sink.split('/').at(-1)!.replace(/\.java$/,'')+'.project'
+                : 'project';
+              const terminal=JSON.parse(await session.probe(route.sink,selector,'html_reflection'));
+              if(terminal.status==='behavior_observed' &&
+                 typeof terminal.caseId==='string' &&
+                 session.cases.has(terminal.caseId)) {
+                reads.add(route.sink,{start:0,end:terminalCode.length});
+                const entryRecord=session.cases.get(result.caseId)!;
+                const proof=controllerProofCandidate({
+                  caseId:terminal.caseId,rendererFile:route.sink,
+                  rendererSelector:selector,callerFile:route.sink,
+                  callerLine:callLine,callerSource:terminalCode,
+                  entryCase:{kind:entryRecord.spec.kind,
+                    behaviorObserved:entryRecord.result.behavior_observed,
+                    observations:entryRecord.result.observations}
+                });
+                if(proof && !indexedVerifiedCandidates.some(x=>x.caseId===proof.caseId)) {
+                  await appendFile(logFile,'[PROBE_RESULT] '+JSON.stringify({
+                    path:route.sink,function:selector,kind:'html_reflection',
+                    status:terminal.status,caseId:terminal.caseId,
+                    origin:'controller-indexed-terminal'})+'\\n');
+                  indexedVerifiedCandidates.push(proof);
+                  controllerEntryCases.set(proof.caseId,result.caseId);
+                  await appendFile(logFile,'[CONTROLLER_INDEXED_PROOF_CANDIDATE] '+
+                    JSON.stringify({entry:route.entry,chain:route.chain,
+                      sink:route.sink,sinkCaseId:proof.caseId,
+                      entryCaseId:result.caseId,callerLine:callLine,
+                      independentReviewRequired:true})+'\\n');
+                }
+              }
+            }
+          }
+          await appendFile(logFile,'[CONTROLLER_INDEXED_ENTRY_PROBE] '+
+            JSON.stringify({entry:route.entry,sink:route.sink,
+              stages:route.chain.length,status:result.status,
+              caseId:valid?result.caseId:null,verified:valid})+'\\n');
+        }catch(error){
+          await appendFile(logFile,'[CONTROLLER_INDEXED_ENTRY_UNAVAILABLE] '+
+            JSON.stringify({entry:route.entry,error:String(error).slice(0,180)})+'\\n');
+        }
+      }
+      await appendFile(logFile,'[CONTROLLER_INDEXED_ENTRY_SUMMARY] '+
+        JSON.stringify({sourceRoutes:routes.length,attempted,observed})+'\\n');
+    }
+    // Controller-side role mutation reproduction uses the SAME existing
+    // isolated Solidity sequence verifier and independent reviewer. Source
+    // inspection determines the role, setter and protected consumer; actual
+    // EVM receipt and before/after state determine behavior_observed.
+    if(fullSourceIndex && !focus) {
+      for(const path of eligiblePaths.filter(p=>p.endsWith('.sol'))) {
+        signal.throwIfAborted();
+        if(indexedVerifiedCandidates.length>=8)break;
+        const repo=repos.find(r=>path.startsWith(
+          relative(root,r.directory).split(sep).join('/')+'/'));
+        if(!repo || missingDependencies.has(repo.url))continue;
+        try {
+          const code=await readFile(join(root,path),'utf8');
+          const role=privilegedRoleMutationCandidate(path,code,[code]);
+          if(!role)continue;
+          if(!new RegExp('\\bfunction\\s+'+role.method+
+             '\\s*\\(\\s*address\\s+[A-Za-z_]\\w*\\s*\\)').test(code))continue;
+          // The role setter alone is not impact. Require a source-declared
+          // protected consumer and execute a negative control before the
+          // mutation, then the same consumer after the role transition.
+          const sequence=roleConsumerImpactSequence(code,role.role,role.method);
+          if(!sequence){
+            await appendFile(logFile,'[CONTROLLER_SOLIDITY_IMPACT_UNSUPPORTED] '+
+              JSON.stringify({path,role:role.role,reason:'No supported protected consumer sequence'})+'\\n');
+            continue;
+          }
+          const observation=JSON.parse(await session.probe(
+            path,role.selector,'solidity_sequence',sequence));
+          await appendFile(logFile,'[PROBE_RESULT] '+JSON.stringify({
+            path,function:role.selector,kind:'solidity_sequence',
+            status:observation.status,caseId:observation.caseId||null,
+            origin:'controller-indexed-solidity-role'})+'\\n');
+          if(observation.status!=='behavior_observed'||
+             typeof observation.caseId!=='string'||
+             !session.cases.has(observation.caseId) ||
+             !roleConsumerImpactObserved(observation.observations,role.role,role.method)){
+            await appendFile(logFile,'[CONTROLLER_SOLIDITY_IMPACT_NOT_PROVEN] '+
+              JSON.stringify({path,status:observation.status,caseId:observation.caseId||null})+'\\n');
+            continue;
+          }
+          await appendFile(logFile,'[CONTROLLER_SOLIDITY_CONSUMER_IMPACT_OBSERVED] '+
+            JSON.stringify({path,role:role.role,mutator:role.method,
+              caseId:observation.caseId,baselineUnauthorizedBlocked:true,
+              postMutationConsumerSucceeded:true,creditChanged:true})+'\\n');
+          const statement=new RegExp('\\bfunction\\s+'+role.method+'\\s*\\(');
+          const line=code.split('\n').findIndex(text=>statement.test(text))+1;
+          if(!line)continue;
+          reads.add(path,{start:0,end:code.length});
+          const candidate:z.infer<typeof candidateSchema>={
+            caseId:observation.caseId,severity:'low',confidence:0.75,
+            title:'Reproduced unauthorized privileged role mutation',
+            ratingReason:'Two independently contrasted local EVM states show that a previously blocked role-gated consumer succeeds after a nonadministrator changes the role, with a measured beneficiary balance increase. The reviewer still checks real deployment, mitigations and scope.',
+            impact:'A previously unauthorized account obtained the protected settlement privilege after a nonadministrator role mutation and executed a settlement that increased beneficiary credit; deployment impact remains subject to independent review.',
+            callerFile:path,callerLine:line,reachability:'direct_transaction',
+            falsification:'Replay the initial denied settlement, unauthorized role change, and post-change successful settlement on a fresh EVM; verify the credited balance change, actual authorization checks, and effective deployment mitigations. Reject if any necessary step fails.'
+          };
+          indexedVerifiedCandidates.push(candidate);
+          await appendFile(logFile,'[CONTROLLER_INDEXED_PROOF_CANDIDATE] '+
+            JSON.stringify({path,selector:role.selector,
+              caseId:observation.caseId,role:role.role,
+              callerLine:line,independentReviewRequired:true})+'\\n');
+        }catch(error){
+          await appendFile(logFile,'[CONTROLLER_INDEXED_SOLIDITY_UNAVAILABLE] '+
+            JSON.stringify({path,error:String(error).slice(0,220)})+'\\n');
+        }
+      }
+    }
     // Controller-first bounded investigation: source selection and isolated
     // execution no longer depend on Qwen to request the first verification.
     // Lexical ranking is NOT a vulnerability verdict. Only separately executed
@@ -411,7 +566,24 @@ Do not claim production testing, JavaScript execution, file access or other effe
     beforeInspection?.();
     await note('MODEL_START',{model:process.env.LOCAL_OLLAMA_MODEL||'qwen3:4b',selectedFiles:sourceHints.length});
     let answer:string;
-    try {
+    // When the controller has *already* source-traced the full route,
+    // independently executed both entry and terminal functions, and assembled
+    // exact caller evidence, the investigative file-navigation loop has no
+    // further work. Send the recorded candidates directly to the existing
+    // independent technical reviewer. This does not approve any vulnerability.
+    if(fullSourceIndex && indexedVerifiedCandidates.length) {
+      parsed=huntSchema.parse({
+        findings:indexedVerifiedCandidates.slice(0,8),outcome:'inspected'
+      });
+      answer=JSON.stringify({controllerEvidenceHandoff:true,
+        caseIds:indexedVerifiedCandidates.map(c=>c.caseId),
+        sourceRoutesVerified:indexedVerifiedCandidates.length,
+        independentReviewRequired:true});
+      await appendFile(logFile,'[CONTROLLER_INDEXED_REVIEW_HANDOFF] '+
+        JSON.stringify({candidates:indexedVerifiedCandidates.length,
+          caseIds:indexedVerifiedCandidates.map(c=>c.caseId),
+          modelNavigationSkipped:true,autoApproved:false})+'\\n');
+    } else try {
       answer=await runLocalAudit(prompt,logFile,getConfig().SECURITY_SOURCE_CODE_TIMEOUT_MINUTES*60000,root,
       process.env.LOCAL_OLLAMA_MODEL || "qwen3:4b",undefined,{
         onAllowance:async deadline=>writeSecuritySolverStatus({active:true,programId:program.id,programName:program.name,
@@ -1042,7 +1214,7 @@ Do not claim production testing, JavaScript execution, file access or other effe
     // executed and caller-linked entry case is even allowed to reach review.
     // A model-only negative is not a technical disproof. The independent
     // reviewer still receives the full source/replay and can reject.
-    if(process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false' && independentlyProvenCandidate) {
+    if(process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false' && independentlyProvenCandidate && !indexedVerifiedCandidates.length) {
       const candidate=independentlyProvenCandidate;
       const alreadyPresent=parsed?.findings.some(item=>item.caseId===candidate.caseId);
       if(!alreadyPresent) {
@@ -1209,7 +1381,12 @@ export async function independentReview(finding:SecurityFinding,program:Security
     // only local source-level HTML injection, never production exploitability.
     // Other probe kinds or missing evidence still require ordinary review.
     const observedTechnical=controllerVerifiedLocalHtmlReview(immutableReviewGrounds,
-      entryReplay as Parameters<typeof controllerVerifiedLocalHtmlReview>[1]);
+      entryReplay as Parameters<typeof controllerVerifiedLocalHtmlReview>[1]) ||
+      (reachability==='direct_transaction' ?
+        controllerVerifiedLocalSolidityConsumerReview({
+          source:targetCode,selector:record.spec.function,
+          sequence:record.spec.sequence,replay
+        }) : null);
     if(observedTechnical) {
       review=reviewSchema.parse(observedTechnical);
       await appendFile(logFile,'[CONTROLLER_FACTUAL_REVIEW] '+JSON.stringify({

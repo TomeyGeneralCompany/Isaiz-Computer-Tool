@@ -35,6 +35,16 @@ jobs:
         run: npx tsx scripts/test-solidity-protocol.ts
       - name: Test local Solidity transaction executor
         run: node scripts/test-solidity-sequence.cjs
+      - name: Replay 2000-file Python and Java entry-to-sink routes in isolated runtimes
+        timeout-minutes: 15
+        run: node --import tsx scripts/test-controller-indexed-entry-replay.ts
+      - name: Qualify 2000-file Solidity consumer findings through independent review
+        timeout-minutes: 20
+        run: node --import tsx scripts/test-indexed-solidity-independent-review.ts
+      - name: Verify controller source-derived protected consumer impact
+        run: node --import tsx scripts/test-controller-solidity-impact.ts
+      - name: Reproduce protected consumer escalation in independent local EVM
+        run: node --import tsx scripts/test-controller-solidity-impact-evm.ts
       - name: Test real Level-5 Solidity public state getter and baseline selection
         run: npx tsx scripts/test-solidity-controller-menu.ts
       - name: Run actual Python, JavaScript, Java and Solidity sandbox probes
@@ -91,6 +101,10 @@ jobs:
         run: python3 scripts/test-solidity-access-evidence.py
       - name: Validate bounded evidence-only independent reviewer
         run: npx tsx scripts/test-evidence-only-review.ts
+      - name: Prove Solidity nonadministrator role transitions across 2000 sources
+        run: node --import tsx scripts/test-indexed-solidity-roles.ts
+      - name: Prove five real indexed entry and sink reproductions per language
+        run: node --import tsx scripts/test-indexed-verified-entries.ts
       - name: Test real source audit and review with controller full indexing
         env:
           LOCAL_CONTROLLER_FULL_SOURCE_INDEX: 'true'
