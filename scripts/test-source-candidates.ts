@@ -137,7 +137,7 @@ try {
   const previous=process.env.PROJECT_ROOT;
   try {
     process.env.PROJECT_ROOT=root;
-    const unavailable=await collectStaticLeads(root,[],[],join(root,'cache.json'),new AbortController().signal);
+    const unavailable=await collectStaticLeads(root,[],[],join(root,'cache.json'),new AbortController().signal,root);
     assert.equal(unavailable.status,'unavailable','Missing optional scanners must not abort source inspection');
     assert.deepEqual(unavailable.leads,[]);
   } finally {if(previous===undefined)delete process.env.PROJECT_ROOT;else process.env.PROJECT_ROOT=previous;}
