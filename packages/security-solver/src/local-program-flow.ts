@@ -2,6 +2,7 @@ import {prioritizeSourceCandidates} from './source-candidates';
 import {collectStaticLeads} from './local-static-leads';
 import {buildSourceMap} from './source-map';
 import {buildControllerSourceIndex,controllerEvidencePacket} from './controller-source-index';
+import {controllerIndexedAuditPrompt} from './controller-index-prompt';
 import {sourceCandidateEvidence,verifiedProbeSummary} from './source-candidate-evidence';
 import {rankTracedSourceCandidates} from './controller-source-candidates';
 import {traceSourceCalls,solidityDependentSources,controllerCallerChain} from './source-flow-facts';
@@ -377,7 +378,7 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
       lead:focus ? {file:"source-1/"+focus.file,line:focus.line,rule:focus.rule,commit:focus.commit} : null,
     },null,2),{mode:0o600});
     const indexedPacket=fullSourceIndex?controllerEvidencePacket(fullSourceIndex,5):null;
-    const prompt=`Controller source evidence from actual workspace reads (not inferred findings):
+    const legacyPrompt=`Controller source evidence from actual workspace reads (not inferred findings):
 ${indexedPacket ? 'Controller indexed every eligible source before model invocation. Compact source-derived context: '+JSON.stringify(indexedPacket).slice(0,3800)+'\\nFull persistent index: audit-controller-source-index.json. Qwen interprets facts, it does not need to rediscover file paths. Source/reachability/exploit verification is still mandatory.\\n' : ''}
 ${JSON.stringify(candidateEvidence).slice(0,4500)}
 These are file/line-cited candidate and possible caller facts. The controller has already discovered these locations. The controller's replayed, same-instance Python/JavaScript state observations are in audit-controller-stateful.json, where present; they are not findings or proof of a security boundary violation. Do not guess their paths or declarations. Ask for interpretation or verification only after considering the supplied facts. Possible lexical callers must still be validated against the source and runtime.
@@ -394,6 +395,17 @@ Investigate one concrete behavior at a time: locate the relevant function and ca
 Choose severity and confidence from the actual reachability, observed behavior, impact and remaining uncertainty. Never raise a rating just to meet a threshold.
 An empty findings array can end this bounded pass after a supported probe, or with outcome="no_testable_candidate" and a reason. The latter records incomplete inspection, not a claim that the program has no vulnerabilities.
 Do not claim production testing, JavaScript execution, file access or other effects not demonstrated. You initially have ${maxTurns} read/probe turns. The controller may extend turns and time when newly inspected source or completed tests demonstrate progress. Choose relevant functions and callers rather than exhaustively reading unrelated files.`;
+    // Keep the full controller inventory and evidence packet available through
+    // pageable workspace files. Only a bounded, fixed prompt is pinned in Qwen.
+    if(indexedPacket)await writeFile(join(root,'audit-controller-evidence-packet.json'),
+      JSON.stringify(indexedPacket),{mode:0o600});
+    const prompt=fullSourceIndex
+      ? controllerIndexedAuditPrompt({program:String(program.name),maxTurns,
+          candidates:indexedPacket?.candidates||[]})
+      : legacyPrompt;
+    await appendFile(logFile,'[AUDIT_PINNED_ENVELOPE] '+JSON.stringify({
+      fullIndex:!!fullSourceIndex,promptCharacters:prompt.length,
+      fullInventoryFiles:fullSourceIndex?.indexedFiles||0})+'\\n');
     let parsed:z.infer<typeof huntSchema> | undefined;
     signal.throwIfAborted();
     beforeInspection?.();
