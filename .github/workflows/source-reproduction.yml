@@ -98,6 +98,8 @@ jobs:
           node --import tsx scripts/test-production-workflow.ts
           node --import tsx scripts/test-production-workflow.ts --premature-final
 
+      - name: Verify controller-first full source inventory and evidence packets
+        run: node --import tsx scripts/test-controller-full-source-index.ts
       - name: Regress shared risk ranking over 2,000-source Crucible challenges
         run: node --import tsx scripts/test-crucible-polyglot-risk-ranking.ts
       - name: Install pinned local static analyzers
@@ -123,6 +125,7 @@ jobs:
       LOCAL_MODEL_ADAPTER: ollama
       LOCAL_OLLAMA_TOOL_PROTOCOL: json
       LOCAL_HUNT_DYNAMIC_ALLOWANCE: 'true'
+      LOCAL_CONTROLLER_FULL_SOURCE_INDEX: 'true'
       LOCAL_HUNT_NUM_PREDICT: '2048'
       SECURITY_AUTO_SUBMIT: 'false'
       SECURITY_AUTO_HUNT_ENABLED: 'false'
@@ -145,6 +148,9 @@ jobs:
           sudo apt-get install -y bubblewrap default-jdk-headless
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           timeout 2100 bash scripts/install-reproduction-runtime.sh
+      - name: Provision pinned offline scanner dependencies for Level 6
+        timeout-minutes: 20
+        run: bash scripts/install-static-analysis.sh
       - name: Start local Qwen3 4B model on CPU
         timeout-minutes: 45
         run: |
