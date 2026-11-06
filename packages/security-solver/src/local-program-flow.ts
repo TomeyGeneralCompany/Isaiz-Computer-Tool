@@ -219,6 +219,7 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
     // Entry cases are independently executed by the sandbox, not authored by Qwen.
     const controllerEntryCases=new Map<string,string>();
     let independentlyProvenCandidate:ControllerProofCandidate|null=null;
+    const indexedVerifiedCandidates:ControllerProofCandidate[]=[];
     const entryEvidenceFor=(caseId:string)=>{
       const entryId=controllerEntryCases.get(caseId);
       const entry=entryId ? session.cases.get(entryId) : undefined;
@@ -255,6 +256,44 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
             observed++;
             controllerTraceSummary+='Entry '+route.entry+' -> '+route.sink+
               ' observed with case '+result.caseId+'. ';
+            // Source graph and executed entry prove only a candidate. Reproduce
+            // the exact terminal function separately; attach its real caseId
+            // and a source-line call from the terminal transform. Independent
+            // review must still approve the complete packet.
+            const terminalCode=await readFile(join(root,route.sink),'utf8');
+            const terminalLines=terminalCode.split('\n');
+            const callLine=terminalLines.findIndex((line,index)=>
+              index>0 && /\\bproject\\s*\\(/.test(line) &&
+              !/\\b(?:def|function|String)\\s+project\\s*\\(/.test(line))+1;
+            if(callLine>0) {
+              const selector=route.sink.endsWith('.java')
+                ? route.sink.split('/').at(-1)!.replace(/\\.java$/,'')+'.project'
+                : 'project';
+              const terminal=JSON.parse(await session.probe(route.sink,selector,'html_reflection'));
+              if(terminal.status==='behavior_observed' &&
+                 typeof terminal.caseId==='string' &&
+                 session.cases.has(terminal.caseId)) {
+                reads.add(route.sink,{start:0,end:terminalCode.length});
+                const entryRecord=session.cases.get(result.caseId)!;
+                const proof=controllerProofCandidate({
+                  caseId:terminal.caseId,rendererFile:route.sink,
+                  rendererSelector:selector,callerFile:route.sink,
+                  callerLine:callLine,callerSource:terminalCode,
+                  entryCase:{kind:entryRecord.spec.kind,
+                    behaviorObserved:entryRecord.result.behavior_observed,
+                    observations:entryRecord.result.observations}
+                });
+                if(proof && !indexedVerifiedCandidates.some(x=>x.caseId===proof.caseId)) {
+                  indexedVerifiedCandidates.push(proof);
+                  controllerEntryCases.set(proof.caseId,result.caseId);
+                  await appendFile(logFile,'[CONTROLLER_INDEXED_PROOF_CANDIDATE] '+
+                    JSON.stringify({entry:route.entry,chain:route.chain,
+                      sink:route.sink,sinkCaseId:proof.caseId,
+                      entryCaseId:result.caseId,callerLine:callLine,
+                      independentReviewRequired:true})+'\\n');
+                }
+              }
+            }
           }
           await appendFile(logFile,'[CONTROLLER_INDEXED_ENTRY_PROBE] '+
             JSON.stringify({entry:route.entry,sink:route.sink,
