@@ -1013,7 +1013,7 @@ Do not claim production testing, JavaScript execution, file access or other effe
       const candidate=independentlyProvenCandidate;
       const alreadyPresent=parsed?.findings.some(item=>item.caseId===candidate.caseId);
       if(!alreadyPresent) {
-        parsed={findings:[candidate,...(parsed?.findings||[])].slice(0,3),outcome:'inspected'};
+        parsed={findings:[candidate,...(parsed?.findings||[])].slice(0,8),outcome:'inspected'};
         await appendFile(logFile,'[CONTROLLER_PROOF_FOR_REVIEW] '+JSON.stringify({
           caseId:candidate.caseId,source:'controller independent entry reproduction',
           reason:'model nomination is not a requirement for independently reviewed evidence',
