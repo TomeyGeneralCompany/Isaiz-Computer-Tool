@@ -135,7 +135,6 @@ async function solidityOracle(c:CrucibleChallenge):Promise<void>{
 export async function runCrucibleOracle(language:Language,seed:string,clean=false):Promise<void>{
  const challenge=generateCrucible({language,seed,clean});
  validateCrucibleChallenge(challenge);
- if(clean)throw Error('Clean-trial runtime oracle is not yet implemented; cannot certify');
  if(language==='javascript')await jsOracle(challenge);
  else if(language==='python')await pythonOracle(challenge);
  else if(language==='java')await javaOracle(challenge);
@@ -144,8 +143,9 @@ export async function runCrucibleOracle(language:Language,seed:string,clean=fals
 if(process.argv[1]?.includes('lotus-crucible-runtime-oracle')){
  const language=process.argv[2] as Language;
  const seed=process.argv[3]||'runtime-oracle-verification-01';
+ const clean=process.argv.includes('--clean');
  if(!['solidity','python','javascript','java'].includes(language))
    throw Error('Specify solidity, python, javascript, or java');
- runCrucibleOracle(language,seed).then(()=>console.log('Level 6 independent runtime oracle PASSED '+language))
+ runCrucibleOracle(language,seed,clean).then(()=>console.log('Level 6 independent runtime oracle PASSED '+language+(clean?' clean':'')))
  .catch(e=>{console.error(e);process.exitCode=1});
 }
