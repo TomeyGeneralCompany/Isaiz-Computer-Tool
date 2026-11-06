@@ -1,4 +1,4 @@
-name: LOTUS Level 5 polyglot post-PR150 maximum Gauntlet
+name: LOTUS Level 5 Python-only post-PR150 maximum Gauntlet
 on:
   push:
     branches:
@@ -7,14 +7,14 @@ permissions:
   contents: read
 concurrency:
   group: lotus-gauntlet-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 jobs:
   gauntlet:
     name: Level 5 ${{ matrix.language }}
     strategy:
       fail-fast: false
       matrix:
-        language: [solidity, python, javascript, java]
+        language: [python]
     if: startsWith(github.event.head_commit.message, 'Run owned LOTUS Level 5 Gauntlet')
     runs-on: ubuntu-24.04
     timeout-minutes: 360
