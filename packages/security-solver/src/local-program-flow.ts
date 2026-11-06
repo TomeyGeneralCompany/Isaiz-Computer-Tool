@@ -5,6 +5,7 @@ import {buildControllerSourceIndex,controllerEvidencePacket} from './controller-
 import {indexedEntryRoutes} from './controller-indexed-route';
 import {privilegedRoleMutationCandidate} from './solidity-security-candidates';
 import {controllerIndexedAuditPrompt} from './controller-index-prompt';
+import {roleConsumerImpactSequence,roleConsumerImpactObserved} from './controller-solidity-consumer-impact';
 import {sourceCandidateEvidence,verifiedProbeSummary} from './source-candidate-evidence';
 import {rankTracedSourceCandidates} from './controller-source-candidates';
 import {traceSourceCalls,solidityDependentSources,controllerCallerChain} from './source-flow-facts';
@@ -333,15 +334,15 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
           if(!role)continue;
           if(!new RegExp('\\bfunction\\s+'+role.method+
              '\\s*\\(\\s*address\\s+[A-Za-z_]\\w*\\s*\\)').test(code))continue;
-          const sequence={
-            constructorArgs:[],
-            steps:[
-              {operation:'observe' as const,function:role.role+'()',args:[]},
-              {operation:'send' as const,function:role.method+'(address)',
-                args:['$account2'],sender:1},
-              {operation:'observe' as const,function:role.role+'()',args:[]}
-            ]
-          };
+          // The role setter alone is not impact. Require a source-declared
+          // protected consumer and execute a negative control before the
+          // mutation, then the same consumer after the role transition.
+          const sequence=roleConsumerImpactSequence(code,role.role,role.method);
+          if(!sequence){
+            await appendFile(logFile,'[CONTROLLER_SOLIDITY_IMPACT_UNSUPPORTED] '+
+              JSON.stringify({path,role:role.role,reason:'No supported protected consumer sequence'})+'\\n');
+            continue;
+          }
           const observation=JSON.parse(await session.probe(
             path,role.selector,'solidity_sequence',sequence));
           await appendFile(logFile,'[PROBE_RESULT] '+JSON.stringify({
@@ -350,7 +351,16 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
             origin:'controller-indexed-solidity-role'})+'\\n');
           if(observation.status!=='behavior_observed'||
              typeof observation.caseId!=='string'||
-             !session.cases.has(observation.caseId))continue;
+             !session.cases.has(observation.caseId) ||
+             !roleConsumerImpactObserved(observation.observations,role.role,role.method)){
+            await appendFile(logFile,'[CONTROLLER_SOLIDITY_IMPACT_NOT_PROVEN] '+
+              JSON.stringify({path,status:observation.status,caseId:observation.caseId||null})+'\\n');
+            continue;
+          }
+          await appendFile(logFile,'[CONTROLLER_SOLIDITY_CONSUMER_IMPACT_OBSERVED] '+
+            JSON.stringify({path,role:role.role,mutator:role.method,
+              caseId:observation.caseId,baselineUnauthorizedBlocked:true,
+              postMutationConsumerSucceeded:true,creditChanged:true})+'\\n');
           const statement=new RegExp('\\bfunction\\s+'+role.method+'\\s*\\(');
           const line=code.split('\n').findIndex(text=>statement.test(text))+1;
           if(!line)continue;
@@ -358,10 +368,10 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
           const candidate:z.infer<typeof candidateSchema>={
             caseId:observation.caseId,severity:'low',confidence:0.75,
             title:'Reproduced unauthorized privileged role mutation',
-            ratingReason:'An isolated EVM transaction from a nonadministrator changed a source-declared privileged role. The independent reviewer must verify authorization, causal impact, scope and limitations.',
-            impact:'The demonstrated role change alters the account authorized by a source-declared privileged consumer, potentially changing who can perform protected operations.',
+            ratingReason:'Two independently contrasted local EVM states show that a previously blocked role-gated consumer succeeds after a nonadministrator changes the role, with a measured beneficiary balance increase. The reviewer still checks real deployment, mitigations and scope.',
+            impact:'A previously unauthorized account obtained the protected settlement privilege after a nonadministrator role mutation and executed a settlement that increased beneficiary credit; deployment impact remains subject to independent review.',
             callerFile:path,callerLine:line,reachability:'direct_transaction',
-            falsification:'Repeat the fresh deployment, call the setter as a nonadministrator, compare the before and after role getter, and inspect the privileged consumer and effective authorization checks. Reject if the transaction or source evidence contradicts the claim.'
+            falsification:'Replay the initial denied settlement, unauthorized role change, and post-change successful settlement on a fresh EVM; verify the credited balance change, actual authorization checks, and effective deployment mitigations. Reject if any necessary step fails.'
           };
           indexedVerifiedCandidates.push(candidate);
           await appendFile(logFile,'[CONTROLLER_INDEXED_PROOF_CANDIDATE] '+
