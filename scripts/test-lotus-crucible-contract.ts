@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {CRUCIBLE_REQUIREMENTS,validateCrucibleChallenge,type CrucibleChallenge} from './lotus-crucible-contract';
+import {CRUCIBLE_REQUIREMENTS,validateCrucibleChallenge,type CrucibleChallenge,createCrucibleInvestigatorPackage} from './lotus-crucible-contract';
 
 const file=(i:number)=>'export function step'+i+'(input:string){\n' +
   '  const n = input.length;\n  if (n < 1) return "";\n  const text = input.trim();\n' +
@@ -43,3 +43,17 @@ assert.equal(validateCrucibleChallenge({files,privateAnswerKey:clean}).defects,0
 assert.throws(()=>validateCrucibleChallenge({files:Object.fromEntries(Object.entries(files).slice(0,1999)),
  privateAnswerKey:key}),/Crucible/);
 console.log('Level 6 sealed challenge contract validation PASSED (structural only; no benchmark was run)');
+
+const visible=createCrucibleInvestigatorPackage(challenge);
+assert.equal(visible.sourceSha256,verdict.sourceSha256);
+assert.equal(visible.challengeId,key.challengeId);
+assert.equal(visible.files[sourcePaths[0]],files[sourcePaths[0]]);
+assert.notEqual(visible.files,files);
+assert.equal('privateAnswerKey' in visible,false);
+assert.equal('seed' in visible,false);
+assert.equal('defects' in visible,false);
+assert.equal(JSON.stringify(visible).includes('test-seed'),false);
+assert.equal(JSON.stringify(visible).includes('defect-0'),false);
+const unsafe={...files,'../outside.js':file(9000)};
+assert.throws(()=>createCrucibleInvestigatorPackage({files:unsafe,privateAnswerKey:key}),/Crucible unsafe source path/);
+assert.throws(()=>validateCrucibleChallenge({files:unsafe,privateAnswerKey:key}),/Crucible unsafe source path/);
