@@ -75,5 +75,9 @@ export function canonicalControllerPolyglotIntent(path:string,source:string,
       sequence:p.sequence});
   const matches=choices.filter(p=>p.query===requested.query ||
     (path.endsWith('.java') && p.query.split('.').at(-1)===requested.query));
-  return matches.length===1?matches[0]:null;
+  if(new Set(matches.map(p=>p.query)).size!==1)return null;
+  // Same exact symbol can have both text and stateful adapters. An actual
+  // literal HTML sink gets the context-aware HTML probe, not a generic state
+  // sequence with weaker observations.
+  return matches.find(p=>p.answer==='html_reflection')||matches[0]||null;
 }
