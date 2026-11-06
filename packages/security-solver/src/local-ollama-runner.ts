@@ -397,6 +397,24 @@ export async function runLocalAudit(
       controller.signal.throwIfAborted();
       // Keep stable history; send fresh controller state only with this request.
       let constraints=workflow ? await workflow.constraints() : limits.actionConstraints?.();
+      // The inspection graph moves into hypothesis mode after six source reads.
+      // Keep source reading *eligible* while controller-ranked, scoped sources
+      // remain unread; otherwise a repetitive small model cannot be redirected
+      // past six files and wastes the remaining turn allowance on rejections.
+      // Never override an exact required probe, caller read, or final-only gate.
+      if(workflow && constraints?.action?.includes('continue_inspection') &&
+         constraints.action.includes('plan_probe') &&
+         !constraints.action.includes('read_file') &&
+         (limits.initialSourcePaths||[]).some(path=>
+           /^source-[0-9]+\//.test(path) &&
+           /\.(?:py|js|mjs|cjs|java|sol)$/.test(path) &&
+           !workflow.snapshot().readPaths.includes(path))) {
+        constraints={...constraints,action:['read_file',...constraints.action]};
+        await appendFile(logFile,'[UNREAD_SOURCE_ACTION_RESTORED] '+
+          JSON.stringify({turn:turn+1,remaining:(limits.initialSourcePaths||[])
+            .filter(path=>!workflow.snapshot().readPaths.includes(path)).length})+'\\n');
+      }
+
       if(workflow && requireInvestigationAfterEmpty && constraints?.action?.includes('final') && constraints.action.length>1) {
         constraints={...constraints,action:constraints.action.filter(name=>name!=='final')};
         await appendFile(logFile,'[EMPTY_FINAL_INVESTIGATE] Require a concrete tool action before another conclusion\n');
