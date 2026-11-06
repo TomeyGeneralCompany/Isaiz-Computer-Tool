@@ -182,6 +182,9 @@ export async function runLocalAudit(
   const recentActions = new Map<string, {turn:number; nextOffset?:number|null; response?:Message}>();
   // Independent of context compaction: an evicted source page is not an unread page.
   const sourceReadCounts = new Map<string,number>();
+  // Completed pages survive model-context eviction and unreliable offset replay.
+  const terminalReadPages = new Map<string,{offset:number;response?:Message}>();
+  const terminalPageRecoveries = new Set<string>();
   let stalledActions = 0;
   const missingRequests=new Map<string,number>();
   const fixedSize=JSON.stringify(messages).length+JSON.stringify(structured ? actionSchema : availableTools).length;
@@ -292,6 +295,7 @@ export async function runLocalAudit(
           navigation.observe('read_file',path,offset,'',delivered);
           successfulReads++;
           recentActions.set(JSON.stringify(['read_file',path,offset,'']),{turn:-1,nextOffset:delivered.nextOffset,response:fitted.message});
+          if(delivered.nextOffset===null)terminalReadPages.set(path,{offset,response:fitted.message});
           events.push(JSON.stringify({tool:'read_file',path,offset,end:delivered.end,nextOffset:delivered.nextOffset,status:'prefetched'}).slice(0,180));
           await appendFile(logFile,'[INITIAL_SOURCE_READ] '+JSON.stringify({path,start:delivered.start,end:delivered.end,nextOffset:delivered.nextOffset})+'\n');
           await recordToolActivity(logFile,{phase:'completed',tool:'read_file',
@@ -1298,21 +1302,42 @@ export async function runLocalAudit(
           // compaction. The controller, not Qwen, chooses an unread in-scope
           // source when Qwen repeats that page; do not spend another model
           // turn on the same text or pretend this creates new evidence.
-          if(name==='read_file' && workflow && previous?.nextOffset===null) {
-            const readPaths=new Set(workflow.snapshot().readPaths);
-            const next=(limits.initialSourcePaths||[]).find(candidate=>
-              candidate.startsWith('source-') &&
-              /\.(?:py|js|mjs|cjs|java|sol)$/.test(candidate) &&
-              candidate!==path && !readPaths.has(candidate));
-            if(next) {
-              const nextFull=await safePath(next);
-              await appendFile(logFile,'[CONTROLLER_READ_REDIRECT] '+
-                JSON.stringify({from:path,requestedOffset:offset,to:next,turn:turn+1})+'\\n');
-              path=next;full=nextFull;offset=0;
-              call.function.arguments.path=path;
-              call.function.arguments.offset=0;
-              actionKey=keyAt(0);
-              previous=recentActions.get(actionKey);
+          if(name==='read_file' && workflow &&
+             (terminalReadPages.has(path) || previous?.nextOffset===null)) {
+            const completed=terminalReadPages.get(path);
+            const recordedResponse=completed?.response || (completed
+              ? recentActions.get(keyAt(completed.offset))?.response : previous?.response);
+            const evicted=!!recordedResponse && !messages.includes(recordedResponse);
+            if(completed && evicted && !terminalPageRecoveries.has(path)) {
+              // Exactly one bounded recovery of a compacted source result.
+              terminalPageRecoveries.add(path);
+              offset=completed.offset;
+              call.function.arguments.offset=offset;
+              actionKey=keyAt(offset);
+              previous=undefined;
+              await appendFile(logFile,'[TERMINAL_PAGE_CONTEXT_RECOVERY] '+
+                JSON.stringify({path,offset,turn:turn+1})+'\\n');
+            } else {
+              // Choose from the entire authorized, source-ranked candidate list,
+              // not the last page or the exhausted eight-file prefetch.
+              const readPaths=new Set(workflow.snapshot().readPaths);
+              const next=(limits.initialSourcePaths||[]).find(candidate=>
+                /^source-[0-9]+\\//.test(candidate) &&
+                /\\.(?:py|js|mjs|cjs|java|sol)$/.test(candidate) &&
+                candidate!==path && !readPaths.has(candidate));
+              if(next) {
+                const nextFull=await safePath(next);
+                await appendFile(logFile,'[CONTROLLER_READ_REDIRECT] '+
+                  JSON.stringify({from:path,requestedOffset:offset,to:next,turn:turn+1})+'\\n');
+                path=next;full=nextFull;offset=0;
+                call.function.arguments.path=path;
+                call.function.arguments.offset=0;
+                actionKey=keyAt(0);
+                previous=recentActions.get(actionKey);
+              } else {
+                workflow.feedback('All source pages in the candidate queue are complete. Choose a supported probe, another evidence-bearing search, or a fact-grounded final.');
+                throw new Error('Completed source page has already been recorded. No new eligible source remains; do not reread it.');
+              }
             }
           }
           const repeatCount=sourceReadCounts.get(actionKey)||0;
@@ -1402,6 +1427,7 @@ export async function runLocalAudit(
             workflow?.read(relative(root,full).split(sep).join("/"));
             limits.onRead?.(relative(root,full).split(sep).join("/"),{start:page.start,end:page.end});
             await appendFile(logFile, "[READ_OK] " + relative(root,full) + ` offset=${page.start} end=${page.end} nextOffset=${page.nextOffset}\n`);
+            if(page.nextOffset===null)terminalReadPages.set(relative(root,full).split(sep).join('/'),{offset:page.start});
             // Present grounded choices as soon as a file's last page is read,
             // before Qwen needs to invent a probe target or a Solidity sequence.
             if(workflow && page.nextOffset===null && ['.sol','.py','.js','.mjs','.cjs','.java'].some(ext=>full.endsWith(ext))) {
@@ -1580,6 +1606,11 @@ export async function runLocalAudit(
           }
         }
         if(completedActionKey)recentActions.get(completedActionKey)!.response=responseMessage;
+        if(call.function.name==='read_file'){
+          const sourcePath=String(call.function.arguments?.path||'');
+          const terminal=terminalReadPages.get(sourcePath);
+          if(terminal && terminal.offset===pageOffset(call.function.arguments?.offset))terminal.response=responseMessage;
+        }
         await persistMemory();
         // The independent reviewer may have supplied a valid conservative
         // verdict before its mandatory pagination completed. If subsequent
