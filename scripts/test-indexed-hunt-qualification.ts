@@ -6,7 +6,7 @@ import {dirname,join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {generateCrucible} from './lotus-crucible-generator';
 import {createCrucibleInvestigatorPackage} from './lotus-crucible-contract';
-import {runLocalProgramHunt} from '../packages/security-solver/src/local-program-flow';
+import {runLocalProgramHunt,independentReview} from '../packages/security-solver/src/local-program-flow';
 
 const root=await mkdtemp(join(tmpdir(),'lotus-indexed-hunt-qualification-'));
 const old={project:process.env.PROJECT_ROOT,token:process.env.GITHUB_TOKEN,
@@ -45,6 +45,18 @@ try{
    const expected=challenge.privateAnswerKey.defects.map(x=>x.affectedPaths.at(-1)!).sort();
    assert.deepEqual(targets,expected,language+' must report exactly the five reproduced sinks');
    assert.ok(result.findings.every(f=>/^[a-f0-9]{64}$/.test(f.reproductionCaseId||'')));
+   // The final gate is independent technical verification, not an accepted
+   // source route or model-authored claim. Verify all five actual Python
+   // handler replays against freshly reacquired committed source.
+   if(language==='python') {
+     for(const [i,finding] of result.findings.entries()) {
+       const reviewed=await independentReview({...finding,id:'indexed-review-'+i} as any,
+         program,finding.reproductionCaseId!,new AbortController().signal,acquirer);
+       assert.equal(reviewed.review.verdict,'approve');
+       assert.equal(reviewed.review.recommendation,'dont_submit');
+     }
+     console.log('python: all five source-linked reports independently approved after replay; external submission disabled');
+   }
    console.log(language+': 2000-file actual runLocalProgramHunt, five verified cases and reports PASSED');
  }
 }finally{
