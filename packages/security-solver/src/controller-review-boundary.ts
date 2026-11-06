@@ -109,3 +109,46 @@ export function controllerReviewGroundDefect(
   }
   return null;
 }
+
+
+/** Controller-owned technical review of an independently replayed *local*
+ * source-level HTML injection. This is a narrow, factual classification:
+ * it does not assert XSS, a deployed HTTP route, authorization bypass,
+ * policy eligibility or an externally reportable vulnerability.
+ *
+ * When every predicate below is true the actual unescaped markup injection
+ * is not a discretionary model opinion. A verified external impact still
+ * requires additional evidence; recommendation is always dont_submit.
+ */
+export function controllerVerifiedLocalHtmlReview(
+  grounds:ControllerReviewGrounds,
+  entry:EntryReviewObservation|null|undefined
+) {
+  if(!grounds.verifiedLocalEntryInjection || !grounds.independentlyReplayed ||
+     grounds.replayedProbeKind!=='html_reflection' ||
+     grounds.sourceBackedTextOnlyResponse.length ||
+     grounds.sourceBackedEscaping.length)return null;
+  const obs=entry?.observations;
+  if(!obs)return null;
+  const {control_input:normal,control_output:control,
+    attack_input:attack,attack_output:output}=obs;
+  if(!normal || !control || !attack || !output ||
+     control===output || !control.includes(normal) ||
+     !attack.startsWith('<') || !/<\/?[a-z][^>]*>/i.test(attack) ||
+     !output.includes(attack) || output===attack)return null;
+  // The independently reproduced handler must demonstrably construct or
+  // return HTML markup in its cited source, not merely an arbitrary string.
+  const sourceConstructsHtml=grounds.immutableFacts.some(line=>
+    /^.+:\d+: /.test(line) &&
+    /(?:['"\`]<(?:p|div|span|article|section|body|html|em|strong)\b|text\/html\b|innerHTML\b|document\.write\b)/i.test(line));
+  if(!sourceConstructsHtml)return null;
+  return {
+    verdict:'approve' as const,recommendation:'dont_submit' as const,
+    severity:'low' as const,confidence:0.72,bet100:false,
+    ratingReason:'Independent controller replay verified a source-declared handler returning attacker-selected raw HTML markup in a constructed HTML fragment; external client rendering and exploitability remain unproven.',
+    rubric:{exploitability:1,impactSeverity:1,evidenceQuality:3,novelty:0,scopeAlignment:2},
+    issues:[{category:'evidence_limit',severity:'warning' as const,
+      description:'Only source-level entry-to-HTML injection is established. Deployed routing, output content type, browser behavior, and external exploitation remain unverified.'}],
+    reasoning:'The controller independently re-executed the recorded case and the entry handler, observed differential control and attacker-selected HTML passing into constructed markup, and verified the cited source chain. This technically verifies the local injection, not browser script execution or a reportable external impact. External submission is prohibited pending further evidence.'
+  };
+}
