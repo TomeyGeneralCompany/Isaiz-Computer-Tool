@@ -3,6 +3,7 @@ import {collectStaticLeads} from './local-static-leads';
 import {buildSourceMap} from './source-map';
 import {buildControllerSourceIndex,controllerEvidencePacket} from './controller-source-index';
 import {indexedEntryRoutes} from './controller-indexed-route';
+import {privilegedRoleMutationCandidate} from './solidity-security-candidates';
 import {controllerIndexedAuditPrompt} from './controller-index-prompt';
 import {sourceCandidateEvidence,verifiedProbeSummary} from './source-candidate-evidence';
 import {rankTracedSourceCandidates} from './controller-source-candidates';
@@ -219,7 +220,7 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
     // Entry cases are independently executed by the sandbox, not authored by Qwen.
     const controllerEntryCases=new Map<string,string>();
     let independentlyProvenCandidate:ControllerProofCandidate|null=null;
-    const indexedVerifiedCandidates:ControllerProofCandidate[]=[];
+    const indexedVerifiedCandidates:Array<z.infer<typeof candidateSchema>>=[];
     const entryEvidenceFor=(caseId:string)=>{
       const entryId=controllerEntryCases.get(caseId);
       const entry=entryId ? session.cases.get(entryId) : undefined;
@@ -314,6 +315,64 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
       }
       await appendFile(logFile,'[CONTROLLER_INDEXED_ENTRY_SUMMARY] '+
         JSON.stringify({sourceRoutes:routes.length,attempted,observed})+'\\n');
+    }
+    // Controller-side role mutation reproduction uses the SAME existing
+    // isolated Solidity sequence verifier and independent reviewer. Source
+    // inspection determines the role, setter and protected consumer; actual
+    // EVM receipt and before/after state determine behavior_observed.
+    if(fullSourceIndex && !focus) {
+      for(const path of eligiblePaths.filter(p=>p.endsWith('.sol'))) {
+        signal.throwIfAborted();
+        if(indexedVerifiedCandidates.length>=8)break;
+        const repo=repos.find(r=>path.startsWith(
+          relative(root,r.directory).split(sep).join('/')+'/'));
+        if(!repo || missingDependencies.has(repo.url))continue;
+        try {
+          const code=await readFile(join(root,path),'utf8');
+          const role=privilegedRoleMutationCandidate(path,code,[code]);
+          if(!role)continue;
+          if(!new RegExp('\\bfunction\\s+'+role.method+
+             '\\s*\\(\\s*address\\s+[A-Za-z_]\\w*\\s*\\)').test(code))continue;
+          const sequence={
+            constructorArgs:[],
+            steps:[
+              {operation:'observe' as const,function:role.role+'()',args:[]},
+              {operation:'send' as const,function:role.method+'(address)',
+                args:['$account2'],sender:1},
+              {operation:'observe' as const,function:role.role+'()',args:[]}
+            ]
+          };
+          const observation=JSON.parse(await session.probe(
+            path,role.selector,'solidity_sequence',sequence));
+          await appendFile(logFile,'[PROBE_RESULT] '+JSON.stringify({
+            path,function:role.selector,kind:'solidity_sequence',
+            status:observation.status,caseId:observation.caseId||null,
+            origin:'controller-indexed-solidity-role'})+'\\n');
+          if(observation.status!=='behavior_observed'||
+             typeof observation.caseId!=='string'||
+             !session.cases.has(observation.caseId))continue;
+          const statement=new RegExp('\\bfunction\\s+'+role.method+'\\s*\\(');
+          const line=code.split('\n').findIndex(text=>statement.test(text))+1;
+          if(!line)continue;
+          reads.add(path,{start:0,end:code.length});
+          const candidate:z.infer<typeof candidateSchema>={
+            caseId:observation.caseId,severity:'low',confidence:0.75,
+            title:'Reproduced unauthorized privileged role mutation',
+            ratingReason:'An isolated EVM transaction from a nonadministrator changed a source-declared privileged role. The independent reviewer must verify authorization, causal impact, scope and limitations.',
+            impact:'The demonstrated role change alters the account authorized by a source-declared privileged consumer, potentially changing who can perform protected operations.',
+            callerFile:path,callerLine:line,reachability:'direct_transaction',
+            falsification:'Repeat the fresh deployment, call the setter as a nonadministrator, compare the before and after role getter, and inspect the privileged consumer and effective authorization checks. Reject if the transaction or source evidence contradicts the claim.'
+          };
+          indexedVerifiedCandidates.push(candidate);
+          await appendFile(logFile,'[CONTROLLER_INDEXED_PROOF_CANDIDATE] '+
+            JSON.stringify({path,selector:role.selector,
+              caseId:observation.caseId,role:role.role,
+              callerLine:line,independentReviewRequired:true})+'\\n');
+        }catch(error){
+          await appendFile(logFile,'[CONTROLLER_INDEXED_SOLIDITY_UNAVAILABLE] '+
+            JSON.stringify({path,error:String(error).slice(0,220)})+'\\n');
+        }
+      }
     }
     // Controller-first bounded investigation: source selection and isolated
     // execution no longer depend on Qwen to request the first verification.
