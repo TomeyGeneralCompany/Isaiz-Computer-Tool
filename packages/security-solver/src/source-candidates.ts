@@ -11,12 +11,12 @@ export function controllerSourceRiskSignal(path:string,source:string):number {
     // Authorization must guard the SAME state-changing function. A check
     // on setNext() cannot bless an unrelated unrestricted rotateOperator().
     // This scanner only ranks source for review; it never proves exploitation.
-    const method=/\\bfunction\\s+\\w+\\s*\\([^)]*\\)\\s*(?:external|public)[^{]*\\{[^{}]*\\}/g;
+    const method=/\bfunction\s+\w+\s*\([^)]*\)\s*(?:external|public)[^{]*\{[^{}]*\}/g;
     for(const match of source.matchAll(method)){
       const body=match[0];
-      const stateChange=/\\b(?:operator|administrator|owner|guardian)\\s*=\\s*[A-Za-z_]\\w*\\s*;/i.test(body);
+      const stateChange=/\b(?:operator|administrator|owner|guardian)\s*=\s*[A-Za-z_]\w*\s*;/i.test(body);
       if(!stateChange)continue;
-      const guarded=/\\brequire\\s*\\(\\s*(?:msg\\.sender\\s*==|hasRole\\s*\\(|_msgSender\\s*\\(\\s*\\)\\s*==)|\\bonly(?:Owner|Role|Admin|Operator)\\b/i.test(body);
+      const guarded=/\brequire\s*\(\s*(?:msg\.sender\s*==|hasRole\s*\(|_msgSender\s*\(\s*\)\s*==)|\bonly(?:Owner|Role|Admin|Operator)\b/i.test(body);
       score=Math.max(score,guarded?2:40);
     }
   }else if(/\.(?:py|js|mjs|cjs|java)$/.test(path)) {
