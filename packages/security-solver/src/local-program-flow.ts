@@ -267,11 +267,11 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
             const terminalCode=await readFile(join(root,route.sink),'utf8');
             const terminalLines=terminalCode.split('\n');
             const callLine=terminalLines.findIndex((line,index)=>
-              index>0 && /\\bproject\\s*\\(/.test(line) &&
-              !/\\b(?:def|function|String)\\s+project\\s*\\(/.test(line))+1;
+              index>0 && /\bproject\s*\(/.test(line) &&
+              !/\b(?:def|function|String)\s+project\s*\(/.test(line))+1;
             if(callLine>0) {
               const selector=route.sink.endsWith('.java')
-                ? route.sink.split('/').at(-1)!.replace(/\\.java$/,'')+'.project'
+                ? route.sink.split('/').at(-1)!.replace(/\.java$/,'')+'.project'
                 : 'project';
               const terminal=JSON.parse(await session.probe(route.sink,selector,'html_reflection'));
               if(terminal.status==='behavior_observed' &&
