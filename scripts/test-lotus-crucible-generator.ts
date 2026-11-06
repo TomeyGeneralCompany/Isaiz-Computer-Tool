@@ -32,7 +32,7 @@ for(const language of languages){
   const clean=generateCrucible({language,seed:'crucible-acceptance-clean-01',clean:true});
   assert.equal(clean.privateAnswerKey.defects.length,0);
   const paths=Object.keys(pkg.files);
-  assert.ok(paths.some(p=>p.includes('gateways/')));
+  assert.ok(paths.some(p=>p.includes('gateways/') || p.includes('/Gateway')));
   if(language==='javascript'){
     const root=await mkdtemp(join(tmpdir(),'crucible-js-'));
     try{
