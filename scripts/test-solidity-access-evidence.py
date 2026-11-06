@@ -34,6 +34,19 @@ function settle() external {require(msg.sender==operator,"operator only");}
             ]
             d={"accounts":a,"steps":steps}
             self.assertTrue(authorization_transition_observed(root,authority,"Authority.rotateOperator",d))
+            external_source=authority.read_text()
+            public_source=external_source.replace(
+                'rotateOperator(address next) external',
+                'rotateOperator(address next) public')
+            authority.write_text(public_source)
+            self.assertTrue(authorization_transition_observed(root,authority,"Authority.rotateOperator",d),
+                "A public function is externally callable and must receive the same evidence test")
+            authority.write_text(public_source.replace(
+                'rotateOperator(address next) public',
+                'rotateOperator(address next) public onlyOwner'))
+            self.assertFalse(authorization_transition_observed(root,authority,"Authority.rotateOperator",d),
+                "Role-guarded Solidity modifiers must defeat this unguarded-mutation hypothesis")
+            authority.write_text(external_source)
             self.assertFalse(authorization_transition_observed(root,authority,"Authority.rotateOperator",
                 {"accounts":a,"steps":[steps[0],dict(steps[1],reverted=True),steps[2]]}))
             consumer.unlink()

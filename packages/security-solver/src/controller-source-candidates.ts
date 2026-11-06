@@ -34,7 +34,7 @@ export async function rankTracedSourceCandidates(
        /(?:searchParams|urlsplit|parse_qs|URL\s*\()/i.test(source))continue;
     const selectors:string[]=[];
     if(path.endsWith('.py')){
-      for(const m of source.matchAll(/^def\s+([A-Za-z_]\w*)\s*\(\s*([A-Za-z_]\w*)\s*\)\s*(?:->\s*str\s*)?:/gm))
+      for(const m of source.matchAll(/^(?:async\s+)?def\s+([A-Za-z_]\w*)\s*\(\s*([A-Za-z_]\w*)\s*(?::\s*(?:str|Any|object))?\s*\)\s*(?:->\s*str\s*)?:/gm))
         selectors.push(m[1]);
     }else if(path.endsWith('.java')){
       const cls=path.split('/').at(-1)!.slice(0,-5);
@@ -45,6 +45,18 @@ export async function rankTracedSourceCandidates(
         selectors.push(m[1]);
       for(const m of source.matchAll(/\bexport\s+(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(\s*[A-Za-z_$][\w$]*\s*\)/g))
         selectors.push(m[1]);
+      // CommonJS shorthand exports are ordinary public entry points, too:
+      // function project(value) {...} ; module.exports={project,transform}.
+      // Do not nominate unexported implementation helpers.
+      const objectExport=/\bmodule\.exports\s*=\s*\{([^}]+)\}/g;
+      for(const match of source.matchAll(objectExport)) {
+        for(const declaration of match[1].split(',')) {
+          const name=declaration.trim();
+          if(!/^[A-Za-z_$][\w$]*$/.test(name))continue;
+          const functionPattern=new RegExp('\\bfunction\\s+'+name+'\\s*\\(\\s*[A-Za-z_$][\\w$]*\\s*\\)');
+          if(functionPattern.test(source))selectors.push(name);
+        }
+      }
     }
     for(const selector of [...new Set(selectors)].slice(0,12)){
       const method=selector.split('.').at(-1)||'';
@@ -54,7 +66,7 @@ export async function rankTracedSourceCandidates(
         const implementation=trace.facts.map(f=>f.source).join('\n');
         // Require an actual source-traced HTML result. Sanitizers in any
         // inspected hop defeat this particular unsanitized-reflection hint.
-        if(!/<p>/i.test(implementation)||!/<\/p>/i.test(implementation) ||
+        if(!/<p(?:\s|>)/i.test(implementation)||!/<\/p\s*>/i.test(implementation) ||
            !/\breturn\b/.test(implementation))continue;
         if(/\b(?:escape|escapeHtml|htmlspecialchars|sanitize|DOMPurify)\s*\(|\.replace\s*\(/i.test(implementation))continue;
         const chain=[...new Set(trace.facts.map(f=>f.path))];

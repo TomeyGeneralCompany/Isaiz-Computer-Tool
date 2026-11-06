@@ -27,7 +27,7 @@ try {
   const cache=join(root,"static-leads-cache.json");
   const result=await collectStaticLeads(root,
     [{directory:repository,url:"https://github.com/owned-fixture/source"}],
-    [],cache,new AbortController().signal);
+    [],cache,new AbortController().signal,root);
   assert.equal(result.runs.length,1);
   const run=result.runs[0];
   assert.equal(run.status,"failed");

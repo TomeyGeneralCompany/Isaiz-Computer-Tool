@@ -78,6 +78,10 @@ jobs:
           npx tsx scripts/test-audit-navigation-recovery.ts
           npx tsx scripts/test-solidity-source-index.ts
           npx tsx scripts/test-submodule-acquisition.ts
+      - name: Regress Level 6 source ranking and completed-page recovery
+        run: |
+          node --import tsx scripts/test-level6-controller-candidate-recovery.ts
+          node --import tsx scripts/test-level6-terminal-page-handoff.ts
       - name: Verify paginated source inspection and evidence spans
         run: npx tsx scripts/test-source-inspection.ts
       - name: Verify state mutex crash recovery and concurrent claims

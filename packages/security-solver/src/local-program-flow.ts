@@ -236,12 +236,12 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
           if(!record || !record.result.behavior_observed)continue;
           const prefix=relative(root,repo.directory).split(sep).join('/')+'/';
           const chain=await controllerCallerChain(root,prefix,selected.path,
-            selected.selector,[...new Set([...sourceHints,...eligiblePaths])],4);
+            selected.selector,[...new Set([...sourceHints,...eligiblePaths])],8);
           // Reproduce each import-resolved intermediate caller, rather than
           // jumping directly from a nested helper to a handler.
           const progression=await promoteControllerCallChain({
             start:{path:selected.path,selector:selected.selector,kind:selected.kind,caseId:output.caseId},
-            chain,maxSteps:6,
+            chain,maxSteps:8,
             read:path=>readFile(join(root,path),'utf8'),
             references:callerLineReferences,
             supported:async(path,selector)=>path.endsWith('.java')
