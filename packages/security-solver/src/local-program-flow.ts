@@ -1129,7 +1129,7 @@ export async function independentReview(finding:SecurityFinding,program:Security
     });
     const entryFacts=entryReplayFacts(entryReplay as Parameters<typeof entryReplayFacts>[0]);
     const immutableReviewGrounds=controllerReviewGrounds(chainEvidence,
-      entryReplay as Parameters<typeof controllerReviewGrounds>[1]);
+      entryReplay as Parameters<typeof controllerReviewGrounds>[1],replay);
     const evidenceDirectory=join(root,"evidence");await mkdir(evidenceDirectory,{mode:0o700});
     const evidenceFiles={"report.txt":finding.reportBody!,"replay.json":JSON.stringify(replay,null,2),
       "policy.txt":policy || "No policy text available", "known-reports.json":JSON.stringify(disclosedReports,null,2),
