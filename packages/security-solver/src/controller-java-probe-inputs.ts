@@ -4,14 +4,15 @@
  */
 import type {JavaSequence} from './java-sequence';
 export interface ControllerJavaProbe {selector:string;sequence:JavaSequence;methodLine:number}
-const typeFixtures:Record<string,unknown>={
+type JavaArgument=JavaSequence['constructor'][number];
+const typeFixtures:Record<string,JavaArgument>={
   int:1,long:1,short:1,byte:1,float:1,double:1,
   boolean:true,char:'A',String:'TOMEY_LOCAL_PROBE',
   'java.lang.String':'TOMEY_LOCAL_PROBE',
 };
-function argumentsFor(parameters:string):unknown[]|null {
+function argumentsFor(parameters:string):JavaArgument[]|null {
   if(!parameters.trim())return [];
-  const args:unknown[]=[];
+  const args:JavaArgument[]=[];
   for(const fragment of parameters.split(',')){
     const parameter=fragment.trim().replace(/\bfinal\s+/g,'').replace(/@\w+(?:\([^)]*\))?\s*/g,'');
     const match=/^([\w.]+)\s+[A-Za-z_$]\w*$/.exec(parameter);
