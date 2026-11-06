@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {assessCrucibleQualification,type CrucibleTrialReceipt} from './lotus-crucible-qualification';
 const langs=['solidity','python','javascript','java'] as const;
 const receipts:CrucibleTrialReceipt[]=Array.from({length:36},(_,i)=>{
-  const kind=i%2===0?'clean':'vulnerable';
+  const kind=Math.floor(i/4)%2===0?'clean':'vulnerable';
   const ids=kind==='clean'?[]:Array.from({length:5},(_,j)=>'defect-'+j);
   return {
     trialId:'trial-'+i,language:langs[i%4],
