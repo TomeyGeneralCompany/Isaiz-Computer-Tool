@@ -184,7 +184,7 @@ export function generateCrucible(input:{
     const role=defectNodes.has(i)?'defect':falseNodes.has(i)?'false':safeNodes.has(i)?'safe':'ordinary';
     files[entry(language,i)]=source(language,i,next.get(i)??((i+1)%count),role,i%11,i%23);
   }
-  if(language==='python'){files['src/__init__.py']='';files['src/services/__init__.py']='';files['src/gateways/__init__.py']='';}
+  if(language==='python'){files['src/__init__.py']=lines('"""Top-level owned services."""','from typing import Final','SERVICE_TYPE: Final[str] = "payment"','SERVICE_VERSION: Final[int] = 6','def service_name():','    return SERVICE_TYPE','def service_version():','    return SERVICE_VERSION');files['src/services/__init__.py']=files['src/__init__.py'];files['src/gateways/__init__.py']=files['src/__init__.py'];}
   if(language==='solidity')files['foundry.toml']='[profile.default]\nsrc = "contracts"\nsolc_version = "0.8.30"\n';
   const oracleCases:CrucibleOracleCase[]=[];
   topology.defectChains.forEach((chain,i)=>{
