@@ -1282,7 +1282,7 @@ export async function runLocalAudit(
             // In a compacted prompt a completed page may be replayed once for
             // genuine context recovery. Never reset a live pagination cursor,
             // and never permit unlimited identical recovery reads.
-            if(!workflow && previous.nextOffset===null && (sourceReadCounts.get(actionKey)||0)<2)previous=undefined;
+            if(previous.nextOffset===null && (sourceReadCounts.get(actionKey)||0)<2)previous=undefined;
           }
           // Recover a repeated page request using the tool's actual cursor.
           // Stay on the same action/path/query and record the effective span.
