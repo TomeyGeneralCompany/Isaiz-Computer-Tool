@@ -40,7 +40,7 @@ async function prepare(root:string,level:number,language:Language,seed:string,cl
  const commit=execFileSync('git',['-C',fixture,'rev-parse','HEAD'],{encoding:'utf8'}).trim();
  await writeFile(join(root,'answer-key.private.json'),JSON.stringify(answer,null,2),{mode:0o600});
  await writeFile(join(root,'manifest.json'),JSON.stringify({
-   challenge:'crucible-v1',language,seedCommitment:createHash('sha256').update(seed).digest('hex'),level,kind:answer.kind,sourceFiles:Object.keys(investigatorPackage.files).filter(p=>/\.(?:sol|py|cjs|java)$/.test(p)).length,commit,mode:'owned-synthetic'
+   challenge:'crucible-v1',language,seedCommitment:createHash('sha256').update(seed).digest('hex'),level,kind:answer.kind,sourceSha256:investigatorPackage.sourceSha256,sourceFiles:Object.keys(investigatorPackage.files).filter(p=>/\.(?:sol|py|cjs|java)$/.test(p)).length,commit,mode:'owned-synthetic'
  },null,2));
  return {fixture,answer};
 }
