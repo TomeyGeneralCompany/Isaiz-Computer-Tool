@@ -19,7 +19,7 @@ export type ControllerSourceIndex={
   limitation:string;
 };
 const extension=/\.(?:py|js|mjs|cjs|java|sol)$/;
-const declaration=/^\s*(?:(?:async\s+)?def\s+[A-Za-z_]\w*\s*\(|(?:export\s+)?(?:async\s+)?function\s+[A-Za-z_$][\w$]*\s*\(|(?:public|external|protected|private)\s+(?:(?:static|final)\s+)*(?:(?:String|void|[A-Za-z_$][\w$<>]*)\s+)?[A-Za-z_$][\w$]*\s*\(|(?:function|contract)\s+[A-Za-z_]\w*\s*[({]))/gm;
+const declaration=/^\s*(?:(?:async\s+)?def\s+[A-Za-z_]\w*\s*\(|(?:export\s+)?(?:async\s+)?function\s+[A-Za-z_$][\w$]*\s*\(|(?:public|external|protected|private)\s+(?:(?:static|final)\s+)*(?:(?:String|void|[A-Za-z_$][\w$<>]*)\s+)?[A-Za-z_$][\w$]*\s*\(|(?:function|contract)\s+[A-Za-z_]\w*\s*[({])/gm;
 const relation=/\b(?:import|from|require\s*\(|extends|implements|is\s+[A-Z])/;
 const rank=(entry:IndexedSourceFact)=>entry.risk*100+sourcePriority(entry.path)*10+
   (/(?:gateway|handler|controller|router|entry|server)/i.test(entry.path)?30:0);
