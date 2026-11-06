@@ -100,15 +100,25 @@ function source(language:Language,i:number,next:number,role:'defect'|'safe'|'fal
       '}');
   }
   return lines('// SPDX-License-Identifier: MIT','pragma solidity ^0.8.20;',
-    'contract '+cls+' {',
+    'import "../interfaces/ICrucibleRoute.sol";',
+    'contract '+cls+' is ICrucibleRoute {',
     '  address public immutable administrator;',
     '  address public operator;',
+    '  address public next;',
     '  uint256 public totalCredit;',
     '  mapping(address => uint256) public credit;',
     '  constructor(){ administrator=msg.sender; operator=msg.sender; }',
-    '  function rotateOperator(address nextOperator) external {',
+    '  function setNext(address target) external {',
+    '    require(msg.sender==administrator,"admin only"); next=target;',
+    '  }',
+    '  function rotateOperator(address nextOperator) public {',
     (safe?'    require(msg.sender==administrator,"admin only");':'    require(nextOperator!=address(0),"zero operator");'),
     '    operator=nextOperator;',
+    '  }',
+    '  function route(address candidate,uint256 remaining) external {',
+    '    if(remaining==0){rotateOperator(candidate);return;}',
+    '    require(next!=address(0),"route missing");',
+    '    ICrucibleRoute(next).route(candidate,remaining-1);',
     '  }',
     '  function fund(uint256 amount) external {credit[msg.sender]+=amount;totalCredit+=amount;}',
     '  function settle(address receiver,uint256 amount) external {',
@@ -158,10 +168,16 @@ function gateway(language:Language,i:number,chain:readonly number[],safe:boolean
     '}')];
   return ['contracts/gateways/'+ident+'.sol',lines(
     '// SPDX-License-Identifier: MIT','pragma solidity ^0.8.20;',
-    'import "../services/'+symbol(last)+'.sol";',
-    'contract '+ident+' is '+symbol(last)+' {',
-    '  function entryPoint() external view returns(address,uint256){',
-    '    return (operator,totalCredit);',
+    'import "../interfaces/ICrucibleRoute.sol";',
+    'contract '+ident+' {',
+    '  address public immutable initial;',
+    '  uint256 public constant hops='+steps+';',
+    '  constructor(address first){require(first!=address(0),"first");initial=first;}',
+    '  function rotateOperator(address candidate) external {',
+    '    ICrucibleRoute(initial).route(candidate,hops);',
+    '  }',
+    '  function entryPoint() external view returns(address){',
+    '    return ICrucibleRoute(initial).operator();',
     '  }',
     '}')];
 }
@@ -185,7 +201,18 @@ export function generateCrucible(input:{
     files[entry(language,i)]=source(language,i,next.get(i)??((i+1)%count),role,i%11,i%23);
   }
   if(language==='python'){files['src/__init__.py']=lines('"""Top-level owned services."""','from typing import Final','SERVICE_TYPE: Final[str] = "payment"','SERVICE_VERSION: Final[int] = 6','def service_name():','    return SERVICE_TYPE','def service_version():','    return SERVICE_VERSION');files['src/services/__init__.py']=files['src/__init__.py'];files['src/gateways/__init__.py']=files['src/__init__.py'];}
-  if(language==='solidity')files['foundry.toml']='[profile.default]\nsrc = "contracts"\nsolc_version = "0.8.30"\n';
+  if(language==='solidity'){
+    files['foundry.toml']='[profile.default]\\nsrc = "contracts"\\nsolc_version = "0.8.30"\\n';
+    files['contracts/interfaces/ICrucibleRoute.sol']=lines(
+      '// SPDX-License-Identifier: MIT','pragma solidity ^0.8.20;',
+      'interface ICrucibleRoute {',
+      '  function route(address candidate,uint256 remaining) external;',
+      '  function rotateOperator(address candidate) external;',
+      '  function setNext(address target) external;',
+      '  function operator() external view returns(address);',
+      '  function next() external view returns(address);',
+      '}');
+  }
   const oracleCases:CrucibleOracleCase[]=[];
   topology.defectChains.forEach((chain,i)=>{
     const [path,body]=gateway(language,i,chain,false);files[path]=body;
