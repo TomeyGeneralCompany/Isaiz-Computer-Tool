@@ -24,6 +24,11 @@ const replay={...claim,executionId:'independent',independentlyReplayed:true};
 const grade=(claims:CrucibleReplayObservation[],replays:CrucibleReplayObservation[],k=key)=>
   adjudicateCrucibleReplay({key:k,sourceSha256:sha,claims,independentObservations:replays});
 assert.equal(grade([claim],[replay]).qualified,true);
+assert.equal(grade([{...claim,authorizedScope:false}],[replay]).qualified,false);
+assert.throws(()=>grade([claim],[replay,{...replay,executionId:'second'}]),/duplicate/);
+assert.equal(grade([claim],[replay,{...replay,caseId:'invented',executionId:'extra'}]).qualified,false);
+assert.equal(grade([claim],[replay,{...replay,caseId:'n1',executionId:'negative',chainPaths:['safe.py']}]).negativeControlViolations.length,1);
+assert.equal(grade([claim],[replay,{...replay,caseId:'d2',executionId:'unclaimed'}]).unexpectedClaims.length,1);
 assert.equal(grade([],[replay]).qualified,false);
 assert.equal(grade([claim],[]).qualified,false);
 assert.equal(grade([claim],[{...replay,effect:'different'}]).qualified,false);
