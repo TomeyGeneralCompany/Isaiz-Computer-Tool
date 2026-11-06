@@ -49,7 +49,7 @@ function grade(log:string,result:any,elapsed:number,review:any[],answer:Crucible
  const findings:any[]=Array.isArray(result.findings)?result.findings:[];
  const reviews:any[]=Array.isArray(review)?review:[];
  const accepted=findings.filter(f=>f.reproductionCaseId&&reviews.some(r=>r.caseId===f.reproductionCaseId&&
-  ['valid','verified','confirmed','accepted'].includes(String(r.verdict).toLowerCase())));
+  ['approve','valid','verified','confirmed','accepted'].includes(String(r.verdict).toLowerCase())));
  const matched=answer.defects.map(d=>({id:d.id,cases:accepted.filter(f=>{
    const text=[f.targetAsset,f.title,f.reportBody,f.summary,f.sourceFile].filter(Boolean).join(' ');
    return [d.entryPath,...d.affectedPaths].some(p=>text.includes(p));
