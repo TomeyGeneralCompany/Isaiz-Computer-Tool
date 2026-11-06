@@ -101,7 +101,7 @@ function source(language:Language,i:number,next:number,role:'defect'|'safe'|'fal
   }
   return lines('// SPDX-License-Identifier: MIT','pragma solidity ^0.8.20;',
     'import "../interfaces/ICrucibleRoute.sol";',
-    'contract '+cls+' is ICrucibleRoute {',
+    'contract '+cls+' {',
     '  address public immutable administrator;',
     '  address public operator;',
     '  address public next;',
