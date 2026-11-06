@@ -59,6 +59,18 @@ assert.ok((await rejected.constraints()).action.includes('final'));
 // bounded duplicate-read recovery recognizes the recorded completed page,
 // acknowledging that prior read must release the read_file-only constraint.
 // It must not manufacture a new source span or a reproduction observation.
+// Level 6 context compaction must retain a bounded ledger of actual probe
+// results without mistaking those observations for approved findings.
+const ledgerFlow=new InvestigationWorkflow();
+for(let i=0;i<8;i++){
+  const path='source-1/service_'+i+'.py';
+  const probe={action:'verify_source',path,query:'render',answer:'html_reflection',offset:0};
+  ledgerFlow.observe(probe,JSON.stringify({status:'observation_only',caseId:String(i).padStart(64,'a'),behavior_observed:false}));
+}
+const ledgerNote=JSON.parse(ledgerFlow.note());
+assert.ok(ledgerNote.observationLedger.length>=3,'bounded controller context must retain multiple recorded probes');
+assert.equal(ledgerNote.observationLedger.at(-1).path,'source-1/service_7.py');
+assert.equal(ledgerFlow.snapshot().observations.length,8,'context compaction must not erase controller evidence');
 const callerRecovery=new InvestigationWorkflow();
 const callerPath='source-1/caller.py';
 callerRecovery.read(callerPath);
