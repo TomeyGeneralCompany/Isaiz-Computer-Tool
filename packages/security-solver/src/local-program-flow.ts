@@ -241,7 +241,7 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
           // jumping directly from a nested helper to a handler.
           const progression=await promoteControllerCallChain({
             start:{path:selected.path,selector:selected.selector,kind:selected.kind,caseId:output.caseId},
-            chain,maxSteps:6,
+            chain,maxSteps:8,
             read:path=>readFile(join(root,path),'utf8'),
             references:callerLineReferences,
             supported:async(path,selector)=>path.endsWith('.java')
