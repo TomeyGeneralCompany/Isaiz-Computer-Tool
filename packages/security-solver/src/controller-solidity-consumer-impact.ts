@@ -14,7 +14,7 @@ export function roleConsumerImpactSequence(source:string,role:string,mutator:str
   const balance=/\bmapping\s*\(\s*address\s*=>\s*uint256\s*\)\s+public\s+credit\b/.test(source);
   const roleGuard=settle && new RegExp('\\brequire\\s*\\(\\s*msg\\.sender\\s*==\\s*'+role+'\\b').test(settle[1]);
   if(!fund||!settle||!balance||!roleGuard||
-     !new RegExp('\\bcredit\\s*\\[\\s*\w+\\s*\\]\\s*\\+=').test(settle[1]))
+     !/\bcredit\s*\[\s*\w+\s*\]\s*\+=/.test(settle[1]))
     return null;
   return {constructorArgs:[],steps:[
     {operation:'observe',function:role+'()',args:[]},
