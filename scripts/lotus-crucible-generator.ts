@@ -202,7 +202,7 @@ export function generateCrucible(input:{
   }
   if(language==='python'){files['src/__init__.py']=lines('"""Top-level owned services."""','from typing import Final','SERVICE_TYPE: Final[str] = "payment"','SERVICE_VERSION: Final[int] = 6','def service_name():','    return SERVICE_TYPE','def service_version():','    return SERVICE_VERSION');files['src/services/__init__.py']=files['src/__init__.py'];files['src/gateways/__init__.py']=files['src/__init__.py'];}
   if(language==='solidity'){
-    files['foundry.toml']='[profile.default]\\nsrc = "contracts"\\nsolc_version = "0.8.30"\\n';
+    files['foundry.toml']='[profile.default]\nsrc = "contracts"\nsolc_version = "0.8.30"\n';
     files['contracts/interfaces/ICrucibleRoute.sol']=lines(
       '// SPDX-License-Identifier: MIT','pragma solidity ^0.8.20;',
       'interface ICrucibleRoute {',
