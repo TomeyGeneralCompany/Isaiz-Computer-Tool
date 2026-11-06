@@ -85,7 +85,7 @@ async function solidityOracle(c:CrucibleChallenge):Promise<void>{
  const solc=requireRuntime('solc'),ethers=requireRuntime('ethers'),ganache=requireRuntime('ganache');
  const sources:Record<string,{content:string}>={};
  const targetGateways=c.privateAnswerKey.defects.map((_,i)=>'contracts/gateways/Gateway'+String(i).padStart(2,'0')+'.sol');
- const targetPaths=[...targetGateways,...c.privateAnswerKey.defects.flatMap(d=>d.affectedPaths.slice(-1)),
+ const targetPaths=[...targetGateways,'contracts/interfaces/ICrucibleRoute.sol',...c.privateAnswerKey.defects.flatMap(d=>d.affectedPaths),
    ...c.privateAnswerKey.negativeControls.slice(0,8).flatMap(d=>d.affectedPaths)];
  for(const p of targetPaths){if(!c.files[p])throw Error('Missing Solidity oracle source '+p);sources[p]={content:c.files[p]};}
  const input={language:'Solidity',sources,settings:{optimizer:{enabled:false},
@@ -103,11 +103,24 @@ async function solidityOracle(c:CrucibleChallenge):Promise<void>{
    return instance;
  };
  for(let i=0;i<targetGateways.length;i++){
-   const contract=await deploy(targetGateways[i],'Gateway'+String(i).padStart(2,'0'));
-   const tx=await contract.connect(attacker).rotateOperator(await attacker.getAddress());
+   const chain=c.privateAnswerKey.defects[i].affectedPaths;
+   const deployed:any[]=[];
+   for(let j=chain.length-1;j>=0;j--){
+     const path=chain[j],name=path.split('/').pop()!.replace('.sol','');
+     const instance=await deploy(path,name);
+     if(deployed.length){
+       const tx=await instance.setNext(await deployed[deployed.length-1].getAddress());
+       await tx.wait();
+     }
+     deployed.push(instance);
+   }
+   const first=deployed[deployed.length-1],terminal=deployed[0];
+   const gateway=await deploy(targetGateways[i],'Gateway'+String(i).padStart(2,'0'),
+     [await first.getAddress()]);
+   const tx=await gateway.connect(attacker).rotateOperator(await attacker.getAddress());
    await tx.wait();
-   if((await contract.operator()).toLowerCase()!==(await attacker.getAddress()).toLowerCase())
-     throw Error('Oracle Solidity defect '+i+' did not reproduce unauthorized operator change');
+   if((await terminal.operator()).toLowerCase()!==(await attacker.getAddress()).toLowerCase())
+     throw Error('Oracle Solidity defect '+i+' did not reproduce chained unauthorized operator change');
  }
  for(let i=0;i<8;i++){
    const path=c.privateAnswerKey.negativeControls[i].affectedPaths[0];
