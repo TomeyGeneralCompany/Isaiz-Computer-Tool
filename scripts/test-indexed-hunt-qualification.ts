@@ -48,15 +48,13 @@ try{
    // The final gate is independent technical verification, not an accepted
    // source route or model-authored claim. Verify all five actual Python
    // handler replays against freshly reacquired committed source.
-   if(language==='python') {
-     for(const [i,finding] of result.findings.entries()) {
-       const reviewed=await independentReview({...finding,id:'indexed-review-'+i} as any,
-         program,finding.reproductionCaseId!,new AbortController().signal,acquirer);
-       assert.equal(reviewed.review.verdict,'approve');
-       assert.equal(reviewed.review.recommendation,'dont_submit');
-     }
-     console.log('python: all five source-linked reports independently approved after replay; external submission disabled');
+   for(const [i,finding] of result.findings.entries()) {
+     const reviewed=await independentReview({...finding,id:'indexed-review-'+language+'-'+i} as any,
+       program,finding.reproductionCaseId!,new AbortController().signal,acquirer);
+     assert.equal(reviewed.review.verdict,'approve',language+' independent technical review of case '+i);
+     assert.equal(reviewed.review.recommendation,'dont_submit');
    }
+   console.log(language+': all five source-linked findings independently approved after fresh-source replay; external submission disabled');
    console.log(language+': 2000-file actual runLocalProgramHunt, five verified cases and reports PASSED');
  }
 }finally{
