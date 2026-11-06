@@ -153,6 +153,8 @@ function gateway(language:Language,i:number,chain:readonly number[],safe:boolean
     '    return '+symbol(first)+'.transform(userInput,'+steps+');',
     '  }',
     '  public String testVector(){return responseBody("<svg>");}',
+    '  public int routeId(){return '+i+';}',
+    '  public String routeName(){return "'+ident+'";}',
     '}')];
   return ['contracts/gateways/'+ident+'.sol',lines(
     '// SPDX-License-Identifier: MIT','pragma solidity ^0.8.20;',
