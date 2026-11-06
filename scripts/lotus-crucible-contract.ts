@@ -64,6 +64,9 @@ export function validateCrucibleChallenge(challenge:CrucibleChallenge):{
   const {files,privateAnswerKey:key}=challenge;
   const paths=Object.keys(files).filter(p=>/\.(?:sol|py|js|mjs|cjs|java)$/.test(p));
   const r=CRUCIBLE_REQUIREMENTS;
+  if(!key.challengeId.trim()||!key.seed.trim())throw new Error('Crucible missing challenge identity or seed');
+  if(Object.keys(files).some(p=>p.startsWith('/')||p.includes('\\\\')||p.split('/').some(x=>x==='..'||x==='.'||!x)))
+    throw new Error('Crucible unsafe source path');
   if(paths.length<r.minimumSourceFiles||paths.length>r.maximumSourceFiles)
     throw new Error('Crucible substantive source file count outside specification: '+paths.length);
   if(paths.some(p=>typeof files[p]!=='string'||files[p].trim().split('\n').length<8))
@@ -95,4 +98,22 @@ export function validateCrucibleChallenge(challenge:CrucibleChallenge):{
   return {language:key.language,sourceFiles:paths.length,defects:key.defects.length,
     falseLeads:key.falseLeads.length,negativeControls:key.negativeControls.length,
     sourceSha256:hash.digest('hex')};
+}
+
+/** Construct the ONLY investigator-visible package. Never return the key, seed,
+ * oracle selectors, defect IDs or control classifications in this boundary.
+ * Grader callers must store the private answer key in a separate process/workspace.
+ */
+export function createCrucibleInvestigatorPackage(challenge:CrucibleChallenge):{
+  challengeId:string; language:Language; files:Record<string,string>; sourceSha256:string
+}{
+  const summary=validateCrucibleChallenge(challenge);
+  const files=Object.create(null) as Record<string,string>;
+  for(const [path,content] of Object.entries(challenge.files)){
+    if(path.startsWith('/')||path.includes('\\')||path.split('/').some(x=>x==='..'||x==='.'||!x))
+      throw new Error('Crucible unsafe source path '+path);
+    files[path]=content;
+  }
+  return {challengeId:challenge.privateAnswerKey.challengeId,
+    language:summary.language,files,sourceSha256:summary.sourceSha256};
 }
