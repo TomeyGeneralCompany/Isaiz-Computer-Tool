@@ -1182,8 +1182,8 @@ export async function runLocalAudit(
                   messages.push(request,fitted.message);
                   await appendFile(logFile,'[CONTROLLER_CALLER_PAGE_READ] '+
                     JSON.stringify({path:caller,start:delivered.start,end:delivered.end,
-                      nextOffset:delivered.nextOffset,claimedLine:line})+'\\n');
-                  seenLines+=(delivered.text.match(/\\n/g)||[]).length;
+                      nextOffset:delivered.nextOffset,claimedLine:line})+'\n');
+                  seenLines+=(delivered.text.match(/\n/g)||[]).length;
                   if(seenLines>=Number(line) || delivered.nextOffset===null) {
                     reached=seenLines>=Number(line)-1;
                     break;
@@ -1195,11 +1195,11 @@ export async function runLocalAudit(
                   repeatedRejectedConclusions=0;
                   lastRejectedConclusion='';
                   await appendFile(logFile,'[CONTROLLER_CALLER_PAGE_READY] '+
-                    JSON.stringify({path:caller,line})+'\\n');
+                    JSON.stringify({path:caller,line})+'\n');
                 }
               } catch(error) {
                 await appendFile(logFile,'[CONTROLLER_CALLER_PAGE_UNAVAILABLE] '+
-                  JSON.stringify({path:caller,error:String(error).slice(0,250)})+'\\n');
+                  JSON.stringify({path:caller,error:String(error).slice(0,250)})+'\n');
               }
             }
           }
