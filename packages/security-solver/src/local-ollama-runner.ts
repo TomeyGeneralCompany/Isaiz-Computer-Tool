@@ -1141,6 +1141,68 @@ export async function runLocalAudit(
         emptyFinals=0;
         const feedback = await limits.validateFinal?.(message.content);
         if (feedback) {
+          // A final claiming an unread caller line cannot be repaired by another
+          // model-only final. Read the *actual* authorized caller page first.
+          // This is navigation evidence, never a finding or a reviewer verdict.
+          if (workflow && /Read the page containing the entire claimed caller line before reporting/i.test(feedback)) {
+            let claimed:{callerFile?:unknown;callerLine?:unknown}|undefined;
+            try {
+              const answer=JSON.parse(message.content) as {findings?:Array<{callerFile?:unknown;callerLine?:unknown}>};
+              claimed=answer.findings?.[0];
+            } catch {}
+            const caller=typeof claimed?.callerFile==='string' ? claimed.callerFile : '';
+            const line=claimed?.callerLine;
+            if (caller && Number.isSafeInteger(line) && Number(line)>0 &&
+                (limits.initialSourcePaths||[]).includes(caller)) {
+              try {
+                const full=await safePath(caller);
+                let offset=0, pages=0, seenLines=0, reached=false;
+                while(pages++<32) {
+                  const page=await readSourcePage(full,offset,pageSize);
+                  if(!page.text || page.end<=page.start)break;
+                  const action={action:'read_file',path:caller,query:'',answer:'',offset};
+                  const request:Message={role:'assistant',content:JSON.stringify(action)};
+                  const fitted=fitAuditToolOutput(messages.slice(0,2),request,'read_file',
+                    JSON.stringify(page),exchangeBudget,true);
+                  const delivered=JSON.parse(fitted.output) as typeof page;
+                  if(!delivered.text || delivered.end<=delivered.start)break;
+                  // Track the real source span through the same controller
+                  // callbacks as an ordinary tool read; do not synthesize it.
+                  workflow.read(caller);
+                  workflow.observe(action,fitted.output);
+                  limits.onRead?.(caller,{start:delivered.start,end:delivered.end});
+                  navigation.observe('read_file',caller,offset,'',delivered);
+                  allowance.read(caller,delivered.start,delivered.end,turn);
+                  successfulReads++;
+                  sourceTotals.set(caller,delivered.totalCharacters);
+                  recentActions.set(JSON.stringify(['read_file',caller,offset,'']),
+                    {turn,nextOffset:delivered.nextOffset,response:fitted.message});
+                  if(delivered.nextOffset===null)
+                    terminalReadPages.set(caller,{offset,response:fitted.message});
+                  messages.push(request,fitted.message);
+                  await appendFile(logFile,'[CONTROLLER_CALLER_PAGE_READ] '+
+                    JSON.stringify({path:caller,start:delivered.start,end:delivered.end,
+                      nextOffset:delivered.nextOffset,claimedLine:line})+'\\n');
+                  seenLines+=(delivered.text.match(/\\n/g)||[]).length;
+                  if(seenLines>=Number(line) || delivered.nextOffset===null) {
+                    reached=seenLines>=Number(line)-1;
+                    break;
+                  }
+                  if(delivered.nextOffset===null || delivered.nextOffset<=offset)break;
+                  offset=delivered.nextOffset;
+                }
+                if(reached) {
+                  repeatedRejectedConclusions=0;
+                  lastRejectedConclusion='';
+                  await appendFile(logFile,'[CONTROLLER_CALLER_PAGE_READY] '+
+                    JSON.stringify({path:caller,line})+'\\n');
+                }
+              } catch(error) {
+                await appendFile(logFile,'[CONTROLLER_CALLER_PAGE_UNAVAILABLE] '+
+                  JSON.stringify({path:caller,error:String(error).slice(0,250)})+'\\n');
+              }
+            }
+          }
           const observations=workflow?.snapshot().observations.filter(o=>o.status==='behavior_observed')||[];
           if(observations.length) {
             const normalizedConclusion=message.content.replace(/\s+/g,' ').trim().slice(0,1000);
