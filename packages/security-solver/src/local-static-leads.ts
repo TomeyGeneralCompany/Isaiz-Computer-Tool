@@ -2,10 +2,13 @@ import {createHash} from 'node:crypto';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {readFile,writeFile,rename} from 'node:fs/promises';
-import {join,relative,resolve,sep} from 'node:path';
+import {join,relative,resolve,sep,dirname} from 'node:path';
+import {fileURLToPath} from 'node:url';
 const exec=promisify(execFile);
 export async function collectStaticLeads(root:string,repositories:Array<{directory:string;url:string}>,paths:string[],cache:string,signal:AbortSignal) {
-  const app=process.env.PROJECT_ROOT||process.cwd();
+  // Crucible and real local hunts may change process.cwd() to an acquired
+  // repository. Resolve packaged scanner assets from this module's location.
+  const app=process.env.PROJECT_ROOT||resolve(dirname(fileURLToPath(import.meta.url)),'../../..');
   if(process.env.LOCAL_STATIC_ANALYSIS==='false')return {status:'disabled',leads:[],runs:[]};
   const revision=createHash('sha256');
   try {
