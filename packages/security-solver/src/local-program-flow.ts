@@ -1204,7 +1204,7 @@ Do not claim production testing, JavaScript execution, file access or other effe
     // executed and caller-linked entry case is even allowed to reach review.
     // A model-only negative is not a technical disproof. The independent
     // reviewer still receives the full source/replay and can reject.
-    if(process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false' && independentlyProvenCandidate) {
+    if(process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false' && independentlyProvenCandidate && !indexedVerifiedCandidates.length) {
       const candidate=independentlyProvenCandidate;
       const alreadyPresent=parsed?.findings.some(item=>item.caseId===candidate.caseId);
       if(!alreadyPresent) {
