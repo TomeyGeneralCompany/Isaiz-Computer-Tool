@@ -36,6 +36,25 @@ for(const ex of examples){
   assert.equal(withoutEntry.verifiedLocalEntryInjection,false);
   assert.equal(controllerReviewGroundDefect(reject('There is no proof of reachability.'),withoutEntry),null);
 }
+for(const lang of ['solidity','python','java','javascript']){
+  const ev:ReviewEvidence={language:lang,kind:lang==='solidity'?'solidity_sequence':
+    lang==='java'?'java_sequence':lang==='python'?'python_sequence':'javascript_sequence',
+    reachabilityRequirement:'Source replay',sourceDigest:'c'.repeat(64),
+    links:[{file:'src/Counter',line:5,code:'increment()',relationship:'observed sequence'}],
+    unresolved:[],summary:'Verified local state observation'};
+  const grounds=controllerReviewGrounds(ev,null,{
+    status:'observation_only',behavior_observed:false,kind:ev.kind,
+    observations:{steps:[{value:1},{value:2}]}});
+  assert.equal(grounds.independentlyReplayed,true);
+  assert.equal(grounds.replayedProbeKind,ev.kind);
+  assert.match(controllerReviewGroundDefect(reject(
+    'No supported probe was executed for this source.'),grounds)||'',
+    /independent controller replay recorded the executed probe/,
+    'every language must preserve independently replayed observations');
+  assert.equal(controllerReviewGroundDefect(reject(
+    'The state difference is observed but the source proves no unauthorized privilege boundary.'),grounds),null,
+    'a real lack of security impact remains a valid reason to reject');
+}
 const ev:ReviewEvidence={language:'java',kind:'html_reflection',reachabilityRequirement:'',
   sourceDigest:'e'.repeat(64),summary:'',unresolved:[],
   links:[{file:'src/HttpHandler.java',line:19,
