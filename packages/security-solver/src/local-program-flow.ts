@@ -2,6 +2,7 @@ import {prioritizeSourceCandidates} from './source-candidates';
 import {collectStaticLeads} from './local-static-leads';
 import {buildSourceMap} from './source-map';
 import {buildControllerSourceIndex,controllerEvidencePacket} from './controller-source-index';
+import {indexedEntryRoutes} from './controller-indexed-route';
 import {controllerIndexedAuditPrompt} from './controller-index-prompt';
 import {sourceCandidateEvidence,verifiedProbeSummary} from './source-candidate-evidence';
 import {rankTracedSourceCandidates} from './controller-source-candidates';
@@ -229,6 +230,44 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
     const candidateEvidence=await sourceCandidateEvidence(root,sourceMap.symbols,8);
     await writeFile(join(root,'audit-controller-candidates.json'),JSON.stringify(candidateEvidence,null,2),{mode:0o600});
     await appendFile(logFile,'[SOURCE_MAP] '+JSON.stringify({files:sourceMap.scannedFiles,symbols:sourceMap.symbols.length,skipped:sourceMap.skippedFiles})+'\n');
+    // Full-index mode supplies source-grounded entry routes BEFORE Qwen.
+    // Each route is syntax only; a real sandboxed entry call must reproduce
+    // the behavior. A failed probe cannot be promoted as a finding.
+    if(fullSourceIndex && !focus) {
+      const routes=await indexedEntryRoutes(root,eligiblePaths);
+      await writeFile(join(root,'audit-source-routes.json'),JSON.stringify(routes),
+        {mode:0o600});
+      let attempted=0,observed=0;
+      for(const route of routes.slice(0,16)){
+        signal.throwIfAborted();
+        const repo=repos.find(r=>route.entry.startsWith(
+          relative(root,r.directory).split(sep).join('/')+'/'));
+        if(!repo || missingDependencies.has(repo.url))continue;
+        try {
+          const source=await readFile(join(root,route.entry),'utf8');
+          reads.add(route.entry,{start:0,end:source.length});
+          const result=JSON.parse(await session.probe(
+            route.entry,route.selector,'entry_html_reflection'));
+          attempted++;
+          const valid=result.status==='behavior_observed' &&
+            typeof result.caseId==='string' && session.cases.has(result.caseId);
+          if(valid){
+            observed++;
+            controllerTraceSummary+='Entry '+route.entry+' -> '+route.sink+
+              ' observed with case '+result.caseId+'. ';
+          }
+          await appendFile(logFile,'[CONTROLLER_INDEXED_ENTRY_PROBE] '+
+            JSON.stringify({entry:route.entry,sink:route.sink,
+              stages:route.chain.length,status:result.status,
+              caseId:valid?result.caseId:null,verified:valid})+'\\n');
+        }catch(error){
+          await appendFile(logFile,'[CONTROLLER_INDEXED_ENTRY_UNAVAILABLE] '+
+            JSON.stringify({entry:route.entry,error:String(error).slice(0,180)})+'\\n');
+        }
+      }
+      await appendFile(logFile,'[CONTROLLER_INDEXED_ENTRY_SUMMARY] '+
+        JSON.stringify({sourceRoutes:routes.length,attempted,observed})+'\\n');
+    }
     // Controller-first bounded investigation: source selection and isolated
     // execution no longer depend on Qwen to request the first verification.
     // Lexical ranking is NOT a vulnerability verdict. Only separately executed
