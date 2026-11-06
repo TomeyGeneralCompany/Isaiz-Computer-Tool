@@ -31,8 +31,18 @@ for(const test of cases){
    await mkdir(dirname(full),{recursive:true});
    await writeFile(full,source);
   }
+  // A caller placed beyond the first 256 eligible files must remain discoverable.
+  // No private vulnerability answers or filename shortcuts participate.
+  const extension=test.lang==='python'?'.py':test.lang==='java'?'.java':'.cjs';
+  const decoys=Array.from({length:300},(_,i)=>
+    'source-1/src/extra/Unrelated'+String(i).padStart(4,'0')+extension);
+  for(const path of decoys){
+    const full=join(root,path);await mkdir(dirname(full),{recursive:true});
+    await writeFile(full,test.lang==='python'?'def unrelated(value): return value\\n':
+      test.lang==='java'?'class Unrelated {}\\n':'exports.unrelated=(value)=>value;\\n');
+  }
   const chain=await controllerCallerChain(root,'source-1/','source-1/'+test.target,
-    test.selector,paths,4);
+    test.selector,[...decoys,...paths],4);
   assert.deepEqual(chain.map(x=>x.path),test.callers.map(p=>'source-1/'+p),
    test.lang+' caller search must ignore 140 same-named decoys and follow imports');
   assert.ok(chain.every(x=>x.line>0&&x.code.includes('(')));
