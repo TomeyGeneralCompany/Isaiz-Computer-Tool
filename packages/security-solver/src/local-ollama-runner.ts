@@ -1348,10 +1348,28 @@ export async function runLocalAudit(
           // turn on the same text or pretend this creates new evidence.
           if(name==='read_file' && fullIndexMode &&
              (terminalReadPages.has(path) || previous?.nextOffset===null)) {
-            await appendFile(logFile,'[INDEXED_COMPLETED_READ_REJECTED] '+
-              JSON.stringify({path,turn:turn+1})+'\\n');
-            throw new Error('INDEXED_COMPLETED_READ_REJECTED: '+path+
-              ' is already indexed and inspected. Do not redirect to an unrelated source or repeat the completed page.');
+            const complete=terminalReadPages.get(path);
+            const prior=complete?.response;
+            // Exactly one source-page replay is permitted when compaction has
+            // genuinely evicted the prior evidence. Do not substitute a
+            // different file for an already-satisfied required caller.
+            if(complete && prior && !messages.includes(prior) &&
+               !terminalPageRecoveries.has(path)) {
+              terminalPageRecoveries.add(path);
+              offset=complete.offset;
+              call.function.arguments.offset=offset;
+              actionKey=keyAt(offset);
+              previous=undefined;
+              await appendFile(logFile,'[INDEXED_CONTEXT_RECOVERY] '+
+                JSON.stringify({path,offset,turn:turn+1})+'\\n');
+            } else {
+              await appendFile(logFile,'[INDEXED_COMPLETED_READ_REJECTED] '+
+                JSON.stringify({path,turn:turn+1})+'\\n');
+              // Unlike the old controller, do not spend hundreds of synthetic
+              // actions satisfying a read requirement that is already done.
+              throw new Error('AUDIT_STALLED: indexed source '+path+
+                ' was already inspected. A caller or probe transition is required; no unrelated redirect is permitted.');
+            }
           }
           if(name==='read_file' && workflow && !fullIndexMode &&
              (terminalReadPages.has(path) || previous?.nextOffset===null)) {
