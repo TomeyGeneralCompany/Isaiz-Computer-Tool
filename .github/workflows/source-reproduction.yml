@@ -206,3 +206,5 @@ jobs:
         run: npm install --prefix scripts/reproduction-runtime --ignore-scripts --no-audit --no-fund
       - name: Reproduce hidden defects and reject secured controls
         run: node --import tsx scripts/lotus-crucible-runtime-oracle.ts "${{ matrix.language }}" runtime-oracle-verification-01
+      - name: Verify clean Level 6 trial rejects attacker-controlled input
+        run: node --import tsx scripts/lotus-crucible-runtime-oracle.ts "${{ matrix.language }}" runtime-oracle-verification-clean-01 --clean
