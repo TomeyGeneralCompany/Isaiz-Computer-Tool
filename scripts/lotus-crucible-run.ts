@@ -22,11 +22,11 @@ export function chooseLanguage(seed:string,override?:string):Language {
  const index=createHash('sha256').update(seed).digest().readUInt32BE(0)%LANGUAGES.length;
  return LANGUAGES[index];
 }
-async function prepare(root:string,level:number,language:Language,seed:string,clean:boolean){
- const size=LEVELS[level];
- if(!size)throw Error('Level 6 only');
+async function prepare(root:string,level:number,language:Language,seed:string,clean:boolean,fileCount:number,defects:number){
+ const size=fileCount;
+ if(!Number.isInteger(size)||size<2000||size>5000)throw Error('Level 6 source count must be 2000–5000');
  const fixture=join(root,'fixture');
- const challenge=generateCrucible({language,seed,fileCount:size,clean});
+ const challenge=generateCrucible({language,seed,fileCount:size,defectCount:defects,clean});
  const investigatorPackage=createCrucibleInvestigatorPackage(challenge);
  const answer=challenge.privateAnswerKey;
  for(const [path,body] of Object.entries(investigatorPackage.files)){
@@ -103,7 +103,10 @@ async function main(){
  await mkdir(root,{recursive:true,mode:0o700});
  try {await readFile(join(root,'manifest.json'));throw Error('Gauntlet output directory already contains a challenge');}
  catch(e:any){if(e?.code!=='ENOENT')throw e;}
- const {fixture,answer}=await prepare(root,level,language,selectedSeed,args.includes('--clean'));
+ const fileCount=Number((args.find(x=>x.startsWith('--files='))||'--files=2000').split('=')[1]);
+ const defects=Number((args.find(x=>x.startsWith('--defects='))||'--defects=5').split('=')[1]);
+ if(!Number.isInteger(defects)||defects<5||defects>8)throw Error('Crucible defect count must be 5–8');
+ const {fixture,answer}=await prepare(root,level,language,selectedSeed,args.includes('--clean'),fileCount,defects);
  if(preview){console.log('Gauntlet prepared (NO model or tests run): '+root);return;}
  if(smoke){
    const cloned=join(root,'acquired-smoke');
