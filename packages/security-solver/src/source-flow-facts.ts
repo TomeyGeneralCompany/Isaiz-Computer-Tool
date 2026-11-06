@@ -155,18 +155,33 @@ export async function controllerCallerChain(
   const root=await realpath(workspace);
   const visited=new Set<string>([testedPath]);
   const chain:CallerEvidence[]=[];
+  // Large scoped repositories require the full eligible source set. Cache
+  // bounded, validated text so multi-hop caller searches do not reread 2,000
+  // files from disk on every hop.
+  const sourceCache=new Map<string,string|null>();
+  const candidateSource=async(path:string):Promise<string|null>=>{
+    if(sourceCache.has(path))return sourceCache.get(path)!;
+    let code:string|null=null;
+    try {
+      const full=await realpath(resolve(root,path));
+      const local=relative(root,full);
+      if(local!=='..'&&!local.startsWith('..'+sep)){
+        const text=await readFile(full,'utf8');
+        if(text.length<=256000)code=text;
+      }
+    }catch{}
+    sourceCache.set(path,code);
+    return code;
+  };
   let currentSource=testedPath,currentSelector=selector;
   for(let depth=0;depth<Math.min(8,Math.max(1,maxDepth));depth++){
     const found:Array<CallerEvidence & {qualified:boolean;source:string}>=[];
-    for(const path of [...new Set(sourcePaths)].slice(0,256)) {
+    for(const path of [...new Set(sourcePaths)].slice(0,5000)) {
       if(visited.has(path) || !path.startsWith(repositoryPrefix) ||
          path.startsWith('/') || path.split(/[\\/]/).includes('..'))continue;
       try {
-        const full=await realpath(resolve(root,path));
-        const local=relative(root,full);
-        if(local==='..'||local.startsWith('..'+sep))continue;
-        const code=await readFile(full,'utf8');
-        if(code.length>256000 || !sourceImportsTarget(path,currentSource,code))continue;
+        const code=await candidateSource(path);
+        if(!code || !sourceImportsTarget(path,currentSource,code))continue;
         const lines=code.split('\n');
         for(let i=1;i<=lines.length;i++){
           if(!callerLineReferences(code,i,currentSelector))continue;
