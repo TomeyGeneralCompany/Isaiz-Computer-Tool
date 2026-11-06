@@ -84,6 +84,8 @@ jobs:
           node --import tsx scripts/test-level6-terminal-page-handoff.ts
       - name: Prove indexed source navigation cannot consume the investigation
         run: node --import tsx scripts/test-indexed-controller-no-navigation-loop.ts
+      - name: Verify indexed multi-hop source graph over full Crucible fixtures
+        run: node --import tsx scripts/test-indexed-source-routes.ts
       - name: Regress indexed controller completed-source requirements
         run: node --import tsx scripts/test-indexed-required-source-progress.ts
       - name: Verify Level 6 indexed prompt fits actual Qwen context reservation
