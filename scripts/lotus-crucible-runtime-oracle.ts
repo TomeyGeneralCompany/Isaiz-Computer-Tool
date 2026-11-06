@@ -95,11 +95,11 @@ async function solidityOracle(c:CrucibleChallenge):Promise<void>{
  if(errors.length)throw Error('Oracle Solidity compilation failed: '+JSON.stringify(errors.slice(0,3)));
  const provider=new ethers.BrowserProvider(ganache.provider({logging:{quiet:true}}));
  const deployer=await provider.getSigner(0),attacker=await provider.getSigner(1);
- const deploy=async(path:string,name:string)=>{
+ const deploy=async(path:string,name:string,args:any[]=[])=>{
    const artifact=compiled.contracts?.[path]?.[name];
    if(!artifact?.evm?.bytecode?.object)throw Error('Oracle missing Solidity artifact '+path+':'+name);
    const factory=new ethers.ContractFactory(artifact.abi,artifact.evm.bytecode.object,deployer);
-   const instance=await factory.deploy();await instance.waitForDeployment();
+   const instance=await factory.deploy(...args);await instance.waitForDeployment();
    return instance;
  };
  for(let i=0;i<targetGateways.length;i++){
