@@ -24,7 +24,7 @@ try {
   for(const path of sourcePaths){
     const full=join(root,path);
     await mkdir(dirname(full),{recursive:true});
-    await writeFile(full,'def project(value: str) -> str:\\n    return \"<p>\" + value + \"</p>\"\\n');
+    await writeFile(full,'def project(value: str) -> str:\n    return "<p>" + value + "</p>"\n');
   }
   await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));
   process.env.AUTOHACK_OLLAMA_URL='http://127.0.0.1:'+(server.address() as any).port+'/api/chat';
@@ -38,7 +38,7 @@ try {
     onRead:(path)=>delivered.push(path)
   }),/12-turn inspection limit|inspection limit/);
   const text=await readFile(log,'utf8');
-  assert.ok((text.match(/\\[CONTROLLER_READ_REDIRECT\\]/g)||[]).length>=8,
+  assert.ok((text.match(/\[CONTROLLER_READ_REDIRECT\]/g)||[]).length>=8,
     'Repeated completed-page request must redirect to unread authorized source');
   assert.ok(new Set(delivered).size>=9,'Controller must advance through the source queue');
   assert.ok(delivered.filter(path=>path===sourcePaths[0]).length<=2,
