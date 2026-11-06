@@ -15,7 +15,7 @@ const key:CrucibleChallenge['privateAnswerKey']={
   defects:Array.from({length:5},(_,i)=>({id:'defect-'+i,language:'javascript' as const,
     entryPath:sourcePaths[i],affectedPaths:[sourcePaths[i],sourcePaths[i+1]],
     weakness:'missing boundary check',reproduction:{kind:'synthetic',selector:'step'+i,expectedEffect:'unauthorized change'},
-    requiredChains:[[sourcePaths[i],sourcePaths[i+1]]]})),
+    requiredChains:[[sourcePaths[i],sourcePaths[i+1],sourcePaths[i+2]]]})),
   falseLeads:Array.from({length:200},(_,i)=>control('false-'+i,i+10)),
   negativeControls:Array.from({length:50},(_,i)=>control('safe-'+i,i+250)),
 };
@@ -32,6 +32,9 @@ const reject=(mutate:(k:CrucibleChallenge['privateAnswerKey'])=>void)=>{
   assert.throws(()=>validateCrucibleChallenge({files,privateAnswerKey:k}),/Crucible/);
 };
 reject(k=>k.defects.pop());
+reject(k=>{k.defects.forEach(d=>d.requiredChains=[[sourcePaths[0],sourcePaths[1]]]);});
+reject(k=>{k.defects.forEach(d=>d.requiredChains=[[sourcePaths[0],sourcePaths[1],sourcePaths[0]]]);});
+reject(k=>{k.defects.forEach(d=>d.requiredChains=[[sourcePaths[0],sourcePaths[1],sourcePaths[2],sourcePaths[3],sourcePaths[4],sourcePaths[5],sourcePaths[6],sourcePaths[7]]]);});
 reject(k=>k.falseLeads.pop());
 reject(k=>k.negativeControls.pop());
 reject(k=>k.defects[0].requiredChains=[[sourcePaths[0],'src/missing.js']]);
@@ -42,6 +45,7 @@ clean.kind='clean';clean.defects=[];
 assert.equal(validateCrucibleChallenge({files,privateAnswerKey:clean}).defects,0);
 assert.throws(()=>validateCrucibleChallenge({files:Object.fromEntries(Object.entries(files).slice(0,1999)),
  privateAnswerKey:key}),/Crucible/);
+assert.throws(()=>validateCrucibleChallenge({files:{...files,'src/mixed.py':file(9001)},privateAnswerKey:key}),/mixed-language/);
 console.log('Level 6 sealed challenge contract validation PASSED (structural only; no benchmark was run)');
 
 const visible=createCrucibleInvestigatorPackage(challenge);
