@@ -96,6 +96,8 @@ jobs:
           node --import tsx scripts/test-production-workflow.ts
           node --import tsx scripts/test-production-workflow.ts --premature-final
 
+      - name: Regress shared risk ranking over 2,000-source Crucible challenges
+        run: node --import tsx scripts/test-crucible-polyglot-risk-ranking.ts
       - name: Install pinned local static analyzers
         run: bash scripts/install-static-analysis.sh
       - name: Verify vendored upstream rules and positive/negative fixtures
