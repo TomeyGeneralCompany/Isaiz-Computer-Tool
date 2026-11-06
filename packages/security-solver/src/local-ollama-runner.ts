@@ -1331,7 +1331,7 @@ export async function runLocalAudit(
             requireInvestigationAfterEmpty=true;
             emptyFinals=0;
           }
-          const rejected=messages.at(-1)!;
+          const rejected=message;
           rejected.content="Previous final answer rejected; follow the validation feedback.";
           await appendFile(logFile, "[FINAL_REJECTED] " + feedback + "\n");
           const evidencePacket=limits.finalEvidencePacket ? await limits.finalEvidencePacket() : '';
