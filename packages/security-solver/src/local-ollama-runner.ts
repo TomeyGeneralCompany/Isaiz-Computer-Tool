@@ -1322,8 +1322,8 @@ export async function runLocalAudit(
               // not the last page or the exhausted eight-file prefetch.
               const readPaths=new Set(workflow.snapshot().readPaths);
               const next=(limits.initialSourcePaths||[]).find(candidate=>
-                /^source-[0-9]+\\//.test(candidate) &&
-                /\\.(?:py|js|mjs|cjs|java|sol)$/.test(candidate) &&
+                /^source-[0-9]+\//.test(candidate) &&
+                /\.(?:py|js|mjs|cjs|java|sol)$/.test(candidate) &&
                 candidate!==path && !readPaths.has(candidate));
               if(next) {
                 const nextFull=await safePath(next);
