@@ -91,6 +91,8 @@ jobs:
         run: python3 scripts/test-solidity-access-evidence.py
       - name: Validate bounded evidence-only independent reviewer
         run: npx tsx scripts/test-evidence-only-review.ts
+      - name: Prove Solidity nonadministrator role transitions across 2000 sources
+        run: node --import tsx scripts/test-indexed-solidity-roles.ts
       - name: Prove five real indexed entry and sink reproductions per language
         run: node --import tsx scripts/test-indexed-verified-entries.ts
       - name: Test real source audit and review with controller full indexing
