@@ -69,7 +69,7 @@ async function javaOracle(c:CrucibleChallenge):Promise<void>{
    const names=[...Array.from({length:count},(_,i)=>i),...Array.from({length:8},(_,i)=>100+i)];
    const code=['public class CrucibleOracleRun {',
      'public static void main(String[] args){',
-     ...names.map(i=>'System.out.println(new '+cls(i)+'().testVector());'),
+     ...names.map(i=>'System.out.println(new '+cls(i)+'().responseBody('+JSON.stringify(payload)+'));'),
      '}', '}'].join('\n')+'\n';
    const run=join(root,'CrucibleOracleRun.java');await writeFile(run,code);
    const sources=Object.keys(c.files).filter(p=>p.endsWith('.java')).map(p=>join(root,p));
@@ -84,8 +84,10 @@ async function solidityOracle(c:CrucibleChallenge):Promise<void>{
  const requireRuntime=createRequire(join(process.cwd(),'scripts/reproduction-runtime/package.json'));
  const solc=requireRuntime('solc'),ethers=requireRuntime('ethers'),ganache=requireRuntime('ganache');
  const sources:Record<string,{content:string}>={};
- for(const [p,s] of Object.entries(c.files))if(p.endsWith('.sol'))sources[p]={content:s};
  const targetGateways=c.privateAnswerKey.defects.map((_,i)=>'contracts/gateways/Gateway'+String(i).padStart(2,'0')+'.sol');
+ const targetPaths=[...targetGateways,...c.privateAnswerKey.defects.flatMap(d=>d.affectedPaths.slice(-1)),
+   ...c.privateAnswerKey.negativeControls.slice(0,8).flatMap(d=>d.affectedPaths)];
+ for(const p of targetPaths){if(!c.files[p])throw Error('Missing Solidity oracle source '+p);sources[p]={content:c.files[p]};}
  const input={language:'Solidity',sources,settings:{optimizer:{enabled:false},
    outputSelection:{'*':{'*':['abi','evm.bytecode.object']}}}};
  const compiled=JSON.parse(solc.compile(JSON.stringify(input)));
