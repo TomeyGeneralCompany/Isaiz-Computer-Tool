@@ -43,9 +43,10 @@ jobs:
         run: python3 -m unittest discover -s tests -p test_source_reproduction.py -v
       - name: Reproduce controller-owned entry-to-output paths in Python JavaScript and Java
         run: python3 scripts/test-controller-entry-reproduction.py
-      - name: Exercise production-sized controller read and probe transitions
+      - name: Exercise production controller with full-index source acquisition enabled
         env:
           GITHUB_TOKEN: offline-ci-fixture
+          LOCAL_CONTROLLER_FULL_SOURCE_INDEX: 'true'
         run: npx tsx scripts/test-local-controller.ts --mock
       - name: Validate blind reasoning harness with real isolated probes
         env:
