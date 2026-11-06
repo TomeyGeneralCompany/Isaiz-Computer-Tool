@@ -3,10 +3,6 @@ on:
   push:
     branches:
       - feat/lotus-crucible-level6-20261105
-  pull_request:
-    paths:
-      - 'scripts/lotus-crucible-*.ts'
-      - '.github/workflows/lotus-crucible-level6.yml'
 permissions:
   contents: read
 concurrency:
@@ -33,7 +29,7 @@ jobs:
   production-crucible:
     name: Level 6 ${{ matrix.language }} production
     needs: generator-acceptance
-    if: github.event_name == 'push' && startsWith(github.event.head_commit.message, 'Run owned LOTUS Level 6 Crucible')
+    if: startsWith(github.event.head_commit.message, 'Run owned LOTUS Level 6 Crucible')
     strategy:
       fail-fast: false
       matrix:
