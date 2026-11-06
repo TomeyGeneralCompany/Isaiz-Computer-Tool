@@ -22,11 +22,11 @@ export function chooseLanguage(seed:string,override?:string):Language {
  const index=createHash('sha256').update(seed).digest().readUInt32BE(0)%LANGUAGES.length;
  return LANGUAGES[index];
 }
-async function prepare(root:string,level:number,language:Language,seed:string){
+async function prepare(root:string,level:number,language:Language,seed:string,clean:boolean){
  const size=LEVELS[level];
  if(!size)throw Error('Level 6 only');
  const fixture=join(root,'fixture');
- const challenge=generateCrucible({language,seed,fileCount:size});
+ const challenge=generateCrucible({language,seed,fileCount:size,clean});
  const investigatorPackage=createCrucibleInvestigatorPackage(challenge);
  const answer=challenge.privateAnswerKey;
  for(const [path,body] of Object.entries(investigatorPackage.files)){
@@ -40,7 +40,7 @@ async function prepare(root:string,level:number,language:Language,seed:string){
  const commit=execFileSync('git',['-C',fixture,'rev-parse','HEAD'],{encoding:'utf8'}).trim();
  await writeFile(join(root,'answer-key.private.json'),JSON.stringify(answer,null,2),{mode:0o600});
  await writeFile(join(root,'manifest.json'),JSON.stringify({
-   challenge:'crucible-v1',language,seedCommitment:createHash('sha256').update(seed).digest('hex'),level,sourceFiles:Object.keys(investigatorPackage.files).filter(p=>/\.(?:sol|py|cjs|java)$/.test(p)).length,commit,mode:'owned-synthetic'
+   challenge:'crucible-v1',language,seedCommitment:createHash('sha256').update(seed).digest('hex'),level,kind:answer.kind,sourceFiles:Object.keys(investigatorPackage.files).filter(p=>/\.(?:sol|py|cjs|java)$/.test(p)).length,commit,mode:'owned-synthetic'
  },null,2));
  return {fixture,answer};
 }
@@ -103,7 +103,7 @@ async function main(){
  await mkdir(root,{recursive:true,mode:0o700});
  try {await readFile(join(root,'manifest.json'));throw Error('Gauntlet output directory already contains a challenge');}
  catch(e:any){if(e?.code!=='ENOENT')throw e;}
- const {fixture,answer}=await prepare(root,level,language,selectedSeed);
+ const {fixture,answer}=await prepare(root,level,language,selectedSeed,args.includes('--clean'));
  if(preview){console.log('Gauntlet prepared (NO model or tests run): '+root);return;}
  if(smoke){
    const cloned=join(root,'acquired-smoke');
