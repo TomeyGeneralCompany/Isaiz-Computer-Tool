@@ -33,7 +33,7 @@ import { selectSourceBatch, incompleteProbeCoverage, recoverEmptyUnprobedFinal, 
 import { callerLineReferences, qualifiedCallerLineReferences, transactionEntryLine } from "./source-function-reference";
 import {observedJavaSourceChain} from "./java-source-chain";
 import {buildReviewEvidence,reviewRejectionDefect} from "./review-evidence-chain";
-import {controllerReviewGrounds,controllerReviewGroundDefect,controllerVerifiedLocalHtmlReview} from './controller-review-boundary';
+import {controllerReviewGrounds,controllerReviewGroundDefect,controllerVerifiedLocalHtmlReview,controllerVerifiedLocalSolidityConsumerReview} from './controller-review-boundary';
 import {controllerProofCandidate,type ControllerProofCandidate} from './controller-proof-candidate';
 import {promoteControllerCallChain} from './controller-investigation-chain';
 import {sourceStatefulPlans} from './controller-stateful-candidates';
@@ -1381,7 +1381,12 @@ export async function independentReview(finding:SecurityFinding,program:Security
     // only local source-level HTML injection, never production exploitability.
     // Other probe kinds or missing evidence still require ordinary review.
     const observedTechnical=controllerVerifiedLocalHtmlReview(immutableReviewGrounds,
-      entryReplay as Parameters<typeof controllerVerifiedLocalHtmlReview>[1]);
+      entryReplay as Parameters<typeof controllerVerifiedLocalHtmlReview>[1]) ||
+      (reachability==='direct_transaction' ?
+        controllerVerifiedLocalSolidityConsumerReview({
+          source:targetCode,selector:record.spec.function,
+          sequence:record.spec.sequence,replay
+        }) : null);
     if(observedTechnical) {
       review=reviewSchema.parse(observedTechnical);
       await appendFile(logFile,'[CONTROLLER_FACTUAL_REVIEW] '+JSON.stringify({
