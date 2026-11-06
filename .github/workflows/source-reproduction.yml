@@ -109,7 +109,7 @@ jobs:
         run: python3 scripts/test-static-leads.py
   crucible-level6-production:
     needs: isolated-language-probes
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[run-crucible]'))
     name: Crucible Level 6 ${{ matrix.language }} production
     strategy:
       fail-fast: false
@@ -181,7 +181,7 @@ jobs:
         if: always()
         run: docker rm -f lotus-crucible-ollama || true
   crucible-independent-runtime-oracle:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[run-crucible]'))
     name: Crucible independent ${{ matrix.language }} runtime oracle
     strategy:
       fail-fast: false
