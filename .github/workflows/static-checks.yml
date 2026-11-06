@@ -82,6 +82,8 @@ jobs:
         run: |
           node --import tsx scripts/test-level6-controller-candidate-recovery.ts
           node --import tsx scripts/test-level6-terminal-page-handoff.ts
+      - name: Verify Level 6 indexed prompt fits actual Qwen context reservation
+        run: node --import tsx scripts/test-level6-index-prompt-envelope.ts
       - name: Verify paginated source inspection and evidence spans
         run: npx tsx scripts/test-source-inspection.ts
       - name: Verify state mutex crash recovery and concurrent claims
