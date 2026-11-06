@@ -49,7 +49,7 @@ async function receipt(output:string,trial:Planned,artifactUrl:string):Promise<C
  const replayed=matches.filter(m=>m.cases.length===1).map(m=>m.id);
  const reported=matches.filter(m=>m.cases.length>0).map(m=>m.id);
  const confirmedCases=new Set(review.filter((r:any)=>
-   ['valid','verified','confirmed','accepted'].includes(String(r.verdict).toLowerCase())
+   ['approve','valid','verified','confirmed','accepted'].includes(String(r.verdict).toLowerCase())
    ).map((r:any)=>r.caseId));
  const erroneous=review.filter((r:any)=>!confirmedCases.has(r.caseId))
    .map((r:any)=>String(r.caseId??r.error??'review missing case'));
