@@ -169,7 +169,12 @@ export function controllerVerifiedLocalSolidityConsumerReview(input:{
      replay.behavior_observed!==true||!sequence||typeof sequence!=='object')return null;
   const mutator=selector.split('.').at(-1)||'';
   if(!/^[A-Za-z_]\w*$/.test(mutator))return null;
-  const assigned=/\b(operator|owner|administrator|admin|manager|guardian|controller|authority)\s*=\s*[A-Za-z_]\w*\s*;/i.exec(source);
+  const declaration=new RegExp('\\bfunction\\s+'+mutator+'\\s*\\([^)]*\\)[^{]*\\{').exec(source);
+  if(!declaration)return null;
+  const bodyStart=declaration.index+declaration[0].length;
+  const close=source.indexOf('}',bodyStart);
+  if(close<0||close-bodyStart>2600)return null;
+  const assigned=/\b(operator|owner|administrator|admin|manager|guardian|controller|authority)\s*=\s*[A-Za-z_]\w*\s*;/i.exec(source.slice(bodyStart,close));
   if(!assigned)return null;
   const role=assigned[1];
   const expected=roleConsumerImpactSequence(source,role,mutator);
