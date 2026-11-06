@@ -59,6 +59,8 @@ jobs:
             echo "Incorrect classifications must fail the reasoning evaluator"
             exit 1
           fi
+      - name: Verify shared controller-owned factual review authority in all four languages
+        run: npx tsx scripts/test-controller-review-boundary.ts
       - name: Validate source-to-sink evidence and grounded review rejections
         run: npx tsx scripts/test-review-evidence-chain.ts
       - name: Validate controller-owned actions and grounded source navigation
