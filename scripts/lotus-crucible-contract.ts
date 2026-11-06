@@ -73,9 +73,9 @@ export function validateCrucibleChallenge(challenge:CrucibleChallenge):{
   if(paths.length<r.minimumSourceFiles||paths.length>r.maximumSourceFiles)
     throw new Error('Crucible substantive source file count outside specification: '+paths.length);
   const extension:Record<Language,string>={solidity:'.sol',python:'.py',javascript:'.js',java:'.java'};
-  if(paths.some(p=>!p.endsWith(extension[key.language]) && !(key.language==='javascript' && /\\.(?:mjs|cjs)$/.test(p))))
+  if(paths.some(p=>!p.endsWith(extension[key.language]) && !(key.language==='javascript' && /\.(?:mjs|cjs)$/.test(p))))
     throw new Error('Crucible mixed-language source files violate single-language trial contract');
-  if(paths.some(p=>typeof files[p]!=='string'||files[p].trim().split('\\n').length<8))
+  if(paths.some(p=>typeof files[p]!=='string'||files[p].trim().split('\n').length<8))
     throw new Error('Crucible source file too small; placeholder padding not accepted');
   if(key.kind==='vulnerable'&&(key.defects.length<r.minimumDefects||key.defects.length>r.maximumDefects))
     throw new Error('Crucible vulnerable challenge requires 5–8 distinct oracle cases');
