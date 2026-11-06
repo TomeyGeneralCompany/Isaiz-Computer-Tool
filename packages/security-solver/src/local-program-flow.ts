@@ -256,6 +256,10 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
             observed++;
             controllerTraceSummary+='Entry '+route.entry+' -> '+route.sink+
               ' observed with case '+result.caseId+'. ';
+            await appendFile(logFile,'[PROBE_RESULT] '+JSON.stringify({
+              path:route.entry,function:route.selector,kind:'entry_html_reflection',
+              status:result.status,caseId:result.caseId,
+              origin:'controller-indexed-entry'})+'\\n');
             // Source graph and executed entry prove only a candidate. Reproduce
             // the exact terminal function separately; attach its real caseId
             // and a source-line call from the terminal transform. Independent
@@ -284,6 +288,10 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
                     observations:entryRecord.result.observations}
                 });
                 if(proof && !indexedVerifiedCandidates.some(x=>x.caseId===proof.caseId)) {
+                  await appendFile(logFile,'[PROBE_RESULT] '+JSON.stringify({
+                    path:route.sink,function:selector,kind:'html_reflection',
+                    status:terminal.status,caseId:terminal.caseId,
+                    origin:'controller-indexed-terminal'})+'\\n');
                   indexedVerifiedCandidates.push(proof);
                   controllerEntryCases.set(proof.caseId,result.caseId);
                   await appendFile(logFile,'[CONTROLLER_INDEXED_PROOF_CANDIDATE] '+
@@ -489,7 +497,24 @@ Do not claim production testing, JavaScript execution, file access or other effe
     beforeInspection?.();
     await note('MODEL_START',{model:process.env.LOCAL_OLLAMA_MODEL||'qwen3:4b',selectedFiles:sourceHints.length});
     let answer:string;
-    try {
+    // When the controller has *already* source-traced the full route,
+    // independently executed both entry and terminal functions, and assembled
+    // exact caller evidence, the investigative file-navigation loop has no
+    // further work. Send the recorded candidates directly to the existing
+    // independent technical reviewer. This does not approve any vulnerability.
+    if(fullSourceIndex && indexedVerifiedCandidates.length) {
+      parsed=huntSchema.parse({
+        findings:indexedVerifiedCandidates.slice(0,8),outcome:'inspected'
+      });
+      answer=JSON.stringify({controllerEvidenceHandoff:true,
+        caseIds:indexedVerifiedCandidates.map(c=>c.caseId),
+        sourceRoutesVerified:indexedVerifiedCandidates.length,
+        independentReviewRequired:true});
+      await appendFile(logFile,'[CONTROLLER_INDEXED_REVIEW_HANDOFF] '+
+        JSON.stringify({candidates:indexedVerifiedCandidates.length,
+          caseIds:indexedVerifiedCandidates.map(c=>c.caseId),
+          modelNavigationSkipped:true,autoApproved:false})+'\\n');
+    } else try {
       answer=await runLocalAudit(prompt,logFile,getConfig().SECURITY_SOURCE_CODE_TIMEOUT_MINUTES*60000,root,
       process.env.LOCAL_OLLAMA_MODEL || "qwen3:4b",undefined,{
         onAllowance:async deadline=>writeSecuritySolverStatus({active:true,programId:program.id,programName:program.name,
