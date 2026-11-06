@@ -42,7 +42,7 @@ export function adjudicateCrucibleReplay(input:{
   const {key,sourceSha256,claims,independentObservations:replays}=input;
   if(!/^[a-f0-9]{64}$/.test(sourceSha256))throw new Error('Crucible invalid source digest');
   if(!unique(key.defects.map(d=>d.id))||!unique(claims.map(c=>c.caseId))||
-     !unique(replays.map(c=>c.executionId)))
+     !unique(replays.map(c=>c.executionId))||!unique(replays.map(c=>c.caseId)))
     throw new Error('Crucible ambiguous duplicate evidence identity');
   const negativePaths=new Set(key.negativeControls.flatMap(c=>c.affectedPaths));
   const negativeControlViolations:string[]=[];
@@ -52,6 +52,15 @@ export function adjudicateCrucibleReplay(input:{
   const unprovenDefects:string[]=[];
   const known=new Map(key.defects.map(d=>[d.id,d]));
   const replayById=new Map(replays.map(r=>[r.caseId,r]));
+  // An independent runner may not silently add unexplained observations.
+  // In particular, an extra negative-control replay is not evidence of a
+  // valid mandatory defect and must never be ignored by the grader.
+  for(const replay of replays){
+    if(!known.has(replay.caseId)||!claims.some(c=>c.caseId===replay.caseId))
+      unexpectedClaims.push('unmatched-replay:'+replay.caseId);
+    if(replay.chainPaths.some(p=>negativePaths.has(p)))
+      negativeControlViolations.push('replay:'+replay.caseId);
+  }
   const exact=(a:CrucibleReplayObservation,b:CrucibleReplayObservation)=>
     a.sourceSha256===b.sourceSha256&&a.entryPath===b.entryPath&&
     JSON.stringify(a.chainPaths)===JSON.stringify(b.chainPaths)&&
@@ -71,6 +80,7 @@ export function adjudicateCrucibleReplay(input:{
       claim.probeKind===d.reproduction.kind&&
       claim.selector===d.reproduction.selector&&
       claim.effect===d.reproduction.expectedEffect&&
+      claim.authorizedScope===true&&
       replay.independentlyReplayed===true&&replay.authorizedScope===true&&
       nonempty(replay.executionId)&&nonempty(claim.executionId)&&
       replay.executionId!==claim.executionId;
