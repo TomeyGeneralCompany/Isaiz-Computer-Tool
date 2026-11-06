@@ -2,6 +2,27 @@ import {readFile,realpath,stat} from 'node:fs/promises';
 import {relative,resolve,sep} from 'node:path';
 import {sourcePriority} from './source-capability';
 
+/** Language-neutral, source-only security signals. These prioritize READS,
+ * never findings, and are intentionally independent of challenge answer keys.
+ */
+export function controllerSourceRiskSignal(path:string,source:string):number {
+  let score=0;
+  if(path.endsWith('.sol')) {
+    const stateChange=/\b(?:operator|administrator|owner|guardian)\s*=\s*[A-Za-z_]\w*\s*;/i.test(source);
+    const external=/\bfunction\s+\w+\s*\([^)]*\)\s*(?:external|public)\b/.test(source);
+    const authorization=/\brequire\s*\(\s*(?:msg\.sender\s*==|hasRole\s*\(|_msgSender\s*\(\s*\)\s*==)|\bonly(?:Owner|Role|Admin|Operator)\b/i.test(source);
+    if(stateChange&&external)score+=authorization?2:40;
+  }else if(/\.(?:py|js|mjs|cjs|java)$/.test(path)) {
+    const output=/(?:<p\b|<div\b|<span\b|<html\b|innerHTML|document\.write)/i.test(source);
+    const returns=/\breturn\b/.test(source);
+    const sanitizer=/\b(?:escape|escapeHtml|sanitize|htmlspecialchars|DOMPurify)\s*\(|\.replace\s*\(\s*(?:\/&|\s*"&")/i.test(source);
+    if(output&&returns)score+=sanitizer?2:40;
+    if(/(?:gateway|handler|controller|router|entry)/i.test(path) &&
+       /(?:responseBody|response_body|parse_qs|urlsplit|searchParams)/.test(source))score+=8;
+  }
+  return score;
+}
+
 /** Candidates guide navigation only; reading/testing still supplies all evidence. */
 export async function prioritizeSourceCandidates(root:string,eligible:string[],fallback:string[],leads:Array<{path:string;line:number;rule?:string;message?:string}>,focus?:string) {
   const allowed=new Set(eligible),base=await realpath(root);
@@ -17,6 +38,24 @@ export async function prioritizeSourceCandidates(root:string,eligible:string[],f
   const ranked=candidates.sort((a,b)=>sourcePriority(b)-sourcePriority(a) ||
     (a.endsWith('.sol')? -1:0) - (b.endsWith('.sol')? -1:0));
   const rankedPool=focus ? ranked.filter(path=>path===focus) : ranked.slice(0,192);
+  // Large repositories need bounded coverage across the whole owned source,
+  // not merely the first 192 filenames. This is a navigation ranking only.
+  // Never use this signal as a vulnerability finding or bypass replay/review.
+  const securityScores=new Map<string,number>();
+  if(!focus&&eligible.length>192){
+    let examined=0;
+    for(const path of ranked.slice(0,5000)){
+      try{
+        const full=await realpath(resolve(base,path)),rel=relative(base,full);
+        if(rel==='..'||rel.startsWith('..'+sep))continue;
+        const size=(await stat(full)).size;
+        if(size>128000||examined+size>16000000)continue;
+        examined+=size;
+        const score=controllerSourceRiskSignal(path,await readFile(full,'utf8'));
+        if(score>0)securityScores.set(path,score);
+      }catch{}
+    }
+  }
   const signatureScores=new Map<string,number>();
   const sourceTexts=new Map<string,string>();
   if(!focus) {
@@ -91,11 +130,15 @@ export async function prioritizeSourceCandidates(root:string,eligible:string[],f
       !/^(?:Generated|Mock)[A-Z][^/]*[.](?:java|sol|py|js|mjs|cjs)$/.test(base);
   });
   const navigationPool=nonGenerated.length>=8 ? nonGenerated : rankedPool;
-  const paths=focus ? rankedPool : navigationPool
+  const promoted=[...securityScores].filter(([p,s])=>s>=20&&allowed.has(p))
+    .map(([p])=>p);
+  const wideNavigation=[...new Set([...promoted,...navigationPool])];
+  const paths=focus ? rankedPool : wideNavigation
     // Application ownership takes precedence over a probe-compatible dependency
     // signature across Solidity, Python, JavaScript, and Java. The overnight
     // 88mph run paginated a supporting ERC1155 library before application code.
-    .sort((a,b)=>sourcePriority(b)-sourcePriority(a) ||
+    .sort((a,b)=>(securityScores.get(b)||0)-(securityScores.get(a)||0) ||
+      sourcePriority(b)-sourcePriority(a) ||
       (referenceScores.get(b)||0)-(referenceScores.get(a)||0) ||
       pathDepth(a)-pathDepth(b) ||
       (signatureScores.get(b)||0)-(signatureScores.get(a)||0))
