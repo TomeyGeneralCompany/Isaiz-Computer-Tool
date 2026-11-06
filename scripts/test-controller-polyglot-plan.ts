@@ -37,11 +37,34 @@ const javaState='public class Counter { private int value = 0; '+
 const javaPlan=controllerPolyglotPlan('src/Counter.java',javaState);
 assert.equal(javaPlan?.answer,'java_sequence');
 assert.equal(javaPlan?.query,'Counter.advance');
-assert.equal((javaPlan?.sequence as any).steps.length,2);
+assert.deepEqual((javaPlan?.sequence as any).steps.map((s:any)=>s.method),['current','advance','current'],
+  'controller observes an independent getter before and after mutation');
 assert.deepEqual(controllerPolyglotPlan('src/Counter.java',javaState,
  {query:'Counter.current',answer:'java_sequence'})?.sequence,
  {constructor:[],steps:[{method:'current',args:[]},{method:'current',args:[]}]});
 assert.equal(controllerPolyglotPlan('src/Counter.java',javaState,
  {query:'Counter.invented',answer:'java_sequence'}),null);
+const typedJava='public class Ledger {\n'+
+ ' public Ledger(int initial) { this.balance=initial; }\n'+
+ ' public int update(int delta) { balance+=delta; return balance; }\n'+
+ ' public int current() { return balance; }\n'+
+ ' private int balance;\n'+
+ '}';
+const typed=controllerPolyglotPlan('src/Ledger.java',typedJava);
+assert.equal(typed?.query,'Ledger.update');
+assert.deepEqual((typed?.sequence as any).constructor,[1],
+  'controller owns source-derived Java constructor inputs');
+assert.deepEqual((typed?.sequence as any).steps,[
+ {method:'current',args:[]},{method:'update',args:[1]},{method:'current',args:[]}],
+ 'no model is required to guess Java method values or before/after reads');
+assert.deepEqual(controllerPolyglotPlan('src/Ledger.java',typedJava,{
+ query:'Ledger.update',answer:'java_sequence'})?.sequence,typed?.sequence);
+const unsupported='public class Dangerous {public void mutate(CustomThing arg) {} }';
+assert.equal(controllerPolyglotPlan('src/Dangerous.java',unsupported),null,
+ 'unsupported Java types must not be guessed');
+const overloaded='public class Overloaded { public int change(int n){return n;} '+
+ 'public int change(boolean b){return 0;} }';
+assert.equal(controllerPolyglotPlan('src/Overloaded.java',overloaded),null,
+ 'overloaded Java methods require disambiguation, never guessed input data');
 assert.equal(controllerPolyglotPlan('src/unrelated.ts','export function x() {}'),null);
 console.log('Source-derived Java/Python/JavaScript controller plans PASSED');
