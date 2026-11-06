@@ -18,14 +18,14 @@ def authorization_transition_observed(repository: Path, file: Path, selector: st
         function=selector.split(".")[-1]
         if not re.fullmatch(r"[A-Za-z_]\w*",function):
             return False
-        decl=re.search(r"\bfunction\s+"+re.escape(function)+r"\s*\([^)]*\)\s*external\s*\{",source)
+        decl=re.search(r"\bfunction\s+"+re.escape(function)+r"\s*\([^)]*\)\s*(?:external|public)\b[^;{]*\{",source)
         if not decl:
             return False
         body=source[decl.end():source.find("}",decl.end())]
         # A direct role-state assignment, with no caller authorization check
         # in this method. Do not pretend that absence of a check alone is proof.
         assignment=re.search(r"\b([A-Za-z_]\w*)\s*=\s*[A-Za-z_]\w*\s*;",body)
-        if not assignment or re.search(r"msg\s*\.\s*sender|onlyOwner|onlyRole|onlyAdmin",body):
+        if not assignment or re.search(r"msg\s*\.\s*sender|onlyOwner|onlyRole|onlyAdmin|onlyOperator|hasRole",decl.group(0)+body):
             return False
         role=assignment.group(1)
         if role.lower() not in {"operator","owner","administrator","admin","manager","guardian","controller","authority"}:
