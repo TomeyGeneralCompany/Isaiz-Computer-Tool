@@ -12,6 +12,8 @@ export interface ControllerReviewGrounds {
   sourceDigest:string;
   language:string;
   verifiedLocalEntryInjection:boolean;
+  independentlyReplayed:boolean;
+  replayedProbeKind:string|null;
   immutableFacts:string[];
   unresolvedQuestions:string[];
   // Only observed or source-cited blockers can be used as factual grounds.
@@ -24,9 +26,12 @@ const explicitlyPlainText=/\btext\/plain\b/i;
 
 /** Produce a finite list of provenance-cited facts, not narrative guesses. */
 export function controllerReviewGrounds(evidence:ReviewEvidence,
-  entry:EntryReviewObservation|null|undefined):ControllerReviewGrounds {
+  entry:EntryReviewObservation|null|undefined,
+  replay?:{status?:string;behavior_observed?:boolean;kind?:string;observations?:unknown}|null):ControllerReviewGrounds {
   const proof=entryReplayFacts(entry);
   const verified=!!proof;
+  const independentlyReplayed=!!replay && !!replay.observations &&
+    ['behavior_observed','observation_only'].includes(replay.status||'');
   const escaped=evidence.links.filter(link=>escapingOperation.test(link.code))
     .map(link=>lineRef(link.file,link.line));
   const plain=evidence.links.filter(link=>explicitlyPlainText.test(link.code))
@@ -34,11 +39,14 @@ export function controllerReviewGrounds(evidence:ReviewEvidence,
   const immutableFacts=[
     'Source-backed evidence digest '+evidence.sourceDigest+' ('+evidence.language+')',
     ...evidence.links.map(link=>lineRef(link.file,link.line)+': '+link.code.trim()).slice(0,70),
-    ...(verified?['Independent sandbox entry replay preserved the exact attacker-chosen HTML markup in the handler output.']:[])
+    ...(verified?['Independent sandbox entry replay preserved the exact attacker-chosen HTML markup in the handler output.']:[]),
+    ...(independentlyReplayed?['Independent sandbox replay recorded '+replay!.status+' for '+(replay!.kind||evidence.kind)+'.']:[])
   ];
   return {
     sourceDigest:evidence.sourceDigest,language:evidence.language,
-    verifiedLocalEntryInjection:verified,immutableFacts,
+    verifiedLocalEntryInjection:verified,independentlyReplayed,
+    replayedProbeKind:independentlyReplayed ? replay?.kind||evidence.kind:null,
+    immutableFacts,
     unresolvedQuestions:[
       'Deployment, browser interpretation and external exploitability remain unproven unless separately established.',
       ...evidence.unresolved.slice(0,6)
@@ -62,7 +70,13 @@ export interface ReviewGroundClaim {
 export function controllerReviewGroundDefect(
   decision:ReviewGroundClaim,grounds:ControllerReviewGrounds
 ):string|null {
-  if(decision.verdict!=='reject'||!grounds.verifiedLocalEntryInjection)return null;
+  if(decision.verdict!=='reject')return null;
+  if(grounds.independentlyReplayed) {
+    const prose=decision.issues.map(x=>x.description).join(' ' )+' '+decision.reasoning;
+    if(/\b(?:no (?:supported|executed|recorded|successful) (?:probe|test|reproduction)|nothing (?:was |has been )?reproduced|no (?:runtime )?observation)\b/i.test(prose))
+      return 'The independent controller replay recorded the executed probe and its actual observations. A rejection must assess security significance without denying the completed test.';
+  }
+  if(!grounds.verifiedLocalEntryInjection)return null;
   const fatal=decision.issues.filter(x=>x.severity==='fatal');
   if(!fatal.length)return 'A technical rejection requires a fatal, evidence-backed technical ground.';
   const cited=(text:string)=>grounds.immutableFacts.some(fact=>{
