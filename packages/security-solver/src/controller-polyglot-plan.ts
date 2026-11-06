@@ -52,3 +52,28 @@ export function controllerPolyglotPlan(path:string,source:string,
     hypothesis:'Observe bounded source-declared state changes and independently verify their security relevance.',
     sequence:first.sequence} : null;
 }
+
+
+/** Resolve Qwen's intent against actual source declarations, regardless of the
+ * model-selected probe kind. Never substitute an unrelated declared function.
+ * Only correct a unique, source-backed method and the corresponding sequence.
+ */
+export function canonicalControllerPolyglotIntent(path:string,source:string,
+  requested:{query:string;answer:string}):ControllerPolyglotPlan|null {
+  if(!requested.query.trim())return controllerPolyglotPlan(path,source);
+  const choices:ControllerPolyglotPlan[]=[];
+  const direct=guidedSourceProbe(path,source);
+  if(direct)choices.push({action:'plan_probe',path,query:direct.functionName,
+    answer:direct.kind,hypothesis:direct.hypothesis});
+  for(const p of sourceStatefulPlans(path,source))
+    choices.push({action:'plan_probe',path,query:p.selector,answer:p.kind,
+      hypothesis:'Controller source-declared same-instance state observation; an observation is not security proof.',
+      sequence:p.sequence});
+  for(const p of controllerJavaProbes(path,source))
+    choices.push({action:'plan_probe',path,query:p.selector,answer:'java_sequence',
+      hypothesis:'Controller-owned Java source-derived typed-argument sequence; independently verify the observed effect.',
+      sequence:p.sequence});
+  const matches=choices.filter(p=>p.query===requested.query ||
+    (path.endsWith('.java') && p.query.split('.').at(-1)===requested.query));
+  return matches.length===1?matches[0]:null;
+}
