@@ -1,0 +1,107 @@
+name: LOTUS Level 6 Crucible production gauntlet
+on:
+  push:
+    branches:
+      - feat/lotus-crucible-level6-20261105
+permissions:
+  contents: read
+concurrency:
+  group: lotus-crucible-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  generator-acceptance:
+    name: Level 6 four-language generator and source validation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Verify sealed challenge contract
+        run: node --import tsx scripts/test-lotus-crucible-contract.ts
+      - name: Verify executable four-language generator and JS runtime
+        run: node --import tsx scripts/test-lotus-crucible-generator.ts
+      - name: Compile TypeScript
+        run: npx tsc --noEmit
+  production-crucible:
+    name: Level 6 ${{ matrix.language }} production
+    needs: generator-acceptance
+    if: startsWith(github.event.head_commit.message, 'Run owned LOTUS Level 6 Crucible')
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [solidity, python, javascript, java]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      LOCAL_OLLAMA_MODEL: qwen3:4b
+      LOCAL_MODEL_ADAPTER: ollama
+      LOCAL_OLLAMA_TOOL_PROTOCOL: json
+      LOCAL_HUNT_DYNAMIC_ALLOWANCE: 'true'
+      LOCAL_HUNT_MAX_TURNS: '80'
+      LOCAL_HUNT_NUM_PREDICT: '2048'
+      SECURITY_AUTO_SUBMIT: 'false'
+      SECURITY_AUTO_HUNT_ENABLED: 'false'
+      SECURITY_SOURCE_CODE_TIMEOUT_MINUTES: '180'
+      AUTOHACK_OLLAMA_URL: http://127.0.0.1:11434/api/chat
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Record host resource budget
+        run: |
+          mkdir -p data/crucible/latest
+          { nproc; free -h; df -h .; } > data/crucible/latest/runner.txt
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Validate source acquisition without a model
+        run: node --import tsx scripts/lotus-crucible-run.ts --smoke --level=6 --language="${{ matrix.language }}" --output=data/crucible/smoke
+      - name: Install production reproduction tools
+        timeout-minutes: 45
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y bubblewrap default-jdk-headless
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          timeout 2100 bash scripts/install-reproduction-runtime.sh
+      - name: Start local CPU Qwen3 model
+        timeout-minutes: 45
+        run: |
+          docker run -d --name lotus-crucible-ollama -p 127.0.0.1:11434:11434 ollama/ollama:latest
+          for n in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:11434/api/tags >/dev/null; then break; fi
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:11434/api/tags >/dev/null
+          docker exec lotus-crucible-ollama ollama pull qwen3:4b
+      - name: Investigate Level 6 with actual production controller
+        timeout-minutes: 230
+        env:
+          CRUCIBLE_LANGUAGE: ${{ matrix.language }}
+        run: |
+          set -o pipefail
+          mkdir -p data/crucible/latest
+          node --import tsx scripts/lotus-crucible-run.ts --run --level=6 --language="$CRUCIBLE_LANGUAGE" --output=data/crucible/latest 2>&1 | tee data/crucible/live-terminal.log
+      - name: Publish independent diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lotus-crucible-level6-${{ matrix.language }}-${{ github.run_id }}
+          path: |
+            data/crucible/latest/manifest.json
+            data/crucible/latest/grade.json
+            data/crucible/latest/result.json
+            data/crucible/latest/review.json
+            data/crucible/latest/runner.txt
+            data/crucible/latest/local-hunt-*.log
+            data/crucible/latest/local-review-*.log
+            data/crucible/live-terminal.log
+          retention-days: 30
+          if-no-files-found: warn
+      - name: Stop local model
+        if: always()
+        run: docker rm -f lotus-crucible-ollama || true

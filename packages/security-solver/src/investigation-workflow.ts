@@ -104,7 +104,11 @@ export class InvestigationWorkflow {
   note():string {
     const note={unansweredQuestion:this.decisions.length?{...this.decisions.at(-1)!,path:this.decisions.at(-1)!.path.slice(0,160),question:this.decisions.at(-1)!.question.slice(0,250)}:undefined,priorNavigation:this.priorNotes.slice(-1).map(n=>n.slice(0,200)),pageTurns:this.pageTurns,stage:this.state.stage,inspectionsSinceDecision:this.state.inspections,
       recentReadPaths:[...this.readPaths].slice(-3).map(p=>p.slice(0,160)),nextUnreadPages:[...this.nextOffsets].filter(([,offset])=>offset!==null).slice(-3).map(([path,offset])=>({path:path.slice(0,160),offset})),pending:this.state.pending ? {path:this.state.pending.path.slice(0,160),function:this.state.pending.query,kind:this.state.pending.answer} : null,
-      observations:this.observations.slice(-2).map(o=>({...o,path:o.path.slice(0,160)})),verifiedEvidenceFocus:this.verifiedEvidenceFocus,feedback:this.lastFeedback.slice(0,240),
+      observations:this.observations.slice(-2).map(o=>({...o,path:o.path.slice(0,160)})),
+      // Compact controller-owned case ledger survives Qwen context eviction.
+      // These are recorded probe outcomes, never model claims or approvals.
+      observationLedger:this.observations.slice(-8).map(o=>({path:o.path.slice(0,100),function:o.function.slice(0,72),status:o.status,caseId:o.caseId,behaviorObserved:o.behaviorObserved})),
+      verifiedEvidenceFocus:this.verifiedEvidenceFocus,feedback:this.lastFeedback.slice(0,240),
       instruction:this.verifiedEvidenceFocus?'The controller has locked a source-reproduced case '+this.verifiedEvidenceFocus+'. Assess its technical security significance against the recorded observations, caller chain and mitigations. Do not select new navigation or probes; a supported negative judgment is valid.':this.state.pending?'Execute the planned probe with exactly its path, function, kind and sequence.':
         'Read relevant source, then plan_probe with path, query=function, answer=probe kind, hypothesis=claim AND disproof condition. After six inspections or eight source pages, choose plan_probe, continue_inspection with a specific unanswered question in hypothesis and the next path/offset/query, or an incomplete final. Continue only to obtain that missing evidence; no forced unrelated test. A failed or unsupported verification is not proof of absence or presence. After inspecting recorded evidence, change candidate or request specific missing context; do not repeat completed evidence pages. Read recorded evidenceFile pages when an observation leaves context instead of repeating its probe. After testing inspect caller/mitigations before reporting; observations alone are not findings.'};
     // Evidence is controller-owned and must survive conversation compaction.
@@ -115,6 +119,7 @@ export class InvestigationWorkflow {
     if(JSON.stringify(note).length>1800)note.instruction='Preserve recorded probe evidence. Inspect unresolved caller reachability and impact before reporting; do not repeat completed probes.';
     if(JSON.stringify(note).length>1800)note.feedback=note.feedback.slice(0,100);
     while(JSON.stringify(note).length>1800 && note.observations.length>1)note.observations.shift();
+    while(JSON.stringify(note).length>1800 && note.observationLedger.length>1)note.observationLedger.shift();
     if(JSON.stringify(note).length>1800)note.unansweredQuestion=undefined;
     return JSON.stringify(note);
   }

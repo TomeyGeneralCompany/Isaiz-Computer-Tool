@@ -42,7 +42,7 @@ const confidenceSchema = z.number().min(0).max(1);
 const candidateSchema=z.object({caseId:sha,severity:severitySchema,confidence:confidenceSchema,ratingReason:z.string().min(40).max(2000),title:z.string().min(10).max(200),
   impact:z.string().min(20).max(2000),callerFile:z.string().min(1).max(4096),callerLine:z.number().int().positive(),
   reachability:z.enum(["caller","direct_transaction"]).optional(),falsification:z.string().min(40).max(2000)}).strict();
-export const huntSchema=z.object({findings:z.array(candidateSchema).max(3),
+export const huntSchema=z.object({findings:z.array(candidateSchema).max(8),
   outcome:z.enum(["inspected","no_testable_candidate"]).optional(),
   reason:z.string().min(20).max(1000).optional()
 }).strict().superRefine((value,ctx)=>{
@@ -1013,7 +1013,7 @@ Do not claim production testing, JavaScript execution, file access or other effe
       const candidate=independentlyProvenCandidate;
       const alreadyPresent=parsed?.findings.some(item=>item.caseId===candidate.caseId);
       if(!alreadyPresent) {
-        parsed={findings:[candidate,...(parsed?.findings||[])].slice(0,3),outcome:'inspected'};
+        parsed={findings:[candidate,...(parsed?.findings||[])].slice(0,8),outcome:'inspected'};
         await appendFile(logFile,'[CONTROLLER_PROOF_FOR_REVIEW] '+JSON.stringify({
           caseId:candidate.caseId,source:'controller independent entry reproduction',
           reason:'model nomination is not a requirement for independently reviewed evidence',
