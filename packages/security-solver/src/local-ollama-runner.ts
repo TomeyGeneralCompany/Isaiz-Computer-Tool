@@ -587,7 +587,7 @@ export async function runLocalAudit(
       if(!controllerAction && structured && workflow &&
          process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false' &&
          !workflow.snapshot().verifiedEvidenceFocus &&
-         controllerAutoProbeCount<Math.min(24,(limits.initialSourcePaths||[]).length) &&
+         controllerAutoProbeCount<Math.max(24,(limits.initialSourcePaths||[]).length) &&
          constraints?.action?.includes('plan_probe')) {
         const inspected=new Set(workflow.snapshot().readPaths);
         // Candidate ranking is controller-owned. Iteration in reverse read
@@ -596,8 +596,8 @@ export async function runLocalAudit(
         const ranked=[...new Set([...(limits.initialSourcePaths||[]),
           ...workflow.snapshot().readPaths])].filter(path=>inspected.has(path) &&
           path.startsWith('source-') && /\.(?:sol|java|py|js|mjs|cjs)$/.test(path));
-        const rankedInspected=[...new Set([...privilegedSolidityCandidates.keys(),...tracedCandidates.map(c=>c.path),...inspected].filter(path=>inspected.has(path)))];
-        for(const path of rankedInspected.slice(0,24)) {
+        const rankedInspected=[...new Set([...privilegedSolidityCandidates.keys(),...tracedCandidates.map(c=>c.path),...ranked].filter(path=>inspected.has(path)))];
+        for(const path of rankedInspected) {
           try {
             const full=await safePath(path);
             let plan:{action:string;path:string;query:string;answer:string;hypothesis:string;sequence?:unknown}|null=null;
