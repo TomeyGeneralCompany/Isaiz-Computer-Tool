@@ -106,7 +106,9 @@ export class InvestigationWorkflow {
       // still have unread pages: real Solidity reviews can span many pages.
       (this.nextOffsets.size && [...this.nextOffsets.values()].some(offset=>offset!==null) ?
         ['read_file','read_solidity','outline_solidity','plan_probe','continue_inspection','final'] :
-        ['plan_probe','continue_inspection','final']) :
+        // The controller may still have ranked unread files after all currently
+        // tracked pages finish. Do not revoke source access at hypothesis stage.
+        ['read_file','read_solidity','outline_solidity','plan_probe','continue_inspection','final']) :
       ['read_file','read_solidity','outline_solidity','search_files','list_files','plan_probe','final']};
   }
   note():string {
