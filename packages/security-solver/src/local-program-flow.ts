@@ -1,3 +1,4 @@
+import {ControllerEvidenceArchive} from './controller-evidence-archive';
 import {prioritizeSourceCandidates} from './source-candidates';
 import {collectStaticLeads} from './local-static-leads';
 import {buildSourceMap} from './source-map';
@@ -1376,6 +1377,18 @@ export async function independentReview(finding:SecurityFinding,program:Security
     await writeFile(join(evidenceDirectory,"controller-packet.txt"),packet,{mode:0o600});
     // Stable, source-grounded memory retained independently of Qwen turns.
     await writeFile(join(evidenceDirectory,"verified-chain.json"),JSON.stringify(chainEvidence,null,2),{mode:0o600});
+    // The reviewer receives the original controller packet; the cold tier retains
+    // the unabridged source route and replay, independently of the model context.
+    const reviewArchive=new ControllerEvidenceArchive(join(evidenceDirectory,'controller-review-evidence.jsonl'));
+    const routeEvidenceId=await reviewArchive.append('route',chainEvidence,{caseId:id});
+    const replayEvidenceId=await reviewArchive.append('probe',
+      {replay,entryReplay,entryFacts,immutableReviewGrounds},
+      {caseId:id,parentIds:[routeEvidenceId]});
+    const packetEvidenceId=await reviewArchive.append('review',{packet},
+      {caseId:id,parentIds:[routeEvidenceId,replayEvidenceId]});
+    const archivedPacket=await reviewArchive.retrieve(packetEvidenceId);
+    if(!archivedPacket || (archivedPacket.payload as {packet:string}).packet!==packet)
+      throw new Error('Controller review packet integrity mismatch');
     // Model-independent technical factual decision, based solely on re-cloned
     // committed source and two independent sandbox replays. This establishes
     // only local source-level HTML injection, never production exploitability.
@@ -1421,6 +1434,8 @@ Use one enum value per string. Scores are integers 0..3. bet100=false requires d
         if(entryDefect)return entryDefect;
         const groundDefect=controllerReviewGroundDefect(value,immutableReviewGrounds);
         if(groundDefect)return groundDefect;
+        await reviewArchive.append('decision',{verdict:value,packetEvidenceId},
+          {caseId:id,parentIds:[packetEvidenceId]});
         review=value;
         return null;
       }catch{return "Return the requested review JSON with valid enum values and integer rubric scores.";}

@@ -29,6 +29,8 @@ jobs:
           npm install --prefix scripts/reproduction-runtime --ignore-scripts --no-audit --no-fund
       - name: Install application dependencies for workflow integration
         run: npm ci
+      - name: Test controller cold-memory archive integrity
+        run: node --import tsx scripts/test-controller-evidence-archive.ts
       - name: Check harness syntax
         run: node --check scripts/reproduction-runtime/probe.cjs
       - name: Test Solidity model tool protocols
@@ -40,7 +42,16 @@ jobs:
         run: node --import tsx scripts/test-controller-indexed-entry-replay.ts
       - name: Qualify 2000-file Solidity consumer findings through independent review
         timeout-minutes: 20
-        run: node --import tsx scripts/test-indexed-solidity-independent-review.ts
+        env:
+          OLLAMA_HOST: http://127.0.0.1:11434
+        run: |
+          docker run -d --name lotus-review-ollama \
+            -e OLLAMA_NUM_PARALLEL=1 -e OLLAMA_MAX_LOADED_MODELS=1 \
+            -e OLLAMA_KEEP_ALIVE=0 -p 127.0.0.1:11434:11434 ollama/ollama:latest
+          trap 'docker logs --tail 120 lotus-review-ollama || true; docker inspect lotus-review-ollama --format "OOMKilled={{.State.OOMKilled}} ExitCode={{.State.ExitCode}}" || true; docker rm -f lotus-review-ollama >/dev/null 2>&1 || true' EXIT
+          for i in $(seq 1 90); do curl -fsS http://127.0.0.1:11434/api/tags >/dev/null && break; sleep 2; done
+          docker exec lotus-review-ollama ollama pull qwen3:4b
+          node --import tsx scripts/test-indexed-solidity-independent-review.ts
       - name: Verify controller source-derived protected consumer impact
         run: node --import tsx scripts/test-controller-solidity-impact.ts
       - name: Reproduce protected consumer escalation in independent local EVM

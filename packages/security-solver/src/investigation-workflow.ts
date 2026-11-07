@@ -44,6 +44,13 @@ export class InvestigationWorkflow {
   private lastFeedback='';
   private decisions:Array<{path:string;question:string;offset:number}>=[];
   private priorNotes:string[]=[];
+  private evidenceReferences:string[]=[];
+  recordEvidence(id:string) {
+    if(!/^[a-f0-9]{64}$/.test(id))throw new Error('Invalid controller evidence reference');
+    if(!this.evidenceReferences.includes(id))this.evidenceReferences.push(id);
+    this.evidenceReferences=this.evidenceReferences.slice(-24);
+  }
+
   private pageTurns=0;
   private continuations=new Map<string,number>();
   private readSpans=new Set<string>();
@@ -54,10 +61,11 @@ export class InvestigationWorkflow {
     // Prior state directs navigation only. Current-run reads and probes must revalidate it.
     const saved=value as any;
     if(saved?.version!==1 || !Array.isArray(saved.notes))return;
+    this.evidenceReferences=Array.isArray(saved.evidenceReferences)?saved.evidenceReferences.filter((id:unknown)=>typeof id==='string'&&/^[a-f0-9]{64}$/.test(id)).slice(-24):[];
     this.priorNotes=saved.notes.filter((n:unknown)=>typeof n==='string').slice(-12).map((n:string)=>n.slice(0,400));
   }
   memory() {
-    return {version:1,notes:[...this.priorNotes,
+    return {version:1,evidenceReferences:this.evidenceReferences,notes:[...this.priorNotes,
       ...this.decisions.slice(-6).map(d=>'Unresolved context: '+JSON.stringify(d)),
       ...(this.state.pending?['Candidate needing fresh evidence: '+JSON.stringify(this.state.pending)]:[]),
       ...this.observations.slice(-6).map(o=>'Prior observation; replay required: '+JSON.stringify(o))].slice(-12).map(n=>n.slice(0,400))};
@@ -108,7 +116,7 @@ export class InvestigationWorkflow {
       // Compact controller-owned case ledger survives Qwen context eviction.
       // These are recorded probe outcomes, never model claims or approvals.
       observationLedger:this.observations.slice(-8).map(o=>({path:o.path.slice(0,100),function:o.function.slice(0,72),status:o.status,caseId:o.caseId,behaviorObserved:o.behaviorObserved})),
-      verifiedEvidenceFocus:this.verifiedEvidenceFocus,feedback:this.lastFeedback.slice(0,240),
+      evidenceReferences:this.evidenceReferences.slice(-3),verifiedEvidenceFocus:this.verifiedEvidenceFocus,feedback:this.lastFeedback.slice(0,240),
       instruction:this.verifiedEvidenceFocus?'The controller has locked a source-reproduced case '+this.verifiedEvidenceFocus+'. Assess its technical security significance against the recorded observations, caller chain and mitigations. Do not select new navigation or probes; a supported negative judgment is valid.':this.state.pending?'Execute the planned probe with exactly its path, function, kind and sequence.':
         'Read relevant source, then plan_probe with path, query=function, answer=probe kind, hypothesis=claim AND disproof condition. After six inspections or eight source pages, choose plan_probe, continue_inspection with a specific unanswered question in hypothesis and the next path/offset/query, or an incomplete final. Continue only to obtain that missing evidence; no forced unrelated test. A failed or unsupported verification is not proof of absence or presence. After inspecting recorded evidence, change candidate or request specific missing context; do not repeat completed evidence pages. Read recorded evidenceFile pages when an observation leaves context instead of repeating its probe. After testing inspect caller/mitigations before reporting; observations alone are not findings.'};
     // Evidence is controller-owned and must survive conversation compaction.
