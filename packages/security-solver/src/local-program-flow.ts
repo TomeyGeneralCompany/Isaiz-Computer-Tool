@@ -381,7 +381,7 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
               callerLine:line,independentReviewRequired:true})+'\\n');
         }catch(error){
           await appendFile(logFile,'[CONTROLLER_INDEXED_SOLIDITY_UNAVAILABLE] '+
-            JSON.stringify({path,error:String(error).slice(0,220)})+'\\n');
+            JSON.stringify({path,error:String(error).slice(0,3200)})+'\\n');
         }
       }
     }
