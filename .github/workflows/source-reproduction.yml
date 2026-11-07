@@ -65,6 +65,18 @@ jobs:
           progress_pid=$!
           trap 'kill "$progress_pid" 2>/dev/null || true; docker logs --tail 120 lotus-review-ollama || true; docker inspect lotus-review-ollama --format "OOMKilled={{.State.OOMKilled}} ExitCode={{.State.ExitCode}}" || true; docker rm -f lotus-review-ollama >/dev/null 2>&1 || true' EXIT
           node --import tsx scripts/test-indexed-solidity-independent-review.ts
+      - name: Preserve full Solidity investigation and controller activity logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: solidity-controller-investigation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            data/logs/local-hunt-*.log
+            data/logs/local-hunt-*.log.activity.jsonl
+            data/logs/local-hunt-*.log.evidence.jsonl
+            data/logs/local-hunt-*.log.exchanges.jsonl
+          if-no-files-found: warn
+          retention-days: 14
       - name: Verify controller source-derived protected consumer impact
         run: node --import tsx scripts/test-controller-solidity-impact.ts
       - name: Reproduce protected consumer escalation in independent local EVM
