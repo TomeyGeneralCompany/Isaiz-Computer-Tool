@@ -27,7 +27,7 @@ export AUTOHACK_AUTO_SOURCE_PREFETCH=true
 export AUTOHACK_GUIDED_SOURCE_PROBES=true
 export LOCAL_HUNT_DYNAMIC_ALLOWANCE=true
 export LOCAL_CONTROLLER_FULL_SOURCE_INDEX=true
-printf 'One-bounty controller settings: protocol=%s prefetch=%s guided=%s dynamic=%s full_index=%s\\n' \
+printf 'One-bounty controller settings: protocol=%s prefetch=%s guided=%s dynamic=%s full_index=%s\n' \
   "$LOCAL_OLLAMA_TOOL_PROTOCOL" "$AUTOHACK_AUTO_SOURCE_PREFETCH" \
   "$AUTOHACK_GUIDED_SOURCE_PROBES" "$LOCAL_HUNT_DYNAMIC_ALLOWANCE" \
   "$LOCAL_CONTROLLER_FULL_SOURCE_INDEX"
