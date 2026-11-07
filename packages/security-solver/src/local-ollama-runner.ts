@@ -694,12 +694,12 @@ export async function runLocalAudit(
         // invitation for repeated speculative model finalization.
         const snapshot=workflow.snapshot();
         const eligible=(limits.initialSourcePaths||[]).filter(path=>
-          path.startsWith('source-') && /\\.(?:sol|java|py|js|mjs|cjs)$/.test(path));
+          path.startsWith('source-') && /\.(?:sol|java|py|js|mjs|cjs)$/.test(path));
         const unread=eligible.filter(path=>!snapshot.readPaths.includes(path));
         await appendFile(logFile,'[CONTROLLER_CANDIDATE_QUEUE_EXHAUSTED] '+
           JSON.stringify({turn:turn+1,stage:snapshot.stage,
             eligible:eligible.length,read:snapshot.readPaths.length,
-            unread:unread.slice(0,12),observations:0})+'\\n');
+            unread:unread.slice(0,12),observations:0})+'\n');
         throw new Error('CONTROLLER_CANDIDATE_QUEUE_EXHAUSTED: no controller-selected source or supported probe; inspect candidate selection diagnostics, not model finalization');
       }
       if(controllerAction && fullIndexMode) {
