@@ -661,10 +661,18 @@ export async function runLocalAudit(
       // belong to the model.
       if(!controllerAction && structured && workflow &&
          process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false' &&
-         !fullIndexMode && !workflow.snapshot().verifiedEvidenceFocus && controllerAutoReadCount<8 &&
+         !workflow.snapshot().verifiedEvidenceFocus &&
+         controllerAutoReadCount<(fullIndexMode
+           ? new Set(limits.initialSourcePaths||[]).size : 8) &&
          constraints?.action?.includes('read_file')) {
         const inspected=new Set(workflow.snapshot().readPaths);
-        for(const candidate of [...new Set([...privilegedSolidityCandidates.keys(),...tracedCandidates.map(c=>c.path),...(limits.initialSourcePaths||[])])]) {
+        // The full-index controller already owns source ranking and read history.
+        // Use that evidence to choose the next unread source, rather than
+        // delegating filename selection to the small model.
+        const rankedSources=[...new Set([...privilegedSolidityCandidates.keys(),
+          ...tracedCandidates.map(c=>c.path),...(limits.initialSourcePaths||[])])];
+        for(const candidate of rankedSources) {
+          if(constraints.path?.length && !constraints.path.includes(candidate))continue;
           if(!candidate.startsWith('source-') || !/\.(?:java|py|js|mjs|cjs|sol)$/.test(candidate) ||
              inspected.has(candidate))continue;
           try {
