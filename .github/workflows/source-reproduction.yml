@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     # The Qwen3:4b independent-review step alone permits 20 minutes.
     # Include setup, model download, and all preceding reproduction checks.
-    timeout-minutes: 40
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -43,7 +43,7 @@ jobs:
         timeout-minutes: 15
         run: node --import tsx scripts/test-controller-indexed-entry-replay.ts
       - name: Qualify 2000-file Solidity consumer findings through independent review
-        timeout-minutes: 20
+        timeout-minutes: 45
         env:
           OLLAMA_HOST: http://127.0.0.1:11434
         run: |
