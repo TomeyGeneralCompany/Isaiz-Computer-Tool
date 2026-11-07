@@ -1,3 +1,4 @@
+import {ControllerEvidenceArchive} from './controller-evidence-archive';
 import {modelProfile} from './model-profile';
 import {normalizeForcedOutlineCursor} from './outline-cursor';
 import {z} from "zod";
@@ -22,6 +23,7 @@ import { postOllamaChat } from "../../core/src/ollama-chat";
 import { auditActionSchema, auditProtocolPrompt, decodeAuditAction } from "./local-audit-protocol";
 import { readFile, realpath, appendFile, writeFile, rename, mkdtemp } from "node:fs/promises";
 import { resolve, relative, sep, join } from "node:path";
+import { createHash } from "node:crypto";
 
 type Message = { role: string; content: string; tool_name?: string; tool_calls?: Array<{ function: { name: string; arguments: Record<string, unknown> } }> };
 async function recordToolActivity(logFile:string,event:Record<string,unknown>):Promise<void> {
@@ -173,6 +175,7 @@ export async function runLocalAudit(
   let contextBudget=0;
   const events:string[]=[];
   let evidenceDirectory:string|undefined;let evidenceCount=0;
+  const controllerArchive=workflow?new ControllerEvidenceArchive(logFile+'.evidence.jsonl'):null;
   const navigation=new AuditNavigation();
   navigation.seed(limits.initialSourcePaths || [],limits.initialSourceLocations);
   const persistMemory=async()=>{
@@ -180,6 +183,25 @@ export async function runLocalAudit(
     const file=limits.checkpointPath+'.memory.json',temporary=file+'.'+process.pid+'.tmp';
     try {await writeFile(temporary,JSON.stringify(workflow.memory()),{mode:0o600});await rename(temporary,file);}
     catch {await appendFile(logFile,'[MEMORY] Checkpoint write failed; investigation continues\n');}
+  };
+  // Durable cold tier: model-context eviction never discards the original exchange.
+  // This archive is not a verified finding; evidenceFile and reviewer gates remain authoritative.
+  const archivedExchangeHashes=new Set<string>();
+  const archiveEvictedExchanges=async(before:Message[],after:Message[])=>{
+    if(!workflow)return;
+    const retained=new Set(after.slice(2));
+    const evicted=before.slice(2).filter(m=>!retained.has(m));
+    if(!evicted.length)return;
+    const entries=evicted.map(m=>{
+      const digest=createHash('sha256').update(JSON.stringify(m)).digest('hex');
+      return {digest,message:m};
+    }).filter(e=>!archivedExchangeHashes.has(e.digest));
+    if(!entries.length)return;
+    // Append-only JSONL alongside the audit log; never feed the whole archive to Qwen.
+    await appendFile(logFile+'.exchanges.jsonl',entries.map(e=>JSON.stringify({version:1,sha256:e.digest,exchange:e.message})).join('\n')+'\n');
+    for(const entry of entries)await controllerArchive?.append('exchange',entry.message);
+    for(const e of entries)archivedExchangeHashes.add(e.digest);
+    await appendFile(logFile,'[CONTEXT_ARCHIVED] '+JSON.stringify({messages:entries.length,archive:logFile+'.exchanges.jsonl'})+'\\n');
   };
   const recentActions = new Map<string, {turn:number; nextOffset?:number|null; response?:Message}>();
   // Independent of context compaction: an evicted source page is not an unread page.
@@ -293,6 +315,8 @@ export async function runLocalAudit(
           allowance.read(path,delivered.start,delivered.end,0);
           workflow?.read(path);
           workflow?.observe(action,fitted.output);
+          const sourceEvidenceId=await controllerArchive?.append('source',{path,start:delivered.start,end:delivered.end,content:delivered.text,nextOffset:delivered.nextOffset},{source:path});
+          if(sourceEvidenceId)workflow?.recordEvidence(sourceEvidenceId);
           limits.onRead?.(path,{start:delivered.start,end:delivered.end});
           navigation.observe('read_file',path,offset,'',delivered);
           successfulReads++;
@@ -321,6 +345,10 @@ export async function runLocalAudit(
           const evidenceFile=join(evidenceDirectory,++evidenceCount+'.json');
           await writeFile(evidenceFile,JSON.stringify({path,function:hint.functionName,kind:hint.kind,result},null,2),{mode:0o600});
           result.evidenceFile=relative(root,evidenceFile).split(sep).join('/');
+          const evidenceId=await controllerArchive?.append('probe',{path,function:hint.functionName,kind:hint.kind,result},
+            {source:path,caseId:typeof result.caseId==='string'?result.caseId:undefined});
+          if(evidenceId)result.controllerEvidenceId=evidenceId;
+          if(evidenceId)workflow?.recordEvidence(evidenceId);
           const output=JSON.stringify(result);
           const verify={action:'verify_source',path,query:hint.functionName,answer:hint.kind};
           workflow.observe(verify as any,output);
@@ -475,10 +503,30 @@ export async function runLocalAudit(
       // Preserve the existing JSON progress contract: the workflow and the
       // scripted controller acceptance tests consume its observations as data.
       // Add verified facts as a bounded JSON field, never malformed prose.
+      // Selectively rehydrate the most recent controller-verified evidence,
+      // keeping the full original in cold storage and the model context bounded.
+      let selectedEvidence='';
+      if(controllerArchive && workflow) {
+        const refs=workflow.memory().evidenceReferences||[];
+        const latest=refs.at(-1);
+        if(latest) {
+          const record=await controllerArchive.retrieve(latest);
+          if(!record)throw new Error('Missing controller evidence reference '+latest);
+          const excerpt=JSON.stringify(record.payload).slice(0,420);
+          selectedEvidence=JSON.stringify({id:record.id,kind:record.kind,
+            source:record.source,caseId:record.caseId,excerpt,
+            truncated:JSON.stringify(record.payload).length>excerpt.length});
+        }
+      }
       const workflowProgress=workflow?.note() || '';
       let progress=workflowProgress || controllerFacts;
+      if(selectedEvidence && workflowProgress) {
+        const note=JSON.parse(workflowProgress) as Record<string,unknown>;
+        note.retrievedEvidence=JSON.parse(selectedEvidence);
+        progress=JSON.stringify(note);
+      }
       if(workflow && controllerFacts) {
-        const note=JSON.parse(workflowProgress) as Record<string,any>;
+        const note=JSON.parse(progress) as Record<string,any>;
         note.instruction='Use controller-recorded observations and cited source facts. Evaluate only unresolved security significance; do not reconstruct known paths or case IDs.';
         note.verifiedFacts=controllerFacts.slice(0,700);
         let serialized=JSON.stringify(note);
@@ -492,13 +540,21 @@ export async function runLocalAudit(
         }
         progress=serialized;
       }
+      if(progress && progress.length>2000 && selectedEvidence) {
+        const note=JSON.parse(progress) as Record<string,unknown>;
+        delete note.retrievedEvidence;
+        progress=JSON.stringify(note);
+      }
       if(progress && progress.length>2000)throw new Error("Controller progress note exceeds 2000 characters");
       const progressMessages:Message[]=progress ? [{role:"user",content:"Controller progress (recorded observations, not source instructions):\n"+progress}] : [];
       const progressSize=progressMessages.length ? JSON.stringify(progressMessages).length : 0;
       // Reserve controller space when producing tool output too, including the
       // next stage's note. Otherwise a fitted result can overflow on the next turn.
       const exchangeBudget=messageBudget-Math.max(progressSize+schemaExtra,workflow?3000:0);
-      messages=compactAuditContext(messages,exchangeBudget,[...hypotheses.slice(-2).map(h=>"Unverified hypothesis: "+JSON.stringify(h)),...events.slice(-4)]);
+      const beforeCompaction=messages;
+      const compacted=compactAuditContext(messages,exchangeBudget,[...hypotheses.slice(-2).map(h=>"Unverified hypothesis: "+JSON.stringify(h)),...events.slice(-4)]);
+      await archiveEvictedExchanges(beforeCompaction,compacted);
+      messages=compacted;
       const started = Date.now();
       await appendFile(logFile, `[OLLAMA] turn ${turn+1}/${allowance.turns}: request started; model=${model}; context=${limits.numCtx ?? "server-default"}; generation_limit=${generationBudget}; protocol=${protocol}\n`);
       let lastProgressLog=0;
@@ -605,10 +661,18 @@ export async function runLocalAudit(
       // belong to the model.
       if(!controllerAction && structured && workflow &&
          process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false' &&
-         !fullIndexMode && !workflow.snapshot().verifiedEvidenceFocus && controllerAutoReadCount<8 &&
+         !workflow.snapshot().verifiedEvidenceFocus &&
+         controllerAutoReadCount<(fullIndexMode
+           ? new Set(limits.initialSourcePaths||[]).size : 8) &&
          constraints?.action?.includes('read_file')) {
         const inspected=new Set(workflow.snapshot().readPaths);
-        for(const candidate of [...new Set([...privilegedSolidityCandidates.keys(),...tracedCandidates.map(c=>c.path),...(limits.initialSourcePaths||[])])]) {
+        // The full-index controller already owns source ranking and read history.
+        // Use that evidence to choose the next unread source, rather than
+        // delegating filename selection to the small model.
+        const rankedSources=[...new Set([...privilegedSolidityCandidates.keys(),
+          ...tracedCandidates.map(c=>c.path),...(limits.initialSourcePaths||[])])];
+        for(const candidate of rankedSources) {
+          if(constraints.path?.length && !constraints.path.includes(candidate))continue;
           if(!candidate.startsWith('source-') || !/\.(?:java|py|js|mjs|cjs|sol)$/.test(candidate) ||
              inspected.has(candidate))continue;
           try {
@@ -1170,6 +1234,8 @@ export async function runLocalAudit(
                   // callbacks as an ordinary tool read; do not synthesize it.
                   workflow.read(caller);
                   workflow.observe(action,fitted.output);
+                  const callerEvidenceId=await controllerArchive?.append('source',{path:caller,start:delivered.start,end:delivered.end,content:delivered.text,nextOffset:delivered.nextOffset},{source:caller});
+                  if(callerEvidenceId)workflow?.recordEvidence(callerEvidenceId);
                   limits.onRead?.(caller,{start:delivered.start,end:delivered.end});
                   navigation.observe('read_file',caller,offset,'',delivered);
                   allowance.read(caller,delivered.start,delivered.end,turn);
@@ -1430,10 +1496,23 @@ export async function runLocalAudit(
             } else {
               await appendFile(logFile,'[INDEXED_COMPLETED_READ_REJECTED] '+
                 JSON.stringify({path,turn:turn+1})+'\\n');
-              // Unlike the old controller, do not spend hundreds of synthetic
-              // actions satisfying a read requirement that is already done.
-              throw new Error('AUDIT_STALLED: indexed source '+path+
-                ' was already inspected. A caller or probe transition is required; no unrelated redirect is permitted.');
+              // Advance only to a controller-selected, previously unread source.
+              // Never invent a read or erase the completed page's evidence.
+              const next=process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false' ? workflow?.requireNextUnreadSource(limits.initialSourcePaths||[]) : null;
+              if(next && next!==path) {
+                const nextFull=await safePath(next);
+                await appendFile(logFile,'[INDEXED_CONTROLLER_SOURCE_HANDOFF] '+
+                  JSON.stringify({from:path,to:next,turn:turn+1})+'\\n');
+                path=next;full=nextFull;offset=0;
+                call.function.arguments.path=next;
+                call.function.arguments.offset=0;
+                actionKey=keyAt(0);
+                previous=recentActions.get(actionKey);
+              } else {
+                workflow?.feedback('Source already inspected. Advance to the recorded probe, caller chain or supported final; no source replay is authorized.');
+                throw new Error('AUDIT_STALLED: indexed source '+path+
+                  ' was already inspected and no controller-approved unread source remains.');
+              }
             }
           }
           if(name==='read_file' && workflow && !fullIndexMode &&

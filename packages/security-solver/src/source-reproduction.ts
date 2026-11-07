@@ -81,7 +81,12 @@ async function executeProbe(directory:string,spec:z.infer<typeof specSchema>,sig
       })).stdout;
     } catch(error:any) {
       signal?.throwIfAborted();
-      if(typeof error.stdout!=="string" || !error.stdout.trim()) throw new Error("Source reproduction process failed or timed out");
+      if(typeof error.stdout!=="string" || !error.stdout.trim()) {
+        const stderr=typeof error.stderr==="string"?error.stderr.slice(-2400):"";
+        const code=error.code===undefined?"unknown":String(error.code);
+        const exitSignal=error.signal===undefined?"none":String(error.signal);
+        throw new Error("Source reproduction subprocess failed (code="+code+", signal="+exitSignal+"): "+(stderr||String(error.message||error).slice(0,1200)));
+      }
       output=error.stdout;
     }
     return resultSchema.parse(JSON.parse(output));

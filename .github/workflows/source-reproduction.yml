@@ -8,7 +8,9 @@ on:
 jobs:
   isolated-language-probes:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # The Qwen3:4b independent-review step alone permits 20 minutes.
+    # Include setup, model download, and all preceding reproduction checks.
+    timeout-minutes: 330
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -29,6 +31,8 @@ jobs:
           npm install --prefix scripts/reproduction-runtime --ignore-scripts --no-audit --no-fund
       - name: Install application dependencies for workflow integration
         run: npm ci
+      - name: Test controller cold-memory archive integrity
+        run: node --import tsx scripts/test-controller-evidence-archive.ts
       - name: Check harness syntax
         run: node --check scripts/reproduction-runtime/probe.cjs
       - name: Test Solidity model tool protocols
@@ -39,8 +43,40 @@ jobs:
         timeout-minutes: 15
         run: node --import tsx scripts/test-controller-indexed-entry-replay.ts
       - name: Qualify 2000-file Solidity consumer findings through independent review
-        timeout-minutes: 20
-        run: node --import tsx scripts/test-indexed-solidity-independent-review.ts
+        timeout-minutes: 300
+        env:
+          OLLAMA_HOST: http://127.0.0.1:11434
+        run: |
+          docker run -d --name lotus-review-ollama \
+            -e OLLAMA_NUM_PARALLEL=1 -e OLLAMA_MAX_LOADED_MODELS=1 \
+            -e OLLAMA_KEEP_ALIVE=0 -p 127.0.0.1:11434:11434 ollama/ollama:latest
+          trap 'docker logs --tail 120 lotus-review-ollama || true; docker inspect lotus-review-ollama --format "OOMKilled={{.State.OOMKilled}} ExitCode={{.State.ExitCode}}" || true; docker rm -f lotus-review-ollama >/dev/null 2>&1 || true' EXIT
+          for i in $(seq 1 90); do curl -fsS http://127.0.0.1:11434/api/tags >/dev/null && break; sleep 2; done
+          docker exec lotus-review-ollama ollama pull qwen3:4b
+          # Surface controller progress and evidence counts rather than only Ollama internals.
+          ( while sleep 120; do
+              echo "=== LOTUS controller audit progress $(date -u +%FT%TZ) ==="
+              find data/logs -name 'local-hunt-*.log' -type f -print 2>/dev/null | while IFS= read -r audit; do
+                echo "Audit: $audit"
+                grep -E '^\\[(SOURCE_MAP|CONTROLLER_INDEXED_ENTRY_SUMMARY|CONTROLLER_INDEXED_PROOF_CANDIDATE|CONTROLLER_INDEXED_REVIEW_HANDOFF|PROBE_RESULT|AUDIT_|FINAL_|REVIEW_)' "$audit" | tail -n 12 || true
+                echo "Recorded probe results: $(grep -c '^\\[PROBE_RESULT\\]' "$audit" || true)"
+              done
+            done ) &
+          progress_pid=$!
+          trap 'kill "$progress_pid" 2>/dev/null || true; docker logs --tail 120 lotus-review-ollama || true; docker inspect lotus-review-ollama --format "OOMKilled={{.State.OOMKilled}} ExitCode={{.State.ExitCode}}" || true; docker rm -f lotus-review-ollama >/dev/null 2>&1 || true' EXIT
+          node --import tsx scripts/test-indexed-solidity-independent-review.ts
+      - name: Preserve full Solidity investigation and controller activity logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: solidity-controller-investigation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            data/logs/local-hunt-*.log
+            data/logs/local-hunt-*.log.activity.jsonl
+            data/logs/local-hunt-*.log.evidence.jsonl
+            data/logs/local-hunt-*.log.exchanges.jsonl
+          if-no-files-found: warn
+          retention-days: 14
       - name: Verify controller source-derived protected consumer impact
         run: node --import tsx scripts/test-controller-solidity-impact.ts
       - name: Reproduce protected consumer escalation in independent local EVM

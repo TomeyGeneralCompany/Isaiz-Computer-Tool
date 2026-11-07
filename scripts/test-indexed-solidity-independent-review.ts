@@ -52,6 +52,14 @@ try{
  }
  console.log('Solidity 2000-file full hunt, five protected-consumer cases independently replayed and reviewed PASSED');
 }finally{
+ // Preserve the actual investigation records outside the disposable fixture workspace.
+ // CI uploads these after a failed assertion, so controller loops are diagnosable.
+ try {
+  const sourceLogs=join(root,'work','data','logs');
+  const destinationLogs=join(process.cwd(),'data','logs');
+  await mkdir(destinationLogs,{recursive:true});
+  await cp(sourceLogs,destinationLogs,{recursive:true,force:true});
+ }catch(error){console.error('Unable to preserve controller audit logs:',error);}
  for(const [name,value] of Object.entries({
   PROJECT_ROOT:old.project,GITHUB_TOKEN:old.token,
   LOCAL_CONTROLLER_FULL_SOURCE_INDEX:old.index,LOCAL_CONTROLLER_OWNED_ACTIONS:old.owned
