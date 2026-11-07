@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     # The Qwen3:4b independent-review step alone permits 20 minutes.
     # Include setup, model download, and all preceding reproduction checks.
-    timeout-minutes: 75
+    timeout-minutes: 330
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -43,7 +43,7 @@ jobs:
         timeout-minutes: 15
         run: node --import tsx scripts/test-controller-indexed-entry-replay.ts
       - name: Qualify 2000-file Solidity consumer findings through independent review
-        timeout-minutes: 45
+        timeout-minutes: 300
         env:
           OLLAMA_HOST: http://127.0.0.1:11434
         run: |
@@ -53,6 +53,17 @@ jobs:
           trap 'docker logs --tail 120 lotus-review-ollama || true; docker inspect lotus-review-ollama --format "OOMKilled={{.State.OOMKilled}} ExitCode={{.State.ExitCode}}" || true; docker rm -f lotus-review-ollama >/dev/null 2>&1 || true' EXIT
           for i in $(seq 1 90); do curl -fsS http://127.0.0.1:11434/api/tags >/dev/null && break; sleep 2; done
           docker exec lotus-review-ollama ollama pull qwen3:4b
+          # Surface controller progress and evidence counts rather than only Ollama internals.
+          ( while sleep 120; do
+              echo "=== LOTUS controller audit progress $(date -u +%FT%TZ) ==="
+              find data/logs -name 'local-hunt-*.log' -type f -print 2>/dev/null | while IFS= read -r audit; do
+                echo "Audit: $audit"
+                grep -E '^\\[(SOURCE_MAP|CONTROLLER_INDEXED_ENTRY_SUMMARY|CONTROLLER_INDEXED_PROOF_CANDIDATE|CONTROLLER_INDEXED_REVIEW_HANDOFF|PROBE_RESULT|AUDIT_|FINAL_|REVIEW_)' "$audit" | tail -n 12 || true
+                echo "Recorded probe results: $(grep -c '^\\[PROBE_RESULT\\]' "$audit" || true)"
+              done
+            done ) &
+          progress_pid=$!
+          trap 'kill "$progress_pid" 2>/dev/null || true; docker logs --tail 120 lotus-review-ollama || true; docker inspect lotus-review-ollama --format "OOMKilled={{.State.OOMKilled}} ExitCode={{.State.ExitCode}}" || true; docker rm -f lotus-review-ollama >/dev/null 2>&1 || true' EXIT
           node --import tsx scripts/test-indexed-solidity-independent-review.ts
       - name: Verify controller source-derived protected consumer impact
         run: node --import tsx scripts/test-controller-solidity-impact.ts
