@@ -685,6 +685,23 @@ export async function runLocalAudit(
           }catch{}
         }
       }
+      if(fullIndexMode && structured && workflow &&
+         process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false' &&
+         !controllerAction && !workflow.snapshot().observations.length &&
+         !workflow.snapshot().verifiedEvidenceFocus) {
+        // The model is not an alternate source/probe scheduler. An exhausted
+        // deterministic candidate queue is a controller diagnostic, not an
+        // invitation for repeated speculative model finalization.
+        const snapshot=workflow.snapshot();
+        const eligible=(limits.initialSourcePaths||[]).filter(path=>
+          path.startsWith('source-') && /\\.(?:sol|java|py|js|mjs|cjs)$/.test(path));
+        const unread=eligible.filter(path=>!snapshot.readPaths.includes(path));
+        await appendFile(logFile,'[CONTROLLER_CANDIDATE_QUEUE_EXHAUSTED] '+
+          JSON.stringify({turn:turn+1,stage:snapshot.stage,
+            eligible:eligible.length,read:snapshot.readPaths.length,
+            unread:unread.slice(0,12),observations:0})+'\\n');
+        throw new Error('CONTROLLER_CANDIDATE_QUEUE_EXHAUSTED: no controller-selected source or supported probe; inspect candidate selection diagnostics, not model finalization');
+      }
       if(controllerAction && fullIndexMode) {
         const snapshot=workflow.snapshot();
         const progressKey=JSON.stringify([snapshot.sourceProgress,
