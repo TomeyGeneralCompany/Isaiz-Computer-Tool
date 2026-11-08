@@ -42,6 +42,7 @@ try {
   const text=await readFile(log,'utf8');
   assert.equal((text.match(/\[CONTROLLER_READ_REDIRECT\]/g)||[]).length,0,
     'Full-index mode must never redirect a completed read to unrelated sources');
+  assert.match(text,/\[INDEXED_EVIDENCE_HANDOFF\]/,'Exhausted source must offer a bounded evidence/probe handoff');
   assert.ok(generations<6,'Repeated completed-page navigation must stop before dozens of turns');
   assert.ok(delivered.length<=2,'Only the actual source and optional context recovery may be read');
   console.log('Indexed controller blocks previously completed source replay without synthetic loop PASSED');

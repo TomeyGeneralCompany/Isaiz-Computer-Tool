@@ -136,6 +136,7 @@ export async function runLocalAudit(
   // Repeated completed-page requests must change the next model action,
   // not merely receive another warning that Qwen can ignore.
   let blockCompletedReadsUntil=0;
+  let indexedExhaustedReadAttempts=0;
 
   let rejectedPlans=0;
   let consecutiveWorkflowRejections=0;
@@ -1633,9 +1634,20 @@ export async function runLocalAudit(
                 await appendFile(logFile,'[INDEXED_CONTROLLER_CURSOR_RESUME] '+
                   JSON.stringify({path:next,offset,turn:turn+1})+'\\n');
               } else {
-                workflow?.feedback('Source already inspected. Advance to the recorded probe, caller chain or supported final; no source replay is authorized.');
-                throw new Error('AUDIT_STALLED: indexed source '+path+
-                  ' was already inspected and no controller-approved unread source remains.');
+                // An exhausted source index is not itself a failed audit: the
+                // controller must give the model an opportunity to use its
+                // recorded evidence for a probe or a supported final. Keep a
+                // bounded failure for models that refuse to change actions.
+                indexedExhaustedReadAttempts++;
+                blockCompletedReadsUntil=Math.max(blockCompletedReadsUntil,turn+4);
+                workflow?.read(path);
+                workflow?.feedback('The full authorized source index is complete. No additional source read is permitted. Select a recorded evidence-backed probe, caller-chain verification, or supported final now.');
+                await appendFile(logFile,'[INDEXED_EVIDENCE_HANDOFF] '+
+                  JSON.stringify({path,attempt:indexedExhaustedReadAttempts,turn:turn+1})+'\\n');
+                if(indexedExhaustedReadAttempts>=3)
+                  throw new Error('AUDIT_STALLED: indexed source '+path+
+                    ' was already inspected and no controller-approved unread source remains.');
+                throw new Error('Indexed source complete: use the recorded evidence for a probe, verification or supported final; no additional source read is authorized.');
               }
             }
           }
