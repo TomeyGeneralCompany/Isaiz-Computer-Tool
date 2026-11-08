@@ -112,7 +112,7 @@ try {
           hypothesis:'Unescaped markup may survive into HTML; escaping input disproves it.'});
         const probe=(f:typeof fixtures[number])=>action('verify_source',f.path,f.fn,'html_reflection');
         const correctFinal=action('final','','',JSON.stringify({files:fixtures.map(f=>({path:f.path,rawMarkup:f.raw}))}));
-        chosen=[plan(fixtures[0]),probe(fixtures[0]),action('final'),correctFinal,action('final'),
+        chosen=[action('read_file',fixtures[0].path),plan(fixtures[0]),probe(fixtures[0]),action('final'),correctFinal,action('final'),
           {...action('continue_inspection',fixtures[1].path),
             hypothesis:'Read the second source function and run a separate reproduction before concluding.'},
           action('read_file',fixtures[1].path),plan(fixtures[1]),probe(fixtures[1]),correctFinal][i];
@@ -167,7 +167,7 @@ try {
     });
   const result=JSON.parse(answer);
   if(!live&&duplicateProbePlan)assert.equal(calls,8);
-  if(!live&&emptyFinalRecovery){assert.equal(calls,10);assert.match(await readFile(join(evidence,'audit.log'),'utf8'),/EMPTY_FINAL_RETRY/);}
+  if(!live&&emptyFinalRecovery){assert.equal(calls,11);assert.match(await readFile(join(evidence,'audit.log'),'utf8'),/EMPTY_FINAL_RETRY/);}
   if(!live&&prematureFinal){assert.equal(calls,8);assert.match(await readFile(join(evidence,'audit.log'),'utf8'),/FINAL_REJECTED/);}
   for(const f of fixtures)assert.equal(result.files.find((r:any)=>r.path===f.path).rawMarkup,f.raw);
   const summary=JSON.parse(await readFile(join(evidence,'audit.log.summary.json'),'utf8'));
