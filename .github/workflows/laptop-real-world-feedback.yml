@@ -70,16 +70,34 @@ jobs:
           npm ci
           mkdir -p data/repair-feedback
           # Preserve the actual setup failure instead of reporting a fabricated test exit code.
-          source_env=""
-          for candidate in "$HOME/isaiz-bugbounty/autohack-complete/.env" "$HOME/isaiz-bugbounty/autohack/.env"; do
-            if [[ -f "$candidate" ]]; then source_env="$candidate"; break; fi
+          # The runner is a systemd service: do not assume the interactive shell's
+          # checkout name, environment path, or PATH. Find the installed LOTUS state.
+          source_root=""
+          for candidate in "$HOME/isaiz-bugbounty/autohack-complete" "$HOME/isaiz-bugbounty/autohack" "$HOME/isaiz-bugbounty" "$HOME/lotus"; do
+            if [[ -f "$candidate/.env" ]]; then source_root="$candidate"; break; fi
           done
-          if [[ -n "$source_env" ]]; then
-            cp "$source_env" .env
-            echo "Using existing local environment file at $source_env" | tee -a data/repair-feedback/setup.log
-          else
-            echo "SETUP_FAILED: no LOTUS .env found in autohack-complete or autohack installation" | tee -a data/repair-feedback/setup.log
+          if [[ -z "$source_root" ]]; then
+            while IFS= read -r candidate; do
+              if [[ -f "$candidate" ]]; then source_root="${candidate%/.env}"; break; fi
+            done < <(find "$HOME" -maxdepth 5 -type f -name .env -not -path '*/node_modules/*' -not -path '*/lotus-github-runner/_work/*' 2>/dev/null | sort)
+          fi
+          if [[ -z "$source_root" ]]; then
+            echo "SETUP_FAILED: no installed LOTUS .env discovered under $HOME" | tee -a data/repair-feedback/setup.log
             exit 1
+          fi
+          cp "$source_root/.env" .env
+          echo "Using local LOTUS configuration from $source_root" | tee -a data/repair-feedback/setup.log
+          # Retain the installed database and program eligibility; a clean GitHub
+          # checkout has no previously assessed bounty program to investigate.
+          if [[ -d "$source_root/data" ]]; then
+            cp -a "$source_root/data/." data/
+            rm -f data/supervisor.lock data/orchestrator.lock
+            echo "Restored installed LOTUS state" | tee -a data/repair-feedback/setup.log
+          fi
+          if ! command -v ollama >/dev/null 2>&1; then
+            for bin in /usr/local/bin/ollama /usr/bin/ollama "$HOME/.local/bin/ollama"; do
+              if [[ -x "$bin" ]]; then export PATH="${bin%/*}:$PATH"; break; fi
+            done
           fi
           if ! command -v ollama >/dev/null 2>&1; then
             echo "SETUP_FAILED: ollama executable not available to runner service" | tee -a data/repair-feedback/setup.log
@@ -89,7 +107,7 @@ jobs:
             echo "SETUP_FAILED: Ollama qwen3:4b unavailable to runner service" | tee -a data/repair-feedback/setup.log
             exit 1
           fi
-          echo "SETUP_OK: dependencies and Ollama model available" | tee -a data/repair-feedback/setup.log
+          echo "SETUP_OK: dependencies, installed state and Ollama model available" | tee -a data/repair-feedback/setup.log
       - name: Run authorized real-world investigation
         id: hunt
         shell: bash
