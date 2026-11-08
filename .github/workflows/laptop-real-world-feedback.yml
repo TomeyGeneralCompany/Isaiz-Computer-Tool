@@ -114,8 +114,12 @@ jobs:
         run: |
           set -uo pipefail
           mkdir -p data/one-bounty data/repair-feedback
+          # GitHub's bash runner enables errexit before this script. Capture
+          # an actual failed hunt instead of incorrectly labeling it SETUP_FAILED.
+          set +e
           bash scripts/run-one-bounty.sh --program immunefi-88mphv3 --timeout-min 60 > data/repair-feedback/terminal.log 2>&1
           status=$?
+          set -e
           echo "$status" > data/repair-feedback/exit-code.txt
           echo "exit_code=$status" >> "$GITHUB_OUTPUT"
           exit 0

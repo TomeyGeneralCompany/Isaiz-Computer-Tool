@@ -1592,13 +1592,20 @@ export async function runLocalAudit(
               // readPaths can include a file after its first page, while its
               // controller-owned pagination still has unread pages. Prefer
               // a source not yet completed over reissuing a terminal page.
-              const ranked=(limits.initialSourcePaths||[]).filter(candidate=>
+              // Production hunts must not fall back to large test fixtures
+              // after exhausting a contract: the 88mph laptop run repeatedly
+              // paged test/base.js while the model requested SafeERC20.sol.
+              // Prefer production source with a recorded unread cursor.
+              const candidates=(limits.initialSourcePaths||[]).filter(candidate=>
                 /^source-[0-9]+\//.test(candidate) &&
                 /\.(?:sol|java|py|js|mjs|cjs)$/.test(candidate) &&
                 candidate!==path && !terminalReadPages.has(candidate));
+              const production=candidates.filter(candidate=>
+                !/(?:^|\/)(?:test|tests|__tests__|fixtures|mocks)(?:\/|$)/i.test(candidate));
+              const ranked=production.length ? production : candidates;
               const required=process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false'
                 ? workflow?.requireNextUnreadSource(limits.initialSourcePaths||[]) : null;
-              const next=required && required!==path && !terminalReadPages.has(required)
+              const next=required && required!==path && ranked.includes(required)
                 ? required : process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false' ? ranked[0] || null : null;
               await appendFile(logFile,'[INDEXED_SOURCE_RECOVERY_DECISION] '+
                 JSON.stringify({from:path,required,rankedRemaining:ranked.length,
