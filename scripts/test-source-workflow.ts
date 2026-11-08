@@ -619,7 +619,15 @@ try {
     }
     assert.equal(result.findings.length,1);
     assert.ok(result.coverageDetail && !result.coverageDetail.includes("1 failed probes") && !result.coverageDetail.includes("1 unsupported probes"),"invented probe should be stopped at declaration preflight");
-    const record=await readSourceCase(caseId,program);
+    // Controller-owned probes can finish before the scripted model sees the
+    // verifier observation. Read the persisted finding's tamper-evident case
+    // reference rather than relying on a model-visible transcript side effect.
+    const persistedCaseId=result.findings[0]?.reproductionCaseId;
+    assert.match(persistedCaseId||"",/^[a-f0-9]{64}$/,
+      "Successful controller-owned finding must retain its reproduction case ID");
+    if(caseId)assert.equal(caseId,persistedCaseId,
+      "Model-visible and persisted reproduction evidence must agree");
+    const record=await readSourceCase(persistedCaseId,program);
     assert.equal((await replaySourceCase(record,fixture)).behavior_observed,true);
 
   }
