@@ -171,6 +171,7 @@ jobs:
       - name: Install production dependencies and Ollama
         run: |
           npm ci
+          npm install --prefix scripts/reproduction-runtime --ignore-scripts --no-audit --no-fund
           curl -fsSL https://ollama.com/install.sh | sh
           ollama serve > "$RUNNER_TEMP/ollama-server.log" 2>&1 &
           echo $! > "$RUNNER_TEMP/ollama-server.pid"
