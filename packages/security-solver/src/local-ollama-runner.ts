@@ -1556,7 +1556,20 @@ export async function runLocalAudit(
                 JSON.stringify({path,turn:turn+1})+'\\n');
               // Advance only to a controller-selected, previously unread source.
               // Never invent a read or erase the completed page's evidence.
-              const next=process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false' ? workflow?.requireNextUnreadSource(limits.initialSourcePaths||[]) : null;
+              // readPaths can include a file after its first page, while its
+              // controller-owned pagination still has unread pages. Prefer
+              // a source not yet completed over reissuing a terminal page.
+              const ranked=(limits.initialSourcePaths||[]).filter(candidate=>
+                /^source-[0-9]+\//.test(candidate) &&
+                /\.(?:sol|java|py|js|mjs|cjs)$/.test(candidate) &&
+                candidate!==path && !terminalReadPages.has(candidate));
+              const required=process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false'
+                ? workflow?.requireNextUnreadSource(limits.initialSourcePaths||[]) : null;
+              const next=required && required!==path && !terminalReadPages.has(required)
+                ? required : process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false' ? ranked[0] || null : null;
+              await appendFile(logFile,'[INDEXED_SOURCE_RECOVERY_DECISION] '+
+                JSON.stringify({from:path,required,rankedRemaining:ranked.length,
+                  next,completedFiles:terminalReadPages.size,turn:turn+1})+'\\n');
               if(next && next!==path) {
                 const nextFull=await safePath(next);
                 await appendFile(logFile,'[INDEXED_CONTROLLER_SOURCE_HANDOFF] '+
