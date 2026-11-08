@@ -1574,11 +1574,24 @@ export async function runLocalAudit(
                 const nextFull=await safePath(next);
                 await appendFile(logFile,'[INDEXED_CONTROLLER_SOURCE_HANDOFF] '+
                   JSON.stringify({from:path,to:next,turn:turn+1})+'\\n');
+                // Resume the controller-owned page cursor. Selecting a file
+                // with an already-recorded first page at offset zero traps the
+                // small model in a NO_PROGRESS loop until all turns expire.
                 path=next;full=nextFull;offset=0;
-                call.function.arguments.path=next;
-                call.function.arguments.offset=0;
-                actionKey=keyAt(0);
+                actionKey=keyAt(offset);
                 previous=recentActions.get(actionKey);
+                const visitedOffsets=new Set<number>();
+                while(previous?.nextOffset!=null && previous.nextOffset>offset &&
+                      !visitedOffsets.has(offset)) {
+                  visitedOffsets.add(offset);
+                  offset=previous.nextOffset;
+                  actionKey=keyAt(offset);
+                  previous=recentActions.get(actionKey);
+                }
+                call.function.arguments.path=next;
+                call.function.arguments.offset=offset;
+                await appendFile(logFile,'[INDEXED_CONTROLLER_CURSOR_RESUME] '+
+                  JSON.stringify({path:next,offset,turn:turn+1})+'\\n');
               } else {
                 workflow?.feedback('Source already inspected. Advance to the recorded probe, caller chain or supported final; no source replay is authorized.');
                 throw new Error('AUDIT_STALLED: indexed source '+path+
