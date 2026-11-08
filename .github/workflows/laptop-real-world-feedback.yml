@@ -68,9 +68,46 @@ jobs:
         run: |
           set -Eeuo pipefail
           npm ci
-          test -f "$HOME/isaiz-bugbounty/autohack-complete/.env"
-          cp "$HOME/isaiz-bugbounty/autohack-complete/.env" .env
-          ollama show qwen3:4b >/dev/null
+          mkdir -p data/repair-feedback
+          # Preserve the actual setup failure instead of reporting a fabricated test exit code.
+          # The runner is a systemd service: do not assume the interactive shell's
+          # checkout name, environment path, or PATH. Find the installed LOTUS state.
+          source_root=""
+          for candidate in "$HOME/isaiz-bugbounty/autohack-complete" "$HOME/isaiz-bugbounty/autohack" "$HOME/isaiz-bugbounty" "$HOME/lotus"; do
+            if [[ -f "$candidate/.env" ]]; then source_root="$candidate"; break; fi
+          done
+          if [[ -z "$source_root" ]]; then
+            while IFS= read -r candidate; do
+              if [[ -f "$candidate" ]]; then source_root="${candidate%/.env}"; break; fi
+            done < <(find "$HOME" -maxdepth 5 -type f -name .env -not -path '*/node_modules/*' -not -path '*/lotus-github-runner/_work/*' 2>/dev/null | sort)
+          fi
+          if [[ -z "$source_root" ]]; then
+            echo "SETUP_FAILED: no installed LOTUS .env discovered under $HOME" | tee -a data/repair-feedback/setup.log
+            exit 1
+          fi
+          cp "$source_root/.env" .env
+          echo "Using local LOTUS configuration from $source_root" | tee -a data/repair-feedback/setup.log
+          # Retain the installed database and program eligibility; a clean GitHub
+          # checkout has no previously assessed bounty program to investigate.
+          if [[ -d "$source_root/data" ]]; then
+            cp -a "$source_root/data/." data/
+            rm -f data/supervisor.lock data/orchestrator.lock
+            echo "Restored installed LOTUS state" | tee -a data/repair-feedback/setup.log
+          fi
+          if ! command -v ollama >/dev/null 2>&1; then
+            for bin in /usr/local/bin/ollama /usr/bin/ollama "$HOME/.local/bin/ollama"; do
+              if [[ -x "$bin" ]]; then export PATH="${bin%/*}:$PATH"; break; fi
+            done
+          fi
+          if ! command -v ollama >/dev/null 2>&1; then
+            echo "SETUP_FAILED: ollama executable not available to runner service" | tee -a data/repair-feedback/setup.log
+            exit 1
+          fi
+          if ! ollama show qwen3:4b >/dev/null 2>&1; then
+            echo "SETUP_FAILED: Ollama qwen3:4b unavailable to runner service" | tee -a data/repair-feedback/setup.log
+            exit 1
+          fi
+          echo "SETUP_OK: dependencies, installed state and Ollama model available" | tee -a data/repair-feedback/setup.log
       - name: Run authorized real-world investigation
         id: hunt
         shell: bash
@@ -94,7 +131,10 @@ jobs:
           # Artifacts include all controller activity/evidence streams; .env and
           # checked-out source credentials are deliberately excluded.
           tar -czf data/repair-feedback/diagnostics.tar.gz data/one-bounty data/logs 2>/dev/null || true
-          test -f data/repair-feedback/exit-code.txt || echo 99 > data/repair-feedback/exit-code.txt
+          if [[ ! -f data/repair-feedback/exit-code.txt ]]; then
+            echo "SETUP_FAILED" > data/repair-feedback/exit-code.txt
+            echo "Investigation did not start; see setup.log and workflow step logs." >> data/repair-feedback/setup.log
+          fi
       - name: Upload diagnostic artifact on every outcome
         if: always()
         uses: actions/upload-artifact@v4
@@ -120,6 +160,6 @@ jobs:
             exit 0
           fi
           title="LOTUS real-world failure: $SHA"
-          body="Real-world test failed with exit code $code.\n\nCommit: $SHA\nFull diagnostic artifact: https://github.com/$REPO/actions/runs/$RUN\n\nRead the uploaded controller log, summary JSON, and terminal transcript. Fix the cause on a PR, require the four green workflows, merge, and let the next push re-run the laptop test. No automatic submission."
+          body="Real-world workflow failed with result $code. SETUP_FAILED means the investigation never started.\n\nCommit: $SHA\nFull diagnostic artifact: https://github.com/$REPO/actions/runs/$RUN\n\nRead the uploaded controller log, summary JSON, and terminal transcript. Fix the cause on a PR, require the four green workflows, merge, and let the next push re-run the laptop test. No automatic submission."
           gh issue create --repo "$REPO" --title "$title" --body "$(printf '%b' "$body")"
           exit 1
