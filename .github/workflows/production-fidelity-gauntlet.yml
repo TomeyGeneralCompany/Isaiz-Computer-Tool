@@ -247,6 +247,9 @@ jobs:
         run: |
           set -Eeuo pipefail
           echo "Real Qwen language: $LOTUS_REAL_QWEN_LANGUAGE"
+          # The shell also archives the live log when timeout kills Node before
+          # its JavaScript finally block can run.
+          trap 'mkdir -p "data/real-qwen-tests/$LOTUS_REAL_QWEN_LANGUAGE/logs"; for logs in /tmp/tomey-workflow-*/data/logs; do if [ -d "$logs" ]; then cp -a "$logs"/. "data/real-qwen-tests/$LOTUS_REAL_QWEN_LANGUAGE/logs/" || true; fi; done' EXIT
           # Terminate a stalled fixture before GitHub kills the job, leaving
           # time for its controller logs and evidence to be uploaded.
           if timeout --signal=TERM --kill-after=20s 35m node --import tsx scripts/test-source-workflow.ts --real-model-polyglot; then
