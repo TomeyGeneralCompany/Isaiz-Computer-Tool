@@ -179,6 +179,13 @@ assert.ok(recoveryRegexSource.includes("[SOLIDITY_DECLARATIONS_GUIDED]"),"log su
 assert.ok(recoveryRegexSource.includes("Choose only a supported, declared probe target"),"retain probe eligibility gate");
 
 // Solidity source-reading must lead to declaration discovery before repeated premature finals.
+// Regression: production prefetch must hand paginated files to the controller's
+// guided probe discovery, not silently skip them after the first page.
+const guidedRunnerText=await readFile(new URL("../packages/security-solver/src/local-ollama-runner.ts",import.meta.url),"utf8");
+assert.ok(guidedRunnerText.includes("await readFile(full,'utf8')"),
+  "guided probe discovery must inspect complete authorized source independently of model pagination");
+assert.ok(!guidedRunnerText.includes("delivered.nextOffset!==null || offset!==0 || !limits.verifyPython"),
+  "paginated source must not block controller-owned guided probe planning");
 const workflowGuideText=await readFile(new URL("../packages/security-solver/src/investigation-workflow.ts",import.meta.url),"utf8");
 assert.ok(workflowGuideText.includes("return {action:['outline_solidity'],path:[this.latestSolidityPath]}"),"paginate-to-outline guidance must be present");
 assert.ok(workflowGuideText.includes("this.attemptedOutlines.add(this.latestSolidityPath)"),"parse failures must not trap outline retries");
