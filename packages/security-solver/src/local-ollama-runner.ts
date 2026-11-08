@@ -1566,7 +1566,7 @@ export async function runLocalAudit(
               const required=process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false'
                 ? workflow?.requireNextUnreadSource(limits.initialSourcePaths||[]) : null;
               const next=required && required!==path && !terminalReadPages.has(required)
-                ? required : ranked[0] || null;
+                ? required : process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false' ? ranked[0] || null : null;
               await appendFile(logFile,'[INDEXED_SOURCE_RECOVERY_DECISION] '+
                 JSON.stringify({from:path,required,rankedRemaining:ranked.length,
                   next,completedFiles:terminalReadPages.size,turn:turn+1})+'\\n');
