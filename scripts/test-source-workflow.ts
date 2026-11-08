@@ -194,7 +194,8 @@ if(!process.argv.includes("--real-model-polyglot"))process.env.LOCAL_CONTROLLER_
 // This scripted fixture expects to drive the first read itself; the separate
 // seeded-source fixture exercises production's automatic first read.
 process.env.AUTOHACK_AUTO_SOURCE_PREFETCH="false";
-process.env.LOCAL_HUNT_NUM_PREDICT="4096";
+// Real-model CI must bound per-response generation; full production is unchanged.
+process.env.LOCAL_HUNT_NUM_PREDICT=process.argv.includes("--real-model-polyglot") ? "1024" : "4096";
 const workflowText=await readFile(join(process.cwd(),"packages/security-solver/src/investigation-workflow.ts"),"utf8");
 assert.ok(workflowText.includes("Invalid Solidity probe target"),"placeholder Solidity method targets must be rejected before verification");
 
@@ -320,6 +321,14 @@ assert.ok(controllerText.includes("[EMPTY_FINAL_RECOVER]"),"repeated empty final
 assert.ok(controllerText.includes("requireInvestigationAfterEmpty"),"recovery must require a tool action rather than another empty final");
 assert.ok(!controllerText.includes("recentActions.clear();stalledActions=0"),"final rejection must preserve read history");
 const livePolyglot=process.argv.includes("--real-model-polyglot");
+const realQwenLanguage=process.env.LOTUS_REAL_QWEN_LANGUAGE?.trim().toLowerCase();
+if(realQwenLanguage && (!livePolyglot || !["javascript","java","solidity"].includes(realQwenLanguage)))
+  throw new Error("LOTUS_REAL_QWEN_LANGUAGE requires --real-model-polyglot and javascript, java, or solidity");
+if(livePolyglot) {
+  // Only the real-model CI fixture receives the bounded source-investigation turn budget.
+  process.env.LOCAL_HUNT_MAX_TURNS="48";
+  process.env.LOCAL_HUNT_DYNAMIC_ALLOWANCE="false";
+}
 if(livePolyglot && !process.env.AUTOHACK_OLLAMA_URL)throw new Error("Real polyglot run requires AUTOHACK_OLLAMA_URL");
 const server=createServer();
 try {
@@ -572,13 +581,16 @@ try {
     "Independent execution must reproduce every stateful observation exactly");
   assert.equal(baselineSession.completedProbes,1);
 
-  for(const language of (livePolyglot?["javascript","java","solidity"]:["javascript","java","solidity","stateful_solidity"])) {
+  for(const language of (realQwenLanguage?[realQwenLanguage]:livePolyglot?["javascript","java","solidity"]:["javascript","java","solidity","stateful_solidity"])) {
+    const languageStart=Date.now();
+    console.log("[REAL_QWEN_LANGUAGE_START] "+JSON.stringify({language,model:process.env.LOCAL_OLLAMA_MODEL,turnBudget:process.env.LOCAL_HUNT_MAX_TURNS,predictionLimit:process.env.LOCAL_HUNT_NUM_PREDICT,startedAt:new Date().toISOString()}));
     turn=0;policyOffset=0;policyDone=false;caseId="";evidenceRepairReads=[];stateful=language==="stateful_solidity";
     source=language==="javascript"?"render.cjs":language==="java"?"Render.java":"Render.sol";
     caller=language==="javascript"?"caller.js":language==="java"?"Caller.java":"Caller.sol";
     selector=language==="javascript"?"render":"Render.render";
     if(stateful) {source="Store.sol";caller="StoreCaller.sol";selector="Store.set";}
     const result=await runLocalProgramHunt(program);
+    console.log("[REAL_QWEN_LANGUAGE_FINISH] "+JSON.stringify({language,success:result.success,elapsedSeconds:Math.round((Date.now()-languageStart)/1000),auditRecord:result.auditRecord||null}));
     if(!result.success && result.auditRecord)console.error(await readFile(join(root,"data/logs",result.auditRecord),"utf8"));
     assert.equal(result.success,true,JSON.stringify(result));
     if(stateful) {
