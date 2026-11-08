@@ -91,7 +91,11 @@ jobs:
           # checkout has no previously assessed bounty program to investigate.
           if [[ -d "$source_root/data" ]]; then
             cp -a "$source_root/data/." data/
-            rm -f data/supervisor.lock data/orchestrator.lock
+            # The copied checkout is a separate process namespace. Never inherit
+            # the installed instance's PID/token-based hunt lock: its owner may
+            # still be alive, causing the fresh investigation to fail instantly.
+            # Do not remove the lock in the installed source directory.
+            rm -f data/supervisor.lock data/orchestrator.lock data/security-hunt.lock
             echo "Restored installed LOTUS state" | tee -a data/repair-feedback/setup.log
           fi
           if ! command -v ollama >/dev/null 2>&1; then
