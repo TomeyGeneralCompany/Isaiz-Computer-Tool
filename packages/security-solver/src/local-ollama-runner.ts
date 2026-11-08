@@ -294,7 +294,38 @@ export async function runLocalAudit(
     // Source locations have already been selected from an authorized workspace.
     // Feed real source pages to the model, then run only narrowly recognizable
     // local probes in the same isolated verifier. Never manufacture evidence.
-    const seededPaths=limits.initialSourcePaths?.slice(0,3) || [];
+    // Audit policy is an authorized controller-owned document, not a model
+    // exploration target. Register every actual page as read and archive its
+    // content before the model can report findings; otherwise a paginated
+    // policy can consume the entire turn budget after a verified probe.
+    if(structured && limits.initialSourcePaths?.includes('audit-policy.txt') &&
+        process.env.AUTOHACK_AUTO_SOURCE_PREFETCH !== 'false') {
+      try {
+        const policyPath=await safePath('audit-policy.txt');
+        let policyOffset=0;
+        for(let policyPage=0;policyPage<10000;policyPage++) {
+          controller.signal.throwIfAborted();
+          const page=await readSourcePage(policyPath,policyOffset,pageSize);
+          if(page.end<=policyOffset && page.nextOffset!==null)
+            throw new Error('Audit policy paging made no forward progress');
+          limits.onRead?.('audit-policy.txt',{start:page.start,end:page.end});
+          allowance.read('audit-policy.txt',page.start,page.end,0);
+          navigation.observe('read_file','audit-policy.txt',policyOffset,'',page);
+          const id=await controllerArchive?.append('source',{
+            path:'audit-policy.txt',start:page.start,end:page.end,
+            content:page.text,nextOffset:page.nextOffset},{source:'audit-policy.txt'});
+          if(id)workflow?.recordEvidence(id);
+          if(page.nextOffset===null)break;
+          policyOffset=page.nextOffset;
+          if(policyPage===9999)throw new Error('Audit policy exceeds controller paging safety bound');
+        }
+        await appendFile(logFile,'[CONTROLLER_POLICY_PAGES_COMPLETE]\\n');
+      } catch(error) {
+        await appendFile(logFile,'[CONTROLLER_POLICY_PREFETCH_FAILED] '+String(error)+'\\n');
+        throw error;
+      }
+    }
+    const seededPaths=limits.initialSourcePaths?.filter(p=>p!=='audit-policy.txt').slice(0,3) || [];
     if(structured && (workflow || limits.prefetchReadOnly) && process.env.AUTOHACK_AUTO_SOURCE_PREFETCH !== 'false') {
       for(const seededPath of seededPaths) {
         const seeded=limits.initialSourceLocations?.find(item=>item.path===seededPath);
@@ -327,9 +358,19 @@ export async function runLocalAudit(
           await recordToolActivity(logFile,{phase:'completed',tool:'read_file',
             path,offset:delivered.start,end:delivered.end,nextOffset:delivered.nextOffset,
             origin:'controller_prefetch'});
-          if(!workflow || process.env.AUTOHACK_GUIDED_SOURCE_PROBES==='false' || delivered.nextOffset!==null || offset!==0 || !limits.verifyPython)continue;
-          const hint=await guidedProbeAcrossSourceChain(root,path,delivered.text);
-          if(!hint)continue;
+          if(!workflow || process.env.AUTOHACK_GUIDED_SOURCE_PROBES==='false' || !limits.verifyPython)continue;
+          // Guided probe discovery is controller-owned. The model sees paginated
+          // source pages, but the controller may inspect the complete authorized
+          // file without consuming model context. Requiring nextOffset===null
+          // here silently disabled guided probes for real-world Solidity files.
+          const guidedSource=delivered.nextOffset===null && offset===0
+            ? delivered.text : await readFile(full,'utf8');
+          const hint=await guidedProbeAcrossSourceChain(root,path,guidedSource);
+          if(!hint) {
+            await appendFile(logFile,'[GUIDED_PROBE_NO_CANDIDATE] '+JSON.stringify({
+              path,paginated:delivered.nextOffset!==null,sourceCharacters:guidedSource.length})+'\\n');
+            continue;
+          }
           const planned={action:'plan_probe',path,query:hint.functionName,answer:hint.kind,hypothesis:hint.hypothesis};
           if(workflow.validate(planned as any))continue;
           workflow.plan(planned as any);

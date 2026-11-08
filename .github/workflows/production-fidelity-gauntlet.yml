@@ -28,6 +28,12 @@ jobs:
           mkdir -p "$RUNNER_TEMP/lotus-fidelity-harness"
           cp .fidelity-harness/scripts/test-production-fidelity-gauntlet.ts "$RUNNER_TEMP/lotus-fidelity-harness/"
           cp .fidelity-harness/scripts/test-production-workflow.ts "$RUNNER_TEMP/lotus-fidelity-harness/"
+      - name: Preserve harness outside target worktree
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.target_ref != '' }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/lotus-fidelity-harness"
+          cp .fidelity-harness/scripts/test-production-fidelity-gauntlet.ts "$RUNNER_TEMP/lotus-fidelity-harness/"
+          cp .fidelity-harness/scripts/test-production-workflow.ts "$RUNNER_TEMP/lotus-fidelity-harness/"
       - name: Checkout LOTUS implementation under test
         uses: actions/checkout@v4
         with:
@@ -144,5 +150,122 @@ jobs:
           path: |
             data/production-workflow-tests/**
             data/logs/local-hunt-*.log*
+          if-no-files-found: warn
+          retention-days: 14
+
+  real-qwen-production:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout LOTUS revision under test
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.target_ref || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install production dependencies and Ollama
+        run: |
+          npm ci
+          npm install --prefix scripts/reproduction-runtime --ignore-scripts --no-audit --no-fund
+          curl -fsSL https://ollama.com/install.sh | sh
+          ollama serve > "$RUNNER_TEMP/ollama-server.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/ollama-server.pid"
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:11434/api/tags >/dev/null; then break; fi
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:11434/api/tags >/dev/null
+          ollama pull qwen3:4b
+      - name: Actual production controller with Qwen and isolated Python reproduction
+        env:
+          AUTOHACK_OLLAMA_URL: http://127.0.0.1:11434/api/chat
+          LOCAL_OLLAMA_MODEL: qwen3:4b
+          LOCAL_CONTROLLER_OWNED_ACTIONS: 'true'
+        run: node --import tsx scripts/test-production-workflow.ts --real-model --host-timeout --prefetch
+      - name: Preserve production evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-qwen-production-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            data/production-workflow-tests/**
+            data/logs/**
+          if-no-files-found: warn
+          retention-days: 14
+
+  real-qwen-polyglot:
+    # Each real-Qwen source investigation owns its own Ollama process, model
+    # budget, watchdog and evidence. No language can starve the others for 90m.
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [javascript, java, solidity]
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - name: Checkout LOTUS revision under test
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.target_ref || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install real isolated execution infrastructure and Ollama
+        run: |
+          npm ci
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          npm install --prefix scripts/reproduction-runtime --ignore-scripts --no-audit --no-fund
+          curl -fsSL https://ollama.com/install.sh | sh
+          ollama serve > "$RUNNER_TEMP/ollama-server.log" 2>&1 &
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:11434/api/tags >/dev/null; then break; fi
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:11434/api/tags >/dev/null
+          ollama pull qwen3:4b
+      - name: Real Qwen source investigation and independent reproduction
+        env:
+          AUTOHACK_OLLAMA_URL: http://127.0.0.1:11434/api/chat
+          LOCAL_OLLAMA_MODEL: qwen3:4b
+          LOCAL_CONTROLLER_OWNED_ACTIONS: 'true'
+          LOTUS_REAL_QWEN_LANGUAGE: ${{ matrix.language }}
+        run: |
+          set -Eeuo pipefail
+          echo "Real Qwen language: $LOTUS_REAL_QWEN_LANGUAGE"
+          # The shell also archives the live log when timeout kills Node before
+          # its JavaScript finally block can run.
+          trap 'mkdir -p "data/real-qwen-tests/$LOTUS_REAL_QWEN_LANGUAGE/logs"; for logs in /tmp/tomey-workflow-*/data/logs; do if [ -d "$logs" ]; then cp -a "$logs"/. "data/real-qwen-tests/$LOTUS_REAL_QWEN_LANGUAGE/logs/" || true; fi; done' EXIT
+          # Do not impose a wall-clock deadline on a progressing investigation.
+          # The controller's own progress/inactivity policy governs its run.
+          if node --import tsx scripts/test-source-workflow.ts --real-model-polyglot; then
+            echo "Completed real Qwen $LOTUS_REAL_QWEN_LANGUAGE"
+          else
+            status=$?
+            echo "::error::Real Qwen $LOTUS_REAL_QWEN_LANGUAGE failed (exit $status). Inspect real-qwen-tests/${LOTUS_REAL_QWEN_LANGUAGE}/logs and the last controller heartbeat."
+            exit "$status"
+          fi
+      - name: Preserve real-model source evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-qwen-${{ matrix.language }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            data/real-qwen-tests/**
+            data/production-workflow-tests/**
           if-no-files-found: warn
           retention-days: 14

@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import {createServer} from "node:http";
 import {execFileSync} from "node:child_process";
-import {mkdtemp,writeFile,readFile,mkdir,rm,chmod} from "node:fs/promises";
+import {mkdtemp,writeFile,readFile,mkdir,readdir,cp,rm,chmod} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 
@@ -179,6 +179,13 @@ assert.ok(recoveryRegexSource.includes("[SOLIDITY_DECLARATIONS_GUIDED]"),"log su
 assert.ok(recoveryRegexSource.includes("Choose only a supported, declared probe target"),"retain probe eligibility gate");
 
 // Solidity source-reading must lead to declaration discovery before repeated premature finals.
+// Regression: production prefetch must hand paginated files to the controller's
+// guided probe discovery, not silently skip them after the first page.
+const guidedRunnerText=await readFile(new URL("../packages/security-solver/src/local-ollama-runner.ts",import.meta.url),"utf8");
+assert.ok(guidedRunnerText.includes("await readFile(full,'utf8')"),
+  "guided probe discovery must inspect complete authorized source independently of model pagination");
+assert.ok(!guidedRunnerText.includes("delivered.nextOffset!==null || offset!==0 || !limits.verifyPython"),
+  "paginated source must not block controller-owned guided probe planning");
 const workflowGuideText=await readFile(new URL("../packages/security-solver/src/investigation-workflow.ts",import.meta.url),"utf8");
 assert.ok(workflowGuideText.includes("return {action:['outline_solidity'],path:[this.latestSolidityPath]}"),"paginate-to-outline guidance must be present");
 assert.ok(workflowGuideText.includes("this.attemptedOutlines.add(this.latestSolidityPath)"),"parse failures must not trap outline retries");
@@ -186,15 +193,16 @@ const root=await mkdtemp(join(tmpdir(),"tomey-workflow-"));
 const originalPath=process.env.PATH;
 process.env.PROJECT_ROOT=root;
 process.env.GITHUB_TOKEN="owned-fixture";
-process.env.LOCAL_OLLAMA_MODEL="mock";
+if(!process.argv.includes("--real-model-polyglot"))process.env.LOCAL_OLLAMA_MODEL="mock";
 process.env.LOCAL_OLLAMA_TOOL_PROTOCOL="json";
 // This legacy scripted model fixture measures interactive recovery by turn;
 // direct controller actions have separate deterministic regression coverage.
-process.env.LOCAL_CONTROLLER_OWNED_ACTIONS="false";
+if(!process.argv.includes("--real-model-polyglot"))process.env.LOCAL_CONTROLLER_OWNED_ACTIONS="false";
 // This scripted fixture expects to drive the first read itself; the separate
 // seeded-source fixture exercises production's automatic first read.
-process.env.AUTOHACK_AUTO_SOURCE_PREFETCH="false";
-process.env.LOCAL_HUNT_NUM_PREDICT="4096";
+process.env.AUTOHACK_AUTO_SOURCE_PREFETCH=process.argv.includes("--real-model-polyglot") ? "true" : "false";
+// Real-model CI must bound per-response generation; full production is unchanged.
+process.env.LOCAL_HUNT_NUM_PREDICT=process.argv.includes("--real-model-polyglot") ? "1024" : "4096";
 const workflowText=await readFile(join(process.cwd(),"packages/security-solver/src/investigation-workflow.ts"),"utf8");
 assert.ok(workflowText.includes("Invalid Solidity probe target"),"placeholder Solidity method targets must be rejected before verification");
 
@@ -319,6 +327,28 @@ assert.ok(controllerText.includes("requiredNextSource"),"coverage rejection must
 assert.ok(controllerText.includes("[EMPTY_FINAL_RECOVER]"),"repeated empty finals must reopen source investigation");
 assert.ok(controllerText.includes("requireInvestigationAfterEmpty"),"recovery must require a tool action rather than another empty final");
 assert.ok(!controllerText.includes("recentActions.clear();stalledActions=0"),"final rejection must preserve read history");
+const livePolyglot=process.argv.includes("--real-model-polyglot");
+const realQwenLanguage=process.env.LOTUS_REAL_QWEN_LANGUAGE?.trim().toLowerCase();
+if(realQwenLanguage && (!livePolyglot || !["javascript","java","solidity"].includes(realQwenLanguage)))
+  throw new Error("LOTUS_REAL_QWEN_LANGUAGE requires --real-model-polyglot and javascript, java, or solidity");
+if(livePolyglot) {
+  // Only the real-model CI fixture receives the bounded source-investigation turn budget.
+  process.env.LOCAL_HUNT_MAX_TURNS="48";
+  process.env.LOCAL_HUNT_DYNAMIC_ALLOWANCE="false";
+}
+if(livePolyglot && !process.env.AUTOHACK_OLLAMA_URL)throw new Error("Real polyglot run requires AUTOHACK_OLLAMA_URL");
+// Emit audit-file progress independently of the model response and retain its
+// trace in CI artifacts when a real-model language fails or reaches its deadline.
+const realModelProgressTicker=livePolyglot?setInterval(async()=>{
+  try {
+    const names=(await readdir(join(root,"data","logs"))).filter(name=>name.startsWith("local-hunt-")&&name.endsWith(".log")).sort();
+    const latest=names.at(-1);
+    if(!latest){console.log("[REAL_QWEN_HEARTBEAT] waiting for local hunt log");return;}
+    const log=await readFile(join(root,"data","logs",latest),"utf8");
+    const lines=log.split("\n").filter(line=>/^\[(MODEL_PROGRESS|MODEL_START|MODEL_REQUEST|MODEL_RESPONSE|TOOL|READ_OK|PROBE_RESULT|CONTROLLER_|AUDIT_)/.test(line));
+    console.log("[REAL_QWEN_HEARTBEAT] "+JSON.stringify({log:latest,bytes:log.length,lastEvent:(lines.at(-1)||"no tracked event").slice(0,350)}));
+  } catch(error) {console.log("[REAL_QWEN_HEARTBEAT] log inspection: "+String(error).slice(0,180));}
+},30_000):null;
 const server=createServer();
 try {
   const fixture=join(root,"fixture");await mkdir(fixture);
@@ -383,7 +413,7 @@ try {
     {operation:"send",function:"set(uint256)",args:["7"]},
     {operation:"call",function:"value()",args:[],expect:"8"},
   ]};
-  server.on("request",async(req,res)=>{
+  if(!livePolyglot)server.on("request",async(req,res)=>{
     let raw="";for await(const chunk of req)raw+=chunk;
     const request=JSON.parse(raw);
     // Production progress is appended separately; inspect the last actual tool result.
@@ -524,9 +554,11 @@ try {
     res.setHeader("Content-Type","application/json");
     res.end(JSON.stringify({message:{role:"assistant",content:JSON.stringify(next)}}));
   });
-  await new Promise<void>(r=>server.listen(0,"127.0.0.1",r));
-  const address=server.address();assert.ok(address&&typeof address!=="string");
-  process.env.AUTOHACK_OLLAMA_URL="http://127.0.0.1:"+address.port+"/api/chat";
+  if(!livePolyglot){
+    await new Promise<void>(r=>server.listen(0,"127.0.0.1",r));
+    const address=server.address();assert.ok(address&&typeof address!=="string");
+    process.env.AUTOHACK_OLLAMA_URL="http://127.0.0.1:"+address.port+"/api/chat";
+  }
   const {runLocalProgramHunt,independentReview}=await import("../packages/security-solver/src/local-program-flow");
   const {readSourceCase,replaySourceCase}=await import("../packages/security-solver/src/source-reproduction");
   const {referencesProbedFunction}=await import("../packages/security-solver/src/source-function-reference");
@@ -568,13 +600,16 @@ try {
     "Independent execution must reproduce every stateful observation exactly");
   assert.equal(baselineSession.completedProbes,1);
 
-  for(const language of ["javascript","java","solidity","stateful_solidity"]) {
+  for(const language of (realQwenLanguage?[realQwenLanguage]:livePolyglot?["javascript","java","solidity"]:["javascript","java","solidity","stateful_solidity"])) {
+    const languageStart=Date.now();
+    console.log("[REAL_QWEN_LANGUAGE_START] "+JSON.stringify({language,model:process.env.LOCAL_OLLAMA_MODEL,turnBudget:process.env.LOCAL_HUNT_MAX_TURNS,predictionLimit:process.env.LOCAL_HUNT_NUM_PREDICT,startedAt:new Date().toISOString()}));
     turn=0;policyOffset=0;policyDone=false;caseId="";evidenceRepairReads=[];stateful=language==="stateful_solidity";
     source=language==="javascript"?"render.cjs":language==="java"?"Render.java":"Render.sol";
     caller=language==="javascript"?"caller.js":language==="java"?"Caller.java":"Caller.sol";
     selector=language==="javascript"?"render":"Render.render";
     if(stateful) {source="Store.sol";caller="StoreCaller.sol";selector="Store.set";}
     const result=await runLocalProgramHunt(program);
+    console.log("[REAL_QWEN_LANGUAGE_FINISH] "+JSON.stringify({language,success:result.success,elapsedSeconds:Math.round((Date.now()-languageStart)/1000),auditRecord:result.auditRecord||null}));
     if(!result.success && result.auditRecord)console.error(await readFile(join(root,"data/logs",result.auditRecord),"utf8"));
     assert.equal(result.success,true,JSON.stringify(result));
     if(stateful) {
@@ -584,14 +619,29 @@ try {
     }
     assert.equal(result.findings.length,1);
     assert.ok(result.coverageDetail && !result.coverageDetail.includes("1 failed probes") && !result.coverageDetail.includes("1 unsupported probes"),"invented probe should be stopped at declaration preflight");
-    const record=await readSourceCase(caseId,program);
+    // Controller-owned probes can finish before the scripted model sees the
+    // verifier observation. Read the persisted finding's tamper-evident case
+    // reference rather than relying on a model-visible transcript side effect.
+    const persistedCaseId=result.findings[0]?.reproductionCaseId;
+    assert.match(persistedCaseId||"",/^[a-f0-9]{64}$/,
+      "Successful controller-owned finding must retain its reproduction case ID");
+    if(caseId)assert.equal(caseId,persistedCaseId,
+      "Model-visible and persisted reproduction evidence must agree");
+    const record=await readSourceCase(persistedCaseId,program);
     assert.equal((await replaySourceCase(record,fixture)).behavior_observed,true);
 
   }
   console.log("JavaScript/Java/Solidity model action -> failed probe recovery -> sandbox -> caller -> report -> persisted evidence -> replay PASSED");
 } finally {
+  if(realModelProgressTicker)clearInterval(realModelProgressTicker);
   process.env.PATH=originalPath;
-  await new Promise<void>(r=>server.close(()=>r()));
+  if(server.listening)await new Promise<void>(r=>server.close(()=>r()));
+  if(livePolyglot) {
+    const archive=join(process.cwd(),"data","real-qwen-tests",realQwenLanguage||"polyglot");
+    await mkdir(archive,{recursive:true});
+    try {await cp(join(root,"data","logs"),join(archive,"logs"),{recursive:true});}
+    catch(error) {console.error("[REAL_QWEN_ARCHIVE_ERROR] "+String(error));}
+  }
   await rm(root,{recursive:true,force:true});
 }
 
