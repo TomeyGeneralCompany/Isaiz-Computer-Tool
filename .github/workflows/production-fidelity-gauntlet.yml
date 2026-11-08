@@ -28,3 +28,15 @@ jobs:
         run: node --import tsx scripts/test-production-workflow.ts --premature-final
       - name: Duplicate-probe recovery on production runner
         run: node --import tsx scripts/test-production-workflow.ts --mock-probes --prefetch --duplicate-probe-plan
+      - name: Empty-final recovery on production runner
+        run: node --import tsx scripts/test-production-workflow.ts --empty-final-recovery
+      - name: Malformed probe sequence rejection
+        run: node --import tsx scripts/test-production-workflow.ts --empty-sequence
+      - name: Production model-context compaction and checkpoint
+        run: node --import tsx scripts/test-production-workflow.ts --large-context
+      - name: Escaped source negative case
+        run: node --import tsx scripts/test-production-workflow.ts --variant=1
+      - name: Alternate source syntax
+        run: node --import tsx scripts/test-production-workflow.ts --variant=2
+      - name: Four-language source tracing and deterministic probe plans
+        run: node --import tsx scripts/test-controller-next-action.ts
