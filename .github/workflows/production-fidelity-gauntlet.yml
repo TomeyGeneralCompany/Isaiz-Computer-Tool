@@ -28,6 +28,12 @@ jobs:
           mkdir -p "$RUNNER_TEMP/lotus-fidelity-harness"
           cp .fidelity-harness/scripts/test-production-fidelity-gauntlet.ts "$RUNNER_TEMP/lotus-fidelity-harness/"
           cp .fidelity-harness/scripts/test-production-workflow.ts "$RUNNER_TEMP/lotus-fidelity-harness/"
+      - name: Preserve harness outside target worktree
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.target_ref != '' }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/lotus-fidelity-harness"
+          cp .fidelity-harness/scripts/test-production-fidelity-gauntlet.ts "$RUNNER_TEMP/lotus-fidelity-harness/"
+          cp .fidelity-harness/scripts/test-production-workflow.ts "$RUNNER_TEMP/lotus-fidelity-harness/"
       - name: Checkout LOTUS implementation under test
         uses: actions/checkout@v4
         with:
@@ -144,5 +150,49 @@ jobs:
           path: |
             data/production-workflow-tests/**
             data/logs/local-hunt-*.log*
+          if-no-files-found: warn
+          retention-days: 14
+
+  real-qwen-production:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout LOTUS revision under test
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.target_ref || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install production dependencies and Ollama
+        run: |
+          npm ci
+          curl -fsSL https://ollama.com/install.sh | sh
+          ollama serve > "$RUNNER_TEMP/ollama-server.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/ollama-server.pid"
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:11434/api/tags >/dev/null; then break; fi
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:11434/api/tags >/dev/null
+          ollama pull qwen3:4b
+      - name: Actual production controller with Qwen and isolated Python reproduction
+        env:
+          AUTOHACK_OLLAMA_URL: http://127.0.0.1:11434/api/chat
+          LOCAL_OLLAMA_MODEL: qwen3:4b
+          LOCAL_CONTROLLER_OWNED_ACTIONS: 'true'
+        run: node --import tsx scripts/test-production-workflow.ts --real-model --host-timeout --prefetch
+      - name: Preserve production evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-qwen-production-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            data/production-workflow-tests/**
+            "$RUNNER_TEMP/ollama-server.log"
           if-no-files-found: warn
           retention-days: 14
