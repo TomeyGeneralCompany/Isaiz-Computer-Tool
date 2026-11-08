@@ -186,6 +186,12 @@ jobs:
           LOCAL_OLLAMA_MODEL: qwen3:4b
           LOCAL_CONTROLLER_OWNED_ACTIONS: 'true'
         run: node --import tsx scripts/test-production-workflow.ts --real-model --host-timeout --prefetch
+      - name: Real Qwen end-to-end JavaScript Java and Solidity source investigations
+        env:
+          AUTOHACK_OLLAMA_URL: http://127.0.0.1:11434/api/chat
+          LOCAL_OLLAMA_MODEL: qwen3:4b
+          LOCAL_CONTROLLER_OWNED_ACTIONS: 'true'
+        run: node --import tsx scripts/test-source-workflow.ts --real-model-polyglot
       - name: Preserve production evidence even on failure
         if: always()
         uses: actions/upload-artifact@v4
