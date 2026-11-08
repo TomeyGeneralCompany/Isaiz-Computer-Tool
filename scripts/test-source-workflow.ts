@@ -193,7 +193,7 @@ process.env.LOCAL_OLLAMA_TOOL_PROTOCOL="json";
 if(!process.argv.includes("--real-model-polyglot"))process.env.LOCAL_CONTROLLER_OWNED_ACTIONS="false";
 // This scripted fixture expects to drive the first read itself; the separate
 // seeded-source fixture exercises production's automatic first read.
-process.env.AUTOHACK_AUTO_SOURCE_PREFETCH="false";
+process.env.AUTOHACK_AUTO_SOURCE_PREFETCH=process.argv.includes("--real-model-polyglot") ? "true" : "false";
 // Real-model CI must bound per-response generation; full production is unchanged.
 process.env.LOCAL_HUNT_NUM_PREDICT=process.argv.includes("--real-model-polyglot") ? "1024" : "4096";
 const workflowText=await readFile(join(process.cwd(),"packages/security-solver/src/investigation-workflow.ts"),"utf8");
