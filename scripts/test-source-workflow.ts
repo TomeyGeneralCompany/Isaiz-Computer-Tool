@@ -186,11 +186,11 @@ const root=await mkdtemp(join(tmpdir(),"tomey-workflow-"));
 const originalPath=process.env.PATH;
 process.env.PROJECT_ROOT=root;
 process.env.GITHUB_TOKEN="owned-fixture";
-process.env.LOCAL_OLLAMA_MODEL="mock";
+if(!process.argv.includes("--real-model-polyglot"))process.env.LOCAL_OLLAMA_MODEL="mock";
 process.env.LOCAL_OLLAMA_TOOL_PROTOCOL="json";
 // This legacy scripted model fixture measures interactive recovery by turn;
 // direct controller actions have separate deterministic regression coverage.
-process.env.LOCAL_CONTROLLER_OWNED_ACTIONS="false";
+if(!process.argv.includes("--real-model-polyglot"))process.env.LOCAL_CONTROLLER_OWNED_ACTIONS="false";
 // This scripted fixture expects to drive the first read itself; the separate
 // seeded-source fixture exercises production's automatic first read.
 process.env.AUTOHACK_AUTO_SOURCE_PREFETCH="false";
