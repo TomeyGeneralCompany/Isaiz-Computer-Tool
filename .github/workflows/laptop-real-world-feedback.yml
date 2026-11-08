@@ -1,0 +1,125 @@
+name: LOTUS laptop real-world feedback
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+  issues: write
+concurrency:
+  group: lotus-laptop-real-world
+  cancel-in-progress: false
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      approved: ${{ steps.check.outputs.approved }}
+    steps:
+      - name: Require green PR gauntlet and checks before laptop execution
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          echo "approved=false" >> "$GITHUB_OUTPUT"
+          prs="$(gh api "repos/$REPO/commits/$SHA/pulls" --jq '[.[] | select(.merged_at != null and .base.ref == "main")]')"
+          head="$(jq -r '.[0].head.sha // empty' <<< "$prs")"
+          if [[ -z "$head" ]]; then
+            echo "Not a merged PR commit; refusing laptop execution"
+            exit 0
+          fi
+          runs="$(gh api "repos/$REPO/actions/runs?head_sha=$head&per_page=100" --jq '.workflow_runs')"
+          for name in "AutoHack static checks" "Source reproduction languages" "Actual local-model production-controller acceptance" "LOTUS Production Fidelity Gauntlet"; do
+            if ! jq -e --arg name "$name" '[.[] | select(.name == $name)] | length > 0' <<< "$runs" >/dev/null; then
+              echo "Missing required workflow: $name"
+              exit 0
+            fi
+            if ! jq -e --arg name "$name" '[.[] | select(.name == $name)] | all(.conclusion == "success")' <<< "$runs" >/dev/null; then
+              echo "Non-green workflow: $name"
+              exit 0
+            fi
+          done
+          echo "approved=true" >> "$GITHUB_OUTPUT"
+  laptop:
+    needs: gate
+    if: needs.gate.outputs.approved == 'true'
+    runs-on: [self-hosted, linux, x64, lotus-laptop]
+    timeout-minutes: 1440
+    env:
+      LOCAL_OLLAMA_MODEL: qwen3:4b
+      LOCAL_MODEL_ADAPTER: ollama
+      LOCAL_OLLAMA_TOOL_PROTOCOL: json
+      LOCAL_MODEL_PROFILE: deterministic
+      LOCAL_CONTROLLER_OWNED_ACTIONS: 'true'
+      AUTOHACK_AUTO_SOURCE_PREFETCH: 'true'
+      AUTOHACK_GUIDED_SOURCE_PROBES: 'true'
+      LOCAL_HUNT_DYNAMIC_ALLOWANCE: 'true'
+      LOCAL_CONTROLLER_FULL_SOURCE_INDEX: 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install locked dependencies and reuse laptop configuration
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          npm ci
+          test -f "$HOME/isaiz-bugbounty/autohack-complete/.env"
+          cp "$HOME/isaiz-bugbounty/autohack-complete/.env" .env
+          ollama show qwen3:4b >/dev/null
+      - name: Run authorized real-world investigation
+        id: hunt
+        shell: bash
+        run: |
+          set -uo pipefail
+          mkdir -p data/one-bounty data/repair-feedback
+          bash scripts/run-one-bounty.sh --program immunefi-88mphv3 --timeout-min 60 > data/repair-feedback/terminal.log 2>&1
+          status=$?
+          echo "$status" > data/repair-feedback/exit-code.txt
+          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: Collect full controller and investigation evidence
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p data/repair-feedback
+          printf '%s\n' "${{ github.sha }}" > data/repair-feedback/commit.txt
+          find data/one-bounty -maxdepth 1 -name '*.json' -printf '%T@ %p\n' | sort -nr | head -1 | cut -d' ' -f2- > data/repair-feedback/latest-summary-path.txt || true
+          cp data/repair-feedback/latest-summary-path.txt data/repair-feedback/summary-pointer.txt
+          # Artifacts include all controller activity/evidence streams; .env and
+          # checked-out source credentials are deliberately excluded.
+          tar -czf data/repair-feedback/diagnostics.tar.gz data/one-bounty data/logs 2>/dev/null || true
+          test -f data/repair-feedback/exit-code.txt || echo 99 > data/repair-feedback/exit-code.txt
+      - name: Upload diagnostic artifact on every outcome
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lotus-real-world-${{ github.run_id }}
+          path: |
+            data/repair-feedback/**
+          retention-days: 30
+          if-no-files-found: error
+      - name: Open actionable repair ticket on failure
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN: ${{ github.run_id }}
+          SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          code="$(cat data/repair-feedback/exit-code.txt)"
+          if [[ "$code" == 0 ]]; then
+            echo "Real-world command passed" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          title="LOTUS real-world failure: $SHA"
+          body="Real-world test failed with exit code $code.\n\nCommit: $SHA\nFull diagnostic artifact: https://github.com/$REPO/actions/runs/$RUN\n\nRead the uploaded controller log, summary JSON, and terminal transcript. Fix the cause on a PR, require the four green workflows, merge, and let the next push re-run the laptop test. No automatic submission."
+          gh issue create --repo "$REPO" --title "$title" --body "$(printf '%b' "$body")"
+          exit 1
