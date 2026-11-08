@@ -817,6 +817,15 @@ export async function runLocalAudit(
             from:action.action,to:navigationAction.action,path:action.path})+'\n');
           action=navigationAction;
         }
+        // read_solidity requires a declaration ID. The real 88mph run sent
+        // read_solidity(path=SafeERC20.sol, query="") for turns 66-80.
+        // An empty query cannot identify a function; route through the
+        // controller's paginated source reader instead of wasting model turns.
+        if(action.action==='read_solidity' && !action.query.trim()) {
+          await appendFile(logFile,'[CONTROLLER_EMPTY_SOLIDITY_QUERY_RECOVERY] '+
+            JSON.stringify({path:action.path,turn:turn+1})+'\\n');
+          action={...action,action:'read_file',query:'',offset:0};
+        }
         // Normalize navigation requests BEFORE workflow validation so source
         // evidence and read-history checks see the same canonical path.
         // Existing absolute-path canonicalization remains intact.
