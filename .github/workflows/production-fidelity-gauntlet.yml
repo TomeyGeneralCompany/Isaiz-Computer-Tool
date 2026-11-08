@@ -2,12 +2,45 @@ name: LOTUS Production Fidelity Gauntlet
 on:
   pull_request:
   workflow_dispatch:
+    inputs:
+      target_ref:
+        description: 'Commit SHA, branch or tag of LOTUS to evaluate (blank = selected workflow branch)'
+        required: false
+        type: string
+        default: ''
 jobs:
   production-fidelity:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout canonical gauntlet harness
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.target_ref != '' }}
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: .fidelity-harness
+          sparse-checkout: |
+            scripts/test-production-fidelity-gauntlet.ts
+            scripts/test-production-workflow.ts
+      - name: Preserve harness outside target worktree
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.target_ref != '' }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/lotus-fidelity-harness"
+          cp .fidelity-harness/scripts/test-production-fidelity-gauntlet.ts "$RUNNER_TEMP/lotus-fidelity-harness/"
+          cp .fidelity-harness/scripts/test-production-workflow.ts "$RUNNER_TEMP/lotus-fidelity-harness/"
+      - name: Checkout LOTUS implementation under test
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.target_ref || github.sha }}
+      - name: Install canonical gauntlet harness on historical revision
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.target_ref != '' }}
+        run: |
+          cp "$RUNNER_TEMP/lotus-fidelity-harness/test-production-fidelity-gauntlet.ts" scripts/test-production-fidelity-gauntlet.ts
+          cp "$RUNNER_TEMP/lotus-fidelity-harness/test-production-workflow.ts" scripts/test-production-workflow.ts
+      - name: Record exact evaluated revision
+        run: |
+          echo "Evaluated LOTUS revision: $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Gauntlet workflow revision: $GITHUB_WORKFLOW_SHA" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -45,7 +78,28 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout canonical gauntlet harness
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.target_ref != '' }}
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: .fidelity-harness
+          sparse-checkout: |
+            scripts/test-production-fidelity-gauntlet.ts
+            scripts/test-production-workflow.ts
+      - name: Checkout LOTUS implementation under test
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.target_ref || github.sha }}
+      - name: Install canonical gauntlet harness on historical revision
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.target_ref != '' }}
+        run: |
+          cp "$RUNNER_TEMP/lotus-fidelity-harness/test-production-fidelity-gauntlet.ts" scripts/test-production-fidelity-gauntlet.ts
+          cp "$RUNNER_TEMP/lotus-fidelity-harness/test-production-workflow.ts" scripts/test-production-workflow.ts
+      - name: Record exact evaluated revision
+        run: |
+          echo "Evaluated LOTUS revision: $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Gauntlet workflow revision: $GITHUB_WORKFLOW_SHA" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
