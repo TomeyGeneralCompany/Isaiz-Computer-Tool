@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import {createServer} from "node:http";
 import {execFileSync} from "node:child_process";
-import {mkdtemp,writeFile,readFile,mkdir,rm,chmod} from "node:fs/promises";
+import {mkdtemp,writeFile,readFile,mkdir,readdir,cp,rm,chmod} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 
@@ -330,6 +330,18 @@ if(livePolyglot) {
   process.env.LOCAL_HUNT_DYNAMIC_ALLOWANCE="false";
 }
 if(livePolyglot && !process.env.AUTOHACK_OLLAMA_URL)throw new Error("Real polyglot run requires AUTOHACK_OLLAMA_URL");
+// Emit audit-file progress independently of the model response and retain its
+// trace in CI artifacts when a real-model language fails or reaches its deadline.
+const realModelProgressTicker=livePolyglot?setInterval(async()=>{
+  try {
+    const names=(await readdir(join(root,"data","logs"))).filter(name=>name.startsWith("local-hunt-")&&name.endsWith(".log")).sort();
+    const latest=names.at(-1);
+    if(!latest){console.log("[REAL_QWEN_HEARTBEAT] waiting for local hunt log");return;}
+    const log=await readFile(join(root,"data","logs",latest),"utf8");
+    const lines=log.split("\n").filter(line=>/^\[(MODEL_PROGRESS|MODEL_START|MODEL_REQUEST|MODEL_RESPONSE|TOOL|READ_OK|PROBE_RESULT|CONTROLLER_|AUDIT_)/.test(line));
+    console.log("[REAL_QWEN_HEARTBEAT] "+JSON.stringify({log:latest,bytes:log.length,lastEvent:(lines.at(-1)||"no tracked event").slice(0,350)}));
+  } catch(error) {console.log("[REAL_QWEN_HEARTBEAT] log inspection: "+String(error).slice(0,180));}
+},30_000):null;
 const server=createServer();
 try {
   const fixture=join(root,"fixture");await mkdir(fixture);
@@ -606,8 +618,15 @@ try {
   }
   console.log("JavaScript/Java/Solidity model action -> failed probe recovery -> sandbox -> caller -> report -> persisted evidence -> replay PASSED");
 } finally {
+  if(realModelProgressTicker)clearInterval(realModelProgressTicker);
   process.env.PATH=originalPath;
   if(server.listening)await new Promise<void>(r=>server.close(()=>r()));
+  if(livePolyglot) {
+    const archive=join(process.cwd(),"data","real-qwen-tests",realQwenLanguage||"polyglot");
+    await mkdir(archive,{recursive:true});
+    try {await cp(join(root,"data","logs"),join(archive,"logs"),{recursive:true});}
+    catch(error) {console.error("[REAL_QWEN_ARCHIVE_ERROR] "+String(error));}
+  }
   await rm(root,{recursive:true,force:true});
 }
 
