@@ -1560,8 +1560,8 @@ export async function runLocalAudit(
               // controller-owned pagination still has unread pages. Prefer
               // a source not yet completed over reissuing a terminal page.
               const ranked=(limits.initialSourcePaths||[]).filter(candidate=>
-                /^source-[0-9]+\\//.test(candidate) &&
-                /\\.(?:sol|java|py|js|mjs|cjs)$/.test(candidate) &&
+                /^source-[0-9]+\//.test(candidate) &&
+                /\.(?:sol|java|py|js|mjs|cjs)$/.test(candidate) &&
                 candidate!==path && !terminalReadPages.has(candidate));
               const required=process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false'
                 ? workflow?.requireNextUnreadSource(limits.initialSourcePaths||[]) : null;
