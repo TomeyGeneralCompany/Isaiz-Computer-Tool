@@ -327,9 +327,19 @@ export async function runLocalAudit(
           await recordToolActivity(logFile,{phase:'completed',tool:'read_file',
             path,offset:delivered.start,end:delivered.end,nextOffset:delivered.nextOffset,
             origin:'controller_prefetch'});
-          if(!workflow || process.env.AUTOHACK_GUIDED_SOURCE_PROBES==='false' || delivered.nextOffset!==null || offset!==0 || !limits.verifyPython)continue;
-          const hint=await guidedProbeAcrossSourceChain(root,path,delivered.text);
-          if(!hint)continue;
+          if(!workflow || process.env.AUTOHACK_GUIDED_SOURCE_PROBES==='false' || !limits.verifyPython)continue;
+          // Guided probe discovery is controller-owned. The model sees paginated
+          // source pages, but the controller may inspect the complete authorized
+          // file without consuming model context. Requiring nextOffset===null
+          // here silently disabled guided probes for real-world Solidity files.
+          const guidedSource=delivered.nextOffset===null && offset===0
+            ? delivered.text : await readFile(full,'utf8');
+          const hint=await guidedProbeAcrossSourceChain(root,path,guidedSource);
+          if(!hint) {
+            await appendFile(logFile,'[GUIDED_PROBE_NO_CANDIDATE] '+JSON.stringify({
+              path,paginated:delivered.nextOffset!==null,sourceCharacters:guidedSource.length})+'\\n');
+            continue;
+          }
           const planned={action:'plan_probe',path,query:hint.functionName,answer:hint.kind,hypothesis:hint.hypothesis};
           if(workflow.validate(planned as any))continue;
           workflow.plan(planned as any);
