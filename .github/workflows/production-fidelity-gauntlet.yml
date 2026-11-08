@@ -1,0 +1,94 @@
+name: LOTUS Production Fidelity Gauntlet
+on:
+  pull_request:
+  workflow_dispatch:
+jobs:
+  production-fidelity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - run: npm ci
+      - name: Production-fidelity controller corpus (four languages)
+        run: node --import tsx scripts/test-production-fidelity-gauntlet.ts
+      - name: Production workflow with isolated Python probes
+        run: node --import tsx scripts/test-production-workflow.ts
+      - name: Premature-final recovery on production runner
+        run: node --import tsx scripts/test-production-workflow.ts --premature-final
+      - name: Duplicate-probe recovery on production runner
+        run: node --import tsx scripts/test-production-workflow.ts --mock-probes --prefetch --duplicate-probe-plan
+      - name: Empty-final recovery on production runner
+        run: node --import tsx scripts/test-production-workflow.ts --empty-final-recovery
+      - name: Malformed probe sequence rejection
+        run: node --import tsx scripts/test-production-workflow.ts --empty-sequence
+      - name: Production model-context compaction and checkpoint
+        run: node --import tsx scripts/test-production-workflow.ts --large-context
+      - name: Escaped source negative case
+        run: node --import tsx scripts/test-production-workflow.ts --variant=1
+      - name: Alternate source syntax
+        run: node --import tsx scripts/test-production-workflow.ts --variant=2
+      - name: Four-language source tracing and deterministic probe plans
+        run: node --import tsx scripts/test-controller-next-action.ts
+
+  isolated-four-language-production:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install actual isolated execution infrastructure
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          npm install --prefix scripts/reproduction-runtime --ignore-scripts --no-audit --no-fund
+          npm ci
+      - name: Actual isolated probes in all four languages
+        env:
+          TOMEY_REPRODUCTION_INTEGRATION: '1'
+        run: python3 -m unittest discover -s tests -p test_source_reproduction.py -v
+      - name: Verify controller-owned entry to output reproduction
+        run: python3 scripts/test-controller-entry-reproduction.py
+      - name: Verify actual indexed entry/sink reproductions across languages
+        run: node --import tsx scripts/test-indexed-verified-entries.ts
+      - name: Verify controller source-to-sink tracing and independent reviewer rejection
+        run: node --import tsx scripts/test-controller-next-action.ts
+      - name: Verify full controller source inventory and evidence packets
+        run: node --import tsx scripts/test-controller-full-source-index.ts
+      - name: Run production workflow with real isolated reproduction
+        run: node --import tsx scripts/test-production-workflow.ts
+      - name: Run source audit with full controller indexing
+        env:
+          LOCAL_CONTROLLER_FULL_SOURCE_INDEX: 'true'
+        run: node --import tsx scripts/test-source-workflow.ts
+      - name: Preserve failure evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fidelity-investigation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            data/production-workflow-tests/**
+            data/logs/local-hunt-*.log*
+          if-no-files-found: warn
+          retention-days: 14
