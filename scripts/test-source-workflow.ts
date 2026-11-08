@@ -319,6 +319,8 @@ assert.ok(controllerText.includes("requiredNextSource"),"coverage rejection must
 assert.ok(controllerText.includes("[EMPTY_FINAL_RECOVER]"),"repeated empty finals must reopen source investigation");
 assert.ok(controllerText.includes("requireInvestigationAfterEmpty"),"recovery must require a tool action rather than another empty final");
 assert.ok(!controllerText.includes("recentActions.clear();stalledActions=0"),"final rejection must preserve read history");
+const livePolyglot=process.argv.includes("--real-model-polyglot");
+if(livePolyglot && !process.env.AUTOHACK_OLLAMA_URL)throw new Error("Real polyglot run requires AUTOHACK_OLLAMA_URL");
 const server=createServer();
 try {
   const fixture=join(root,"fixture");await mkdir(fixture);
@@ -383,7 +385,7 @@ try {
     {operation:"send",function:"set(uint256)",args:["7"]},
     {operation:"call",function:"value()",args:[],expect:"8"},
   ]};
-  server.on("request",async(req,res)=>{
+  if(!livePolyglot)server.on("request",async(req,res)=>{
     let raw="";for await(const chunk of req)raw+=chunk;
     const request=JSON.parse(raw);
     // Production progress is appended separately; inspect the last actual tool result.
@@ -524,9 +526,11 @@ try {
     res.setHeader("Content-Type","application/json");
     res.end(JSON.stringify({message:{role:"assistant",content:JSON.stringify(next)}}));
   });
-  await new Promise<void>(r=>server.listen(0,"127.0.0.1",r));
-  const address=server.address();assert.ok(address&&typeof address!=="string");
-  process.env.AUTOHACK_OLLAMA_URL="http://127.0.0.1:"+address.port+"/api/chat";
+  if(!livePolyglot){
+    await new Promise<void>(r=>server.listen(0,"127.0.0.1",r));
+    const address=server.address();assert.ok(address&&typeof address!=="string");
+    process.env.AUTOHACK_OLLAMA_URL="http://127.0.0.1:"+address.port+"/api/chat";
+  }
   const {runLocalProgramHunt,independentReview}=await import("../packages/security-solver/src/local-program-flow");
   const {readSourceCase,replaySourceCase}=await import("../packages/security-solver/src/source-reproduction");
   const {referencesProbedFunction}=await import("../packages/security-solver/src/source-function-reference");
@@ -568,7 +572,7 @@ try {
     "Independent execution must reproduce every stateful observation exactly");
   assert.equal(baselineSession.completedProbes,1);
 
-  for(const language of ["javascript","java","solidity","stateful_solidity"]) {
+  for(const language of (livePolyglot?["javascript","java","solidity"]:["javascript","java","solidity","stateful_solidity"])) {
     turn=0;policyOffset=0;policyDone=false;caseId="";evidenceRepairReads=[];stateful=language==="stateful_solidity";
     source=language==="javascript"?"render.cjs":language==="java"?"Render.java":"Render.sol";
     caller=language==="javascript"?"caller.js":language==="java"?"Caller.java":"Caller.sol";
@@ -591,7 +595,7 @@ try {
   console.log("JavaScript/Java/Solidity model action -> failed probe recovery -> sandbox -> caller -> report -> persisted evidence -> replay PASSED");
 } finally {
   process.env.PATH=originalPath;
-  await new Promise<void>(r=>server.close(()=>r()));
+  if(server.listening)await new Promise<void>(r=>server.close(()=>r()));
   await rm(root,{recursive:true,force:true});
 }
 
