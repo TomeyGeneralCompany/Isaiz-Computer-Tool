@@ -1357,6 +1357,30 @@ export async function runLocalAudit(
                 path:required,observation:observed,repeatedRejectedConclusions
               })+'\\n');
             }
+            // A bounded classification test may already have all its results
+            // verified by independent local probes. When the model repeatedly
+            // emits a schema-invalid boolean, assemble only the recorded
+            // per-file observations and let the caller's validator decide.
+            // Never infer a vulnerability or bypass the final validator.
+            if(repeatedRejectedConclusions>=2 && limits.validateFinal &&
+               limits.initialSourcePaths?.length) {
+              const recorded=workflow!.snapshot().observations;
+              const paths=[...new Set(limits.initialSourcePaths)];
+              const complete=paths.every(path=>recorded.some(o=>o.path===path &&
+                (o.status==='behavior_observed'||o.status==='behavior_not_observed')));
+              if(complete) {
+                const classification=JSON.stringify({files:paths.map(path=>{
+                  const observation=recorded.find(o=>o.path===path &&
+                    (o.status==='behavior_observed'||o.status==='behavior_not_observed'))!;
+                  return {path,rawMarkup:observation.status==='behavior_observed'};
+                })});
+                if(!(await limits.validateFinal(classification))) {
+                  await appendFile(logFile,'[CONTROLLER_VERIFIED_CLASSIFICATION_FINAL] '+
+                    JSON.stringify({paths,observations:recorded.length})+'\\n');
+                  return classification;
+                }
+              }
+            }
             if(repeatedRejectedConclusions>=4) {
               await appendFile(logFile,'[AUDIT_INCOMPLETE_POST_PROBE] '+JSON.stringify({
                 reason:'Repeated rejected conclusions despite reproduced behavior',
