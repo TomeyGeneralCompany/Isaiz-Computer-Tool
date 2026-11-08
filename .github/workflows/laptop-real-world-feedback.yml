@@ -71,14 +71,15 @@ jobs:
           mkdir -p data/repair-feedback
           # Preserve the actual setup failure instead of reporting a fabricated test exit code.
           source_env=""
-          for candidate in "$HOME/isaiz-bugbounty/autohack-complete/.env" "$HOME/isaiz-bugbounty/autohack/.env" "$HOME/.youtube-ai-agent/.env"; do
+          for candidate in "$HOME/isaiz-bugbounty/autohack-complete/.env" "$HOME/isaiz-bugbounty/autohack/.env"; do
             if [[ -f "$candidate" ]]; then source_env="$candidate"; break; fi
           done
           if [[ -n "$source_env" ]]; then
             cp "$source_env" .env
             echo "Using existing local environment file at $source_env" | tee -a data/repair-feedback/setup.log
           else
-            echo "No existing LOTUS .env found in known installation paths; checking whether process environment is sufficient" | tee -a data/repair-feedback/setup.log
+            echo "SETUP_FAILED: no LOTUS .env found in autohack-complete or autohack installation" | tee -a data/repair-feedback/setup.log
+            exit 1
           fi
           if ! command -v ollama >/dev/null 2>&1; then
             echo "SETUP_FAILED: ollama executable not available to runner service" | tee -a data/repair-feedback/setup.log
