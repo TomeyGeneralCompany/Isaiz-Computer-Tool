@@ -817,6 +817,15 @@ export async function runLocalAudit(
             from:action.action,to:navigationAction.action,path:action.path})+'\n');
           action=navigationAction;
         }
+        // read_solidity requires a declaration ID. The real 88mph run sent
+        // read_solidity(path=SafeERC20.sol, query="") for turns 66-80.
+        // An empty query cannot identify a function; route through the
+        // controller's paginated source reader instead of wasting model turns.
+        if(action.action==='read_solidity' && !action.query.trim()) {
+          await appendFile(logFile,'[CONTROLLER_EMPTY_SOLIDITY_QUERY_RECOVERY] '+
+            JSON.stringify({path:action.path,turn:turn+1})+'\\n');
+          action={...action,action:'read_file',query:'',offset:0};
+        }
         // Normalize navigation requests BEFORE workflow validation so source
         // evidence and read-history checks see the same canonical path.
         // Existing absolute-path canonicalization remains intact.
@@ -1348,6 +1357,30 @@ export async function runLocalAudit(
                 path:required,observation:observed,repeatedRejectedConclusions
               })+'\\n');
             }
+            // A bounded classification test may already have all its results
+            // verified by independent local probes. When the model repeatedly
+            // emits a schema-invalid boolean, assemble only the recorded
+            // per-file observations and let the caller's validator decide.
+            // Never infer a vulnerability or bypass the final validator.
+            if(repeatedRejectedConclusions>=2 && limits.validateFinal &&
+               limits.initialSourcePaths?.length) {
+              const recorded=workflow!.snapshot().observations;
+              const paths=[...new Set(limits.initialSourcePaths)];
+              const complete=paths.every(path=>recorded.some(o=>o.path===path &&
+                (o.status==='behavior_observed'||o.status==='behavior_not_observed')));
+              if(complete) {
+                const classification=JSON.stringify({files:paths.map(path=>{
+                  const observation=recorded.find(o=>o.path===path &&
+                    (o.status==='behavior_observed'||o.status==='behavior_not_observed'))!;
+                  return {path,rawMarkup:observation.status==='behavior_observed'};
+                })});
+                if(!(await limits.validateFinal(classification))) {
+                  await appendFile(logFile,'[CONTROLLER_VERIFIED_CLASSIFICATION_FINAL] '+
+                    JSON.stringify({paths,observations:recorded.length})+'\\n');
+                  return classification;
+                }
+              }
+            }
             if(repeatedRejectedConclusions>=4) {
               await appendFile(logFile,'[AUDIT_INCOMPLETE_POST_PROBE] '+JSON.stringify({
                 reason:'Repeated rejected conclusions despite reproduced behavior',
@@ -1574,11 +1607,24 @@ export async function runLocalAudit(
                 const nextFull=await safePath(next);
                 await appendFile(logFile,'[INDEXED_CONTROLLER_SOURCE_HANDOFF] '+
                   JSON.stringify({from:path,to:next,turn:turn+1})+'\\n');
+                // Resume the controller-owned page cursor. Selecting a file
+                // with an already-recorded first page at offset zero traps the
+                // small model in a NO_PROGRESS loop until all turns expire.
                 path=next;full=nextFull;offset=0;
-                call.function.arguments.path=next;
-                call.function.arguments.offset=0;
-                actionKey=keyAt(0);
+                actionKey=keyAt(offset);
                 previous=recentActions.get(actionKey);
+                const visitedOffsets=new Set<number>();
+                while(previous?.nextOffset!=null && previous.nextOffset>offset &&
+                      !visitedOffsets.has(offset)) {
+                  visitedOffsets.add(offset);
+                  offset=previous.nextOffset;
+                  actionKey=keyAt(offset);
+                  previous=recentActions.get(actionKey);
+                }
+                call.function.arguments.path=next;
+                call.function.arguments.offset=offset;
+                await appendFile(logFile,'[INDEXED_CONTROLLER_CURSOR_RESUME] '+
+                  JSON.stringify({path:next,offset,turn:turn+1})+'\\n');
               } else {
                 workflow?.feedback('Source already inspected. Advance to the recorded probe, caller chain or supported final; no source replay is authorized.');
                 throw new Error('AUDIT_STALLED: indexed source '+path+
