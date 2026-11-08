@@ -3,6 +3,7 @@ on:
   pull_request:
     paths:
       - '.github/workflows/real-model-acceptance.yml'
+      - '.github/workflows/laptop-real-world-feedback.yml'
       - 'scripts/test-production-workflow.ts'
       - 'scripts/test-real-program-hunt.ts'
       - 'packages/security-solver/src/**'
