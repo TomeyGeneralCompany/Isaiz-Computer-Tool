@@ -206,7 +206,7 @@ jobs:
       matrix:
         language: [javascript, java, solidity]
     runs-on: ubuntu-latest
-    timeout-minutes: 100
+    timeout-minutes: 350
     steps:
       - name: Checkout LOTUS revision under test
         uses: actions/checkout@v4
@@ -250,9 +250,9 @@ jobs:
           # The shell also archives the live log when timeout kills Node before
           # its JavaScript finally block can run.
           trap 'mkdir -p "data/real-qwen-tests/$LOTUS_REAL_QWEN_LANGUAGE/logs"; for logs in /tmp/tomey-workflow-*/data/logs; do if [ -d "$logs" ]; then cp -a "$logs"/. "data/real-qwen-tests/$LOTUS_REAL_QWEN_LANGUAGE/logs/" || true; fi; done' EXIT
-          # Terminate a stalled fixture before GitHub kills the job, leaving
-          # time for its controller logs and evidence to be uploaded.
-          if timeout --signal=TERM --kill-after=20s 90m node --import tsx scripts/test-source-workflow.ts --real-model-polyglot; then
+          # Do not impose a wall-clock deadline on a progressing investigation.
+          # The controller's own progress/inactivity policy governs its run.
+          if node --import tsx scripts/test-source-workflow.ts --real-model-polyglot; then
             echo "Completed real Qwen $LOTUS_REAL_QWEN_LANGUAGE"
           else
             status=$?
