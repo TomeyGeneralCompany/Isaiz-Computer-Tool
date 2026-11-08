@@ -38,13 +38,15 @@ try {
     productionWorkflow:true,verifyPython:async()=>JSON.stringify({status:'behavior_not_observed'}),
     maxTurns:80,numCtx:8192,numPredict:256,initialSourcePaths:sourcePaths,
     onRead:(path)=>delivered.push(path)
-  }),/AUDIT_STALLED: indexed source/);
+  }),/Local audit reached its 80-turn inspection limit/);
   const text=await readFile(log,'utf8');
   assert.equal((text.match(/\[CONTROLLER_READ_REDIRECT\]/g)||[]).length,0,
     'Full-index mode must never redirect a completed read to unrelated sources');
-  assert.ok(generations<6,'Repeated completed-page navigation must stop before dozens of turns');
+  assert.ok(text.includes('[INDEXED_SOURCE_TO_EVIDENCE_HANDOFF]'), 'Exhausted index must offer an evidence/probe transition rather than fatal AUDIT_STALLED');
+  assert.ok(!text.includes('AUDIT_STALLED: indexed source'), 'Old fatal index stall must not recur');
+  assert.ok(generations<=80,'Fixed model cannot advance to probes, but run must respect turn allowance');
   assert.ok(delivered.length<=2,'Only the actual source and optional context recovery may be read');
-  console.log('Indexed controller blocks previously completed source replay without synthetic loop PASSED');
+  console.log('Indexed controller preserves source evidence and offers probe handoff under uncooperative model PASSED');
 } finally {
   server.closeAllConnections();server.close();
   for(const [name,value] of Object.entries({

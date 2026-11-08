@@ -1633,9 +1633,23 @@ export async function runLocalAudit(
                 await appendFile(logFile,'[INDEXED_CONTROLLER_CURSOR_RESUME] '+
                   JSON.stringify({path:next,offset,turn:turn+1})+'\\n');
               } else {
-                workflow?.feedback('Source already inspected. Advance to the recorded probe, caller chain or supported final; no source replay is authorized.');
-                throw new Error('AUDIT_STALLED: indexed source '+path+
-                  ' was already inspected and no controller-approved unread source remains.');
+                // Source-index exhaustion is a phase transition, not an audit failure.
+                // Preserve the existing evidence and give the model a tool-level
+                // rejection so it can select a declared probe or evidence-backed
+                // final. Do not fabricate a probe or silently mark a hunt complete.
+                const observations=workflow?.snapshot().observations||[];
+                const feedback='All controller-ranked source files have reached their terminal page. '+
+                  'The requested source '+path+' is already recorded. Source reading is complete; '+
+                  'your NEXT action must be plan_probe for a concrete declared function with '+
+                  'a falsifiable hypothesis, verify_source for an already pending probe, '+
+                  'or final using only verified evidence. Do not request read_file again. '+
+                  'Recorded observations: '+JSON.stringify(observations.slice(-6)).slice(0,1800);
+                workflow?.feedback(feedback,true);
+                await appendFile(logFile,'[INDEXED_SOURCE_TO_EVIDENCE_HANDOFF] '+
+                  JSON.stringify({path,completedFiles:terminalReadPages.size,
+                    observations:observations.length,pending:!!workflow?.snapshot().pending,
+                    turn:turn+1})+'\\n');
+                throw new Error('SOURCE_INDEX_EXHAUSTED: '+feedback);
               }
             }
           }
