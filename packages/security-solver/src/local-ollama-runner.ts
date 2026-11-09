@@ -775,7 +775,8 @@ export async function runLocalAudit(
       // to Qwen in controller-owned indexed investigations. Only a semantic
       // final assessment may use the model, after deterministic work is done.
       // An unresolved action is a controller defect, not a model prompt.
-      if(fullIndexMode && workflow && !controllerAction) {
+      if(fullIndexMode && workflow && !controllerAction &&
+         process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false') {
         const snapshot=workflow.snapshot();
         const permitted=constraints?.action||[];
         const semanticOnly=permitted.length>0 &&
