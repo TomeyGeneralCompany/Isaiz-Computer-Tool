@@ -882,7 +882,7 @@ export async function runLocalAudit(
           for(let attempt=1;attempt<=3;attempt++) {
             controller.signal.throwIfAborted();
             const attemptController=new AbortController();
-            let inactivityTimer: ReturnType<typeof setTimeout>;
+            let inactivityTimer: ReturnType<typeof setTimeout> | undefined;
             const resetInactivity=()=>{
               clearTimeout(inactivityTimer);
               inactivityTimer=setTimeout(()=>attemptController.abort('model_request_stalled'),12*60*1000);
