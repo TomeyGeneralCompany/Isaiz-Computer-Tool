@@ -366,17 +366,24 @@ export async function runLocalAudit(
           // here silently disabled guided probes for real-world Solidity files.
           const guidedSource=delivered.nextOffset===null && offset===0
             ? delivered.text : await readFile(full,'utf8');
-          const hint=await guidedProbeAcrossSourceChain(root,path,guidedSource);
+          const guidedHint=await guidedProbeAcrossSourceChain(root,path,guidedSource);
+          const fallbackPlan=!guidedHint ? controllerPolyglotPlan(path,guidedSource) : null;
+          const hint=guidedHint || (fallbackPlan ? {
+            functionName:fallbackPlan.query,kind:fallbackPlan.answer,
+            hypothesis:fallbackPlan.hypothesis,sequence:fallbackPlan.sequence
+          } : null);
           if(!hint) {
             await appendFile(logFile,'[GUIDED_PROBE_NO_CANDIDATE] '+JSON.stringify({
               path,paginated:delivered.nextOffset!==null,sourceCharacters:guidedSource.length})+'\n');
             continue;
           }
-          const planned={action:'plan_probe',path,query:hint.functionName,answer:hint.kind,hypothesis:hint.hypothesis};
+          const planned={action:'plan_probe',path,query:hint.functionName,answer:hint.kind,hypothesis:hint.hypothesis,
+            ...('sequence' in hint && hint.sequence!==undefined ? {sequence:hint.sequence} : {})};
           if(workflow.validate(planned as any))continue;
           workflow.plan(planned as any);
           let raw:string;
-          try {raw=await limits.verifyPython(path,hint.functionName,hint.kind);}
+          try {raw=await limits.verifyPython(path,hint.functionName,hint.kind,
+            'sequence' in hint ? hint.sequence as any : undefined);}
           catch(error) {raw=JSON.stringify({status:'probe_failed',detail:String(error).slice(0,500),behavior_observed:false});}
           let result:any;
           try {result=JSON.parse(raw);}catch {result={status:'probe_failed',detail:'Verifier returned invalid JSON',behavior_observed:false};}
@@ -439,7 +446,8 @@ export async function runLocalAudit(
           }
 
           if(['behavior_observed','behavior_not_observed'].includes(result.status))
-            allowance.probe(JSON.stringify([path,hint.functionName,hint.kind,undefined]),0);
+            allowance.probe(JSON.stringify([path,hint.functionName,hint.kind,
+              'sequence' in hint ? hint.sequence : undefined]),0);
           const record:Message={role:'assistant',content:JSON.stringify(verify)};
           const available=messageBudget-3000-JSON.stringify(messages.slice(2)).length;
           try {
