@@ -769,12 +769,35 @@ export async function runLocalAudit(
       }
       const result: {message?:Message;eval_count?:number;prompt_eval_count?:number;done_reason?:string;load_duration?:number;prompt_eval_duration?:number;eval_duration?:number;total_duration?:number;client_queue_ms?:number} = controllerAction ?
         {message:{role:'assistant',content:JSON.stringify(controllerAction)}} :
-        await (adapter==='qwen-agent'?postQwenAgentJson:postOllamaChat)(process.env.AUTOHACK_OLLAMA_URL || "http://127.0.0.1:11434/api/chat", { model, stream: false, think: profile.think, messages:requestMessages,
+        await (async () => {
+          // A stalled Ollama request must not terminate a multi-hour investigation.
+          // Retry only the model generation; controller memory, read cursors,
+          // observations and completed probes remain unchanged.
+          const endpoint=process.env.AUTOHACK_OLLAMA_URL || "http://127.0.0.1:11434/api/chat";
+          const request={ model, stream: false, think: profile.think, messages:requestMessages,
           ...(structured ? {format:requestSchema} : {tools:availableTools}),
           keep_alive:"10m",
           options: { num_predict:generationBudget,
             ...(limits.numCtx === undefined ? {} : {num_ctx:settings.numCtx}),
-            ...(limits.numThreads === undefined ? {} : {num_thread:settings.numThreads}), ...profile.options } }, controller.signal,{onProgress}) as { message?: Message; eval_count?: number; prompt_eval_count?: number; done_reason?: string; load_duration?:number; prompt_eval_duration?:number; eval_duration?:number; total_duration?:number; client_queue_ms?:number };
+            ...(limits.numThreads === undefined ? {} : {num_thread:settings.numThreads}), ...profile.options } };
+          for(let attempt=1;attempt<=3;attempt++) {
+            controller.signal.throwIfAborted();
+            const attemptController=new AbortController();
+            const timeout=setTimeout(()=>attemptController.abort('model_request_stalled'),12*60*1000);
+            const signal=AbortSignal.any([controller.signal,attemptController.signal]);
+            try {
+              return await (adapter==='qwen-agent'?postQwenAgentJson:postOllamaChat)(
+                endpoint,request,signal,{onProgress});
+            } catch(error) {
+              if(controller.signal.aborted)throw error;
+              if(attempt===3)throw error;
+              await appendFile(logFile,'[MODEL_REQUEST_RECOVERY] '+JSON.stringify({
+                turn:turn+1,attempt,reason:String(error).slice(0,200),
+                retainedControllerMemory:true})+'\\n');
+            } finally {clearTimeout(timeout);}
+          }
+          throw new Error('Model request retries exhausted');
+        })() as { message?: Message; eval_count?: number; prompt_eval_count?: number; done_reason?: string; load_duration?:number; prompt_eval_duration?:number; eval_duration?:number; total_duration?:number; client_queue_ms?:number };
       if(!controllerAction)await recordToolActivity(logFile,{
         phase:'completed',tool:'model_generation',turn:turn+1,model,
         durationMs:Date.now()-started,origin:'model',
