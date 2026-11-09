@@ -771,6 +771,25 @@ export async function runLocalAudit(
           }catch{}
         }
       }
+      // Never delegate source selection, probe execution or workflow transitions
+      // to Qwen in controller-owned indexed investigations. Only a semantic
+      // final assessment may use the model, after deterministic work is done.
+      // An unresolved action is a controller defect, not a model prompt.
+      if(fullIndexMode && workflow && !controllerAction) {
+        const snapshot=workflow.snapshot();
+        const permitted=constraints?.action||[];
+        const semanticOnly=permitted.length>0 &&
+          permitted.every(action=>action==='final') &&
+          !snapshot.pending && !snapshot.verifiedEvidenceFocus;
+        if(!semanticOnly) {
+          await appendFile(logFile,'[CONTROLLER_UNRESOLVED_ACTION] '+
+            JSON.stringify({turn:turn+1,stage:snapshot.stage,
+              permitted,pending:snapshot.pending,
+              readPaths:snapshot.readPaths.length,
+              observations:snapshot.observations.length})+'\\n');
+          throw new Error('CONTROLLER_UNRESOLVED_ACTION: controller must select source/probe/transition without Qwen');
+        }
+      }
       if(controllerAction && fullIndexMode) {
         const snapshot=workflow.snapshot();
         const progressKey=JSON.stringify([snapshot.sourceProgress,
