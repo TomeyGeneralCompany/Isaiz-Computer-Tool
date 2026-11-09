@@ -37,7 +37,7 @@ try {
     ['render.py','def render(value):\n    return "<p>"+value+"</p>"\n'],
     ['render.cjs','exports.render=function(value){return "<p>"+value+"</p>";};'],
     ['Render.java','public class Render {public static String render(String value){return "<p>"+value+"</p>";}}'],
-    ['Stateful.py','class Counter:\\n    def advance(self,by=1):\\n        return by\\ndef make(start=0):\\n    return Counter(start)\\n'],
+    ['Stateful.py','class Counter:\n    def advance(self,by=1):\n        return by\ndef make(start=0):\n    return Counter(start)\n'],
     ['Stateful.cjs','exports.make=function(start){let value=start;return {advance(by){value+=by;return value;}};};'],
     ['Stateful.java','public class Stateful {private int value=0; public int advance(){return ++value;} public int current(){return value;}}'],
     ['Counter.sol','pragma solidity ^0.8.0; contract Counter {uint public value; function add(uint amount) public {value+=amount;}}']
