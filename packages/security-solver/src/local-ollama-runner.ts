@@ -210,6 +210,18 @@ export async function runLocalAudit(
   // Completed pages survive model-context eviction and unreliable offset replay.
   const terminalReadPages = new Map<string,{offset:number;response?:Message}>();
   const terminalPageRecoveries = new Set<string>();
+  const probeDispositions = new Map<string,{status:string;reason:string}>();
+  const probeIdentity=(path:string,selector:string,kind:string)=>JSON.stringify([path,selector,kind]);
+  const unresolvedProbes=()=>[...probeDispositions.entries()].filter(([,v])=>v.status==='selected');
+  const recordProbeDisposition=async(path:string,selector:string,kind:string,status:string,reason:string)=>{
+    const key=probeIdentity(path,selector,kind);
+    const previous=probeDispositions.get(key);
+    if(previous?.status===status && previous.reason===reason)return;
+    probeDispositions.set(key,{status,reason});
+    const record={path,selector,kind,status,reason};
+    await appendFile(logFile,'[CONTROLLER_PROBE_DISPOSITION] '+JSON.stringify(record)+'\n');
+    await controllerArchive?.append('decision',record);
+  };
   let stalledActions = 0;
   const missingRequests=new Map<string,number>();
   const fixedSize=JSON.stringify(messages).length+JSON.stringify(structured ? actionSchema : availableTools).length;
@@ -500,6 +512,20 @@ export async function runLocalAudit(
         constraints={...constraints,action:constraints.action.filter(name=>name!=='final')};
         await appendFile(logFile,'[EMPTY_FINAL_INVESTIGATE] Require a concrete tool action before another conclusion\n');
       }
+      // Mandatory indexed transition: completed source acquisition advances to
+      // controller-owned probe planning, never back to speculative source reads.
+      const eligibleForProbe=[...new Set(limits.initialSourcePaths||[])].filter(path=>
+        path.startsWith('source-') && ['.sol','.java','.py','.js','.mjs','.cjs'].some(ext=>path.endsWith(ext)));
+      const sourceStageComplete=!!workflow && eligibleForProbe.length>0 &&
+        eligibleForProbe.every(path=>terminalReadPages.has(path));
+      if(sourceStageComplete && constraints?.action?.includes('read_file') &&
+         !workflow!.snapshot().pending && !workflow!.snapshot().verifiedEvidenceFocus) {
+        constraints={...constraints,action:[...new Set([
+          ...constraints.action.filter(action=>!['read_file','continue_inspection','list_files','search_files'].includes(action)),
+          'plan_probe'])]};
+        await appendFile(logFile,'[MANDATORY_PROBE_TRANSITION] '+
+          JSON.stringify({turn:turn+1,completed:eligibleForProbe.length})+'\n');
+      }
       // A stage permitting plan_probe also permits its controller-executed
       // equivalent, without changing the underlying workflow validation.
       if(workflow && constraints?.action?.includes('plan_probe') && !constraints.action.includes('probe_intent'))
@@ -663,14 +689,16 @@ export async function runLocalAudit(
               for(const entry of entries) {
                 if(entry.operation!=='send')continue;
                 const sequence=buildBaselineSequence(menu,entry.selector,!!risk);
-                if(!sequence)continue;
+                if(!sequence){await recordProbeDisposition(path,entry.selector,'solidity_sequence','unsupported','baseline_sequence_unavailable');continue;}
                 const candidate={action:'plan_probe',path,query:entry.selector,
                   answer:'solidity_sequence',
                   hypothesis:risk?
                     'Check whether a nonadministrator can mutate the source-declared privileged '+risk.role+' role. Compare source-proven authority checks and before/after on-chain observations; independent review must establish impact.':
                     'Observe the declared transaction and getter; check authorization and state effects against source.',
                   sequence};
-                if(!workflow.validate(candidate as any)){plan=candidate;break;}
+                const rejection=workflow.validate(candidate as any);
+                if(!rejection){plan=candidate;break;}
+                await recordProbeDisposition(path,candidate.query,candidate.answer,'rejected',String(rejection).slice(0,240));
               }
             }else {
               const traced=tracedCandidates.find(candidate=>candidate.path===path);
@@ -693,31 +721,28 @@ export async function runLocalAudit(
                 const identity=JSON.stringify([candidate.query,candidate.answer]);
                 if(seen.has(identity))continue;
                 seen.add(identity);
+                if(probeDispositions.has(probeIdentity(path,candidate.query,candidate.answer)) &&
+                   probeDispositions.get(probeIdentity(path,candidate.query,candidate.answer))?.status!=='selected')continue;
                 if(!candidate.answer.endsWith('_sequence') &&
                    !(await declaredProbeTarget(full,candidate.query,candidate.answer,
                      'sequence' in candidate ? candidate.sequence : undefined))) {
-                  await appendFile(logFile,'[CONTROLLER_PROBE_CANDIDATE_SKIPPED] '+
-                    JSON.stringify({path,selector:candidate.query,kind:candidate.answer,
-                      reason:'declaration_preflight_failed'})+'\n');
+                  await recordProbeDisposition(path,candidate.query,candidate.answer,'unsupported','declaration_preflight_failed');
                   continue;
                 }
                 const attempted=workflow.snapshot().observations.some(item=>
                   item.path===path && item.function===candidate.query && item.kind===candidate.answer);
                 if(attempted) {
-                  await appendFile(logFile,'[CONTROLLER_PROBE_CANDIDATE_SKIPPED] '+
-                    JSON.stringify({path,selector:candidate.query,kind:candidate.answer,
-                      reason:'already_observed'})+'\n');
+                  await recordProbeDisposition(path,candidate.query,candidate.answer,'observed','existing_workflow_observation');
                   continue;
                 }
                 const rejection=workflow.validate(candidate as any);
                 if(!rejection){plan=candidate;break;}
-                await appendFile(logFile,'[CONTROLLER_PROBE_CANDIDATE_SKIPPED] '+
-                  JSON.stringify({path,selector:candidate.query,kind:candidate.answer,
-                    reason:'workflow_rejected',detail:String(rejection).slice(0,240)})+'\n');
+                await recordProbeDisposition(path,candidate.query,candidate.answer,'rejected',String(rejection).slice(0,240));
               }
             }
             if(!plan)continue;
             controllerAction=plan;
+            await recordProbeDisposition(path,plan.query,plan.answer,'selected','controller_scheduled');
             await appendFile(logFile,'[CONTROLLER_SOURCE_PROBE_SELECTED] '+
               JSON.stringify({path,selector:plan.query,kind:plan.answer})+'\n');
             break;
@@ -813,6 +838,10 @@ export async function runLocalAudit(
         const eligible=(limits.initialSourcePaths||[]).filter(path=>
           /^source-[0-9]+\//.test(path) && /\.(?:sol|java|py|js|mjs|cjs)$/.test(path));
         const unreadRemaining=eligible.filter(path=>!terminalReadPages.has(path) && !snapshot.readPaths.includes(path));
+        if(eligible.length && !unreadRemaining.length && unresolvedProbes().length) {
+          await appendFile(logFile,'[CONTROLLER_UNRESOLVED_PROBES] '+JSON.stringify(unresolvedProbes())+'\n');
+          throw new Error('CONTROLLER_UNRESOLVED_PROBES: selected probes require verifier dispositions');
+        }
         if(eligible.length && !unreadRemaining.length &&
            workflow.finishControllerCandidates()) {
           constraints=await workflow.constraints();
@@ -822,6 +851,9 @@ export async function runLocalAudit(
             JSON.stringify({observations:workflow.snapshot().observations.length,completedFiles:eligible.length})+'\n');
         }
       }
+      if(fullIndexMode && !controllerAction && constraints?.action?.length===1 &&
+         constraints.action[0]==='final' && unresolvedProbes().length)
+        throw new Error('CONTROLLER_UNRESOLVED_PROBES: final reporting blocked until selected probes have verifier dispositions');
       // Never delegate source selection, probe execution or workflow transitions
       // to Qwen in controller-owned indexed investigations. Only a semantic
       // final assessment may use the model, after deterministic work is done.
@@ -1900,6 +1932,10 @@ export async function runLocalAudit(
             }
           } else if (name === "read_file") {
             const rawPage = await readSourcePage(full,offset,pageSize);
+            // A terminal page must never be scheduled again, even if formatting
+            // its optional probe menu fails. The source cursor is authoritative.
+            const readPath=relative(root,full).split(sep).join('/');
+            if(rawPage.nextOffset===null)terminalReadPages.set(readPath,{offset:rawPage.start});
             output = fitOutput(JSON.stringify(rawPage)).output;
             const page = JSON.parse(output) as typeof rawPage;
             // Present grounded choices as soon as a file's last page is read,
@@ -1922,7 +1958,18 @@ export async function runLocalAudit(
             }
 
           } else throw new Error("Unknown tool");
-          output=fitOutput(output).output;
+          // Optional probe menus must never invalidate a successfully read page.
+          // Fall back to the source-only page if the enlarged payload cannot fit.
+          if(name==='read_file' && !output.startsWith('Tool error:')) {
+            try {
+              const fitted=fitOutput(output).output;
+              JSON.parse(fitted);
+              output=fitted;
+            } catch {
+              output=fitOutput(JSON.stringify(await readSourcePage(full,offset,pageSize))).output;
+              await appendFile(logFile,'[PROBE_MENU_FIT_FALLBACK] '+JSON.stringify({path:relative(root,full),offset})+'\\n');
+            }
+          } else output=fitOutput(output).output;
           if(name==='read_file') {
             // Menus and escaping can force a second fit. Only the final
             // delivered range is read evidence or a pagination cursor.
@@ -1984,6 +2031,17 @@ export async function runLocalAudit(
           sequence:call.function.arguments?.sequence},output);
         let probeStatus:string|undefined;
         if(["verify_source","verify_python"].includes(call.function.name)){
+          const probePath=String(call.function.arguments?.path||'');
+          const probeSelector=String(call.function.arguments?.query||'');
+          const probeKind=String(call.function.arguments?.kind||'');
+          let disposition='failed';
+          let dispositionReason=output.slice(0,240);
+          try {
+            const result=JSON.parse(output);
+            disposition=String(result.status||'unknown');
+            dispositionReason=String(result.detail||result.limitation||result.error||'verifier_completed').slice(0,240);
+          }catch{}
+          await recordProbeDisposition(probePath,probeSelector,probeKind,disposition,dispositionReason);
           try {
             const probeResult=JSON.parse(output);
             probeStatus=String(probeResult.status || "unknown").slice(0,100);
