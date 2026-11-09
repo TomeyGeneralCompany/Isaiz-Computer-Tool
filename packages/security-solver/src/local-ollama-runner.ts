@@ -10,6 +10,8 @@ import {rankTracedSourceCandidates} from './controller-source-candidates';
 import { InvestigationWorkflow } from "./investigation-workflow";
 import {guidedProbeAcrossSourceChain,guidedSourceProbe} from './source-guided-probes';
 import {controllerPolyglotPlan,canonicalControllerPolyglotIntent} from './controller-polyglot-plan';
+import {sourceStatefulPlans} from './controller-stateful-candidates';
+import {controllerJavaProbes} from './controller-java-probe-inputs';
 import {declaredProbeTarget, sourceDeclarationHints, supportedJavaProbeHints, javaProbeSelectorCompatible, probeChoices} from './probe-target-validation';
 import { postQwenAgentJson } from "./qwen-agent-transport";
 import { AuditAllowance } from "./audit-allowance";
@@ -102,7 +104,6 @@ export async function runLocalAudit(
   if(adapter==='qwen-agent'&&!structured)throw new Error('Qwen-Agent adapter requires JSON action protocol');
   let successfulReads = 0;
   let rejectedRequiredProbeFinals = 0;
-  let controllerAutoProbeCount = 0;
   let controllerAutoReadCount = 0;
   let indexedLastProgressKey = '';
   let indexedSyntheticStalls = 0;
@@ -365,17 +366,24 @@ export async function runLocalAudit(
           // here silently disabled guided probes for real-world Solidity files.
           const guidedSource=delivered.nextOffset===null && offset===0
             ? delivered.text : await readFile(full,'utf8');
-          const hint=await guidedProbeAcrossSourceChain(root,path,guidedSource);
+          const guidedHint=await guidedProbeAcrossSourceChain(root,path,guidedSource);
+          const fallbackPlan=!guidedHint ? controllerPolyglotPlan(path,guidedSource) : null;
+          const hint=guidedHint || (fallbackPlan ? {
+            functionName:fallbackPlan.query,kind:fallbackPlan.answer,
+            hypothesis:fallbackPlan.hypothesis,sequence:fallbackPlan.sequence
+          } : null);
           if(!hint) {
             await appendFile(logFile,'[GUIDED_PROBE_NO_CANDIDATE] '+JSON.stringify({
               path,paginated:delivered.nextOffset!==null,sourceCharacters:guidedSource.length})+'\n');
             continue;
           }
-          const planned={action:'plan_probe',path,query:hint.functionName,answer:hint.kind,hypothesis:hint.hypothesis};
+          const planned={action:'plan_probe',path,query:hint.functionName,answer:hint.kind,hypothesis:hint.hypothesis,
+            ...('sequence' in hint && hint.sequence!==undefined ? {sequence:hint.sequence} : {})};
           if(workflow.validate(planned as any))continue;
           workflow.plan(planned as any);
           let raw:string;
-          try {raw=await limits.verifyPython(path,hint.functionName,hint.kind);}
+          try {raw=await limits.verifyPython(path,hint.functionName,hint.kind,
+            'sequence' in hint ? hint.sequence as any : undefined);}
           catch(error) {raw=JSON.stringify({status:'probe_failed',detail:String(error).slice(0,500),behavior_observed:false});}
           let result:any;
           try {result=JSON.parse(raw);}catch {result={status:'probe_failed',detail:'Verifier returned invalid JSON',behavior_observed:false};}
@@ -391,7 +399,8 @@ export async function runLocalAudit(
           if(evidenceId)result.controllerEvidenceId=evidenceId;
           if(evidenceId)workflow?.recordEvidence(evidenceId);
           const output=JSON.stringify(result);
-          const verify={action:'verify_source',path,query:hint.functionName,answer:hint.kind};
+          const verify={action:'verify_source',path,query:hint.functionName,answer:hint.kind,
+            ...('sequence' in hint && hint.sequence!==undefined ? {sequence:hint.sequence} : {})};
           workflow.observe(verify as any,output);
           if(result.status==='behavior_observed' &&
              typeof result.caseId==='string' && limits.onVerifiedCase &&
@@ -438,7 +447,8 @@ export async function runLocalAudit(
           }
 
           if(['behavior_observed','behavior_not_observed'].includes(result.status))
-            allowance.probe(JSON.stringify([path,hint.functionName,hint.kind,undefined]),0);
+            allowance.probe(JSON.stringify([path,hint.functionName,hint.kind,
+              'sequence' in hint ? hint.sequence : undefined]),0);
           const record:Message={role:'assistant',content:JSON.stringify(verify)};
           const available=messageBudget-3000-JSON.stringify(messages.slice(2)).length;
           try {
@@ -628,7 +638,8 @@ export async function runLocalAudit(
       if(!controllerAction && structured && workflow &&
          process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false' &&
          !workflow.snapshot().verifiedEvidenceFocus &&
-         controllerAutoProbeCount<Math.max(24,(limits.initialSourcePaths||[]).length) &&
+         // Candidate exhaustion is evidence-driven: never stop after an arbitrary number of selections.
+         // Previously attempted selectors are excluded below using persisted observations.
          constraints?.action?.includes('plan_probe')) {
         const inspected=new Set(workflow.snapshot().readPaths);
         // Candidate ranking is controller-owned. Iteration in reverse read
@@ -674,18 +685,53 @@ export async function runLocalAudit(
               const tracedPlan=traced && await declaredProbeTarget(full,traced.selector)
                 ? {action:'plan_probe' as const,path,query:traced.selector,
                     answer:traced.kind,hypothesis:traced.hypothesis}:null;
-              const candidate=tracedPlan ?? controllerPlan ?? (hint ? {action:'plan_probe' as const,
-                path,query:hint.functionName,answer:hint.kind,hypothesis:hint.hypothesis}:null);
-              if(candidate && (candidate.answer.endsWith('_sequence') ||
-                  await declaredProbeTarget(full,candidate.query))) {
+              // Evaluate every supported plan for this inspected file. The old
+              // single-candidate choice could permanently hide the next method
+              // after the first one had already been observed or rejected.
+              const candidates=[
+                ...(tracedPlan?[tracedPlan]:[]),
+                ...(controllerPlan?[controllerPlan]:[]),
+                ...sourceStatefulPlans(path,code).map(item=>({
+                  action:'plan_probe' as const,path,query:item.selector,answer:item.kind,
+                  hypothesis:'Observe the source-declared state transition; verify actual behavior independently.',
+                  sequence:item.sequence
+                })),
+                ...controllerJavaProbes(path,code).map(item=>({
+                  action:'plan_probe' as const,path,query:item.selector,answer:'java_sequence' as const,
+                  hypothesis:'Observe the declared Java method with source-derived arguments and independent replay.',
+                  sequence:item.sequence
+                })),
+                ...(hint?[{action:'plan_probe' as const,path,query:hint.functionName,
+                  answer:hint.kind,hypothesis:hint.hypothesis}]:[])
+              ];
+              const seen=new Set<string>();
+              for(const candidate of candidates) {
+                const identity=JSON.stringify([candidate.query,candidate.answer]);
+                if(seen.has(identity))continue;
+                seen.add(identity);
+                if(!candidate.answer.endsWith('_sequence') &&
+                   !(await declaredProbeTarget(full,candidate.query))) {
+                  await appendFile(logFile,'[CONTROLLER_PROBE_CANDIDATE_SKIPPED] '+
+                    JSON.stringify({path,selector:candidate.query,kind:candidate.answer,
+                      reason:'declaration_preflight_failed'})+'\n');
+                  continue;
+                }
                 const attempted=workflow.snapshot().observations.some(item=>
                   item.path===path && item.function===candidate.query && item.kind===candidate.answer);
-                if(!attempted && !workflow.validate(candidate as any))plan=candidate;
+                if(attempted) {
+                  await appendFile(logFile,'[CONTROLLER_PROBE_CANDIDATE_SKIPPED] '+JSON.stringify({
+                    path,selector:candidate.query,kind:candidate.answer,reason:'already_observed'})+'\n');
+                  continue;
+                }
+                const rejection=workflow.validate(candidate as any);
+                if(!rejection){plan=candidate;break;}
+                await appendFile(logFile,'[CONTROLLER_PROBE_CANDIDATE_SKIPPED] '+JSON.stringify({
+                  path,selector:candidate.query,kind:candidate.answer,
+                  reason:'workflow_rejected',detail:String(rejection).slice(0,240)})+'\n');
               }
             }
             if(!plan)continue;
             controllerAction=plan;
-            controllerAutoProbeCount++;
             await appendFile(logFile,'[CONTROLLER_SOURCE_PROBE_SELECTED] '+
               JSON.stringify({path,selector:plan.query,kind:plan.answer})+'\n');
             break;
@@ -1145,7 +1191,7 @@ export async function runLocalAudit(
               const target=await safePath(action.path);
               declared=action.path.endsWith('.sol') ?
                 await solidityIndex.hasFunction(target,action.query) :
-                await declaredProbeTarget(target,action.query);
+                await declaredProbeTarget(target,action.query,action.answer,action.sequence);
             }catch{}
             if(!declared) {
               let hints:string[]=[];
