@@ -46,6 +46,27 @@ try {
   assert.ok(!text.includes('AUDIT_STALLED: indexed source'), 'Old fatal index stall must not recur');
   assert.ok(generations<=80,'Fixed model cannot advance to probes, but run must respect turn allowance');
   assert.ok(delivered.length<=2,'Only the actual source and optional context recovery may be read');
+  // Production controller authority: even when no executable probe exists,
+  // Qwen must not be called to choose a new source or transition. The
+  // controller reads exactly once and exposes an explicit diagnostic.
+  const ownedPath='source-1/src/services/no_candidate.py';
+  const ownedFull=join(root,ownedPath);
+  await mkdir(dirname(ownedFull),{recursive:true});
+  await writeFile(ownedFull,'# No callable function or supported probe here\\n');
+  process.env.LOCAL_CONTROLLER_OWNED_ACTIONS='true';
+  const beforeOwnedGenerations=generations;
+  const ownedReads:string[]=[];
+  const ownedLog=join(root,'controller-owned.log');
+  await assert.rejects(runLocalAudit('Inspect source',ownedLog,20000,root,'mock',undefined,{
+    productionWorkflow:true,verifyPython:async()=>JSON.stringify({status:'behavior_not_observed'}),
+    maxTurns:8,numCtx:8192,numPredict:256,initialSourcePaths:[ownedPath],
+    onRead:path=>ownedReads.push(path)
+  }),/CONTROLLER_CANDIDATE_QUEUE_EXHAUSTED|CONTROLLER_UNRESOLVED_ACTION/);
+  assert.equal(generations,beforeOwnedGenerations,
+    'Controller-owned investigation must not ask Qwen to choose sources or transitions');
+  assert.deepEqual(ownedReads,[ownedPath],
+    'Controller must read the ranked file once and retain its cursor without model navigation');
+  console.log('Controller-owned indexed source read and zero Qwen navigation calls PASSED');
   console.log('Indexed controller preserves source evidence and offers probe handoff under uncooperative model PASSED');
 } finally {
   server.closeAllConnections();server.close();
