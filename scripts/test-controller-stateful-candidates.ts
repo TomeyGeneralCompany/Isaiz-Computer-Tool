@@ -25,4 +25,16 @@ assert.deepEqual(sourceStatefulPlans('src/plain.py','def render(x):\n    return 
 assert.deepEqual(sourceStatefulPlans('src/decoy.cjs',
   'exports.make = function(x) {return x;};\nexports.advance=function(v){return v;};\n'),[],
   'unrelated exports must not imply the returned object has a method');
+const multipleJs='exports.make=function(start){let value=start;return {\n'+
+  ' advance(by){value+=by;return value;},\n'+
+  ' retreat(by){value-=by;return value;}\n};};\n';
+const multiplePy='class Counter:\n'+
+  '    def advance(self,by=1):\n        return by\n'+
+  '    def retreat(self,by=1):\n        return -by\n'+
+  'def make(start=0):\n    return Counter(start)\n';
+assert.deepEqual(sourceStatefulPlans('src/counter.cjs',multipleJs).map(p=>p.selector),
+  ['advance','retreat'],'JS controller must not hide second executable method');
+assert.deepEqual(sourceStatefulPlans('src/counter.py',multiplePy).map(p=>p.selector),
+  ['advance','retreat'],'Python controller must not hide second executable method');
+
 console.log('Source-grounded Python JavaScript stateful controller plans PASSED');
