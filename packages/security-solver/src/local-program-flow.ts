@@ -201,7 +201,7 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
         JSON.stringify(fullSourceIndex),{mode:0o600});
       await appendFile(logFile,'[CONTROLLER_FULL_SOURCE_INDEX] '+
         JSON.stringify({eligible:fullSourceIndex.eligibleFiles,indexed:fullSourceIndex.indexedFiles,
-          skipped:fullSourceIndex.skipped.length,complete:fullSourceIndex.complete})+'\\n');
+          skipped:fullSourceIndex.skipped.length,complete:fullSourceIndex.complete})+'\n');
     }
     const controllerRankedPaths=fullSourceIndex?.rankedPaths||[];
     const selection=await prioritizeSourceCandidates(root,eligiblePaths,
@@ -262,7 +262,7 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
             await appendFile(logFile,'[PROBE_RESULT] '+JSON.stringify({
               path:route.entry,function:route.selector,kind:'entry_html_reflection',
               status:result.status,caseId:result.caseId,
-              origin:'controller-indexed-entry'})+'\\n');
+              origin:'controller-indexed-entry'})+'\n');
             // Source graph and executed entry prove only a candidate. Reproduce
             // the exact terminal function separately; attach its real caseId
             // and a source-line call from the terminal transform. Independent
@@ -294,14 +294,14 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
                   await appendFile(logFile,'[PROBE_RESULT] '+JSON.stringify({
                     path:route.sink,function:selector,kind:'html_reflection',
                     status:terminal.status,caseId:terminal.caseId,
-                    origin:'controller-indexed-terminal'})+'\\n');
+                    origin:'controller-indexed-terminal'})+'\n');
                   indexedVerifiedCandidates.push(proof);
                   controllerEntryCases.set(proof.caseId,result.caseId);
                   await appendFile(logFile,'[CONTROLLER_INDEXED_PROOF_CANDIDATE] '+
                     JSON.stringify({entry:route.entry,chain:route.chain,
                       sink:route.sink,sinkCaseId:proof.caseId,
                       entryCaseId:result.caseId,callerLine:callLine,
-                      independentReviewRequired:true})+'\\n');
+                      independentReviewRequired:true})+'\n');
                 }
               }
             }
@@ -309,14 +309,14 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
           await appendFile(logFile,'[CONTROLLER_INDEXED_ENTRY_PROBE] '+
             JSON.stringify({entry:route.entry,sink:route.sink,
               stages:route.chain.length,status:result.status,
-              caseId:valid?result.caseId:null,verified:valid})+'\\n');
+              caseId:valid?result.caseId:null,verified:valid})+'\n');
         }catch(error){
           await appendFile(logFile,'[CONTROLLER_INDEXED_ENTRY_UNAVAILABLE] '+
-            JSON.stringify({entry:route.entry,error:String(error).slice(0,180)})+'\\n');
+            JSON.stringify({entry:route.entry,error:String(error).slice(0,180)})+'\n');
         }
       }
       await appendFile(logFile,'[CONTROLLER_INDEXED_ENTRY_SUMMARY] '+
-        JSON.stringify({sourceRoutes:routes.length,attempted,observed})+'\\n');
+        JSON.stringify({sourceRoutes:routes.length,attempted,observed})+'\n');
     }
     // Controller-side role mutation reproduction uses the SAME existing
     // isolated Solidity sequence verifier and independent reviewer. Source
@@ -341,7 +341,7 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
           const sequence=roleConsumerImpactSequence(code,role.role,role.method);
           if(!sequence){
             await appendFile(logFile,'[CONTROLLER_SOLIDITY_IMPACT_UNSUPPORTED] '+
-              JSON.stringify({path,role:role.role,reason:'No supported protected consumer sequence'})+'\\n');
+              JSON.stringify({path,role:role.role,reason:'No supported protected consumer sequence'})+'\n');
             continue;
           }
           const observation=JSON.parse(await session.probe(
@@ -349,19 +349,19 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
           await appendFile(logFile,'[PROBE_RESULT] '+JSON.stringify({
             path,function:role.selector,kind:'solidity_sequence',
             status:observation.status,caseId:observation.caseId||null,
-            origin:'controller-indexed-solidity-role'})+'\\n');
+            origin:'controller-indexed-solidity-role'})+'\n');
           if(observation.status!=='behavior_observed'||
              typeof observation.caseId!=='string'||
              !session.cases.has(observation.caseId) ||
              !roleConsumerImpactObserved(observation.observations,role.role,role.method)){
             await appendFile(logFile,'[CONTROLLER_SOLIDITY_IMPACT_NOT_PROVEN] '+
-              JSON.stringify({path,status:observation.status,caseId:observation.caseId||null})+'\\n');
+              JSON.stringify({path,status:observation.status,caseId:observation.caseId||null})+'\n');
             continue;
           }
           await appendFile(logFile,'[CONTROLLER_SOLIDITY_CONSUMER_IMPACT_OBSERVED] '+
             JSON.stringify({path,role:role.role,mutator:role.method,
               caseId:observation.caseId,baselineUnauthorizedBlocked:true,
-              postMutationConsumerSucceeded:true,creditChanged:true})+'\\n');
+              postMutationConsumerSucceeded:true,creditChanged:true})+'\n');
           const statement=new RegExp('\\bfunction\\s+'+role.method+'\\s*\\(');
           const line=code.split('\n').findIndex(text=>statement.test(text))+1;
           if(!line)continue;
@@ -378,10 +378,10 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
           await appendFile(logFile,'[CONTROLLER_INDEXED_PROOF_CANDIDATE] '+
             JSON.stringify({path,selector:role.selector,
               caseId:observation.caseId,role:role.role,
-              callerLine:line,independentReviewRequired:true})+'\\n');
+              callerLine:line,independentReviewRequired:true})+'\n');
         }catch(error){
           await appendFile(logFile,'[CONTROLLER_INDEXED_SOLIDITY_UNAVAILABLE] '+
-            JSON.stringify({path,error:String(error).slice(0,3200)})+'\\n');
+            JSON.stringify({path,error:String(error).slice(0,3200)})+'\n');
         }
       }
     }
@@ -561,7 +561,7 @@ Do not claim production testing, JavaScript execution, file access or other effe
       : legacyPrompt;
     await appendFile(logFile,'[AUDIT_PINNED_ENVELOPE] '+JSON.stringify({
       fullIndex:!!fullSourceIndex,promptCharacters:prompt.length,
-      fullInventoryFiles:fullSourceIndex?.indexedFiles||0})+'\\n');
+      fullInventoryFiles:fullSourceIndex?.indexedFiles||0})+'\n');
     let parsed:z.infer<typeof huntSchema> | undefined;
     signal.throwIfAborted();
     beforeInspection?.();
@@ -583,7 +583,7 @@ Do not claim production testing, JavaScript execution, file access or other effe
       await appendFile(logFile,'[CONTROLLER_INDEXED_REVIEW_HANDOFF] '+
         JSON.stringify({candidates:indexedVerifiedCandidates.length,
           caseIds:indexedVerifiedCandidates.map(c=>c.caseId),
-          modelNavigationSkipped:true,autoApproved:false})+'\\n');
+          modelNavigationSkipped:true,autoApproved:false})+'\n');
     } else try {
       answer=await runLocalAudit(prompt,logFile,getConfig().SECURITY_SOURCE_CODE_TIMEOUT_MINUTES*60000,root,
       process.env.LOCAL_OLLAMA_MODEL || "qwen3:4b",undefined,{
@@ -797,7 +797,7 @@ Do not claim production testing, JavaScript execution, file access or other effe
                           caseId:proposed.caseId,callerFile:proposed.callerFile,
                           callerLine:proposed.callerLine,entryCaseId:observed.caseId,
                           source:'executed entry plus source-verified caller',
-                          review:'required, no automatic approval'})+'\\n');
+                          review:'required, no automatic approval'})+'\n');
                       }
                     }
 
@@ -898,11 +898,11 @@ Do not claim production testing, JavaScript execution, file access or other effe
                Array.isArray(proposed.findings) && proposed.findings.length &&
                proposed.findings.every((finding:any)=>!session.cases.has(finding?.caseId)) &&
                session.cases.size===0) {
-              await appendFile(logFile,'[UNRECORDED_CASES_DROPPED] '+JSON.stringify({count:proposed.findings.length})+'\\n');
+              await appendFile(logFile,'[UNRECORDED_CASES_DROPPED] '+JSON.stringify({count:proposed.findings.length})+'\n');
               proposed.findings=[];
               proposed.outcome='no_testable_candidate';
               proposed.reason='No reproduction was recorded. If the inspected source has a compatible declared function, first use plan_probe then verify_source; otherwise inspect the next eligible candidate and record a scoped incomplete result.';
-              await appendFile(logFile,'[PROBE_REQUIRED_FOR_FINDING] No recorded case ID; plan a compatible source probe before claiming a vulnerability\\n');
+              await appendFile(logFile,'[PROBE_REQUIRED_FOR_FINDING] No recorded case ID; plan a compatible source probe before claiming a vulnerability\n');
             }
             // Source-verified caller reproduction supersedes the helper's
             // case ID for the SAME observed flow. The controller owns this
@@ -933,7 +933,7 @@ Do not claim production testing, JavaScript execution, file access or other effe
             // selected-source coverage gate instead of rejecting the same final
             // until all 80 turns are exhausted.
             const recovered=recoverEmptyUnprobedFinal(proposed,session.completedProbes,session.blockedReason);
-            if(recovered!==proposed)await appendFile(logFile,'[EMPTY_UNPROBED_FINAL_RECOVERED] Applying selected-source coverage gate\\n');
+            if(recovered!==proposed)await appendFile(logFile,'[EMPTY_UNPROBED_FINAL_RECOVERED] Applying selected-source coverage gate\n');
             // Report metadata belongs to the controller, not the language
             // model. For a real observed case, reconstruct a uniquely
             // inspected caller from verified source rather than trusting a
@@ -992,7 +992,7 @@ Do not claim production testing, JavaScript execution, file access or other effe
                     caseId:candidate.caseId,source:record.spec.file,callerFile:chosen.file,
                     callerLine:chosen.line,sourceSha256:record.sourceSha256,
                     reason:'single inspected caller verified against recorded case'
-                  })+'\\n');
+                  })+'\n');
                 }
               }
             }
@@ -1027,7 +1027,7 @@ Do not claim production testing, JavaScript execution, file access or other effe
                 if(retained!==candidates) {
                   (recovered as {findings:any[]}).findings=retained;
                   await appendFile(logFile,'[CONTROLLER_UNSUPPORTED_REPORTS_PRUNED] '+
-                    JSON.stringify({removed:candidates.length-retained.length,remaining:retained.map(c=>c.caseId)})+'\\n');
+                    JSON.stringify({removed:candidates.length-retained.length,remaining:retained.map(c=>c.caseId)})+'\n');
                 }
               }
             }
@@ -1124,13 +1124,13 @@ Do not claim production testing, JavaScript execution, file access or other effe
               if(sites.length>1)await appendFile(logFile,'[CALLER_CANDIDATES] '+JSON.stringify({
                 caseId:finding.caseId,sites:sites.slice(0,8),
                 exactSites,reason:reconciled?'unique exact qualified call':'multiple inspected call sites require disambiguation'
-              })+'\\n');
+              })+'\n');
               if(reconciled) {
                 finding.callerFile=reconciled.file;
                 finding.callerLine=reconciled.line;
                 await appendFile(logFile,'[CALLER_RECONCILED] '+JSON.stringify({caseId:finding.caseId,
                   callerFile:finding.callerFile,callerLine:finding.callerLine,
-                  reason:exactSites.length===1?'unique inspected qualified caller':'unique previously inspected caller'})+'\\n');
+                  reason:exactSites.length===1?'unique inspected qualified caller':'unique previously inspected caller'})+'\n');
               }
             }
             for(const finding of value.findings) {
@@ -1207,7 +1207,7 @@ Do not claim production testing, JavaScript execution, file access or other effe
         modelError:String(error).slice(0,250),independentReviewRequired:true});
       await appendFile(logFile,'[CONTROLLER_MODEL_RECOVERY] '+JSON.stringify({
         caseId:independentlyProvenCandidate.caseId,
-        reason:String(error).slice(0,240),autoApproval:false})+'\\n');
+        reason:String(error).slice(0,240),autoApproval:false})+'\n');
     }
     signal.throwIfAborted();
     await note('MODEL_DONE',{completedProbes:session.completedProbes});
@@ -1223,7 +1223,7 @@ Do not claim production testing, JavaScript execution, file access or other effe
         await appendFile(logFile,'[CONTROLLER_PROOF_FOR_REVIEW] '+JSON.stringify({
           caseId:candidate.caseId,source:'controller independent entry reproduction',
           reason:'model nomination is not a requirement for independently reviewed evidence',
-          autoApproval:false})+'\\n');
+          autoApproval:false})+'\n');
       }
     }
     if(parsed?.outcome === "no_testable_candidate")return {auditRecord,success:true,coverage:"partial",acquisitionChecks,capabilityChecks,
@@ -1405,7 +1405,7 @@ export async function independentReview(finding:SecurityFinding,program:Security
       await appendFile(logFile,'[CONTROLLER_FACTUAL_REVIEW] '+JSON.stringify({
         caseId:id,kind:record.spec.kind,verdict:review.verdict,
         recommendation:review.recommendation,sourceDigest:chainEvidence.sourceDigest,
-        externalImpactProven:false})+'\\n');
+        externalImpactProven:false})+'\n');
       return {review,replay,caseId:id,policy,sourceSha256:record.sourceSha256,
         replayedAt:new Date().toISOString()};
     }
