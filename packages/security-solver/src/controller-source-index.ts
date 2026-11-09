@@ -56,6 +56,7 @@ export async function buildControllerSourceIndex(
       files.push({path,sha256:createHash('sha256').update(content).digest('hex'),
         bytes:size,risk,declarations,dependencies,excerpt});
     }catch{
+      signal?.throwIfAborted();
       skipped.push({path,reason:'unreadable'});
     }
   }

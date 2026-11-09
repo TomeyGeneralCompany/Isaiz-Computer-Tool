@@ -51,6 +51,14 @@ export class InvestigationWorkflow {
     this.evidenceReferences=this.evidenceReferences.slice(-24);
   }
 
+  private controllerCandidatesComplete=false;
+  finishControllerCandidates() {
+    if(this.state.pending || this.requiredSource)return false;
+    this.controllerCandidatesComplete=true;
+    this.feedback('All supported controller candidates and source pages were examined. Assess only the recorded evidence; explain unsupported execution or missing impact rather than inventing a finding.');
+    return true;
+  }
+
   private pageTurns=0;
   private continuations=new Map<string,number>();
   private readSpans=new Set<string>();
@@ -61,7 +69,9 @@ export class InvestigationWorkflow {
     // Prior state directs navigation only. Current-run reads and probes must revalidate it.
     const saved=value as any;
     if(saved?.version!==1 || !Array.isArray(saved.notes))return;
-    this.evidenceReferences=Array.isArray(saved.evidenceReferences)?saved.evidenceReferences.filter((id:unknown)=>typeof id==='string'&&/^[a-f0-9]{64}$/.test(id)).slice(-24):[];
+    // Checkpoint IDs belong to the previous run's archive. They cannot be
+    // dereferenced in a fresh log or promoted to current-run evidence.
+    this.evidenceReferences=[];
     this.priorNotes=saved.notes.filter((n:unknown)=>typeof n==='string').slice(-12).map((n:string)=>n.slice(0,400));
   }
   memory() {
@@ -83,6 +93,7 @@ export class InvestigationWorkflow {
     if(this.pageTurns>=8)this.state.inspections=Math.max(6,this.state.inspections);
     this.state=await graph.invoke(this.state);
     if(this.requiredSource)return {action:['read_file'],path:[this.requiredSource]};
+    if(this.controllerCandidatesComplete && !this.state.pending)return {action:['final']};
     // Once the controller has source-grounded reachability evidence for an
     // observed reproduction, further exploration cannot displace this case.
     // Only a final technical assessment (including a supported rejection) is

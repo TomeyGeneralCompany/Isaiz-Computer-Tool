@@ -2,7 +2,7 @@
  * Qwen never invents a selector, a sequence or its arguments; normal workflow
  * validation and sandbox execution are still required. Not vulnerability proof.
  */
-import {guidedSourceProbe} from './source-guided-probes';
+import {guidedSourceProbe,guidedSourceProbes} from './source-guided-probes';
 import {sourceStatefulPlans} from './controller-stateful-candidates';
 import {controllerJavaProbes} from './controller-java-probe-inputs';
 
@@ -62,9 +62,9 @@ export function canonicalControllerPolyglotIntent(path:string,source:string,
   requested:{query:string;answer:string}):ControllerPolyglotPlan|null {
   if(!requested.query.trim())return controllerPolyglotPlan(path,source);
   const choices:ControllerPolyglotPlan[]=[];
-  const direct=guidedSourceProbe(path,source);
-  if(direct)choices.push({action:'plan_probe',path,query:direct.functionName,
-    answer:direct.kind,hypothesis:direct.hypothesis});
+  for(const direct of guidedSourceProbes(path,source))
+    choices.push({action:'plan_probe',path,query:direct.functionName,
+      answer:direct.kind,hypothesis:direct.hypothesis});
   for(const p of sourceStatefulPlans(path,source))
     choices.push({action:'plan_probe',path,query:p.selector,answer:p.kind,
       hypothesis:'Controller source-declared same-instance state observation; an observation is not security proof.',
@@ -80,4 +80,24 @@ export function canonicalControllerPolyglotIntent(path:string,source:string,
   // literal HTML sink gets the context-aware HTML probe, not a generic state
   // sequence with weaker observations.
   return matches.find(p=>p.answer==='html_reflection')||matches[0]||null;
+}
+
+/** Enumerate every grounded adapter in a file, retaining deterministic order.
+ * A failed/negative first method must not conceal the remaining declarations.
+ * All plans still require isolated execution and independent impact review.
+ */
+export function controllerPolyglotPlans(path:string,source:string):ControllerPolyglotPlan[] {
+  if(source.length>256000 || !/\.(?:py|java|js|mjs|cjs)$/.test(path))return [];
+  const plans:ControllerPolyglotPlan[]=[];
+  for(const hint of guidedSourceProbes(path,source))plans.push({
+    action:'plan_probe',path,query:hint.functionName,answer:hint.kind,hypothesis:hint.hypothesis});
+  for(const hint of sourceStatefulPlans(path,source))plans.push({
+    action:'plan_probe',path,query:hint.selector,answer:hint.kind,sequence:hint.sequence,
+    hypothesis:'Observe the source-declared method in a bounded same-instance sequence. Unchanged state disproves the proposed transition; an observation alone does not establish a security violation.'});
+  for(const hint of controllerJavaProbes(path,source))plans.push({
+    action:'plan_probe',path,query:hint.selector,answer:'java_sequence',sequence:hint.sequence,
+    hypothesis:'Observe the selected Java declaration with source-compatible primitive arguments and before/after calls. Unchanged state disproves the transition; independent review must establish any security impact.'});
+  const seen=new Set<string>();
+  return plans.filter(plan=>{const id=JSON.stringify([plan.query,plan.answer,plan.sequence]);
+    if(seen.has(id))return false;seen.add(id);return true;});
 }

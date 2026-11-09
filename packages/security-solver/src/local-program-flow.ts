@@ -190,10 +190,10 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
     const staticLeads=await collectStaticLeads(root,repos,eligiblePaths,join(checkpointDirectory,checkpointKey+'.static-v2.json'),signal);
     await writeFile(join(root,'audit-static-leads.json'),JSON.stringify(staticLeads,null,2),{mode:0o600});
     await appendFile(logFile,'[STATIC_LEADS] '+JSON.stringify({runs:staticLeads.runs,count:staticLeads.leads.length})+'\n');
-    // Opt-in full eligible-source inventory: inspect and retain all eligible
-    // source facts BEFORE Qwen begins. Existing map and probe/review machinery
-    // remain untouched; unset the flag to restore the established behavior.
-    const fullSourceIndexEnabled=process.env.LOCAL_CONTROLLER_FULL_SOURCE_INDEX==='true' && !focus;
+    // Every production entry uses controller-owned source inventory. Explicit
+    // false is retained only for legacy comparison/fixture runs.
+    const controllerIndex=process.env.LOCAL_CONTROLLER_FULL_SOURCE_INDEX!=='false';
+    const fullSourceIndexEnabled=controllerIndex && !focus;
     const fullSourceIndex=fullSourceIndexEnabled
       ? await buildControllerSourceIndex(root,eligiblePaths,signal):null;
     if(fullSourceIndex){
@@ -589,7 +589,7 @@ Do not claim production testing, JavaScript execution, file access or other effe
       process.env.LOCAL_OLLAMA_MODEL || "qwen3:4b",undefined,{
         onAllowance:async deadline=>writeSecuritySolverStatus({active:true,programId:program.id,programName:program.name,
           stage:"hunting",startedAt:statusStartedAt,timeoutMinutes:(deadline-Date.parse(statusStartedAt))/60000,pid:process.pid}),
-        signal,maxTurns,finalSchema:z.toJSONSchema(huntSchema),productionWorkflow:true,dynamicAllowance:process.env.LOCAL_HUNT_DYNAMIC_ALLOWANCE !== "false",initialSourcePaths:["audit-policy.txt",...new Set([...sourceHints,...(fullSourceIndex?.rankedPaths||[]),...eligiblePaths])],initialSourceLocations:selection.locations,checkpointPath:join(checkpointDirectory,checkpointKey+".json"),numCtx:8192,numThreads:4,numPredict:getConfig().LOCAL_HUNT_NUM_PREDICT,onRead:(path,span)=>reads.add(path,span),
+        signal,maxTurns,controllerIndex,finalSchema:z.toJSONSchema(huntSchema),productionWorkflow:true,dynamicAllowance:process.env.LOCAL_HUNT_DYNAMIC_ALLOWANCE !== "false",initialSourcePaths:["audit-policy.txt",...new Set([...sourceHints,...(fullSourceIndex?.rankedPaths||[]),...eligiblePaths])],initialSourceLocations:selection.locations,checkpointPath:join(checkpointDirectory,checkpointKey+".json"),numCtx:8192,numThreads:4,numPredict:getConfig().LOCAL_HUNT_NUM_PREDICT,onRead:(path,span)=>reads.add(path,span),
         progressNote:()=>(controllerPromotedCaseId?
           'CONTROLLER VERIFIED ENTRY CASE: '+controllerPromotedCaseId+' (prioritize this observed caller; do not substitute helper case).\n':'')+
           (verifiedProbeSummary(session.cases,2).slice(0,340)+'\n'+controllerTraceSummary.slice(0,340)).slice(0,730),
@@ -605,7 +605,7 @@ Do not claim production testing, JavaScript execution, file access or other effe
           if(path!==testedPath)return null;
           if(record.spec.kind==='solidity_sequence') {
             const entry=record.spec.function.split('.').at(-1)||'';
-            if(!record.spec.sequence?.steps.some(step=>
+            if(record.spec.sequence?.steps.some(step=>
               'operation' in step && step.operation==='send' && 'function' in step &&
               step.function.split('(')[0]===entry))return {callers:[testedPath]};
             return null;
@@ -1379,7 +1379,8 @@ export async function independentReview(finding:SecurityFinding,program:Security
     await writeFile(join(evidenceDirectory,"verified-chain.json"),JSON.stringify(chainEvidence,null,2),{mode:0o600});
     // The reviewer receives the original controller packet; the cold tier retains
     // the unabridged source route and replay, independently of the model context.
-    const reviewArchive=new ControllerEvidenceArchive(join(evidenceDirectory,'controller-review-evidence.jsonl'));
+    // Keep the complete independent packet after temporary checkout cleanup.
+    const reviewArchive=new ControllerEvidenceArchive(logFile+'.evidence.jsonl');
     const routeEvidenceId=await reviewArchive.append('route',chainEvidence,{caseId:id});
     const replayEvidenceId=await reviewArchive.append('probe',
       {replay,entryReplay,entryFacts,immutableReviewGrounds},
@@ -1402,6 +1403,8 @@ export async function independentReview(finding:SecurityFinding,program:Security
         }) : null);
     if(observedTechnical) {
       review=reviewSchema.parse(observedTechnical);
+      await reviewArchive.append('decision',{verdict:review,packetEvidenceId},
+        {caseId:id,parentIds:[packetEvidenceId]});
       await appendFile(logFile,'[CONTROLLER_FACTUAL_REVIEW] '+JSON.stringify({
         caseId:id,kind:record.spec.kind,verdict:review.verdict,
         recommendation:review.recommendation,sourceDigest:chainEvidence.sourceDigest,

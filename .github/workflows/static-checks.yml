@@ -67,6 +67,7 @@ jobs:
           npx tsx scripts/test-hunt-reliability.ts
           node --import tsx scripts/test-source-probe-session.ts
           node --import tsx scripts/test-controller-verified-handoff.ts
+          node --import tsx scripts/test-production-audit-regressions.ts
           npx tsx scripts/test-audit-context-loop.ts
           node --import tsx scripts/test-production-workflow.ts --mock-probes --large-context
           node --import tsx scripts/test-production-workflow.ts --mock-probes --premature-final

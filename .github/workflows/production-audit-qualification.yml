@@ -1,0 +1,86 @@
+name: Production audit four-language qualification
+on:
+  pull_request:
+    paths:
+      - packages/security-solver/src/**
+      - scripts/reproduction-runtime/**
+      - scripts/source-reproduction.py
+      - .github/workflows/production-audit-qualification.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  gauntlet:
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        level: [1, 2, 3, 4, 5, 6]
+        language: [solidity, python, javascript, java]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      LOCAL_OLLAMA_MODEL: qwen3:4b
+      LOCAL_MODEL_ADAPTER: ollama
+      LOCAL_OLLAMA_TOOL_PROTOCOL: json
+      LOCAL_HUNT_DYNAMIC_ALLOWANCE: 'true'
+      LOCAL_HUNT_MAX_TURNS: '80'
+      LOCAL_HUNT_NUM_PREDICT: '2048'
+      SECURITY_AUTO_SUBMIT: 'false'
+      SECURITY_AUTO_HUNT_ENABLED: 'false'
+      SECURITY_SOURCE_CODE_TIMEOUT_MINUTES: '180'
+      AUTOHACK_OLLAMA_URL: http://127.0.0.1:11434/api/chat
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Validate source acquisition
+        run: |
+          mkdir -p data/gauntlet/latest
+          if [ "${{ matrix.level }}" = "6" ]; then
+            node --import tsx scripts/lotus-crucible-run.ts --smoke --level=6 --language="${{ matrix.language }}" --output=data/gauntlet/smoke
+          else
+            node --import tsx scripts/lotus-gauntlet.ts --smoke --level="${{ matrix.level }}" --language="${{ matrix.language }}" --output=data/gauntlet/smoke
+          fi
+      - name: Install reproduction runtime
+        timeout-minutes: 45
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y bubblewrap default-jdk-headless
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          timeout 2100 bash scripts/install-reproduction-runtime.sh
+      - name: Start local Qwen3 model
+        timeout-minutes: 45
+        run: |
+          docker run -d --name lotus-gauntlet-ollama -p 127.0.0.1:11434:11434 ollama/ollama:latest
+          for n in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:11434/api/tags >/dev/null; then break; fi
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:11434/api/tags >/dev/null
+          docker exec lotus-gauntlet-ollama ollama pull qwen3:4b
+      - name: Run production investigation
+        timeout-minutes: 230
+        run: |
+          set -o pipefail
+          if [ "${{ matrix.level }}" = "6" ]; then
+            node --import tsx scripts/lotus-crucible-run.ts --run --level=6 --language="${{ matrix.language }}" --output=data/gauntlet/latest 2>&1 | tee data/gauntlet/live-terminal.log
+          else
+            node --import tsx scripts/lotus-gauntlet.ts --run --level="${{ matrix.level }}" --language="${{ matrix.language }}" --output=data/gauntlet/latest 2>&1 | tee data/gauntlet/live-terminal.log
+          fi
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-level-${{ matrix.level }}-${{ matrix.language }}-${{ github.run_id }}
+          path: |
+            data/gauntlet/latest/
+            data/gauntlet/live-terminal.log
+          retention-days: 14
+          if-no-files-found: warn
+      - name: Stop model
+        if: always()
+        run: docker rm -f lotus-gauntlet-ollama || true
