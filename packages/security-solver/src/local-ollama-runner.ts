@@ -1900,6 +1900,10 @@ export async function runLocalAudit(
             }
           } else if (name === "read_file") {
             const rawPage = await readSourcePage(full,offset,pageSize);
+            // A terminal page must never be scheduled again, even if formatting
+            // its optional probe menu fails. The source cursor is authoritative.
+            const readPath=relative(root,full).split(sep).join('/');
+            if(rawPage.nextOffset===null)terminalReadPages.set(readPath,{offset:rawPage.start});
             output = fitOutput(JSON.stringify(rawPage)).output;
             const page = JSON.parse(output) as typeof rawPage;
             // Present grounded choices as soon as a file's last page is read,
@@ -1922,7 +1926,18 @@ export async function runLocalAudit(
             }
 
           } else throw new Error("Unknown tool");
-          output=fitOutput(output).output;
+          // Optional probe menus must never invalidate a successfully read page.
+          // Fall back to the source-only page if the enlarged payload cannot fit.
+          if(name==='read_file' && !output.startsWith('Tool error:')) {
+            try {
+              const fitted=fitOutput(output).output;
+              JSON.parse(fitted);
+              output=fitted;
+            } catch {
+              output=fitOutput(JSON.stringify(await readSourcePage(full,offset,pageSize))).output;
+              await appendFile(logFile,'[PROBE_MENU_FIT_FALLBACK] '+JSON.stringify({path:relative(root,full),offset})+'\\n');
+            }
+          } else output=fitOutput(output).output;
           if(name==='read_file') {
             // Menus and escaping can force a second fit. Only the final
             // delivered range is read evidence or a pagination cursor.
