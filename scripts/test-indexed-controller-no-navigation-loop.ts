@@ -66,6 +66,22 @@ try {
     'Controller-owned investigation must not ask Qwen to choose sources or transitions');
   assert.deepEqual(ownedReads,[ownedPath],
     'Controller must read the ranked file once and retain its cursor without model navigation');
+  // The verified-case handoff is an authorized semantic assessment, not
+  // source navigation. Prevent the previous contradictory guard from returning.
+  const {InvestigationWorkflow}=await import('../packages/security-solver/src/investigation-workflow');
+  const verified=new InvestigationWorkflow();
+  const caseId='a'.repeat(64);
+  verified.observe({action:'verify_source',path:ownedPath,query:'Demo.render',
+    answer:'html_reflection'} as any,JSON.stringify({status:'behavior_observed',
+    behavior_observed:true,caseId,evidenceFile:'.audit-evidence/verified.json'}));
+  assert.equal(verified.focusVerifiedEvidence(caseId),true);
+  assert.deepEqual((await verified.constraints()).action,['final'],
+    'Controller-verified reproduction must permit a final semantic assessment');
+  const runnerSource=await readFile(new URL('../packages/security-solver/src/local-ollama-runner.ts',import.meta.url),'utf8');
+  assert.ok(runnerSource.includes("permitted.every(action=>action==='final') &&\\n          !snapshot.pending;"),
+    'No-navigation guard must permit the verified-case final handoff');
+  assert.ok(!runnerSource.includes('!snapshot.pending && !snapshot.verifiedEvidenceFocus'),
+    'Verified evidence must not disqualify a final handoff');
   console.log('Controller-owned indexed source read and zero Qwen navigation calls PASSED');
   console.log('Indexed controller preserves source evidence and offers probe handoff under uncooperative model PASSED');
 } finally {
