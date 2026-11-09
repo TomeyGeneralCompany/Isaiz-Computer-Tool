@@ -500,6 +500,20 @@ export async function runLocalAudit(
         constraints={...constraints,action:constraints.action.filter(name=>name!=='final')};
         await appendFile(logFile,'[EMPTY_FINAL_INVESTIGATE] Require a concrete tool action before another conclusion\n');
       }
+      // Mandatory indexed transition: completed source acquisition advances to
+      // controller-owned probe planning, never back to speculative source reads.
+      const eligibleForProbe=[...new Set(limits.initialSourcePaths||[])].filter(path=>
+        path.startsWith('source-') && ['.sol','.java','.py','.js','.mjs','.cjs'].some(ext=>path.endsWith(ext)));
+      const sourceStageComplete=!!workflow && eligibleForProbe.length>0 &&
+        eligibleForProbe.every(path=>terminalReadPages.has(path));
+      if(sourceStageComplete && constraints?.action?.includes('read_file') &&
+         !workflow!.snapshot().pending && !workflow!.snapshot().verifiedEvidenceFocus) {
+        constraints={...constraints,action:[...new Set([
+          ...constraints.action.filter(action=>!['read_file','continue_inspection','list_files','search_files'].includes(action)),
+          'plan_probe'])]};
+        await appendFile(logFile,'[MANDATORY_PROBE_TRANSITION] '+
+          JSON.stringify({turn:turn+1,completed:eligibleForProbe.length})+'\n');
+      }
       // A stage permitting plan_probe also permits its controller-executed
       // equivalent, without changing the underlying workflow validation.
       if(workflow && constraints?.action?.includes('plan_probe') && !constraints.action.includes('probe_intent'))
