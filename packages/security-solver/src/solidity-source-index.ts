@@ -95,7 +95,7 @@ export class SoliditySourceIndex {
   /** Exact source declaration check for model-proposed Contract.function targets.
    * This is navigation validation, not a claim that the method is executable. */
   async hasFunction(path:string,selector:string):Promise<boolean> {
-    const unit=await this.load(path);
+    const unit=await new SoliditySourceIndex(this.root,this.signal).load(path);
     for(const node of unit.ast.children) {
       if(node.type!=='ContractDefinition')continue;
       for(const member of node.subNodes) {
@@ -107,7 +107,7 @@ export class SoliditySourceIndex {
   /** Source-derived Solidity probe menu, including state-changing entry points.
    * Never synthesizes expected values or asserts that a contract is deployable. */
   async probeMenu(path:string,limit=24) {
-    const unit=await this.load(path);
+    const unit=await new SoliditySourceIndex(this.root,this.signal).load(path);
     const entries:Array<{selector:string;signature:string;operation:'send'|'call'|'constructor';visibility:string;inputs:string[]}>=[];
     for(const node of unit.ast.children) {
       if(node.type!=='ContractDefinition')continue;
@@ -150,7 +150,7 @@ export class SoliditySourceIndex {
     return entries;
   }
   async outline(path:string,offset:number,budget:number) {
-    const unit=await this.load(path);
+    const unit=await new SoliditySourceIndex(this.root,this.signal).load(path);
     const items:Array<Record<string,unknown>>=[];
     const add=(node:BaseASTNode,contract?:ContractDefinition)=>{
       const [start,end]=bounds(node), source=unit.text.slice(start,end);
@@ -175,7 +175,9 @@ export class SoliditySourceIndex {
     return result;
   }
   async context(path:string,selector:string,offset:number,budget:number) {
-    const unit=await this.graph(path);
+    // Graph limits apply to one source context, not cumulatively to a hunt.
+    const scope=new SoliditySourceIndex(this.root,this.signal);
+    const unit=await scope.graph(path);
     const functions:Array<{fn:FunctionDefinition;owner?:ContractDefinition}>=[];
     for(const node of unit.ast.children) {
       if(node.type==='FunctionDefinition')functions.push({fn:node});
@@ -233,7 +235,7 @@ export class SoliditySourceIndex {
       }
     }
     // Surface errors anywhere in the traversed import graph, including cyclic imports.
-    for(const pending of this.units.values()) {
+    for(const pending of scope.units.values()) {
       try {for(const warning of (await pending).unresolved)unresolved.add(warning);}catch{}
     }
     for(const name of called)if(!helpers.some(h=>h.name.split('.').at(-1)===name))unresolved.add('Call not statically bound (may be builtin/external): '+name);

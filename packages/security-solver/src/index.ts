@@ -4,7 +4,7 @@ import { LOCAL_REPRODUCTION_CAPABILITY_VERSION } from "../../core/src/program-el
 import { programSelectionDecision, summarizeProgramSelection } from "./program-selection";
 export { scoreProgram, summarizeProgramSelection } from "./program-selection";
 import type { StaticLeadFocus } from "./local-program-flow";
-import { beginLocalJob } from "./local-job";
+import { beginLocalJob, activeLocalJobCount } from "./local-job";
 import { randomBytes } from "node:crypto";
 import { readFileSync, writeFileSync, unlinkSync, mkdirSync } from "node:fs";
 import { rm } from "node:fs/promises";
@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { eq, desc, and, or, isNull, lt } from "drizzle-orm";
 import { getDb, schema, getConfig, createLogger, generateTraceId, classifyError, extractJsonWithKey, recordSecurityHuntOutcome, recordNearMiss, updateProgramNotes, getSecurityLearningContext, getSecurityProgramContext, type SecurityFinding, type SecurityProgram, claimDailyHuntSlot, dailyHuntQuotaStatus, recordHuntAttempt, authorizedSourceUrls, assertAuthorizedProgram, targetInExplicitScope, assertAuthorizedTarget, submitOnce } from "@bounty/core";
 import { fetchProgramPolicy, fetchProgramSignalRequirement, fetchAllDisclosedReports, prepareSubmission, submitReport, fetchProgramScopes } from "@bounty/security-discovery";
-import { runProgramHunt, runFindingSolver, killActiveSecurityProcess, detectHuntStrategy, prepareReviewWorkspace, spawnComprehensiveReview, deverbosifyReport, EXCLUDED_VULN_TYPES, type ReviewContext } from "./claude-runner";
+import { usesDeterministicSourceController, runProgramHunt, runFindingSolver, killActiveSecurityProcess, detectHuntStrategy, prepareReviewWorkspace, spawnComprehensiveReview, deverbosifyReport, EXCLUDED_VULN_TYPES, type ReviewContext } from "./claude-runner";
 import { clearSecuritySolverStatus, writeAdversarialReviewStatus, clearAdversarialReviewStatus, readAdversarialReviewStatus, cancelAdversarialReview } from "./status";
 
 const log = createLogger("security-solver");
@@ -112,7 +112,7 @@ async function huntProgramImpl(
   let localJob: ReturnType<typeof beginLocalJob> | undefined;
 
   try {
-    if (process.env.LOCAL_OLLAMA_MODEL) localJob = beginLocalJob();
+    if (usesDeterministicSourceController(program)) localJob = beginLocalJob();
     localJob?.signal.throwIfAborted();
     if (program.provider === "hackerone" && program.providerProgramId) {
       const [freshScopes,freshPolicy] = await Promise.all([
@@ -294,7 +294,7 @@ async function huntProgramImpl(
         : findingsCreated > 0 ? 0 : prevMissStreak + 1;
 
       const tracking = JSON.parse(recordHuntAttempt(currentProgram?.scopeSummary ?? program.scopeSummary,huntSucceeded));
-      if (process.env.LOCAL_OLLAMA_MODEL) tracking.inspectionPass = (Number.isSafeInteger(tracking.inspectionPass) ? tracking.inspectionPass : 0) + 1;
+      if (usesDeterministicSourceController(program)) tracking.inspectionPass = (Number.isSafeInteger(tracking.inspectionPass) ? tracking.inspectionPass : 0) + 1;
       const scopeKey=JSON.stringify(tracking.scopes || []);
       if(acquisitionChecks) {
         const old=tracking.sourceAcquisition;
@@ -373,6 +373,15 @@ export async function solveSecurityFinding(
     throw new Error(`No program found for finding ${finding.id}`);
   }
 
+  if(usesDeterministicSourceController(program)) {
+    // Source reports are materialized from immutable cases, never rewritten by
+    // a free-form report agent (including after a model configuration change).
+    releaseHuntLock();
+    const notes=JSON.parse(finding.analysisNotes||'{}');
+    if(!notes.reproductionCaseId)throw new Error('Source finding has no controller-owned reproduction case; run the source investigation before independent review');
+    await processAdversarialQueueImpl(program.id);
+    return;
+  }
   solving = true;
 
   db.update(schema.securityFindings)
@@ -438,7 +447,7 @@ export async function forceStopSecuritySolver(): Promise<{ killed: boolean; rese
   const killed = killActiveSecurityProcess();
   // The owning hunt/review releases its lock in finally after cancellation and
   // any bounded reproduction cleanup; never let another job reuse it early.
-  if(!process.env.LOCAL_OLLAMA_MODEL){solving=false;releaseHuntLock();}
+  if(!process.env.LOCAL_OLLAMA_MODEL && activeLocalJobCount()===0){solving=false;releaseHuntLock();}
 
   const db = getDb();
   const stuck = db
@@ -527,7 +536,7 @@ export function rankEligiblePrograms(): RankedProgram[] {
     .where(eq(schema.securityPrograms.status,"active")).all();
   const ranked: RankedProgram[] = [];
   for (const p of programs) {
-    const decision = programSelectionDecision(p, config, !!process.env.LOCAL_OLLAMA_MODEL);
+    const decision = programSelectionDecision(p, config, usesDeterministicSourceController(p));
     if (decision.score === null) continue;
     ranked.push({ program: p, score: decision.score, difficulty:estimateProgramDifficulty(p) });
   }
@@ -664,14 +673,19 @@ function buildBatchContext(currentFindingId: string, allFindings: SecurityFindin
  * Transitions findings to "reviewing" (passed) or "bot_rejected" (rejected).
  */
 async function processAdversarialQueueImpl(programId?: string): Promise<void> {
-  if(process.env.LOCAL_OLLAMA_MODEL) {
+  const db = getDb();
+  const pendingSourceCases=db.select().from(schema.securityFindings)
+    .where(programId?and(eq(schema.securityFindings.programId,programId),
+      or(eq(schema.securityFindings.status,'report_ready'),eq(schema.securityFindings.status,'reviewing'))):
+      or(eq(schema.securityFindings.status,'report_ready'),eq(schema.securityFindings.status,'reviewing'))).all()
+    .some(f=>{try{return !!JSON.parse(f.analysisNotes||'{}').reproductionCaseId;}catch{return false;}});
+  if(process.env.LOCAL_OLLAMA_MODEL || pendingSourceCases) {
     if(solving || !acquireHuntLock())return;
     solving=true;
     try {const {processLocalReviewQueue}=await import("./local-program-flow");await processLocalReviewQueue(programId);}
     finally {solving=false;releaseHuntLock();await clearAdversarialReviewStatus().catch(()=>{});}
-    return;
+    if(process.env.LOCAL_OLLAMA_MODEL)return;
   }
-  const db = getDb();
   const config = getConfig();
 
   const statusFilter = eq(schema.securityFindings.status, "report_ready");
@@ -687,9 +701,12 @@ async function processAdversarialQueueImpl(programId?: string): Promise<void> {
     .filter((f) => {
       // Skip findings that already have an adversarial review —
       // they stay report_ready for the user to manually act on
+      const owner=f.programId?db.select().from(schema.securityPrograms)
+        .where(eq(schema.securityPrograms.id,f.programId)).get():null;
+      if(owner && usesDeterministicSourceController(owner))return false;
       try {
         const notes = JSON.parse(f.analysisNotes || "{}");
-        return !notes.adversarialReview;
+        return !notes.reproductionCaseId && !notes.adversarialReview;
       } catch {
         return true;
       }

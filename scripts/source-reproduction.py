@@ -395,7 +395,7 @@ def run_probe(repository: Path, specification: dict, _dependency_round: int = 0)
             if kind=='python_sequence':
                 declared=re.search(r'(?m)^def\s+'+chosen+r'\s*\(',code)
             else:
-                declared=re.search(r'\b(?:exports\.'+chosen+
+                declared=re.search(r'\b(?:(?:exports\.|module\.exports\.|export\s+(?:const|let|var)\s+)'+chosen+
                     r'\s*=|(?:async\s+)?function\s+'+chosen+r'\s*\()',code)
             if not declared: raise ValueError('Stateful factory not declared by source')
         for step in sequence['steps']:

@@ -52,7 +52,7 @@ export function getActiveChildPid(): number | null {
 }
 
 export function killActiveSecurityProcess(): boolean {
-  if (process.env.LOCAL_OLLAMA_MODEL) {
+  if (process.env.LOCAL_OLLAMA_MODEL || activeLocalJobCount() || activeLocalAuditCount()) {
     const cancelled = requestLocalJobCancellation();
     return abortLocalAudits() || cancelled;
   }
@@ -1928,6 +1928,16 @@ ${reportBody}`;
   }
 }
 
+/** Source investigations always use the deterministic source controller. Model
+ * configuration chooses inference, never whether reproduction/review gates exist. */
+export function usesDeterministicSourceController(program:Pick<SecurityProgram,'scopeSummary'>):boolean {
+  if(process.env.LOCAL_OLLAMA_MODEL)return true;
+  try {
+    const value=JSON.parse(program.scopeSummary||'{}');
+    return authorizedSourceUrls(Array.isArray(value)?value:value.scopes).length>0;
+  }catch{return false;}
+}
+
 export async function runProgramHunt(
   program: SecurityProgram,
   trigger?: "auto" | "manual",
@@ -1935,7 +1945,7 @@ export async function runProgramHunt(
   focus?: StaticLeadFocus,
   beforeInspection?: () => void,
 ): Promise<SecuritySolveResult> {
-  if(process.env.LOCAL_OLLAMA_MODEL) {
+  if(usesDeterministicSourceController(program)) {
     const {runLocalProgramHunt}=await import("./local-program-flow");
     return runLocalProgramHunt(program,signal,focus,beforeInspection,trigger === "auto");
   }
@@ -2042,6 +2052,10 @@ export async function runFindingSolver(
   program: SecurityProgram,
   trigger?: "auto" | "manual",
 ): Promise<SecuritySolveResult> {
+  if(usesDeterministicSourceController(program))return {
+    success:false,coverage:'failed',findings:[],rawOutput:'',
+    error:'Source reports require the controller-owned reproduction and independent review path; free-form report rewriting is disabled'
+  };
   const config = getConfig();
 
   // Ensure workspace is prepared with CLAUDE.md and tools

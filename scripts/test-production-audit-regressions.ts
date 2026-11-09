@@ -8,6 +8,7 @@ import {tmpdir} from 'node:os';
 import {runLocalAudit} from '../packages/security-solver/src/local-ollama-runner';
 import {InvestigationWorkflow} from '../packages/security-solver/src/investigation-workflow';
 import {controllerPolyglotPlans} from '../packages/security-solver/src/controller-polyglot-plan';
+import {SoliditySourceIndex} from '../packages/security-solver/src/solidity-source-index';
 import {ControllerEvidenceArchive} from '../packages/security-solver/src/controller-evidence-archive';
 const root=await mkdtemp(join(tmpdir(),'lotus-audit-regressions-'));
 const keys=['AUTOHACK_OLLAMA_URL','LOCAL_CONTROLLER_FULL_SOURCE_INDEX','LOCAL_CONTROLLER_OWNED_ACTIONS','AUTOHACK_AUTO_SOURCE_PREFETCH','LOCAL_OLLAMA_TOOL_PROTOCOL','LOCAL_MODEL_ADAPTER'];
@@ -34,12 +35,13 @@ try {
   for(const [name,code,first,second] of fixtures) {
     const path='source-1/'+name;await writeFile(join(root,path),code);
     if(!name.endsWith('.sol'))assert.ok(controllerPolyglotPlans(path,code).some(p=>p.query===second),name+': enumerate beyond first declaration');
-    const attempted:string[]=[];const before=generations;const log=join(root,name+'.log');
+    const attempted:string[]=[];const spans:Array<{path:string;start:number;end:number}>=[];
+    const before=generations;const log=join(root,name+'.log');
     const checkpoint=join(root,name+'.checkpoint.json');
     await writeFile(checkpoint+'.memory.json',JSON.stringify({version:1,notes:['Prior navigation; replay required'],evidenceReferences:['f'.repeat(64)]}));
     await runLocalAudit('Assess source-grounded observations.',log,20000,root,'mock',undefined,{
       productionWorkflow:true,controllerIndex:true,maxTurns:24,numCtx:8192,numPredict:256,
-      checkpointPath:checkpoint,initialSourcePaths:[path],
+      checkpointPath:checkpoint,initialSourcePaths:[path],onRead:(p,span)=>spans.push({path:p,...span}),
       verifyPython:async(_path,selector)=>{
         attempted.push(selector);
         return JSON.stringify(attempted.length>=2?{status:'behavior_observed',behavior_observed:true,caseId:'a'.repeat(64)}:{status:'unsupported_execution',behavior_observed:false});
@@ -50,6 +52,14 @@ try {
     assert.ok(attempted.includes(first),name);assert.ok(attempted.includes(second),name+': unsupported first candidate cannot starve a later declaration');
     assert.equal(new Set(attempted).size,attempted.length,name+': never repeat unsupported methods');
     assert.equal(generations-before,1,name+': exactly one semantic assessment');
+    const cold=new ControllerEvidenceArchive(log+'.evidence.jsonl');
+    const records=await cold.forSource(path);
+    const delivered=records.filter(r=>r?.kind==='source').map(r=>r!.payload as {path:string;start:number;end:number;content:string});
+    assert.deepEqual(delivered.map(p=>({path:p.path,start:p.start,end:p.end})),spans,
+      name+': only delivered source spans are credited');
+    assert.ok(delivered.every(p=>p.content.length===p.end-p.start));
+    assert.equal(records.filter(r=>r?.kind==='probe').length,attempted.length,
+      name+': every actual ordinary probe outcome survives context eviction');
     assert.ok(!(await readFile(log,'utf8')).includes('Missing controller evidence reference'),name);
   }
   // Negative-only observations have a final-only transition after actual source
@@ -70,6 +80,15 @@ try {
   const copy=(await archive.retrieve(child))!;copy.parentIds.length=0;(copy.payload as any).status='forged';
   assert.deepEqual((await archive.retrieve(child))?.parentIds,[id]);
   assert.deepEqual((await archive.retrieve(child))?.payload,{status:'observed'});
+  // One long investigation must not permanently exhaust AST support after
+  // 32 unrelated sources or 4 MB cumulatively. Per-context graph caps remain.
+  const solidity=new SoliditySourceIndex(root);
+  for(let i=0;i<40;i++) {
+    const file=join(root,'source-1','Indexed'+i+'.sol');
+    await writeFile(file,'// '+'x'.repeat(110000)+'\npragma solidity ^0.8.0; contract Indexed'+i+' {uint public value; function change(uint amount) public {value=amount;}}');
+    assert.ok((await solidity.probeMenu(file)).some(p=>p.selector==='Indexed'+i+'.change'),
+      'Solidity candidate '+i+' retains AST support in a long hunt');
+  }
   console.log('Four-language candidate progression, negative assessment, restart memory and immutable archive regressions PASSED');
 } finally {
   server.closeAllConnections();server.close();

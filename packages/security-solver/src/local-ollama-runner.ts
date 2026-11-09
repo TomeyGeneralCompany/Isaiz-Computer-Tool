@@ -630,7 +630,7 @@ export async function runLocalAudit(
       if(!controllerAction && structured && workflow &&
          process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false' &&
          !workflow.snapshot().verifiedEvidenceFocus &&
-         controllerAutoProbeCount<Math.max(24,(limits.initialSourcePaths||[]).length*16) &&
+         (fullIndexMode || controllerAutoProbeCount<Math.max(24,(limits.initialSourcePaths||[]).length*16)) &&
          constraints?.action?.includes('plan_probe')) {
         const inspected=new Set(workflow.snapshot().readPaths);
         // Candidate ranking is controller-owned. Iteration in reverse read
@@ -654,8 +654,6 @@ export async function runLocalAudit(
                 menu.filter(entry=>entry.operation==='send');
               for(const entry of entries) {
                 if(entry.operation!=='send')continue;
-                if(workflow.snapshot().observations.some(item=>item.path===path &&
-                   item.function===entry.selector && item.kind==='solidity_sequence'))continue;
                 const sequence=buildBaselineSequence(menu,entry.selector,!!risk);
                 if(!sequence)continue;
                 const candidate={action:'plan_probe',path,query:entry.selector,
@@ -681,13 +679,10 @@ export async function runLocalAudit(
               const candidates=[...(tracedPlan?[tracedPlan]:[]),...controllerPolyglotPlans(path,code),
                 ...(controllerPlan?[controllerPlan]:[]),...(hint?[{action:'plan_probe' as const,
                 path,query:hint.functionName,answer:hint.kind,hypothesis:hint.hypothesis}]:[])];
-              const candidate=candidates.find(candidate=>!workflow.snapshot().observations.some(item=>
-                item.path===path && item.function===candidate.query && item.kind===candidate.answer));
+              const candidate=candidates.find(candidate=>!workflow.validate(candidate as any));
               if(candidate && (candidate.answer.endsWith('_sequence') ||
                   await declaredProbeTarget(full,candidate.query))) {
-                const attempted=workflow.snapshot().observations.some(item=>
-                  item.path===path && item.function===candidate.query && item.kind===candidate.answer);
-                if(!attempted && !workflow.validate(candidate as any))plan=candidate;
+                if(!workflow.validate(candidate as any))plan=candidate;
               }
             }
             if(!plan)continue;
@@ -1007,7 +1002,7 @@ export async function runLocalAudit(
         // All three non-Solidity languages obey the same source-owned probe
         // request contract as Solidity. The model may choose an actual method,
         // but its guessed kind, typed arguments and sequence are never trusted.
-        if(workflow && ['plan_probe','probe_intent'].includes(action.action) &&
+        if(!controllerAction && workflow && ['plan_probe','probe_intent'].includes(action.action) &&
            action.path.startsWith('source-') && /\.(?:java|py|js|mjs|cjs)$/.test(action.path)) {
           try {
             const full=await safePath(action.path);
