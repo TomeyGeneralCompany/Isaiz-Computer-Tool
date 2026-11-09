@@ -628,7 +628,9 @@ export async function runLocalAudit(
       if(!controllerAction && structured && workflow &&
          process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false' &&
          !workflow.snapshot().verifiedEvidenceFocus &&
-         controllerAutoProbeCount<Math.max(24,(limits.initialSourcePaths||[]).length) &&
+         // Candidate exhaustion is evidence-driven: never stop after an arbitrary number of selections.
+         // Previously attempted selectors are excluded below using persisted observations.
+         true &&
          constraints?.action?.includes('plan_probe')) {
         const inspected=new Set(workflow.snapshot().readPaths);
         // Candidate ranking is controller-owned. Iteration in reverse read
@@ -680,7 +682,16 @@ export async function runLocalAudit(
                   await declaredProbeTarget(full,candidate.query))) {
                 const attempted=workflow.snapshot().observations.some(item=>
                   item.path===path && item.function===candidate.query && item.kind===candidate.answer);
-                if(!attempted && !workflow.validate(candidate as any))plan=candidate;
+                if(attempted) {
+                  await appendFile(logFile,'[CONTROLLER_PROBE_CANDIDATE_SKIPPED] '+JSON.stringify({
+                    path,selector:candidate.query,kind:candidate.answer,reason:'already_observed'})+'\n');
+                } else {
+                  const rejection=workflow.validate(candidate as any);
+                  if(!rejection)plan=candidate;
+                  else await appendFile(logFile,'[CONTROLLER_PROBE_CANDIDATE_SKIPPED] '+JSON.stringify({
+                    path,selector:candidate.query,kind:candidate.answer,
+                    reason:'workflow_rejected',detail:String(rejection).slice(0,240)})+'\n');
+                }
               }
             }
             if(!plan)continue;
