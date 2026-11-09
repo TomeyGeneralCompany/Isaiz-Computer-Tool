@@ -10,6 +10,8 @@ import {rankTracedSourceCandidates} from './controller-source-candidates';
 import { InvestigationWorkflow } from "./investigation-workflow";
 import {guidedProbeAcrossSourceChain,guidedSourceProbe} from './source-guided-probes';
 import {controllerPolyglotPlan,canonicalControllerPolyglotIntent} from './controller-polyglot-plan';
+import {sourceStatefulPlans} from './controller-stateful-candidates';
+import {controllerJavaProbes} from './controller-java-probe-inputs';
 import {declaredProbeTarget, sourceDeclarationHints, supportedJavaProbeHints, javaProbeSelectorCompatible, probeChoices} from './probe-target-validation';
 import { postQwenAgentJson } from "./qwen-agent-transport";
 import { AuditAllowance } from "./audit-allowance";
@@ -102,7 +104,6 @@ export async function runLocalAudit(
   if(adapter==='qwen-agent'&&!structured)throw new Error('Qwen-Agent adapter requires JSON action protocol');
   let successfulReads = 0;
   let rejectedRequiredProbeFinals = 0;
-  let controllerAutoProbeCount = 0;
   let controllerAutoReadCount = 0;
   let indexedLastProgressKey = '';
   let indexedSyntheticStalls = 0;
@@ -675,27 +676,53 @@ export async function runLocalAudit(
               const tracedPlan=traced && await declaredProbeTarget(full,traced.selector)
                 ? {action:'plan_probe' as const,path,query:traced.selector,
                     answer:traced.kind,hypothesis:traced.hypothesis}:null;
-              const candidate=tracedPlan ?? controllerPlan ?? (hint ? {action:'plan_probe' as const,
-                path,query:hint.functionName,answer:hint.kind,hypothesis:hint.hypothesis}:null);
-              if(candidate && (candidate.answer.endsWith('_sequence') ||
-                  await declaredProbeTarget(full,candidate.query))) {
+              // Evaluate every supported plan for this inspected file. The old
+              // single-candidate choice could permanently hide the next method
+              // after the first one had already been observed or rejected.
+              const candidates=[
+                ...(tracedPlan?[tracedPlan]:[]),
+                ...(controllerPlan?[controllerPlan]:[]),
+                ...sourceStatefulPlans(path,code).map(item=>({
+                  action:'plan_probe' as const,path,query:item.selector,answer:item.kind,
+                  hypothesis:'Observe the source-declared state transition; verify actual behavior independently.',
+                  sequence:item.sequence
+                })),
+                ...controllerJavaProbes(path,code).map(item=>({
+                  action:'plan_probe' as const,path,query:item.selector,answer:'java_sequence' as const,
+                  hypothesis:'Observe the declared Java method with source-derived arguments and independent replay.',
+                  sequence:item.sequence
+                })),
+                ...(hint?[{action:'plan_probe' as const,path,query:hint.functionName,
+                  answer:hint.kind,hypothesis:hint.hypothesis}]:[])
+              ];
+              const seen=new Set<string>();
+              for(const candidate of candidates) {
+                const identity=JSON.stringify([candidate.query,candidate.answer]);
+                if(seen.has(identity))continue;
+                seen.add(identity);
+                if(!candidate.answer.endsWith('_sequence') &&
+                   !(await declaredProbeTarget(full,candidate.query))) {
+                  await appendFile(logFile,'[CONTROLLER_PROBE_CANDIDATE_SKIPPED] '+
+                    JSON.stringify({path,selector:candidate.query,kind:candidate.answer,
+                      reason:'declaration_preflight_failed'})+'\n');
+                  continue;
+                }
                 const attempted=workflow.snapshot().observations.some(item=>
                   item.path===path && item.function===candidate.query && item.kind===candidate.answer);
                 if(attempted) {
                   await appendFile(logFile,'[CONTROLLER_PROBE_CANDIDATE_SKIPPED] '+JSON.stringify({
                     path,selector:candidate.query,kind:candidate.answer,reason:'already_observed'})+'\n');
-                } else {
-                  const rejection=workflow.validate(candidate as any);
-                  if(!rejection)plan=candidate;
-                  else await appendFile(logFile,'[CONTROLLER_PROBE_CANDIDATE_SKIPPED] '+JSON.stringify({
-                    path,selector:candidate.query,kind:candidate.answer,
-                    reason:'workflow_rejected',detail:String(rejection).slice(0,240)})+'\n');
+                  continue;
                 }
+                const rejection=workflow.validate(candidate as any);
+                if(!rejection){plan=candidate;break;}
+                await appendFile(logFile,'[CONTROLLER_PROBE_CANDIDATE_SKIPPED] '+JSON.stringify({
+                  path,selector:candidate.query,kind:candidate.answer,
+                  reason:'workflow_rejected',detail:String(rejection).slice(0,240)})+'\n');
               }
             }
             if(!plan)continue;
             controllerAction=plan;
-            controllerAutoProbeCount++;
             await appendFile(logFile,'[CONTROLLER_SOURCE_PROBE_SELECTED] '+
               JSON.stringify({path,selector:plan.query,kind:plan.answer})+'\n');
             break;
