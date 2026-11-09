@@ -23,6 +23,18 @@ export function controllerOwnedNextAction(
   if(constraints.action[0]==='read_file' && constraints.path?.length===1) {
     return {action:'read_file',path:constraints.path[0],query:'',answer:'',offset:0};
   }
+  if(constraints.action[0]==='read_solidity' &&
+     constraints.path?.length===1 && constraints.query?.length===1) {
+    return canonicalSourceNavigationAction({action:'read_solidity',path:constraints.path[0],
+      query:constraints.query[0],answer:'',offset:0});
+  }
+  if(constraints.action[0]==='search_files' &&
+     constraints.path?.length===1 && constraints.query?.length===1) {
+    return {action:'search_files',path:constraints.path[0],query:constraints.query[0],answer:'',offset:0};
+  }
+  if(constraints.action[0]==='list_files' && constraints.path?.length===1) {
+    return {action:'list_files',path:constraints.path[0],query:'',answer:'',offset:0};
+  }
   if(constraints.action[0]==='outline_solidity' && constraints.path?.length===1) {
     return {action:'outline_solidity',path:constraints.path[0],query:'',answer:'',offset:0};
   }
