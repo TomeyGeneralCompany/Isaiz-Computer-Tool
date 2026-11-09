@@ -630,7 +630,6 @@ export async function runLocalAudit(
          !workflow.snapshot().verifiedEvidenceFocus &&
          // Candidate exhaustion is evidence-driven: never stop after an arbitrary number of selections.
          // Previously attempted selectors are excluded below using persisted observations.
-         true &&
          constraints?.action?.includes('plan_probe')) {
         const inspected=new Set(workflow.snapshot().readPaths);
         // Candidate ranking is controller-owned. Iteration in reverse read
