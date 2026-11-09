@@ -210,6 +210,17 @@ export async function runLocalAudit(
   // Completed pages survive model-context eviction and unreliable offset replay.
   const terminalReadPages = new Map<string,{offset:number;response?:Message}>();
   const terminalPageRecoveries = new Set<string>();
+  const probeDispositions = new Map<string,{status:string;reason:string}>();
+  const probeIdentity=(path:string,selector:string,kind:string)=>JSON.stringify([path,selector,kind]);
+  const recordProbeDisposition=async(path:string,selector:string,kind:string,status:string,reason:string)=>{
+    const key=probeIdentity(path,selector,kind);
+    const previous=probeDispositions.get(key);
+    if(previous?.status===status && previous.reason===reason)return;
+    probeDispositions.set(key,{status,reason});
+    const record={path,selector,kind,status,reason};
+    await appendFile(logFile,'[CONTROLLER_PROBE_DISPOSITION] '+JSON.stringify(record)+'\n');
+    await controllerArchive?.append('decision',record);
+  };
   let stalledActions = 0;
   const missingRequests=new Map<string,number>();
   const fixedSize=JSON.stringify(messages).length+JSON.stringify(structured ? actionSchema : availableTools).length;
@@ -677,14 +688,16 @@ export async function runLocalAudit(
               for(const entry of entries) {
                 if(entry.operation!=='send')continue;
                 const sequence=buildBaselineSequence(menu,entry.selector,!!risk);
-                if(!sequence)continue;
+                if(!sequence){await recordProbeDisposition(path,entry.selector,'solidity_sequence','unsupported','baseline_sequence_unavailable');continue;}
                 const candidate={action:'plan_probe',path,query:entry.selector,
                   answer:'solidity_sequence',
                   hypothesis:risk?
                     'Check whether a nonadministrator can mutate the source-declared privileged '+risk.role+' role. Compare source-proven authority checks and before/after on-chain observations; independent review must establish impact.':
                     'Observe the declared transaction and getter; check authorization and state effects against source.',
                   sequence};
-                if(!workflow.validate(candidate as any)){plan=candidate;break;}
+                const rejection=workflow.validate(candidate as any);
+                if(!rejection){plan=candidate;break;}
+                await recordProbeDisposition(path,candidate.query,candidate.answer,'rejected',String(rejection).slice(0,240));
               }
             }else {
               const traced=tracedCandidates.find(candidate=>candidate.path===path);
@@ -707,31 +720,28 @@ export async function runLocalAudit(
                 const identity=JSON.stringify([candidate.query,candidate.answer]);
                 if(seen.has(identity))continue;
                 seen.add(identity);
+                if(probeDispositions.has(probeIdentity(path,candidate.query,candidate.answer)) &&
+                   probeDispositions.get(probeIdentity(path,candidate.query,candidate.answer))?.status!=='selected')continue;
                 if(!candidate.answer.endsWith('_sequence') &&
                    !(await declaredProbeTarget(full,candidate.query,candidate.answer,
                      'sequence' in candidate ? candidate.sequence : undefined))) {
-                  await appendFile(logFile,'[CONTROLLER_PROBE_CANDIDATE_SKIPPED] '+
-                    JSON.stringify({path,selector:candidate.query,kind:candidate.answer,
-                      reason:'declaration_preflight_failed'})+'\n');
+                  await recordProbeDisposition(path,candidate.query,candidate.answer,'unsupported','declaration_preflight_failed');
                   continue;
                 }
                 const attempted=workflow.snapshot().observations.some(item=>
                   item.path===path && item.function===candidate.query && item.kind===candidate.answer);
                 if(attempted) {
-                  await appendFile(logFile,'[CONTROLLER_PROBE_CANDIDATE_SKIPPED] '+
-                    JSON.stringify({path,selector:candidate.query,kind:candidate.answer,
-                      reason:'already_observed'})+'\n');
+                  await recordProbeDisposition(path,candidate.query,candidate.answer,'observed','existing_workflow_observation');
                   continue;
                 }
                 const rejection=workflow.validate(candidate as any);
                 if(!rejection){plan=candidate;break;}
-                await appendFile(logFile,'[CONTROLLER_PROBE_CANDIDATE_SKIPPED] '+
-                  JSON.stringify({path,selector:candidate.query,kind:candidate.answer,
-                    reason:'workflow_rejected',detail:String(rejection).slice(0,240)})+'\n');
+                await recordProbeDisposition(path,candidate.query,candidate.answer,'rejected',String(rejection).slice(0,240));
               }
             }
             if(!plan)continue;
             controllerAction=plan;
+            await recordProbeDisposition(path,plan.query,plan.answer,'selected','controller_scheduled');
             await appendFile(logFile,'[CONTROLLER_SOURCE_PROBE_SELECTED] '+
               JSON.stringify({path,selector:plan.query,kind:plan.answer})+'\n');
             break;
