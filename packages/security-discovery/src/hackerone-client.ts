@@ -531,6 +531,14 @@ function extractVulnerabilityInfo(reportBody: string): string {
   );
   if (structuredMatch?.[1]?.trim()) return structuredMatch[1].trim();
 
+  // Support local workflow Markdown format: take content preceding the impact section
+  const markdownBeforeImpact = reportBody.match(
+    /([\s\S]*?)(?=^#{1,6}[ \t]+(?:Security[ \t]+)?Impact(?:[ \t]+To[ \t]+Verify)?|(?![\s\S]))/im,
+  );
+  if (markdownBeforeImpact?.[1]?.trim() && /## (?:Summary|Affected Source|Steps to Reproduce)/i.test(markdownBeforeImpact[1])) {
+    return stripReportMetadata(markdownBeforeImpact[1]).trim();
+  }
+
   // Fallback: strip metadata headers and return everything before **Impact:**
   const stripped = stripReportMetadata(reportBody);
   const beforeImpact = stripped.match(/([\s\S]*?)(?=\*\*Impact:\*\*|$)/);
@@ -539,13 +547,12 @@ function extractVulnerabilityInfo(reportBody: string): string {
 
 /**
  * Extract the standalone "Impact" section from a structured report body.
- * In the HackerOne format, Impact is the last section before ===FINDING_END===.
+ * Accepts legacy **Impact:** and local workflow ## Security Impact To Verify / ## Impact.
+ * Stops before the next section so evidence ratings stay separate.
  */
 function extractImpact(reportBody: string): string {
-  // Accept both the legacy bold label and the local workflow's Markdown
-  // heading. Stop before the next section so evidence ratings stay separate.
   const match = reportBody.match(
-    /(?:\*\*Impact:\*\*|^#{1,6}[ \t]+Impact[ \t]*:?[ \t]*\r?$)[ \t]*(?:\r?\n)?([\s\S]*?)(?=^#{1,6}[ \t]+|^\*\*[^*\r\n]+:\*\*|={3}FINDING_END={3}|(?![\s\S]))/im,
+    /(?:\*\*Impact:\*\*|^#{1,6}[ \t]+(?:Security[ \t]+)?Impact(?:[ \t]+To[ \t]+Verify)?[ \t]*:?[ \t]*\r?$)[ \t]*(?:\r?\n)?([\s\S]*?)(?=^#{1,6}[ \t]+|^\*\*[^*\r\n]+:\*\*|={3}FINDING_END={3}|(?![\s\S]))/im,
   );
   return match?.[1]?.trim() || "";
 }
@@ -674,7 +681,75 @@ Omit weakness_id/structured_scope_id if no good match exists. CVSS is always req
       cvss = parsed.fields.cvss;
     }
   } catch (err) {
-    log.warn({ err, teamHandle: opts.teamHandle }, "Field selection agent failed — submitting without extra fields");
+    log.warn({ err, teamHandle: opts.teamHandle }, "Field selection agent failed — falling back to deterministic heuristics");
+  }
+
+  // Deterministic local fallback when LLM field selector is offline or unavailable
+  if (!weaknessId && weaknesses.length > 0) {
+    const textToMatch = `${opts.finding.title} ${opts.finding.vulnerabilityType ?? ""} ${opts.finding.reportBody}`.toLowerCase();
+    const heuristics: Array<{ terms: string[]; cweMatch?: string }> = [
+      { terms: ["reentrancy", "reentrant"], cweMatch: "CWE-670" },
+      { terms: ["integer overflow", "underflow", "arithmetic"], cweMatch: "CWE-190" },
+      { terms: ["access control", "unauthorized", "authorization", "ownership", "privilege"], cweMatch: "CWE-284" },
+      { terms: ["sql injection", "sqli"], cweMatch: "CWE-89" },
+      { terms: ["cross-site scripting", "xss"], cweMatch: "CWE-79" },
+      { terms: ["ssrf", "server-side request forgery"], cweMatch: "CWE-918" },
+      { terms: ["deserialization"], cweMatch: "CWE-502" },
+      { terms: ["denial of service", "dos", "gas limit"], cweMatch: "CWE-400" },
+      { terms: ["cryptograph", "hash collision", "signature", "nonce"], cweMatch: "CWE-327" },
+      { terms: ["logic error", "business logic"], cweMatch: "CWE-840" },
+    ];
+    for (const rule of heuristics) {
+      if (rule.terms.some(t => textToMatch.includes(t))) {
+        const found = weaknesses.find(w =>
+          (rule.cweMatch && w.externalId?.includes(rule.cweMatch)) ||
+          rule.terms.some(t => w.name?.toLowerCase().includes(t))
+        );
+        if (found) {
+          weaknessId = found.id;
+          weaknessName = found.name;
+          break;
+        }
+      }
+    }
+    if (!weaknessId && weaknesses.length > 0) {
+      const generic = weaknesses.find(w =>
+        w.name?.toLowerCase().includes("logic") ||
+        w.name?.toLowerCase().includes("validation") ||
+        w.name?.toLowerCase().includes("other")
+      ) || weaknesses[0];
+      if (generic) {
+        weaknessId = generic.id;
+        weaknessName = generic.name;
+      }
+    }
+  }
+
+  if (!structuredScopeId && opts.scopes.length > 0 && opts.finding.targetAsset) {
+    const target = opts.finding.targetAsset.toLowerCase();
+    const matchedScope = opts.scopes.find(s =>
+      s.assetIdentifier && (
+        target.includes(s.assetIdentifier.toLowerCase()) ||
+        s.assetIdentifier.toLowerCase().includes(target)
+      )
+    ) || opts.scopes[0];
+    if (matchedScope) {
+      structuredScopeId = matchedScope.id;
+    }
+  }
+
+  if (!cvss) {
+    const sev = severityRating;
+    cvss = {
+      attack_vector: "network",
+      attack_complexity: "low",
+      privileges_required: "none",
+      user_interaction: "none",
+      scope: "unchanged",
+      confidentiality: sev === "critical" || sev === "high" ? "high" : "low",
+      integrity: sev === "critical" || sev === "high" ? "high" : (sev === "medium" ? "low" : "none"),
+      availability: sev === "critical" ? "high" : "none",
+    };
   }
 
   const payload: SubmissionPayload = {
@@ -727,7 +802,7 @@ export async function submitReport(opts: {
   } else {
     const vulnInfo = stripReportMetadata(opts.reportBody ?? "");
     const severityRating = SEVERITY_MAP[opts.severity ?? "medium"] ?? "medium";
-    const impactMatch = vulnInfo.match(/(?:\*\*Impact:\*\*|## Impact)\s*([\s\S]*?)(?=\*\*(?:Proof of Concept|Remediation|Summary|Vulnerability):\*\*|## (?:Proof of Concept|Remediation|Summary|Vulnerability)|$)/);
+    const impactMatch = vulnInfo.match(/(?:\*\*Impact:\*\*|## (?:Security )?Impact(?: To Verify)?)\s*([\s\S]*?)(?=\*\*(?:Proof of Concept|Remediation|Summary|Vulnerability|Provisional Evidence Rating):\*\*|## (?:Proof of Concept|Remediation|Summary|Vulnerability|Provisional Evidence Rating)|$)/i);
     const impact = impactMatch?.[1]?.trim() || "See vulnerability information above for full impact details.";
 
     attrs = {
