@@ -77,19 +77,20 @@ else:
     root.mkdir(parents=True)
     (root / "sample.cjs").write_text("exports.ownedFixture = true;" )
 `);
-  await assert.rejects(huntProgram(program), /inspection limit/);
+  await assert.rejects(huntProgram(program), /CONTROLLER_CANDIDATE_QUEUE_EXHAUSTED/);
   assert.equal(db.select().from(schema.securityPrograms).get()!.lastHuntedAt, null);
   answer = JSON.stringify({findings:[]});
   // A read-only model answer without a completed probe is incomplete coverage.
-  await assert.rejects(huntProgram(program), /inspection limit/);
+  await assert.rejects(huntProgram(program), /CONTROLLER_CANDIDATE_QUEUE_EXHAUSTED/);
   const incomplete = db.select().from(schema.securityPrograms).get()!;
   assert.equal(incomplete.lastHuntedAt, null);
   assert.equal(incomplete.huntCount, 0);
   assert.equal(JSON.parse(incomplete.scopeSummary!).huntCoverage.status, "failed");
   answer=JSON.stringify({findings:[],outcome:"no_testable_candidate",reason:"Inspected sample source; it exposes a boolean and no supported function candidate."});
-  assert.deepEqual(await huntProgram(program,"auto"),{findingsCreated:0});
+  await assert.rejects(huntProgram(program,"auto"), /CONTROLLER_CANDIDATE_QUEUE_EXHAUSTED/);
+  assert.equal(modelCalls,0,"An exhausted unsupported controller queue must never delegate scheduling or fabricate a successful inspection");
   assert.equal(readDailyQuota()!.dispatched,2,"A model inspection consumes exactly one slot");
-  assert.equal(JSON.parse(db.select().from(schema.securityPrograms).get()!.scopeSummary!).huntCoverage.status,"partial");
+  assert.equal(JSON.parse(db.select().from(schema.securityPrograms).get()!.scopeSummary!).huntCoverage.status,"failed");
   // A complete unsupported inventory is stored without consuming model turns.
   const previousCalls=modelCalls;
   writeFileSync(git,readFileSync(git,"utf8").replaceAll("sample.cjs","sample.ts"));
