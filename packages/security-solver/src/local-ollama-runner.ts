@@ -9,9 +9,7 @@ import {privilegedRoleMutationCandidate} from './solidity-security-candidates';
 import {rankTracedSourceCandidates} from './controller-source-candidates';
 import { InvestigationWorkflow } from "./investigation-workflow";
 import {guidedProbeAcrossSourceChain,guidedSourceProbe} from './source-guided-probes';
-import {controllerPolyglotPlan,canonicalControllerPolyglotIntent} from './controller-polyglot-plan';
-import {sourceStatefulPlans} from './controller-stateful-candidates';
-import {controllerJavaProbes} from './controller-java-probe-inputs';
+import {controllerPolyglotPlan,controllerPolyglotPlans,canonicalControllerPolyglotIntent} from './controller-polyglot-plan';
 import {declaredProbeTarget, sourceDeclarationHints, supportedJavaProbeHints, javaProbeSelectorCompatible, probeChoices} from './probe-target-validation';
 import { postQwenAgentJson } from "./qwen-agent-transport";
 import { AuditAllowance } from "./audit-allowance";
@@ -49,6 +47,8 @@ export interface LocalAuditLimits {
   maxTurns: number;
   finalSchema?: Record<string,unknown>;
   productionWorkflow?: boolean;
+  /** Production acquisition explicitly enables controller-owned indexed scheduling. */
+  controllerIndex?: boolean;
   /** An explicit task contract may require one specific local probe kind. */
   requiredProbeKind?: 'html_reflection'|'path_construction';
   dynamicAllowance?: boolean;
@@ -619,7 +619,7 @@ export async function runLocalAudit(
       const requestMessages=profile.think ? turnMessages.map(m=>({...m,content:m.content.replaceAll('/no_think','')})) : turnMessages;
       // The graph has already specified the exact next read/verification.
       // Execute it rather than spending a Qwen turn asking for known arguments.
-      const fullIndexMode=!!workflow && process.env.LOCAL_CONTROLLER_FULL_SOURCE_INDEX==='true';
+      const fullIndexMode=!!workflow && (limits.controllerIndex ?? (process.env.LOCAL_CONTROLLER_FULL_SOURCE_INDEX==='true'));
       if(fullIndexMode && constraints?.action?.length===1 &&
          constraints.action[0]==='read_file' && constraints.path?.length===1 &&
          workflow.snapshot().readPaths.includes(constraints.path[0])) {
@@ -638,8 +638,7 @@ export async function runLocalAudit(
       if(!controllerAction && structured && workflow &&
          process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false' &&
          !workflow.snapshot().verifiedEvidenceFocus &&
-         // Candidate exhaustion is evidence-driven: never stop after an arbitrary number of selections.
-         // Previously attempted selectors are excluded below using persisted observations.
+         // Probe progression is bounded by evidence-backed candidates, not an arbitrary count.
          constraints?.action?.includes('plan_probe')) {
         const inspected=new Set(workflow.snapshot().readPaths);
         // Candidate ranking is controller-owned. Iteration in reverse read
@@ -685,32 +684,18 @@ export async function runLocalAudit(
               const tracedPlan=traced && await declaredProbeTarget(full,traced.selector)
                 ? {action:'plan_probe' as const,path,query:traced.selector,
                     answer:traced.kind,hypothesis:traced.hypothesis}:null;
-              // Evaluate every supported plan for this inspected file. The old
-              // single-candidate choice could permanently hide the next method
-              // after the first one had already been observed or rejected.
-              const candidates=[
-                ...(tracedPlan?[tracedPlan]:[]),
-                ...(controllerPlan?[controllerPlan]:[]),
-                ...sourceStatefulPlans(path,code).map(item=>({
-                  action:'plan_probe' as const,path,query:item.selector,answer:item.kind,
-                  hypothesis:'Observe the source-declared state transition; verify actual behavior independently.',
-                  sequence:item.sequence
-                })),
-                ...controllerJavaProbes(path,code).map(item=>({
-                  action:'plan_probe' as const,path,query:item.selector,answer:'java_sequence' as const,
-                  hypothesis:'Observe the declared Java method with source-derived arguments and independent replay.',
-                  sequence:item.sequence
-                })),
-                ...(hint?[{action:'plan_probe' as const,path,query:hint.functionName,
-                  answer:hint.kind,hypothesis:hint.hypothesis}]:[])
-              ];
+              // Enumerate every source-backed adapter; record explicit skip reasons.
+              const candidates=[...(tracedPlan?[tracedPlan]:[]),...controllerPolyglotPlans(path,code),
+                ...(controllerPlan?[controllerPlan]:[]),...(hint?[{action:'plan_probe' as const,
+                  path,query:hint.functionName,answer:hint.kind,hypothesis:hint.hypothesis}]:[])];
               const seen=new Set<string>();
               for(const candidate of candidates) {
                 const identity=JSON.stringify([candidate.query,candidate.answer]);
                 if(seen.has(identity))continue;
                 seen.add(identity);
                 if(!candidate.answer.endsWith('_sequence') &&
-                   !(await declaredProbeTarget(full,candidate.query))) {
+                   !(await declaredProbeTarget(full,candidate.query,candidate.answer,
+                     'sequence' in candidate ? candidate.sequence : undefined))) {
                   await appendFile(logFile,'[CONTROLLER_PROBE_CANDIDATE_SKIPPED] '+
                     JSON.stringify({path,selector:candidate.query,kind:candidate.answer,
                       reason:'declaration_preflight_failed'})+'\n');
@@ -719,15 +704,16 @@ export async function runLocalAudit(
                 const attempted=workflow.snapshot().observations.some(item=>
                   item.path===path && item.function===candidate.query && item.kind===candidate.answer);
                 if(attempted) {
-                  await appendFile(logFile,'[CONTROLLER_PROBE_CANDIDATE_SKIPPED] '+JSON.stringify({
-                    path,selector:candidate.query,kind:candidate.answer,reason:'already_observed'})+'\n');
+                  await appendFile(logFile,'[CONTROLLER_PROBE_CANDIDATE_SKIPPED] '+
+                    JSON.stringify({path,selector:candidate.query,kind:candidate.answer,
+                      reason:'already_observed'})+'\n');
                   continue;
                 }
                 const rejection=workflow.validate(candidate as any);
                 if(!rejection){plan=candidate;break;}
-                await appendFile(logFile,'[CONTROLLER_PROBE_CANDIDATE_SKIPPED] '+JSON.stringify({
-                  path,selector:candidate.query,kind:candidate.answer,
-                  reason:'workflow_rejected',detail:String(rejection).slice(0,240)})+'\n');
+                await appendFile(logFile,'[CONTROLLER_PROBE_CANDIDATE_SKIPPED] '+
+                  JSON.stringify({path,selector:candidate.query,kind:candidate.answer,
+                    reason:'workflow_rejected',detail:String(rejection).slice(0,240)})+'\n');
               }
             }
             if(!plan)continue;
@@ -772,6 +758,34 @@ export async function runLocalAudit(
           }catch{}
         }
       }
+      // Real-world 88mph run: Qwen repeatedly requested a terminal SafeERC20
+      // page at turns 70-75, taking 5-13 minutes per request. The old recovery
+      // handed off another ranked file only AFTER wasting a model turn. When
+      // controller-ranked source remains, perform that read directly instead.
+      // Source progress and terminal pages are controller-owned, not model-owned.
+      if(!controllerAction && fullIndexMode && structured && workflow &&
+         process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false' &&
+         constraints?.action?.includes('read_file') &&
+         !workflow.snapshot().verifiedEvidenceFocus) {
+        const remaining=[...new Set(limits.initialSourcePaths||[])].filter(path=>
+          path.startsWith('source-') && /\.(?:sol|java|py|js|mjs|cjs)$/.test(path) &&
+          !terminalReadPages.has(path) &&
+          (!constraints?.path?.length || constraints.path.includes(path)));
+        for(const candidate of remaining) {
+          try {
+            await safePath(candidate);
+            const offsets=[...recentActions.entries()]
+              .filter(([key,value])=>JSON.parse(key)[0]==='read_file' && JSON.parse(key)[1]===candidate && value.nextOffset!=null)
+              .map(([,value])=>value.nextOffset as number);
+            const offset=offsets.length ? Math.max(...offsets) : 0;
+            controllerAction={action:'read_file',path:candidate,query:'',answer:'',offset};
+            await appendFile(logFile,'[INDEXED_CONTROLLER_MODEL_BYPASS] '+
+              JSON.stringify({turn:turn+1,path:candidate,offset,
+                remaining:remaining.length,completed:terminalReadPages.size})+'\n');
+            break;
+          }catch{}
+        }
+      }
       if(fullIndexMode && structured && workflow &&
          process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false' &&
          !controllerAction && !workflow.snapshot().observations.length &&
@@ -789,32 +803,21 @@ export async function runLocalAudit(
             unread:unread.slice(0,12),observations:0})+'\n');
         throw new Error('CONTROLLER_CANDIDATE_QUEUE_EXHAUSTED: no controller-selected source or supported probe; inspect candidate selection diagnostics, not model finalization');
       }
-      // Real-world 88mph run: Qwen repeatedly requested a terminal SafeERC20
-      // page at turns 70-75, taking 5-13 minutes per request. The old recovery
-      // handed off another ranked file only AFTER wasting a model turn. When
-      // controller-ranked source remains, perform that read directly instead.
-      // Source progress and terminal pages are controller-owned, not model-owned.
-      if(!controllerAction && fullIndexMode && structured && workflow &&
+      // Exhaustion is an explicit controller transition. Unsupported/negative
+      // observations cannot authorize more source scheduling by the model.
+      if(fullIndexMode && workflow && !controllerAction &&
          process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false' &&
-         constraints?.action?.includes('read_file') &&
+         workflow.snapshot().observations.length && !workflow.snapshot().pending &&
          !workflow.snapshot().verifiedEvidenceFocus) {
-        const remaining=[...new Set(limits.initialSourcePaths||[])].filter(path=>
-          path.startsWith('source-') && /\.(?:sol|java|py|js|mjs|cjs)$/.test(path) &&
-          !terminalReadPages.has(path) &&
-          (!constraints.path?.length || constraints.path.includes(path)));
-        for(const candidate of remaining) {
-          try {
-            await safePath(candidate);
-            const offsets=[...recentActions.entries()]
-              .filter(([key,value])=>key.includes(candidate) && value.nextOffset!=null)
-              .map(([,value])=>value.nextOffset as number);
-            const offset=offsets.length ? Math.max(...offsets) : 0;
-            controllerAction={action:'read_file',path:candidate,query:'',answer:'',offset};
-            await appendFile(logFile,'[INDEXED_CONTROLLER_MODEL_BYPASS] '+
-              JSON.stringify({turn:turn+1,path:candidate,offset,
-                remaining:remaining.length,completed:terminalReadPages.size})+'\n');
-            break;
-          }catch{}
+        const eligible=(limits.initialSourcePaths||[]).filter(path=>
+          /^source-[0-9]+\//.test(path) && /\.(?:sol|java|py|js|mjs|cjs)$/.test(path));
+        if(eligible.length && eligible.every(path=>terminalReadPages.has(path)) &&
+           workflow.finishControllerCandidates()) {
+          constraints=await workflow.constraints();
+          requestSchema={...requestSchema,properties:{...requestSchema.properties,
+            action:{type:'string',enum:['final']}}};
+          await appendFile(logFile,'[CONTROLLER_EVIDENCE_ASSESSMENT_HANDOFF] '+
+            JSON.stringify({observations:workflow.snapshot().observations.length,completedFiles:eligible.length})+'\n');
         }
       }
       // Never delegate source selection, probe execution or workflow transitions
@@ -1029,7 +1032,7 @@ export async function runLocalAudit(
         // All three non-Solidity languages obey the same source-owned probe
         // request contract as Solidity. The model may choose an actual method,
         // but its guessed kind, typed arguments and sequence are never trusted.
-        if(workflow && ['plan_probe','probe_intent'].includes(action.action) &&
+        if(!controllerAction && workflow && ['plan_probe','probe_intent'].includes(action.action) &&
            action.path.startsWith('source-') && /\.(?:java|py|js|mjs|cjs)$/.test(action.path)) {
           try {
             const full=await safePath(action.path);
@@ -1888,14 +1891,6 @@ export async function runLocalAudit(
             const rawPage = await readSourcePage(full,offset,pageSize);
             output = fitOutput(JSON.stringify(rawPage)).output;
             const page = JSON.parse(output) as typeof rawPage;
-            sourceTotals.set(relative(root,full),page.totalCharacters);
-            allowance.read(relative(root,full),page.start,page.end,turn+1);
-            activityCount=page.text.length;
-            successfulReads++;
-            workflow?.read(relative(root,full).split(sep).join("/"));
-            limits.onRead?.(relative(root,full).split(sep).join("/"),{start:page.start,end:page.end});
-            await appendFile(logFile, "[READ_OK] " + relative(root,full) + ` offset=${page.start} end=${page.end} nextOffset=${page.nextOffset}\n`);
-            if(page.nextOffset===null)terminalReadPages.set(relative(root,full).split(sep).join('/'),{offset:page.start});
             // Present grounded choices as soon as a file's last page is read,
             // before Qwen needs to invent a probe target or a Solidity sequence.
             if(workflow && page.nextOffset===null && ['.sol','.py','.js','.mjs','.cjs','.java'].some(ext=>full.endsWith(ext))) {
@@ -1917,6 +1912,24 @@ export async function runLocalAudit(
 
           } else throw new Error("Unknown tool");
           output=fitOutput(output).output;
+          if(name==='read_file') {
+            // Menus and escaping can force a second fit. Only the final
+            // delivered range is read evidence or a pagination cursor.
+            const page=JSON.parse(output);
+            const sourcePath=relative(root,full).split(sep).join('/');
+            sourceTotals.set(sourcePath,page.totalCharacters);
+            allowance.read(sourcePath,page.start,page.end,turn+1);
+            activityCount=page.text.length;successfulReads++;
+            workflow?.read(sourcePath);
+            limits.onRead?.(sourcePath,{start:page.start,end:page.end});
+            await appendFile(logFile,'[READ_OK] '+sourcePath+
+              ` offset=${page.start} end=${page.end} nextOffset=${page.nextOffset}\n`);
+            if(page.nextOffset===null)terminalReadPages.set(sourcePath,{offset:page.start});
+            const id=await controllerArchive?.append('source',{
+              path:sourcePath,start:page.start,end:page.end,content:page.text,nextOffset:page.nextOffset
+            },{source:sourcePath});
+            if(id)workflow?.recordEvidence(id);
+          }
           try {navigation.observe(name,relative(root,full).split(sep).join("/") || ".",offset,String(call.function.arguments?.query || ""),JSON.parse(output));}catch{}
           stalledActions=0;
           if(inspection) {
@@ -1945,6 +1958,15 @@ export async function runLocalAudit(
               "Use list_files on a known directory or select an existing source hint. "+navigation.hint();
             if(count>=3)fatalToolError="AUDIT_STALLED: repeated missing source path after corrective feedback; inspection incomplete";
           }
+        }
+        if(['verify_source','verify_python'].includes(call.function.name) && !output.startsWith('Tool error:')) {
+          const result=JSON.parse(output);
+          const sourcePath=String(call.function.arguments?.path||'');
+          const id=await controllerArchive?.append('probe',{
+            path:sourcePath,function:call.function.arguments?.query,
+            kind:call.function.arguments?.kind,result
+          },{source:sourcePath,caseId:typeof result.caseId==='string'?result.caseId:undefined});
+          if(id)workflow?.recordEvidence(id);
         }
         workflow?.observe({action:call.function.name,path:String(call.function.arguments?.path || ''),
           query:String(call.function.arguments?.query || ''),answer:String(call.function.arguments?.kind || ''),

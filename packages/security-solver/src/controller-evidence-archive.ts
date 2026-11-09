@@ -32,6 +32,8 @@ export class ControllerEvidenceArchive {
       if(!line.trim())continue;
       const record=JSON.parse(line) as AuditEvidenceRecord;
       if(record.version!==2||!validId(record.id)||!validId(record.sha256)||
+        !Array.isArray(record.parentIds)||record.parentIds.some(id=>!validId(id)||!this.byId.has(id))||
+        !['source','probe','route','review','decision','exchange'].includes(record.kind)||
         hash(record.payload)!==record.sha256||
         makeId(record.kind,record.sha256,record.source,record.caseId,record.parentIds)!==record.id)
         throw new Error('Controller evidence archive integrity mismatch');
@@ -43,7 +45,7 @@ export class ControllerEvidenceArchive {
     source?:string;caseId?:string;parentIds?:string[];
   }={}) {
     await this.load();
-    const parentIds=metadata.parentIds||[];
+    const parentIds=[...(metadata.parentIds||[])];
     for(const id of parentIds)if(!this.byId.has(id))throw new Error('Missing controller evidence parent');
     // Snapshot mutable controller objects before hashing: later workflow mutations
     // must never alter the evidence record or invalidate its integrity digest.
@@ -63,8 +65,11 @@ export class ControllerEvidenceArchive {
     await this.load();
     const record=this.byId.get(id);
     if(!record)return null;
-    if(hash(record.payload)!==record.sha256)throw new Error('Controller evidence archive integrity mismatch');
-    return record;
+    if(hash(record.payload)!==record.sha256||
+       makeId(record.kind,record.sha256,record.source,record.caseId,record.parentIds)!==record.id)
+      throw new Error('Controller evidence archive integrity mismatch');
+    // Retrieval is a snapshot too: a consumer cannot mutate authoritative cold memory.
+    return JSON.parse(JSON.stringify(record)) as AuditEvidenceRecord;
   }
   async forCase(caseId:string) {
     await this.load();

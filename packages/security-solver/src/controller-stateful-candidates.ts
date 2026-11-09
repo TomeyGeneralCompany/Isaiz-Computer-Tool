@@ -8,6 +8,24 @@ export type StatefulSourcePlan={
   sequence:PolyglotSequence;factoryLine:number;methodLine:number;
 };
 const lineAt=(source:string,pos:number)=>source.slice(0,pos).split('\n').length;
+/** Fixture only declared primitive defaults/types; never evaluate source expressions. */
+function parameterFixtures(parameters:string,python:boolean,fallback:number):PolyglotSequence['constructor']|null {
+  if(!parameters.trim())return [];
+  const parts=parameters.split(',');if(parts.length>8)return null;
+  const values:PolyglotSequence['constructor']=[];
+  for(const part of parts) {
+    const match=/^\s*([A-Za-z]\w*)(?:\s*:\s*(int|float|bool|str))?(?:\s*=\s*(.+))?\s*$/.exec(part);
+    if(!match || (!python && match[2]))return null;
+    const literal=match[3]?.trim();
+    if(literal!==undefined) {
+      if(/^-?\d+(?:\.\d+)?$/.test(literal) && Number.isFinite(Number(literal)))values.push(Number(literal));
+      else if(/^(?:True|False|true|false)$/.test(literal))values.push(literal.toLowerCase()==='true');
+      else if(/^"[^"\\]*"$/.test(literal)||/^'[^'\\]*'$/.test(literal))values.push(literal.slice(1,-1));
+      else return null;
+    }else values.push(match[2]==='str'?'TOMEY_LOCAL_PROBE':match[2]==='bool'?true:fallback);
+  }
+  return values;
+}
 export function sourceStatefulPlans(file:string,source:string):StatefulSourcePlan[] {
   if(source.length>256000)return [];
   if(/\.(?:js|cjs|mjs)$/.test(file)) {
@@ -22,17 +40,16 @@ export function sourceStatefulPlans(file:string,source:string):StatefulSourcePla
       const method=/\b([A-Za-z][A-Za-z0-9_]*)\s*\(([^)]*)\)\s*\{/g;
       for(const m of returned[1].matchAll(method)){
         if(['constructor','toString','valueOf'].includes(m[1]))continue;
-        const args=m[2].trim()?m[2].split(',').map(x=>x.trim()):[];
-        if(args.length>1 || args.some(x=>!/^[A-Za-z][A-Za-z0-9_]*$/.test(x)))continue;
-        const selectedArgs=args.length?[1]:[];
-        const rawParams=/\b(?:function(?:\s+[A-Za-z]\w*)?\s*\(|\()\s*([^)]*)\)/.exec(f[0])?.[1].trim()||'';
-        const ctor=rawParams ? rawParams.split(',').map(x=>x.trim()):[];
-        if(ctor.length>1||ctor.some(x=>!/^[A-Za-z][A-Za-z0-9_]*$/.test(x)))continue;
+        const selectedArgs=parameterFixtures(m[2],false,1);
+        if(!selectedArgs)continue;
+        const rawParams=/(?:\bfunction(?:\s+[A-Za-z]\w*)?\s*\(|\()\s*([^)]*)\)/.exec(f[0])?.[1].trim()||'';
+        const ctor=parameterFixtures(rawParams,false,0);
+        if(!ctor)continue;
         plans.push({kind:'javascript_sequence',selector:m[1],factoryLine:lineAt(source,f.index!),
           methodLine:lineAt(source,f.index!+returned.index+returned[0].indexOf(m[0])),
-          sequence:{factory:f[1],constructor:ctor.length?[0]:[],
+          sequence:{factory:f[1],constructor:ctor,
             steps:[{method:m[1],args:selectedArgs},{method:m[1],args:selectedArgs}]}});
-        if(plans.length>=32)break;
+        if(plans.length>=32)return plans;
       }
       if(plans.length>=32)break;
     }
@@ -45,21 +62,20 @@ export function sourceStatefulPlans(file:string,source:string):StatefulSourcePla
       const tail=source.slice(cls.index!+cls[0].length);
       const next=/^class\s+[A-Za-z]/m.exec(tail);
       const body=tail.slice(0,Math.min(next?.index??tail.length,5000));
-      const method=/^    def\s+([A-Za-z][A-Za-z0-9_]*)\s*\(\s*self\s*(?:,\s*([^)]*))?\)\s*:/gm;
+      const method=/^    def\s+([A-Za-z][A-Za-z0-9_]*)\s*\(\s*self\s*(?:,\s*([^)]*))?\)\s*(?:->\s*[A-Za-z]\w*)?\s*:/gm;
       const named=[...body.matchAll(method)].filter(x=>!x[1].startsWith('_'));
-      const factoryRe=new RegExp('^def\\s+([A-Za-z][A-Za-z0-9_]*)\\s*\\(([^)]*)\\)\\s*:\\s*\\n(?:[ \\t]+[^\\n]*\\n){0,6}[ \\t]+return\\s+'+cls[1]+'\\s*\\(','gm');
+      const factoryRe=new RegExp('^def\\s+([A-Za-z][A-Za-z0-9_]*)\\s*\\(([^)]*)\\)\\s*(?:->\\s*[A-Za-z]\\w*\\s*)?:[ \\t]*(?:\\n(?:[ \\t]+[^\\n]*\\n){0,6}[ \\t]+)?return\\s+'+cls[1]+'\\s*\\(','gm');
       const make=factoryRe.exec(source);
       if(!make)continue;
       for(const m of named){
-        const args=m[2]?.trim()?m[2].split(',').map(x=>x.trim()):[];
-        if(args.length>1||args.some(x=>!/^[A-Za-z][A-Za-z0-9_]*(?:\s*=\s*[0-9]+)?$/.test(x)))continue;
-        const ctor=make[2].trim()?make[2].split(',').map(x=>x.trim()):[];
-        if(ctor.length>1||ctor.some(x=>!/^[A-Za-z][A-Za-z0-9_]*(?:\s*=\s*[0-9]+)?$/.test(x)))continue;
+        const args=parameterFixtures(m[2]||'',true,1);
+        const ctor=parameterFixtures(make[2],true,0);
+        if(!args||!ctor)continue;
         plans.push({kind:'python_sequence',selector:m[1],factoryLine:lineAt(source,make.index),
           methodLine:lineAt(source,cls.index!+cls[0].length+m.index!),
-          sequence:{factory:make[1],constructor:ctor.length?[0]:[],
-            steps:[{method:m[1],args:args.length?[1]:[]},{method:m[1],args:args.length?[1]:[]}]}});
-        if(plans.length>=32)break;
+          sequence:{factory:make[1],constructor:ctor,
+            steps:[{method:m[1],args},{method:m[1],args}]}});
+        if(plans.length>=32)return plans;
       }
       if(plans.length>=32)break;
     }

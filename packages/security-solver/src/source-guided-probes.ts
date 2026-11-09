@@ -10,7 +10,8 @@ import {traceSourceCalls} from './source-flow-facts';
  * explicitly constructs paragraph markup. Leave other code to normal review.
  */
 export type GuidedProbe={path:string;functionName:string;kind:'html_reflection';hypothesis:string};
-export function guidedSourceProbe(path:string,code:string):GuidedProbe|null {
+export function guidedSourceProbes(path:string,code:string):GuidedProbe[] {
+  const found:GuidedProbe[]=[];
   if(path.endsWith('.java') && code.length<=256000) {
     // Only offer methods matching the isolated Java text probe's one-input contract.
     const className=path.split('/').at(-1)!.replace(/\.java$/,'');
@@ -20,10 +21,10 @@ export function guidedSourceProbe(path:string,code:string):GuidedProbe|null {
       if(end<0 || end-match.index!>6000)continue;
       const body=code.slice(match.index!+match[0].length,end);
       if(!/\breturn\b/.test(body)||!/<p>/i.test(body)||!/<\/p>/i.test(body))continue;
-      return {path,functionName:className+'.'+match[1],kind:'html_reflection',
-        hypothesis:'Check whether input HTML survives this Java paragraph renderer; escaped output disproves the suspected reflection.'};
+      found.push({path,functionName:className+'.'+match[1],kind:'html_reflection',
+        hypothesis:'Check whether input HTML survives this Java paragraph renderer; escaped output disproves the suspected reflection.'});
     }
-    return null;
+    return found;
   }
   if(/\.(?:js|mjs|cjs)$/.test(path) && code.length<=256000) {
     // Exported one-input CommonJS or ESM functions whose literal returned
@@ -38,12 +39,12 @@ export function guidedSourceProbe(path:string,code:string):GuidedProbe|null {
       if(end<0 || end-match.index!>6000)continue;
       const body=code.slice(match.index!+match[0].length,end);
       if(!/\breturn\b/.test(body) || !/<p>/i.test(body) || !/<\/p>/i.test(body))continue;
-      return {path,functionName:match[1],kind:'html_reflection',
-        hypothesis:'Check whether source-provided HTML input survives this exported renderer; escaped markup disproves reflection.'};
+      found.push({path,functionName:match[1],kind:'html_reflection',
+        hypothesis:'Check whether source-provided HTML input survives this exported renderer; escaped markup disproves reflection.'});
     }
-    return null;
+    return found;
   }
-  if(!path.endsWith('.py') || code.length>256000)return null;
+  if(!path.endsWith('.py') || code.length>256000)return found;
   const declaration=/^def ([A-Za-z][A-Za-z0-9_]{0,79})\(([A-Za-z][A-Za-z0-9_]*)\)\s*(?:->\s*(?:str|String)\s*)?:\s*$/gm;
   for(const match of code.matchAll(declaration)) {
     const start=match.index!+match[0].length;
@@ -54,10 +55,13 @@ export function guidedSourceProbe(path:string,code:string):GuidedProbe|null {
     if(!/^\s+return\s+/m.test(body))continue;
     if(!/<p>/i.test(body)||!/<\/p>/i.test(body))continue;
     if(body.length>6000)continue;
-    return {path,functionName:match[1],kind:'html_reflection',
-      hypothesis:'Check whether user markup survives paragraph construction; safely escaped output disproves the suspected reflection.'};
+    found.push({path,functionName:match[1],kind:'html_reflection',
+      hypothesis:'Check whether user markup survives paragraph construction; safely escaped output disproves the suspected reflection.'});
   }
-  return null;
+  return found;
+}
+export function guidedSourceProbe(path:string,code:string):GuidedProbe|null {
+  return guidedSourceProbes(path,code)[0]||null;
 }
 
 /** Look through source-resolved helper calls before the model chooses a probe.

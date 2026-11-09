@@ -3,6 +3,8 @@ on:
   pull_request:
     paths:
       - .github/workflows/real-qwen-smoke.yml
+      - packages/security-solver/src/**
+      - scripts/source-reproduction.py
   workflow_dispatch:
 permissions:
   contents: read

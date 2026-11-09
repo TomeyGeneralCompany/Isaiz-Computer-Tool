@@ -37,6 +37,8 @@ try {
   await writeFile(join(repo,'Unsupported.java'),'public class Unsupported { public long count(){ return 1; } }');
   const sources={
     'counter.py':'class Counter:\n    def __init__(self,start=0): self.value=start\n    def advance(self,by=1):\n        self.value+=by\n        return self.value\ndef make(start=0):\n    return Counter(start)\n',
+    'typed.py':'class Counter:\n    def __init__(self,start: int=0): self.value=start\n    def advance(self,by: int=1) -> int:\n        self.value+=by\n        return self.value\ndef make(start: int=0) -> Counter: return Counter(start)\n',
+    'counter.mjs':'export const make = (start=0) => {let value=start; return {advance(by=1) {value+=by;return value;}};};',
     'counter.cjs':'exports.make = function(start) {let value=start; return {\n advance(by) {value += by; return value;}\n};};\n'
   };
   for(const [file,code] of Object.entries(sources))await writeFile(join(repo,file),code);
@@ -67,7 +69,7 @@ try {
       assert.ok(record,'session must persist the actual same-instance sequence');
       assert.equal((await replaySourceCase(record,repo)).status,'observation_only');
     }
-    assert.equal(session.completedProbes,2);
+    assert.equal(session.completedProbes,Object.keys(sources).length);
     assert.equal(session.blockedReason,null,'unsupported attempt must not taint later supported execution');
   }
   console.log('Four-language spec validation, unsupported session recovery and stateful execution boundary PASSED');
