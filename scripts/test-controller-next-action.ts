@@ -21,6 +21,20 @@ assert.deepEqual(controllerOwnedNextAction({
 }),{action:'read_file',path:'source-1/src/http_handler.py',query:'',answer:'',offset:0});
 assert.equal(controllerOwnedNextAction({action:['read_file','final'],path:['x']},null),null);
 assert.equal(controllerOwnedNextAction({action:['verify_source'],path:['x'],query:['y'],answer:['z']},pending),null);
+assert.deepEqual(controllerOwnedNextAction({
+  action:['read_solidity'],path:['source-1/Vault.sol'],query:['Vault.withdraw']
+}),{action:'read_solidity',path:'source-1/Vault.sol',query:'Vault.withdraw',answer:'',offset:0});
+assert.deepEqual(controllerOwnedNextAction({
+  action:['read_solidity'],path:['source-1/src/handler.py'],query:['handler']
+}),{action:'read_file',path:'source-1/src/handler.py',query:'',answer:'',offset:0});
+assert.deepEqual(controllerOwnedNextAction({
+  action:['search_files'],path:['source-1'],query:['withdraw']
+}),{action:'search_files',path:'source-1',query:'withdraw',answer:'',offset:0});
+assert.deepEqual(controllerOwnedNextAction({
+  action:['list_files'],path:['source-1']
+}),{action:'list_files',path:'source-1',query:'',answer:'',offset:0});
+assert.equal(controllerOwnedNextAction({action:['read_solidity'],path:['source-1/Vault.sol']},null),null,
+  'controller must not invent a missing function selector');
 assert.equal(controllerOwnedNextAction({action:['plan_probe']},null),null,
   'controller must not fabricate a probe for unresolved model hypotheses');
 assert.equal(canonicalSourceNavigationAction({
