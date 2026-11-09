@@ -37,6 +37,9 @@ try {
     ['render.py','def render(value):\n    return "<p>"+value+"</p>"\n'],
     ['render.cjs','exports.render=function(value){return "<p>"+value+"</p>";};'],
     ['Render.java','public class Render {public static String render(String value){return "<p>"+value+"</p>";}}'],
+    ['Stateful.py','class Counter:\n    def advance(self,by=1):\n        return by\ndef make(start=0):\n    return Counter(start)\n'],
+    ['Stateful.cjs','exports.make=function(start){let value=start;return {advance(by){value+=by;return value;}};};'],
+    ['Stateful.java','public class Stateful {private int value=0; public int advance(){return ++value;} public int current(){return value;}}'],
     ['Counter.sol','pragma solidity ^0.8.0; contract Counter {uint public value; function add(uint amount) public {value+=amount;}}']
   ]) {
     const path='source-1/'+file;
@@ -49,7 +52,14 @@ try {
     const answer=await runLocalAudit('Assess the recorded local case.',log,20000,root,'mock',undefined,{
       productionWorkflow:true,maxTurns:12,numCtx:8192,numPredict:256,numThreads:1,
       initialSourcePaths:[path],
-      verifyPython:async()=>{probes++;return JSON.stringify({status:'behavior_observed',behavior_observed:true,caseId:id});},
+      verifyPython:async(_path,_selector,kind,sequence)=>{
+        probes++;
+        if(file.startsWith('Stateful')) {
+          assert.ok(kind.endsWith('_sequence'),file+': source-guided path must use existing stateful adapter');
+          assert.ok(sequence,file+': source-derived sequence must reach actual verifier');
+        }
+        return JSON.stringify({status:'behavior_observed',behavior_observed:true,caseId:id});
+      },
       onVerifiedCase:async()=>({callers:[path]}),
       validateFinal:answer=>JSON.parse(answer).assessed===true?null:'Assessment required'
     });

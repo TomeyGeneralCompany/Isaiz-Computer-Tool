@@ -49,9 +49,9 @@ export function sourceStatefulPlans(file:string,source:string):StatefulSourcePla
           methodLine:lineAt(source,f.index!+returned.index+returned[0].indexOf(m[0])),
           sequence:{factory:f[1],constructor:ctor,
             steps:[{method:m[1],args:selectedArgs},{method:m[1],args:selectedArgs}]}});
-        if(plans.length>=24)return plans;
+        if(plans.length>=32)return plans;
       }
-      if(plans.length>=24)break;
+      if(plans.length>=32)break;
     }
     return plans;
   }
@@ -75,9 +75,9 @@ export function sourceStatefulPlans(file:string,source:string):StatefulSourcePla
           methodLine:lineAt(source,cls.index!+cls[0].length+m.index!),
           sequence:{factory:make[1],constructor:ctor,
             steps:[{method:m[1],args},{method:m[1],args}]}});
-        if(plans.length>=24)return plans;
+        if(plans.length>=32)return plans;
       }
-      if(plans.length>=24)break;
+      if(plans.length>=32)break;
     }
     return plans;
   }
