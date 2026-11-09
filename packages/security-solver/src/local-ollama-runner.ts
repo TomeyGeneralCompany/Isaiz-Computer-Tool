@@ -399,7 +399,8 @@ export async function runLocalAudit(
           if(evidenceId)result.controllerEvidenceId=evidenceId;
           if(evidenceId)workflow?.recordEvidence(evidenceId);
           const output=JSON.stringify(result);
-          const verify={action:'verify_source',path,query:hint.functionName,answer:hint.kind};
+          const verify={action:'verify_source',path,query:hint.functionName,answer:hint.kind,
+            ...('sequence' in hint && hint.sequence!==undefined ? {sequence:hint.sequence} : {})};
           workflow.observe(verify as any,output);
           if(result.status==='behavior_observed' &&
              typeof result.caseId==='string' && limits.onVerifiedCase &&
@@ -1190,7 +1191,7 @@ export async function runLocalAudit(
               const target=await safePath(action.path);
               declared=action.path.endsWith('.sol') ?
                 await solidityIndex.hasFunction(target,action.query) :
-                await declaredProbeTarget(target,action.query);
+                await declaredProbeTarget(target,action.query,action.answer,action.sequence);
             }catch{}
             if(!declared) {
               let hints:string[]=[];

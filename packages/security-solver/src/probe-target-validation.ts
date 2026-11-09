@@ -1,10 +1,19 @@
 import {readFile} from 'node:fs/promises';
+import {isDeepStrictEqual} from 'node:util';
+import {sourceStatefulPlans} from './controller-stateful-candidates';
 import {sourceCodeOnly} from './source-function-reference';
 
 /** Declaration preflight across supported languages; reproduction remains authoritative. */
-export async function declaredProbeTarget(path:string,selector:string):Promise<boolean> {
+export async function declaredProbeTarget(path:string,selector:string,kind?:string,sequence?:unknown):Promise<boolean> {
   const text=await readFile(path,'utf8');
   if(text.length>512000)return false;
+  if(kind==='python_sequence' || kind==='javascript_sequence') {
+    // A factory-returned object method is not a top-level function/export.
+    // Accept only the exact controller plan derived from this source. This
+    // binds the method, language, factory, constructor and every step together.
+    return sourceStatefulPlans(path,text).some(plan=>plan.kind===kind &&
+      plan.selector===selector && isDeepStrictEqual(plan.sequence,sequence));
+  }
   const code=sourceCodeOnly(text);
   const parts=selector.split('.');
   const name=parts.at(-1)||'';
