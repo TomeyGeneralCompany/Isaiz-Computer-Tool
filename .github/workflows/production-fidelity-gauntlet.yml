@@ -28,12 +28,6 @@ jobs:
           mkdir -p "$RUNNER_TEMP/lotus-fidelity-harness"
           cp .fidelity-harness/scripts/test-production-fidelity-gauntlet.ts "$RUNNER_TEMP/lotus-fidelity-harness/"
           cp .fidelity-harness/scripts/test-production-workflow.ts "$RUNNER_TEMP/lotus-fidelity-harness/"
-      - name: Preserve harness outside target worktree
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.target_ref != '' }}
-        run: |
-          mkdir -p "$RUNNER_TEMP/lotus-fidelity-harness"
-          cp .fidelity-harness/scripts/test-production-fidelity-gauntlet.ts "$RUNNER_TEMP/lotus-fidelity-harness/"
-          cp .fidelity-harness/scripts/test-production-workflow.ts "$RUNNER_TEMP/lotus-fidelity-harness/"
       - name: Checkout LOTUS implementation under test
         uses: actions/checkout@v4
         with:
@@ -93,6 +87,12 @@ jobs:
           sparse-checkout: |
             scripts/test-production-fidelity-gauntlet.ts
             scripts/test-production-workflow.ts
+      - name: Preserve harness outside target worktree
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.target_ref != '' }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/lotus-fidelity-harness"
+          cp .fidelity-harness/scripts/test-production-fidelity-gauntlet.ts "$RUNNER_TEMP/lotus-fidelity-harness/"
+          cp .fidelity-harness/scripts/test-production-workflow.ts "$RUNNER_TEMP/lotus-fidelity-harness/"
       - name: Checkout LOTUS implementation under test
         uses: actions/checkout@v4
         with:

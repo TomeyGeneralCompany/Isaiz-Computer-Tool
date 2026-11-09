@@ -171,3 +171,8 @@ try {
  }
  console.log('Caller evidence, direct transactions, compiler preflight, capability refresh and bounded history PASSED');
 } finally {await rm(root,{recursive:true,force:true});}
+
+// Import/re-export continuations cannot borrow a following invocation as a caller.
+for(const text of ['export { render\n};\nrender(value);', 'export { render\n(value);']) {
+  assert.equal(callerLineReferences(text,1,'render'),false);
+}

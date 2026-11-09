@@ -201,7 +201,7 @@ export async function runLocalAudit(
     await appendFile(logFile+'.exchanges.jsonl',entries.map(e=>JSON.stringify({version:1,sha256:e.digest,exchange:e.message})).join('\n')+'\n');
     for(const entry of entries)await controllerArchive?.append('exchange',entry.message);
     for(const e of entries)archivedExchangeHashes.add(e.digest);
-    await appendFile(logFile,'[CONTEXT_ARCHIVED] '+JSON.stringify({messages:entries.length,archive:logFile+'.exchanges.jsonl'})+'\\n');
+    await appendFile(logFile,'[CONTEXT_ARCHIVED] '+JSON.stringify({messages:entries.length,archive:logFile+'.exchanges.jsonl'})+'\n');
   };
   const recentActions = new Map<string, {turn:number; nextOffset?:number|null; response?:Message}>();
   // Independent of context compaction: an evicted source page is not an unread page.
@@ -319,9 +319,9 @@ export async function runLocalAudit(
           policyOffset=page.nextOffset;
           if(policyPage===9999)throw new Error('Audit policy exceeds controller paging safety bound');
         }
-        await appendFile(logFile,'[CONTROLLER_POLICY_PAGES_COMPLETE]\\n');
+        await appendFile(logFile,'[CONTROLLER_POLICY_PAGES_COMPLETE]\n');
       } catch(error) {
-        await appendFile(logFile,'[CONTROLLER_POLICY_PREFETCH_FAILED] '+String(error)+'\\n');
+        await appendFile(logFile,'[CONTROLLER_POLICY_PREFETCH_FAILED] '+String(error)+'\n');
         throw error;
       }
     }
@@ -368,7 +368,7 @@ export async function runLocalAudit(
           const hint=await guidedProbeAcrossSourceChain(root,path,guidedSource);
           if(!hint) {
             await appendFile(logFile,'[GUIDED_PROBE_NO_CANDIDATE] '+JSON.stringify({
-              path,paginated:delivered.nextOffset!==null,sourceCharacters:guidedSource.length})+'\\n');
+              path,paginated:delivered.nextOffset!==null,sourceCharacters:guidedSource.length})+'\n');
             continue;
           }
           const planned={action:'plan_probe',path,query:hint.functionName,answer:hint.kind,hypothesis:hint.hypothesis};
@@ -417,7 +417,7 @@ export async function runLocalAudit(
           if(result.status==='behavior_not_observed') {
             const next=workflow.requireNextUnreadSource(limits.initialSourcePaths||[]);
             if(next)await appendFile(logFile,'[GUIDED_NEGATIVE_PROBE_SOURCE_HANDOFF] '+
-              JSON.stringify({testedPath:path,next})+'\\n');
+              JSON.stringify({testedPath:path,next})+'\n');
           }
           if(result.status==='behavior_observed' && !workflow.snapshot().verifiedEvidenceFocus) {
             const paths=(limits.initialSourcePaths||[]).filter(p=>p.startsWith('source-') &&
@@ -483,7 +483,7 @@ export async function runLocalAudit(
         constraints={...constraints,action:['read_file',...constraints.action]};
         await appendFile(logFile,'[UNREAD_SOURCE_ACTION_RESTORED] '+
           JSON.stringify({turn:turn+1,remaining:(limits.initialSourcePaths||[])
-            .filter(path=>!workflow.snapshot().readPaths.includes(path)).length})+'\\n');
+            .filter(path=>!workflow.snapshot().readPaths.includes(path)).length})+'\n');
       }
 
       if(workflow && requireInvestigationAfterEmpty && constraints?.action?.includes('final') && constraints.action.length>1) {
@@ -528,7 +528,7 @@ export async function runLocalAudit(
           // A model cannot cite a reproduction before the controller has
           // registered one. Keep a legitimate scoped negative result possible.
           strictResult.properties.findings={...strictResult.properties.findings,maxItems:0};
-          await appendFile(logFile,'[FINAL_UNVERIFIED_FINDINGS_BLOCKED] No recorded reproduction case\\n');
+          await appendFile(logFile,'[FINAL_UNVERIFIED_FINDINGS_BLOCKED] No recorded reproduction case\n');
         } else if(item?.properties?.caseId) {
           item.properties.caseId={...item.properties.caseId,enum:recordedIds};
         }
@@ -537,7 +537,7 @@ export async function runLocalAudit(
             action:{type:'string',enum:['final']},
             result:strictResult},
           required:[...new Set([...actionSchema.required,'result'])]};
-        await appendFile(logFile,'[FINAL_RESULT_REQUIRED] Recovery from empty final; evidence validation still required\\n');
+        await appendFile(logFile,'[FINAL_RESULT_REQUIRED] Recovery from empty final; evidence validation still required\n');
       }
       const schemaExtra=Math.max(0,JSON.stringify(requestSchema).length-JSON.stringify(actionSchema).length);
       const controllerFacts=limits.progressNote?.() || '';
@@ -617,7 +617,7 @@ export async function runLocalAudit(
         workflow.read(alreadyRead);
         constraints=await workflow.constraints();
         await appendFile(logFile,'[INDEXED_COMPLETED_REQUIREMENT_RELEASED] '+
-          JSON.stringify({path:alreadyRead,turn:turn+1})+'\\n');
+          JSON.stringify({path:alreadyRead,turn:turn+1})+'\n');
       }
       let controllerAction=structured && workflow && process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false' ?
         controllerOwnedNextAction(constraints,workflow.snapshot().pending) : null;
@@ -766,7 +766,7 @@ export async function runLocalAudit(
             controllerAction={action:'read_file',path:candidate,query:'',answer:'',offset};
             await appendFile(logFile,'[INDEXED_CONTROLLER_MODEL_BYPASS] '+
               JSON.stringify({turn:turn+1,path:candidate,offset,
-                remaining:remaining.length,completed:terminalReadPages.size})+'\\n');
+                remaining:remaining.length,completed:terminalReadPages.size})+'\n');
             break;
           }catch{}
         }
@@ -781,13 +781,13 @@ export async function runLocalAudit(
         const permitted=constraints?.action||[];
         const semanticOnly=permitted.length>0 &&
           permitted.every(action=>action==='final') &&
-          !snapshot.pending && !snapshot.verifiedEvidenceFocus;
+          !snapshot.pending;
         if(!semanticOnly) {
           await appendFile(logFile,'[CONTROLLER_UNRESOLVED_ACTION] '+
             JSON.stringify({turn:turn+1,stage:snapshot.stage,
               permitted,pending:snapshot.pending,
               readPaths:snapshot.readPaths.length,
-              observations:snapshot.observations.length})+'\\n');
+              observations:snapshot.observations.length})+'\n');
           throw new Error('CONTROLLER_UNRESOLVED_ACTION: controller must select source/probe/transition without Qwen');
         }
       }
@@ -801,7 +801,7 @@ export async function runLocalAudit(
         indexedLastProgressKey=progressKey;
         if(indexedSyntheticStalls>=12) {
           await appendFile(logFile,'[INDEXED_CONTROLLER_PROGRESS_STALL] '+
-            JSON.stringify({turn:turn+1,action:controllerAction,progressKey})+'\\n');
+            JSON.stringify({turn:turn+1,action:controllerAction,progressKey})+'\n');
           throw new Error('INDEXED_CONTROLLER_PROGRESS_STALL: 12 consecutive controller actions without new source or probe evidence; turn extension cannot repair this');
         }
       } else if(fullIndexMode && !controllerAction)indexedSyntheticStalls=0;
@@ -841,7 +841,7 @@ export async function runLocalAudit(
               if(attempt===3)throw error;
               await appendFile(logFile,'[MODEL_REQUEST_RECOVERY] '+JSON.stringify({
                 turn:turn+1,attempt,reason:String(error).slice(0,200),
-                retainedControllerMemory:true})+'\\n');
+                retainedControllerMemory:true})+'\n');
             } finally {clearTimeout(timeout);}
           }
           throw new Error('Model request retries exhausted');
@@ -894,7 +894,7 @@ export async function runLocalAudit(
         // controller's paginated source reader instead of wasting model turns.
         if(action.action==='read_solidity' && !action.query.trim()) {
           await appendFile(logFile,'[CONTROLLER_EMPTY_SOLIDITY_QUERY_RECOVERY] '+
-            JSON.stringify({path:action.path,turn:turn+1})+'\\n');
+            JSON.stringify({path:action.path,turn:turn+1})+'\n');
           action={...action,action:'read_file',query:'',offset:0};
         }
         // Normalize navigation requests BEFORE workflow validation so source
@@ -951,7 +951,7 @@ export async function runLocalAudit(
             if(changed) {
               action.path=pending.path;action.query=pending.query;
               action.answer=pending.answer;action.sequence=pending.sequence;
-              await appendFile(logFile,'[PROBE_REQUEST_CANONICALIZED] '+JSON.stringify({path:action.path,query:action.query,kind:action.answer})+'\\n');
+              await appendFile(logFile,'[PROBE_REQUEST_CANONICALIZED] '+JSON.stringify({path:action.path,query:action.query,kind:action.answer})+'\n');
             }
           }
         }
@@ -984,7 +984,7 @@ export async function runLocalAudit(
         // request contract as Solidity. The model may choose an actual method,
         // but its guessed kind, typed arguments and sequence are never trusted.
         if(workflow && ['plan_probe','probe_intent'].includes(action.action) &&
-           action.path.startsWith('source-') && /\\.(?:java|py|js|mjs|cjs)$/.test(action.path)) {
+           action.path.startsWith('source-') && /\.(?:java|py|js|mjs|cjs)$/.test(action.path)) {
           try {
             const full=await safePath(action.path);
             const grounded=canonicalControllerPolyglotIntent(action.path,
@@ -997,11 +997,11 @@ export async function runLocalAudit(
               else action.sequence=grounded.sequence;
               if(JSON.stringify(prior)!==JSON.stringify({query:action.query,answer:action.answer,sequence:action.sequence}))
                 await appendFile(logFile,'[CONTROLLER_POLYGLOT_PROBE_CANONICALIZED] '+
-                  JSON.stringify({path:action.path,from:prior,query:action.query,kind:action.answer})+'\\n');
+                  JSON.stringify({path:action.path,from:prior,query:action.query,kind:action.answer})+'\n');
             }
           } catch(error) {
             await appendFile(logFile,'[CONTROLLER_POLYGLOT_PROBE_UNAVAILABLE] '+
-              JSON.stringify({path:action.path,error:String(error).slice(0,160)})+'\\n');
+              JSON.stringify({path:action.path,error:String(error).slice(0,160)})+'\n');
           }
         }
         const automaticProbe=action.action==='probe_intent';
@@ -1083,7 +1083,7 @@ export async function runLocalAudit(
               if(declared && !recoveredFindingProbes.has(recoveryKey)) {
                 recoveredFindingProbes.add(recoveryKey);
                 workflow.requireProbe(path,selector,kind);
-                await appendFile(logFile,'[PROBE_RECOVERY_REQUIRED] '+recoveryKey+'\\n');
+                await appendFile(logFile,'[PROBE_RECOVERY_REQUIRED] '+recoveryKey+'\n');
                 messages.push({role:'user',content:'An unverified finding referred to an inspected declared function. Your NEXT action must be plan_probe with path='+path+', query='+selector+', answer='+kind+', and a hypothesis with a falsification condition. The controller then requires verify_source. Do not invent case IDs. /no_think'});
                 continue;
               }
@@ -1179,7 +1179,7 @@ export async function runLocalAudit(
               const choices=alternatives.filter(selector=>selector!==action.query);
               const nextPaths=(limits.initialSourcePaths||[]).filter(p=>
                 p.startsWith('source-') && p!==action.path &&
-                /\\.(?:java|sol|py|js|mjs|cjs)$/.test(p));
+                /\.(?:java|sol|py|js|mjs|cjs)$/.test(p));
               const caller=nextPaths.find(p=>/(?:caller|handler|program|state|manager|service|controller)/i.test(p))||
                 nextPaths[0];
               const feedback='PROBE_UNSUPPORTED_NOT_HYPOTHESIS_REJECTED: '+action.query+
@@ -1193,12 +1193,12 @@ export async function runLocalAudit(
                 ' merely because that method supports a text probe. '+
                 'If required object/dependency construction remains unsupported, record the precise limitation.';
               workflow.feedback(feedback,true);
-              await appendFile(logFile,'[JAVA_SEQUENCE_GUIDED] '+JSON.stringify({path:action.path,query:action.query})+'\\n');
+              await appendFile(logFile,'[JAVA_SEQUENCE_GUIDED] '+JSON.stringify({path:action.path,query:action.query})+'\n');
               await appendFile(logFile,'[PROBE_CAPABILITY_GAP] '+JSON.stringify({
                 path:action.path,selector:action.query,kind:action.answer,
                 hypothesis:action.hypothesis,caller:caller||null,
                 supportedAlternativesNotSubstituted:choices
-              })+'\\n');
+              })+'\n');
               messages.push({role:'user',content:feedback+' /no_think'});
               continue;
             }
@@ -1247,7 +1247,7 @@ export async function runLocalAudit(
                 'with constructor arguments and steps naming public primitive/String methods, '+
                 'including the selected method. Example: {constructor:[],steps:[{method:"getCount",args:[],expected:0}]}.';
               workflow.feedback(feedback);
-              await appendFile(logFile,'[JAVA_SEQUENCE_INVALID] '+JSON.stringify({path:action.path,query:action.query})+'\\n');
+              await appendFile(logFile,'[JAVA_SEQUENCE_INVALID] '+JSON.stringify({path:action.path,query:action.query})+'\n');
               messages.push({role:'user',content:feedback+' /no_think'});
               continue;
             }
@@ -1426,7 +1426,7 @@ export async function runLocalAudit(
               emptyFinals=0;
               await appendFile(logFile,'[POST_PROBE_RECOVERY] '+JSON.stringify({
                 path:required,observation:observed,repeatedRejectedConclusions
-              })+'\\n');
+              })+'\n');
             }
             // A bounded classification test may already have all its results
             // verified by independent local probes. When the model repeatedly
@@ -1447,7 +1447,7 @@ export async function runLocalAudit(
                 })});
                 if(!(await limits.validateFinal(classification))) {
                   await appendFile(logFile,'[CONTROLLER_VERIFIED_CLASSIFICATION_FINAL] '+
-                    JSON.stringify({paths,observations:recorded.length})+'\\n');
+                    JSON.stringify({paths,observations:recorded.length})+'\n');
                   return classification;
                 }
               }
@@ -1456,7 +1456,7 @@ export async function runLocalAudit(
               await appendFile(logFile,'[AUDIT_INCOMPLETE_POST_PROBE] '+JSON.stringify({
                 reason:'Repeated rejected conclusions despite reproduced behavior',
                 observation:observed,attempts:repeatedRejectedConclusions
-              })+'\\n');
+              })+'\n');
               throw new Error('AUDIT_INCOMPLETE_POST_PROBE: probe evidence preserved, but the model could not produce a supported conclusion after bounded recovery; see audit log');
             }
             const guidance='Verified probe (not automatically a vulnerability): '+
@@ -1540,7 +1540,7 @@ export async function runLocalAudit(
              workflow.snapshot().observations.some(o=>o.status==='behavior_observed')) {
             const inspected=new Set(workflow.snapshot().readPaths);
             const paths=(limits.initialSourcePaths||[]).filter(path=>
-              path.startsWith('source-') && /\\.(?:py|js|mjs|cjs|java|sol)$/.test(path));
+              path.startsWith('source-') && /\.(?:py|js|mjs|cjs|java|sol)$/.test(path));
             const next=paths.find(path=>!finalCallerRecoveries.has(path) &&
               (/(?:caller|handler|route|controller|entry|server)/i.test(path) || !inspected.has(path)));
             if(next) {
@@ -1548,7 +1548,7 @@ export async function runLocalAudit(
               workflow.requireSource(next);
               requireInvestigationAfterEmpty=true;
               emptyFinals=0;
-              await appendFile(logFile,'[CALLER_CONTEXT_RECOVERY] '+JSON.stringify({path:next})+'\\n');
+              await appendFile(logFile,'[CALLER_CONTEXT_RECOVERY] '+JSON.stringify({path:next})+'\n');
             }
           }
           const requiredNextSource=feedback.match(/Suggested next file:\s*(\S+?\.(?:sol|java|ts|tsx|js|jsx|py))\b/i)?.[1];
@@ -1567,7 +1567,7 @@ export async function runLocalAudit(
           await appendFile(logFile, "[FINAL_REJECTED] " + feedback + "\n");
           const evidencePacket=limits.finalEvidencePacket ? await limits.finalEvidencePacket() : '';
           if(evidencePacket)await appendFile(logFile,'[CONTROLLER_FINAL_EVIDENCE_HANDOFF] '+
-            JSON.stringify({length:evidencePacket.length})+'\\n');
+            JSON.stringify({length:evidencePacket.length})+'\n');
           messages.push(fitAuditToolOutput(messages.slice(0,2),rejected,"final_validation",feedback +
             (evidencePacket ? "\nController-verified report input (actual stored evidence, not model speculation):\n"+
               evidencePacket.slice(0,2400)+"\nUse these facts to organize your findings JSON. Supply only your evidence-based impact, severity, and falsification interpretation." : "") +
@@ -1654,10 +1654,10 @@ export async function runLocalAudit(
               actionKey=keyAt(offset);
               previous=undefined;
               await appendFile(logFile,'[INDEXED_CONTEXT_RECOVERY] '+
-                JSON.stringify({path,offset,turn:turn+1})+'\\n');
+                JSON.stringify({path,offset,turn:turn+1})+'\n');
             } else {
               await appendFile(logFile,'[INDEXED_COMPLETED_READ_REJECTED] '+
-                JSON.stringify({path,turn:turn+1})+'\\n');
+                JSON.stringify({path,turn:turn+1})+'\n');
               // Advance only to a controller-selected, previously unread source.
               // Never invent a read or erase the completed page's evidence.
               // readPaths can include a file after its first page, while its
@@ -1680,11 +1680,11 @@ export async function runLocalAudit(
                 ? required : process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false' ? ranked[0] || null : null;
               await appendFile(logFile,'[INDEXED_SOURCE_RECOVERY_DECISION] '+
                 JSON.stringify({from:path,required,rankedRemaining:ranked.length,
-                  next,completedFiles:terminalReadPages.size,turn:turn+1})+'\\n');
+                  next,completedFiles:terminalReadPages.size,turn:turn+1})+'\n');
               if(next && next!==path) {
                 const nextFull=await safePath(next);
                 await appendFile(logFile,'[INDEXED_CONTROLLER_SOURCE_HANDOFF] '+
-                  JSON.stringify({from:path,to:next,turn:turn+1})+'\\n');
+                  JSON.stringify({from:path,to:next,turn:turn+1})+'\n');
                 // Resume the controller-owned page cursor. Selecting a file
                 // with an already-recorded first page at offset zero traps the
                 // small model in a NO_PROGRESS loop until all turns expire.
@@ -1702,7 +1702,7 @@ export async function runLocalAudit(
                 call.function.arguments.path=next;
                 call.function.arguments.offset=offset;
                 await appendFile(logFile,'[INDEXED_CONTROLLER_CURSOR_RESUME] '+
-                  JSON.stringify({path:next,offset,turn:turn+1})+'\\n');
+                  JSON.stringify({path:next,offset,turn:turn+1})+'\n');
               } else {
                 // Source-index exhaustion is a phase transition, not an audit failure.
                 // Preserve the existing evidence and give the model a tool-level
@@ -1719,7 +1719,7 @@ export async function runLocalAudit(
                 await appendFile(logFile,'[INDEXED_SOURCE_TO_EVIDENCE_HANDOFF] '+
                   JSON.stringify({path,completedFiles:terminalReadPages.size,
                     observations:observations.length,pending:!!workflow?.snapshot().pending,
-                    turn:turn+1})+'\\n');
+                    turn:turn+1})+'\n');
                 throw new Error('SOURCE_INDEX_EXHAUSTED: '+feedback);
               }
             }
@@ -1738,7 +1738,7 @@ export async function runLocalAudit(
               actionKey=keyAt(offset);
               previous=undefined;
               await appendFile(logFile,'[TERMINAL_PAGE_CONTEXT_RECOVERY] '+
-                JSON.stringify({path,offset,turn:turn+1})+'\\n');
+                JSON.stringify({path,offset,turn:turn+1})+'\n');
             } else {
               // Choose from the entire authorized, source-ranked candidate list,
               // not the last page or the exhausted eight-file prefetch.
@@ -1750,7 +1750,7 @@ export async function runLocalAudit(
               if(next) {
                 const nextFull=await safePath(next);
                 await appendFile(logFile,'[CONTROLLER_READ_REDIRECT] '+
-                  JSON.stringify({from:path,requestedOffset:offset,to:next,turn:turn+1})+'\\n');
+                  JSON.stringify({from:path,requestedOffset:offset,to:next,turn:turn+1})+'\n');
                 path=next;full=nextFull;offset=0;
                 call.function.arguments.path=path;
                 call.function.arguments.offset=0;
@@ -1774,7 +1774,7 @@ export async function runLocalAudit(
               // out of active context. Repeated completed-page requests are
               // recoverable navigation feedback, not a fatal hunt failure.
               // Keep the finite turn allowance as the ultimate bound.
-              await appendFile(logFile,"[CONTEXT_RECOVERY] "+JSON.stringify({tool:name,path,offset,attempt:stalledActions})+"\\n");
+              await appendFile(logFile,"[CONTEXT_RECOVERY] "+JSON.stringify({tool:name,path,offset,attempt:stalledActions})+"\n");
               blockCompletedReadsUntil=Math.max(blockCompletedReadsUntil,turn+4);
               // A required caller/source read can be satisfied by a previously
               // completed page after context compaction. If that reread is now
@@ -1784,7 +1784,7 @@ export async function runLocalAudit(
               if(previous.nextOffset===null && workflow.snapshot().readPaths.includes(path)) {
                 workflow.read(path);
                 requireInvestigationAfterEmpty=false;
-                await appendFile(logFile,'[COMPLETED_SOURCE_REQUIREMENT_RELEASED] '+JSON.stringify({path,offset})+'\\n');
+                await appendFile(logFile,'[COMPLETED_SOURCE_REQUIREMENT_RELEASED] '+JSON.stringify({path,offset})+'\n');
               }
               workflow.feedback('This exact source page is already recorded and rereading it produced no new evidence. Next choose an evidence-backed final, a different eligible probe, or a specific continuation. Do not reread this completed page.');
               stalledActions=0;
@@ -1974,7 +1974,7 @@ export async function runLocalAudit(
               const next=workflow.requireNextUnreadSource(limits.initialSourcePaths||[]);
               if(next) {
                 await appendFile(logFile,'[NEGATIVE_PROBE_SOURCE_HANDOFF] '+JSON.stringify({
-                  testedPath:String(call.function.arguments?.path||''),next})+'\\n');
+                  testedPath:String(call.function.arguments?.path||''),next})+'\n');
               }
             }
             await appendFile(logFile,"[PROBE_RESULT] "+JSON.stringify({path:call.function.arguments?.path,function:call.function.arguments?.query,kind:call.function.arguments?.kind,status:probeStatus,caseId:probeResult.caseId||null,evidenceFile:probeResult.evidenceFile,detail:String(probeResult.detail||probeResult.limitation||probeResult.reason||probeResult.error||"").slice(-700)})+"\n");
@@ -2007,7 +2007,7 @@ export async function runLocalAudit(
             const eligible=await supportedJavaProbeHints(full);
             if(eligible.length) {
               messages.push({role:'user',content:'The previous Java probe signature was rejected by the isolated verifier. Compatible one-input text/byte methods declared in this same file: '+eligible.join(', ')+'. Select a relevant method and supported probe kind only if its source behavior warrants a test; otherwise continue source inspection. /no_think'});
-              await appendFile(logFile,'[JAVA_PROBE_ELIGIBLE_HINTS] '+JSON.stringify({path:call.function.arguments?.path,selectors:eligible})+'\\n');
+              await appendFile(logFile,'[JAVA_PROBE_ELIGIBLE_HINTS] '+JSON.stringify({path:call.function.arguments?.path,selectors:eligible})+'\n');
             }
           }catch{}
         }
@@ -2027,13 +2027,13 @@ export async function runLocalAudit(
                 '. Choose only a supported, declared probe target; otherwise inspect the next prioritized source. /no_think';
               if(JSON.stringify(messages).length+guidance.length<messageBudget-800) {
                 messages.push({role:'user',content:guidance});
-                await appendFile(logFile,'[SOLIDITY_DECLARATIONS_GUIDED] '+JSON.stringify({path,characters:declarations.length})+'\\n');
+                await appendFile(logFile,'[SOLIDITY_DECLARATIONS_GUIDED] '+JSON.stringify({path,characters:declarations.length})+'\n');
               } else {
-                await appendFile(logFile,'[SOLIDITY_DECLARATIONS_DEFERRED] Context budget; use outline_solidity explicitly\\n');
+                await appendFile(logFile,'[SOLIDITY_DECLARATIONS_DEFERRED] Context budget; use outline_solidity explicitly\n');
               }
             }
           }catch(error) {
-            await appendFile(logFile,'[SOLIDITY_DECLARATIONS_UNAVAILABLE] '+String(error).slice(0,160)+'\\n');
+            await appendFile(logFile,'[SOLIDITY_DECLARATIONS_UNAVAILABLE] '+String(error).slice(0,160)+'\n');
           }
         }
         if(completedActionKey)recentActions.get(completedActionKey)!.response=responseMessage;
@@ -2053,7 +2053,7 @@ export async function runLocalAudit(
             controller.signal.throwIfAborted();
             finalAnswer=recovered;
             stoppingReason="Controller recovered validated final after evidence reads";
-            await appendFile(logFile,'[CONTROLLER_FINAL_RECOVERED] '+JSON.stringify({turn:turn+1})+'\\n');
+            await appendFile(logFile,'[CONTROLLER_FINAL_RECOVERED] '+JSON.stringify({turn:turn+1})+'\n');
             return recovered;
           }
         }

@@ -31,6 +31,8 @@ jobs:
           npm install --prefix scripts/reproduction-runtime --ignore-scripts --no-audit --no-fund
       - name: Install application dependencies for workflow integration
         run: npm ci
+      - name: Verify actual stateful session execution and independent replay
+        run: node --import tsx scripts/test-source-probe-session.ts --isolated
       - name: Test controller cold-memory archive integrity
         run: node --import tsx scripts/test-controller-evidence-archive.ts
       - name: Check harness syntax

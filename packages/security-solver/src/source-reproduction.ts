@@ -14,7 +14,7 @@ const sha = (value:string | Buffer) => createHash("sha256").update(value).digest
 const digest = z.string().regex(/^[a-f0-9]{64}$/);
 import {javaSequenceSchema, type JavaSequence} from "./java-sequence";
 import {polyglotSequenceSchema,type PolyglotSequence} from "./polyglot-sequence";
-const specSchema = z.object({file:z.string().min(1).max(4096),function:z.string().regex(/^[A-Za-z][A-Za-z0-9_]{0,79}(?:\.[A-Za-z][A-Za-z0-9_]{0,79})?$/),
+export const sourceProbeSpecSchema = z.object({file:z.string().min(1).max(4096),function:z.string().regex(/^[A-Za-z][A-Za-z0-9_]{0,79}(?:\.[A-Za-z][A-Za-z0-9_]{0,79})?$/),
   kind:z.enum(["html_reflection","entry_html_reflection","path_construction","solidity_sequence","java_sequence","python_sequence","javascript_sequence"]),sequence:z.union([soliditySequenceSchema,javaSequenceSchema,polyglotSequenceSchema]).optional(),nonce:z.string().regex(/^[a-f0-9]{32}$/)}).strict().superRefine((spec,ctx)=>{
     if(spec.kind === "solidity_sequence") {
       if(!spec.file.endsWith(".sol") || !spec.function.includes(".") || !spec.sequence ||
@@ -26,7 +26,7 @@ const specSchema = z.object({file:z.string().min(1).max(4096),function:z.string(
          !(spec.sequence as JavaSequence)?.steps?.some(step=>step.method===spec.function.split(".")[1]))
         ctx.addIssue({code:z.ZodIssueCode.custom,message:"Java sequence must exercise selected Class.method"});
     } else if(spec.kind === "python_sequence" || spec.kind === "javascript_sequence") {
-      const extension=spec.kind==="python_sequence"?/\\.py$/:/\\.(?:js|mjs|cjs)$/;
+      const extension=spec.kind==="python_sequence"?/\.py$/:/\.(?:js|mjs|cjs)$/;
       const parsed=polyglotSequenceSchema.safeParse(spec.sequence);
       if(!extension.test(spec.file) || spec.function.includes(".") || !parsed.success ||
          !parsed.data.steps.some(step=>step.method===spec.function))
@@ -55,7 +55,7 @@ const resultSchema = z.object({status:z.string(),behavior_observed:z.boolean(),s
     entry_selector:z.string().optional(),entry_parameter:z.string().optional()}),sequenceObservations,javaSequenceObservations,polyglotSequenceObservations]).optional(),
   limitation:z.string().optional(),detail:z.string().optional(),exit_code:z.number().optional()});
 const caseSchema = z.object({version:z.literal(1),programId:z.string(),repositoryUrl:z.string(),commit:z.string().regex(/^[a-f0-9]{40}$/),
-  sourceSha256:digest,spec:specSchema,result:resultSchema});
+  sourceSha256:digest,spec:sourceProbeSpecSchema,result:resultSchema});
 export type SourceCase = z.infer<typeof caseSchema>;
 export type ProbeRepository = {directory:string;url:string};
 function caseDirectory():string {return join(process.env.PROJECT_ROOT || process.cwd(),"data","reproduction");}
@@ -67,7 +67,7 @@ async function commitAt(directory:string, signal?:AbortSignal):Promise<string> {
   });
   return z.string().regex(/^[a-f0-9]{40}$/).parse(result.stdout.trim());
 }
-async function executeProbe(directory:string,spec:z.infer<typeof specSchema>,signal?:AbortSignal):Promise<z.infer<typeof resultSchema>> {
+async function executeProbe(directory:string,spec:z.infer<typeof sourceProbeSpecSchema>,signal?:AbortSignal):Promise<z.infer<typeof resultSchema>> {
   signal?.throwIfAborted();
   await mkdir(caseDirectory(),{recursive:true,mode:0o700});
   const temporary = await mkdtemp(join(caseDirectory(),"pending-"));
@@ -129,7 +129,7 @@ export async function createProbeSession(program:SecurityProgram,workspace:strin
     });
     if(!repo) throw new Error("Probe file is not in an acquired source repository");
     const filePath=relative(repo.directory,file).split(sep).join("/");
-    const spec=specSchema.parse({file:filePath,function:functionName,kind,...(sequence ? {sequence} : {}),nonce:randomBytes(16).toString("hex")});
+    const spec=sourceProbeSpecSchema.parse({file:filePath,function:functionName,kind,...(sequence ? {sequence} : {}),nonce:randomBytes(16).toString("hex")});
     if(!targetInExplicitScope(program.scopeSummary,repo.url+"/"+filePath))throw new Error("Probe is outside program scope");
     let commit: string;
     let sourceSha256: string;
@@ -145,7 +145,7 @@ export async function createProbeSession(program:SecurityProgram,workspace:strin
     }
     signal?.throwIfAborted();
     if (["behavior_observed", "behavior_not_observed", "observation_only"].includes(result.status)) completedProbes++;
-    else if (["invalid_probe","unsupported_dependencies"].includes(result.status)) unsupportedProbes++;
+    else if (["invalid_probe","unsupported_dependencies","unsupported_execution"].includes(result.status)) unsupportedProbes++;
     else if (["probe_failed","timeout"].includes(result.status)) failedProbes++;
     else {
       blockedReason = result.status + (result.detail ? ": " + result.detail : "");

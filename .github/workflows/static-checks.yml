@@ -65,6 +65,8 @@ jobs:
           node --import tsx scripts/test-investigation-decisions.ts
           npx tsx scripts/test-progress-controller.ts
           npx tsx scripts/test-hunt-reliability.ts
+          node --import tsx scripts/test-source-probe-session.ts
+          node --import tsx scripts/test-controller-verified-handoff.ts
           npx tsx scripts/test-audit-context-loop.ts
           node --import tsx scripts/test-production-workflow.ts --mock-probes --large-context
           node --import tsx scripts/test-production-workflow.ts --mock-probes --premature-final
