@@ -51,7 +51,7 @@ export function sourceStatefulPlans(file:string,source:string):StatefulSourcePla
             steps:[{method:m[1],args:selectedArgs},{method:m[1],args:selectedArgs}]}});
         if(plans.length>=24)return plans;
       }
-      if(plans.length>=3)break;
+      if(plans.length>=24)break;
     }
     return plans;
   }
@@ -77,7 +77,7 @@ export function sourceStatefulPlans(file:string,source:string):StatefulSourcePla
             steps:[{method:m[1],args},{method:m[1],args}]}});
         if(plans.length>=24)return plans;
       }
-      if(plans.length>=3)break;
+      if(plans.length>=24)break;
     }
     return plans;
   }

@@ -779,9 +779,11 @@ export async function runLocalAudit(
          process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false' &&
          workflow.snapshot().observations.length && !workflow.snapshot().pending &&
          !workflow.snapshot().verifiedEvidenceFocus) {
+        const snapshot=workflow.snapshot();
         const eligible=(limits.initialSourcePaths||[]).filter(path=>
           /^source-[0-9]+\//.test(path) && /\.(?:sol|java|py|js|mjs|cjs)$/.test(path));
-        if(eligible.length && eligible.every(path=>terminalReadPages.has(path)) &&
+        const unreadRemaining=eligible.filter(path=>!terminalReadPages.has(path) && !snapshot.readPaths.includes(path));
+        if(eligible.length && !unreadRemaining.length &&
            workflow.finishControllerCandidates()) {
           constraints=await workflow.constraints();
           requestSchema={...requestSchema,properties:{...requestSchema.properties,
@@ -850,18 +852,27 @@ export async function runLocalAudit(
           for(let attempt=1;attempt<=3;attempt++) {
             controller.signal.throwIfAborted();
             const attemptController=new AbortController();
-            const timeout=setTimeout(()=>attemptController.abort('model_request_stalled'),12*60*1000);
+            let inactivityTimer: ReturnType<typeof setTimeout>;
+            const resetInactivity=()=>{
+              clearTimeout(inactivityTimer);
+              inactivityTimer=setTimeout(()=>attemptController.abort('model_request_stalled'),12*60*1000);
+            };
+            resetInactivity();
+            const progressHandler=(progress:any)=>{
+              resetInactivity();
+              onProgress?.(progress);
+            };
             const signal=AbortSignal.any([controller.signal,attemptController.signal]);
             try {
               return await (adapter==='qwen-agent'?postQwenAgentJson:postOllamaChat)(
-                endpoint,request,signal,{onProgress});
+                endpoint,request,signal,{onProgress:progressHandler});
             } catch(error) {
               if(controller.signal.aborted)throw error;
               if(attempt===3)throw error;
               await appendFile(logFile,'[MODEL_REQUEST_RECOVERY] '+JSON.stringify({
                 turn:turn+1,attempt,reason:String(error).slice(0,200),
                 retainedControllerMemory:true})+'\n');
-            } finally {clearTimeout(timeout);}
+            } finally {clearTimeout(inactivityTimer);}
           }
           throw new Error('Model request retries exhausted');
         })() as { message?: Message; eval_count?: number; prompt_eval_count?: number; done_reason?: string; load_duration?:number; prompt_eval_duration?:number; eval_duration?:number; total_duration?:number; client_queue_ms?:number };
@@ -1571,7 +1582,7 @@ export async function runLocalAudit(
             }
           }
           const requiredNextSource=feedback.match(/Suggested next file:\s*(\S+?\.(?:sol|java|ts|tsx|js|jsx|py))\b/i)?.[1];
-          if(requiredNextSource && workflow) {
+          if(requiredNextSource && workflow && !terminalReadPages.has(requiredNextSource)) {
             workflow.requireSource(requiredNextSource);
             // A typed-final retry must not trap the model in final-only mode
             // when source coverage requires a new concrete tool action.

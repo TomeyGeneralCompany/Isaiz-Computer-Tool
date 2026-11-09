@@ -1046,7 +1046,7 @@ Do not claim production testing, JavaScript execution, file access or other effe
                 return 'Contradiction: the controller has a recorded successful reproduction. Discuss its security significance or a source-backed disproof; the observed behavior cannot be denied.';
             }
             if(value.outcome === "no_testable_candidate") {
-              if(session.completedProbes) {
+              if(session.completedProbes && [...session.cases.values()].some(record=>record.result.behavior_observed)) {
                 const known=[...session.cases].slice(0,5).map(([caseId,c])=>({caseId,file:c.spec.file,
                   function:c.spec.function,status:c.result.status,behaviorObserved:c.result.behavior_observed}));
                 return "A supported source probe HAS completed. Recorded evidence: "+JSON.stringify(known)+
@@ -1070,7 +1070,7 @@ Do not claim production testing, JavaScript execution, file access or other effe
               }
               // An incomplete outcome must describe this pass, not claim that
               // no relevant methods exist anywhere in the repository.
-              if(/(all|entire|whole) (source|repository|codebase)|further inspection .*redundant|no (testable candidates|suitable functions) exist/i.test(value.reason || ""))
+              if(/(?:all|entire|whole) (?:repository|codebase) (?:is secure|has no bugs)|further inspection .*redundant/i.test(value.reason || ""))
                 return "State only what the selected files and attempted probes support. Do not assert repository-wide absence or that more inspection is redundant; return a scoped incomplete reason.";
               parsed=value;return null;
             }
