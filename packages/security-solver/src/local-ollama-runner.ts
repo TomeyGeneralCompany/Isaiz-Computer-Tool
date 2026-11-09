@@ -212,6 +212,7 @@ export async function runLocalAudit(
   const terminalPageRecoveries = new Set<string>();
   const probeDispositions = new Map<string,{status:string;reason:string}>();
   const probeIdentity=(path:string,selector:string,kind:string)=>JSON.stringify([path,selector,kind]);
+  const unresolvedProbes=()=>[...probeDispositions.entries()].filter(([,v])=>v.status==='selected');
   const recordProbeDisposition=async(path:string,selector:string,kind:string,status:string,reason:string)=>{
     const key=probeIdentity(path,selector,kind);
     const previous=probeDispositions.get(key);
@@ -837,6 +838,10 @@ export async function runLocalAudit(
         const eligible=(limits.initialSourcePaths||[]).filter(path=>
           /^source-[0-9]+\//.test(path) && /\.(?:sol|java|py|js|mjs|cjs)$/.test(path));
         const unreadRemaining=eligible.filter(path=>!terminalReadPages.has(path) && !snapshot.readPaths.includes(path));
+        if(eligible.length && !unreadRemaining.length && unresolvedProbes().length) {
+          await appendFile(logFile,'[CONTROLLER_UNRESOLVED_PROBES] '+JSON.stringify(unresolvedProbes())+'\n');
+          throw new Error('CONTROLLER_UNRESOLVED_PROBES: selected probes require verifier dispositions');
+        }
         if(eligible.length && !unreadRemaining.length &&
            workflow.finishControllerCandidates()) {
           constraints=await workflow.constraints();
@@ -846,6 +851,9 @@ export async function runLocalAudit(
             JSON.stringify({observations:workflow.snapshot().observations.length,completedFiles:eligible.length})+'\n');
         }
       }
+      if(fullIndexMode && !controllerAction && constraints?.action?.length===1 &&
+         constraints.action[0]==='final' && unresolvedProbes().length)
+        throw new Error('CONTROLLER_UNRESOLVED_PROBES: final reporting blocked until selected probes have verifier dispositions');
       // Never delegate source selection, probe execution or workflow transitions
       // to Qwen in controller-owned indexed investigations. Only a semantic
       // final assessment may use the model, after deterministic work is done.
@@ -2023,6 +2031,17 @@ export async function runLocalAudit(
           sequence:call.function.arguments?.sequence},output);
         let probeStatus:string|undefined;
         if(["verify_source","verify_python"].includes(call.function.name)){
+          const probePath=String(call.function.arguments?.path||'');
+          const probeSelector=String(call.function.arguments?.query||'');
+          const probeKind=String(call.function.arguments?.kind||'');
+          let disposition='failed';
+          let dispositionReason=output.slice(0,240);
+          try {
+            const result=JSON.parse(output);
+            disposition=String(result.status||'unknown');
+            dispositionReason=String(result.detail||result.limitation||result.error||'verifier_completed').slice(0,240);
+          }catch{}
+          await recordProbeDisposition(probePath,probeSelector,probeKind,disposition,dispositionReason);
           try {
             const probeResult=JSON.parse(output);
             probeStatus=String(probeResult.status || "unknown").slice(0,100);
