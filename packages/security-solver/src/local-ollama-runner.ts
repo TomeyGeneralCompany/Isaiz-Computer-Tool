@@ -753,7 +753,7 @@ export async function runLocalAudit(
          constraints?.action?.includes('read_file') &&
          !workflow.snapshot().verifiedEvidenceFocus) {
         const remaining=[...new Set(limits.initialSourcePaths||[])].filter(path=>
-          path.startsWith('source-') && /\\.(?:sol|java|py|js|mjs|cjs)$/.test(path) &&
+          path.startsWith('source-') && /\.(?:sol|java|py|js|mjs|cjs)$/.test(path) &&
           !terminalReadPages.has(path) &&
           (!constraints.path?.length || constraints.path.includes(path)));
         for(const candidate of remaining) {
