@@ -329,16 +329,42 @@ function parseReportSections(reportBody: string | null | undefined): {
 
   const grab = (pattern: RegExp) => reportBody.match(pattern)?.[1]?.trim() ?? "";
 
-  const title = grab(/^\*\*Title:\*\*\s*(.+)/m);
-  const severity = grab(/^\*\*Severity:\*\*\s*(.+)/m);
-  const vulnType = grab(/^\*\*Vulnerability Type:\*\*\s*(.+)/m);
-  const targetAsset = grab(/^\*\*Target Asset:\*\*\s*(.+)/m);
+  let title = grab(/^\*\*Title:\*\*\s*(.+)/m);
+  let severity = grab(/^\*\*Severity:\*\*\s*(.+)/m);
+  let vulnType = grab(/^\*\*Vulnerability Type:\*\*\s*(.+)/m);
+  let targetAsset = grab(/^\*\*Target Asset:\*\*\s*(.+)/m);
 
+  if (!title) {
+    const summaryMatch = reportBody.match(/^## Summary\s*\n+([^\n]+)/m);
+    if (summaryMatch) title = summaryMatch[1].trim();
+  }
+  if (!targetAsset) {
+    const assetMatch = reportBody.match(/^## Affected Source\s*\n+([^\n]+)/m);
+    if (assetMatch) targetAsset = assetMatch[1].trim();
+  }
+  if (!severity) {
+    const sevMatch = reportBody.match(/^Severity:\s*([a-zA-Z]+)/m);
+    if (sevMatch) severity = sevMatch[1].trim().toLowerCase();
+  }
+
+  let vulnerabilityInfo = "";
   const vulnMatch = reportBody.match(/\*\*Vulnerability Information:\*\*\s*([\s\S]*?)(?=\*\*Impact:\*\*|$)/);
-  const vulnerabilityInfo = vulnMatch?.[1]?.trim() ?? "";
+  if (vulnMatch?.[1]?.trim()) {
+    vulnerabilityInfo = vulnMatch[1].trim();
+  } else {
+    const mdVulnMatch = reportBody.match(/([\s\S]*?)(?=^#{1,6}[ \t]+(?:Security[ \t]+)?Impact(?:[ \t]+To[ \t]+Verify)?|(?![\s\S]))/im);
+    if (mdVulnMatch?.[1]?.trim()) {
+      vulnerabilityInfo = mdVulnMatch[1].trim();
+    } else {
+      vulnerabilityInfo = reportBody.trim();
+    }
+  }
 
-  const impactMatch = reportBody.match(/\*\*Impact:\*\*\s*([\s\S]*?)(?=={3}FINDING_END={3}|$)/);
-  const impact = impactMatch?.[1]?.trim() ?? "";
+  let impact = "";
+  const impactMatch = reportBody.match(/(?:\*\*Impact:\*\*|^#{1,6}[ \t]+(?:Security[ \t]+)?Impact(?:[ \t]+To[ \t]+Verify)?[ \t]*:?[ \t]*\r?$)[ \t]*(?:\r?\n)?([\s\S]*?)(?=^#{1,6}[ \t]+|^\*\*[^*\r\n]+:\*\*|={3}FINDING_END={3}|(?![\s\S]))/im);
+  if (impactMatch?.[1]?.trim()) {
+    impact = impactMatch[1].trim();
+  }
 
   return { title, severity, vulnType, targetAsset, vulnerabilityInfo, impact };
 }
