@@ -743,6 +743,34 @@ export async function runLocalAudit(
             unread:unread.slice(0,12),observations:0})+'\n');
         throw new Error('CONTROLLER_CANDIDATE_QUEUE_EXHAUSTED: no controller-selected source or supported probe; inspect candidate selection diagnostics, not model finalization');
       }
+      // Real-world 88mph run: Qwen repeatedly requested a terminal SafeERC20
+      // page at turns 70-75, taking 5-13 minutes per request. The old recovery
+      // handed off another ranked file only AFTER wasting a model turn. When
+      // controller-ranked source remains, perform that read directly instead.
+      // Source progress and terminal pages are controller-owned, not model-owned.
+      if(!controllerAction && fullIndexMode && structured && workflow &&
+         process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false' &&
+         constraints?.action?.includes('read_file') &&
+         !workflow.snapshot().verifiedEvidenceFocus) {
+        const remaining=[...new Set(limits.initialSourcePaths||[])].filter(path=>
+          path.startsWith('source-') && /\\.(?:sol|java|py|js|mjs|cjs)$/.test(path) &&
+          !terminalReadPages.has(path) &&
+          (!constraints.path?.length || constraints.path.includes(path)));
+        for(const candidate of remaining) {
+          try {
+            await safePath(candidate);
+            const offsets=[...recentActions.entries()]
+              .filter(([key,value])=>key.includes(candidate) && value.nextOffset!=null)
+              .map(([,value])=>value.nextOffset as number);
+            const offset=offsets.length ? Math.max(...offsets) : 0;
+            controllerAction={action:'read_file',path:candidate,query:'',answer:'',offset};
+            await appendFile(logFile,'[INDEXED_CONTROLLER_MODEL_BYPASS] '+
+              JSON.stringify({turn:turn+1,path:candidate,offset,
+                remaining:remaining.length,completed:terminalReadPages.size})+'\\n');
+            break;
+          }catch{}
+        }
+      }
       if(controllerAction && fullIndexMode) {
         const snapshot=workflow.snapshot();
         const progressKey=JSON.stringify([snapshot.sourceProgress,
