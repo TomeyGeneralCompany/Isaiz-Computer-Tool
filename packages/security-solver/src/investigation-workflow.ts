@@ -306,6 +306,14 @@ export class InvestigationWorkflow {
       return 'Execute the exact planned probe, including its sequence. No changed test was executed.';
     return null;
   }
+  /** Explicitly close an orphaned selected scenario without claiming any
+   * execution. Only the controller can issue this terminal disposition. */
+  blockSelectedScenario(path:string,query:string,kind:string,reason:string){
+    const id=this.scenarioMap.get(this.scenarioKey(path,query,kind));
+    if(!id)return;
+    const scenario=this.scenarios.get(id);
+    if(scenario?.phase!=='resolved')this.scenarios.finish(id,'incomplete',reason);
+  }
   /** Release a verifier that can no longer make progress. No fabricated test
    * or case ID is created; the blocked candidate is recorded as incomplete. */
   abortPending(reason:string) {
