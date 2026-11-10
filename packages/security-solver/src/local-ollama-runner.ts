@@ -911,7 +911,7 @@ export async function runLocalAudit(
           options: { num_predict:generationBudget,
             ...(limits.numCtx === undefined ? {} : {num_ctx:settings.numCtx}),
             ...(limits.numThreads === undefined ? {} : {num_thread:settings.numThreads}), ...profile.options } };
-          for(let attempt=1;attempt<=3;attempt++) {
+          for(let attempt=1;attempt<=5;attempt++) {
             controller.signal.throwIfAborted();
             const attemptController=new AbortController();
             let inactivityTimer: ReturnType<typeof setTimeout> | undefined;
@@ -930,10 +930,11 @@ export async function runLocalAudit(
                 endpoint,request,signal,{onProgress:progressHandler});
             } catch(error) {
               if(controller.signal.aborted)throw error;
-              if(attempt===3)throw error;
+              if(attempt===5)throw error;
               await appendFile(logFile,'[MODEL_REQUEST_RECOVERY] '+JSON.stringify({
                 turn:turn+1,attempt,reason:String(error).slice(0,200),
                 retainedControllerMemory:true})+'\n');
+              await new Promise(r => setTimeout(r, Math.min(attempt * 4000, 15000)));
             } finally {clearTimeout(inactivityTimer);}
           }
           throw new Error('Model request retries exhausted');

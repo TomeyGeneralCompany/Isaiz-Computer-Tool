@@ -1,0 +1,116 @@
+name: Cloud Real-World 88mph Investigation
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: cloud-real-world-88mph
+  cancel-in-progress: false
+
+jobs:
+  cloud-run:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      LOCAL_OLLAMA_MODEL: qwen3:4b
+      LOCAL_MODEL_ADAPTER: ollama
+      LOCAL_OLLAMA_TOOL_PROTOCOL: json
+      LOCAL_MODEL_PROFILE: deterministic
+      LOCAL_CONTROLLER_OWNED_ACTIONS: 'true'
+      AUTOHACK_AUTO_SOURCE_PREFETCH: 'true'
+      AUTOHACK_GUIDED_SOURCE_PROBES: 'true'
+      LOCAL_HUNT_DYNAMIC_ALLOWANCE: 'true'
+      LOCAL_CONTROLLER_FULL_SOURCE_INDEX: 'true'
+      AUTOHACK_OLLAMA_URL: http://127.0.0.1:11434/api/chat
+      AUTOHACK_SINGLE_BOUNTY_DIAGNOSTIC: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies and reproduction runtime
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap default-jdk-headless
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          npm ci
+          bash scripts/install-reproduction-runtime.sh
+
+      - name: Start isolated Docker Ollama with Qwen3 4B
+        run: |
+          docker run -d --name lotus-cloud-ollama -p 127.0.0.1:11434:11434 ollama/ollama:latest
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then break; fi
+            sleep 2
+          done
+          docker exec lotus-cloud-ollama ollama pull qwen3:4b
+
+      - name: Initialize isolated database and seed 88mphV3 program
+        run: |
+          touch .env
+          node --import tsx scripts/initialize-db.ts
+          python3 - <<'PY'
+          import json, sqlite3, time
+          scopes = [{
+              "assetType": "SOURCE_CODE",
+              "eligibleForBounty": True,
+              "assetIdentifier": "https://github.com/88mphapp/88mph-contracts",
+              "instruction": "Test 88mphV3 contracts"
+          }]
+          assessment = {
+              "opportunityScore": 85,
+              "tier": "high",
+              "rationale": "High-value Solidity yield protocol"
+          }
+          scope_summary = {
+              "scopes": scopes,
+              "assessment": assessment
+          }
+          now = int(time.time())
+          with sqlite3.connect("data/bounty.db") as db:
+              db.execute("""INSERT INTO security_programs
+                  (id, provider, provider_program_id, name, url, scope_summary, reward_min_cents, reward_max_cents,
+                   currency, response_efficiency, status, requires_signal, discovered_at, updated_at)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                  ("immunefi-88mphv3", "immunefi", "88mphv3", "88mphV3",
+                   "https://immunefi.com/bounty/88mphv3/", json.dumps(scope_summary),
+                   50000, 10000000, "USD", 0.85, "active", 0, now, now))
+          print("Seeded immunefi-88mphv3 program into data/bounty.db")
+          PY
+
+      - name: Run authorized real-world investigation
+        id: hunt
+        run: |
+          set -uo pipefail
+          mkdir -p data/one-bounty data/repair-feedback
+          set +e
+          bash scripts/run-one-bounty.sh --program immunefi-88mphv3 --timeout-min 60 > data/repair-feedback/terminal.log 2>&1
+          status=$?
+          set -e
+          echo "$status" > data/repair-feedback/exit-code.txt
+          cat data/repair-feedback/terminal.log
+          exit "$status"
+
+      - name: Collect full controller and investigation evidence
+        if: always()
+        run: |
+          mkdir -p data/repair-feedback
+          tar -czf data/repair-feedback/diagnostics.tar.gz data/one-bounty data/logs 2>/dev/null || true
+
+      - name: Upload diagnostic artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lotus-cloud-real-world-${{ github.run_id }}
+          path: data/repair-feedback/**
+          retention-days: 30
+
+      - name: Stop Docker Ollama
+        if: always()
+        run: docker rm -f lotus-cloud-ollama || true
