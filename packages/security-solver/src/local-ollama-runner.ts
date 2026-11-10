@@ -915,12 +915,46 @@ export async function runLocalAudit(
           permitted.every(action=>action==='final') &&
           !snapshot.pending;
         if(!semanticOnly) {
-          await appendFile(logFile,'[CONTROLLER_UNRESOLVED_ACTION] '+
+          // Repair the controller's own missing transition deterministically.
+          // The model is never an alternate source or verifier scheduler.
+          if(snapshot.pending && permitted.includes('verify_source')) {
+            const p=snapshot.pending;
+            controllerAction={action:'verify_source',path:p.path,query:p.query,
+              answer:p.answer,sequence:p.sequence};
+          } else if(permitted.includes('read_file')) {
+            const outstanding=(limits.initialSourcePaths||[]).filter(path=>
+              /^source-[0-9]+\//.test(path) &&
+              /\.(?:sol|java|py|js|mjs|cjs)$/.test(path) &&
+              !terminalReadPages.has(path));
+            for(const path of outstanding){
+              try{
+                await safePath(path);
+                const offsets=[...recentActions.entries()]
+                  .filter(([key,value])=>JSON.parse(key)[0]==='read_file' &&
+                    JSON.parse(key)[1]===path && value.nextOffset!=null)
+                  .map(([,value])=>value.nextOffset as number);
+                controllerAction={action:'read_file',path,query:'',answer:'',
+                  offset:offsets.length?Math.max(...offsets):0};
+                break;
+              }catch{}
+            }
+          }
+          if(!controllerAction && !snapshot.pending &&
+             !(limits.initialSourcePaths||[]).some(path=>
+               /^source-[0-9]+\//.test(path) &&
+               /\.(?:sol|java|py|js|mjs|cjs)$/.test(path) &&
+               !terminalReadPages.has(path)) &&
+             workflow.finishControllerCandidates()) {
+            constraints=await workflow.constraints();
+            requestSchema={...requestSchema,properties:{...requestSchema.properties,
+              action:{type:'string',enum:['final']}}};
+          }
+          await appendFile(logFile,'[CONTROLLER_ACTION_RECOVERY] '+
             JSON.stringify({turn:turn+1,stage:snapshot.stage,
               permitted,pending:snapshot.pending,
-              readPaths:snapshot.readPaths.length,
-              observations:snapshot.observations.length})+'\n');
-          throw new Error('CONTROLLER_UNRESOLVED_ACTION: controller must select source/probe/transition without Qwen');
+              recovered:controllerAction?.action||'evidence_assessment'})+'\n');
+          if(!controllerAction && constraints?.action?.some(action=>action!=='final'))
+            throw new Error('CONTROLLER_UNRESOLVED_ACTION: no supported action remains after deterministic recovery');
         }
       }
       if(controllerAction && fullIndexMode) {
