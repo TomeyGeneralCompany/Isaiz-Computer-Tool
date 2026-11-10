@@ -88,7 +88,7 @@ async function runSequence(artifact, sequence, transport) {
         const receipt=await tx.wait();
         if(receipt?.status!==1)throw new Error('ERC1155 harness mint setup failed');
         steps.push({operation:'setup',function:'tomeyMintBatch(address,uint256[],uint256[])',
-          sender:0,gasUsed:receipt.gasUsed.toString(),purpose:'fund transfer prerequisites'});
+          sender:0,passed:true,gasUsed:receipt.gasUsed.toString(),purpose:'fund transfer prerequisites'});
         prepared.add(key);
       }
       if(ownerIndex!==sender){
@@ -100,7 +100,7 @@ async function runSequence(artifact, sequence, transport) {
           const receipt=await tx.wait();
           if(receipt?.status!==1)throw new Error('ERC1155 harness approval setup failed');
           steps.push({operation:'setup',function:'setApprovalForAll(address,bool)',
-            sender:ownerIndex,gasUsed:receipt.gasUsed.toString(),purpose:'authorize transfer sender'});
+            sender:ownerIndex,passed:true,gasUsed:receipt.gasUsed.toString(),purpose:'authorize transfer sender'});
         }
       }
     }
