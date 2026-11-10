@@ -36,8 +36,18 @@ export function buildBaselineSequence(menu:SolidityProbeDeclaration[],selectedSe
   const constructors=declarations.filter(entry=>entry.operation==='constructor');
   if(constructors.length>1)return null;
   const constructorArgs=constructors.length?fixtureArguments(constructors[0].inputs):[];
-  const sendArgs=fixtureArguments(selected.inputs);
+  let sendArgs=fixtureArguments(selected.inputs);
   const reads=declarations.filter(entry=>entry.operation==='call' && fixtureArguments(entry.inputs)!==null);
+  // For the repository's ERC1155 implementation, the controller owns a
+  // deterministic positive transfer scenario. Empty batches and transfers
+  // back to the same account cannot establish a useful state transition.
+  const erc1155=contract==='ERC1155Upgradeable';
+  const erc1155Single=erc1155 && selectedSelector.endsWith('.safeTransferFrom') &&
+    JSON.stringify(selected.inputs)===JSON.stringify(['address','address','uint256','uint256','bytes']);
+  const erc1155Batch=erc1155 && selectedSelector.endsWith('.safeBatchTransferFrom') &&
+    JSON.stringify(selected.inputs)===JSON.stringify(['address','address','uint256[]','uint256[]','bytes']);
+  if(erc1155Single)sendArgs=['$account1','$account2','7','7','0x4142'];
+  if(erc1155Batch)sendArgs=['$account1','$account2',['7'],['7'],'0x4142'];
   // A zero-input getter is preferable to an unrelated parameterized read;
   // these are observations, not invented assertions about correctness.
   const selectedMethod=selectedSelector.split('.').at(-1)||'';
@@ -51,8 +61,18 @@ export function buildBaselineSequence(menu:SolidityProbeDeclaration[],selectedSe
     };
     return rank(a)-rank(b);
   });
-  const read=reads[0];
-  const readArgs=read?fixtureArguments(read.inputs):null;
+  let read=reads[0];
+  let readArgs=read?fixtureArguments(read.inputs):null;
+  if(erc1155Single||erc1155Batch) {
+    const balance=reads.find(entry=>entry.selector===contract+'.balanceOf' &&
+      JSON.stringify(entry.inputs)===JSON.stringify(['address','uint256']));
+    if(!balance)return null;
+    read=balance;readArgs=['$account2','7'];
+  } else if(erc1155 && selectedSelector.endsWith('.setApprovalForAll')) {
+    const approved=reads.find(entry=>entry.selector===contract+'.isApprovedForAll' &&
+      JSON.stringify(entry.inputs)===JSON.stringify(['address','address']));
+    if(approved){read=approved;readArgs=['$account0','$account1'];}
+  }
   if(!read || !constructorArgs || !sendArgs || !readArgs)return null;
   const signature=(entry:SolidityProbeDeclaration)=>entry.selector.split('.').at(-1)+'('+entry.inputs.join(',')+')';
   // This is only an authorization *observation* when the caller has source
