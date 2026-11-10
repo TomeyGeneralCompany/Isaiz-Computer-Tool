@@ -130,7 +130,7 @@ export function sourceGroundedSolidityProbe(
 export function traceProjectErc1155Callers(path:string,source:string):
   Array<{path:string;selector:string;calledMethod:string;line:number}> {
   if(!path.endsWith('.sol') || source.length>256000 ||
-     !/\\bsafe(?:Batch)?TransferFrom\\s*\\(/.test(source))return [];
+     !/\bsafe(?:Batch)?TransferFrom\s*\(/.test(source))return [];
   let ast:any;
   try {ast=parse(source,{range:true,loc:true});}catch{return [];}
   const results:Array<{path:string;selector:string;calledMethod:string;line:number}>=[];
