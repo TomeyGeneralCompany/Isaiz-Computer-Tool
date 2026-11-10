@@ -38,12 +38,15 @@ export const sourceProbeSpecSchema = z.object({file:z.string().min(1).max(4096),
       ctx.addIssue({code:z.ZodIssueCode.custom,message:"Entry probe requires a supported source-declared handler"});
     else if(spec.sequence)ctx.addIssue({code:z.ZodIssueCode.custom,message:"Sequence requires sequence probe kind"});
   });
-const sequenceObservations = z.object({contract:z.string(),accounts:z.array(z.string()).length(3),deploymentGasUsed:z.string(),
-  steps:z.array(z.union([
+// ERC1155 reproduction may insert mined mint/approval prerequisite transactions
+// before a requested send. They are recorded as setup, never as vulnerability evidence.
+export const sequenceObservations = z.object({contract:z.string(),accounts:z.array(z.string()).length(3),deploymentGasUsed:z.string(),
+  steps:z.array(z.discriminatedUnion("operation",[
     z.object({operation:z.literal("call"),function:z.string(),sender:z.number(),actual:z.unknown(),expected:z.unknown(),passed:z.boolean()}),
     z.object({operation:z.literal("observe"),function:z.string(),sender:z.number(),actual:z.unknown()}),
     z.object({operation:z.literal("send"),function:z.string(),sender:z.number(),valueWei:z.string(),reverted:z.boolean(),gasUsed:z.string(),passed:z.boolean()}),
-  ])).min(1).max(16)});
+    z.object({operation:z.literal("setup"),function:z.string(),sender:z.number(),gasUsed:z.string(),passed:z.literal(true),purpose:z.string()}),
+  ])).min(1).max(48)});
 const javaSequenceObservations=z.object({constructor:z.array(z.unknown()),steps:z.array(z.object({operation:z.literal("call"),function:z.string(),actual:z.string(),expected:z.unknown().optional(),passed:z.boolean()})).min(1).max(12)});
 const polyglotSequenceObservations=z.object({factory:z.string().nullable(),steps:z.array(z.object({
   operation:z.literal("call"),function:z.string(),actual:z.unknown(),
