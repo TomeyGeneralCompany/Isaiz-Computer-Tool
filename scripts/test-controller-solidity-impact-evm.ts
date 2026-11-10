@@ -51,7 +51,10 @@ const provider=ganache.provider({logging:{quiet:true},wallet:{deterministic:true
  chain:{hardfork:'shanghai',chainId:1337,time:new Date('2020-01-01T00:00:00Z')},
  miner:{blockGasLimit:12000000,timestampIncrement:1}});
 try{
- await assert.rejects(runSequence(securedArtifact,sequence,provider),
-  /Unexpected transaction revert|revert/i,'Authorized setter must not pass vulnerable mutation sequence');
+ const securedEvidence=await runSequence(securedArtifact,sequence,provider);
+ assert.equal(securedEvidence.steps[4].reverted,true);
+ assert.equal(securedEvidence.steps[4].passed,false);
+ assert.equal(roleConsumerImpactObserved(securedEvidence,'operator','rotateOperator'),false,
+  'Authorized setter must not pass vulnerable mutation sequence');
 }finally{await provider.disconnect();}
 console.log('Solidity independent EVM denied-before/allowed-after protected consumer impact and secure-control rejection PASSED');

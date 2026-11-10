@@ -100,9 +100,28 @@ async function solidity() {
   const { solc, evmVersion } = resolveSolc(sourceText);
   const ganache = require('ganache');
   const { BrowserProvider, ContractFactory } = require('ethers');
+  // ERC1155Upgradeable exposes internal minting only. Compile a bounded, local
+  // derived harness so transfer probes can establish real balances on-chain.
+  // Never modify the target source or use the harness as impact evidence.
+  const erc1155Harness = sequenceMode &&
+    /(?:^|\/)ERC1155Upgradeable\.sol$/.test(spec.file) &&
+    /\bcontract\s+ERC1155Upgradeable\b/.test(sourceText) &&
+    /^ERC1155Upgradeable\.(?:safeTransferFrom|safeBatchTransferFrom|setApprovalForAll)$/.test(spec.function);
+  const harnessName = 'TomeyERC1155ProbeHarness';
+  const harnessSource = erc1155Harness ? sourceText + `
+contract TomeyERC1155ProbeHarness is ERC1155Upgradeable {
+    constructor() { __ERC1155_init("probe"); }
+    function tomeyMint(address to, uint256 id, uint256 amount) external {
+        _mint(to, id, amount, "");
+    }
+    function tomeyMintBatch(address to, uint256[] memory ids, uint256[] memory amounts) external {
+        _mintBatch(to, ids, amounts, "");
+    }
+}` : sourceText;
+  const effectiveSpec = erc1155Harness ? {...spec, function: spec.function.replace('ERC1155Upgradeable.', harnessName + '.')} : spec;
   const compiled = JSON.parse(solc.compile(JSON.stringify({
     language: 'Solidity',
-    sources: {[spec.file]: {content: sourceText}},
+    sources: {[spec.file]: {content: harnessSource}},
     settings: {...spec.compilerSettings, evmVersion, outputSelection: {'*': {'*': ['abi', 'evm.bytecode.object']}}}
   }), {import: solidityImport}));
   const errors = (compiled.errors || []).filter(e => e.severity === 'error');
@@ -111,7 +130,7 @@ async function solidity() {
     error.missingImports = [...missingImports];
     throw error;
   }
-  const parts = spec.function.split('.');
+  const parts = effectiveSpec.function.split('.');
   const functionName = parts.pop();
   const contractName = parts.pop();
   const candidates = Object.entries(compiled.contracts?.[spec.file] || {}).filter(([name, artifact]) =>

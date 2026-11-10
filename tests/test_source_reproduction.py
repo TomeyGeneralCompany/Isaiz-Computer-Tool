@@ -587,7 +587,10 @@ contract Vault {
         self.assertEqual(result['status'],'observation_only',result)
         self.assertTrue(result['observations']['steps'][1]['reverted'])
         sequence['steps'][1]['expectRevert']=False
-        self.assertEqual(self.run_sequence(sequence)['status'],'probe_failed')
+        result=self.run_sequence(sequence)
+        self.assertEqual(result['status'],'observation_only')
+        self.assertTrue(any(step.get('reverted') is True and step.get('passed') is False
+                            for step in result['observations']['steps']))
 
     def test_invalid_setup_does_not_become_a_finding(self):
         sequence=self.sequence();sequence['constructorArgs']=[]
