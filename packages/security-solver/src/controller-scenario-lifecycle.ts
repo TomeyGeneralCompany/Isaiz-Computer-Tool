@@ -91,8 +91,10 @@ export class ControllerScenarioLedger {
     if(!validId(item.id)||scenario.prerequisites.some(value=>value.id===item.id))
       throw new Error('Duplicate or invalid prerequisite');
     if(item.dependsOn.includes(item.id))throw new Error('Self-dependent prerequisite');
-    scenario.prerequisites.push({...item,dependsOn:[...new Set(item.dependsOn)],state:'required'});
-    this.assertDependencies(scenario);
+    const next={...item,dependsOn:[...new Set(item.dependsOn)],state:'required' as const};
+    const updated={...scenario,prerequisites:[...scenario.prerequisites,next]};
+    this.assertDependencies(updated);
+    scenario.prerequisites.push(next);
   }
   private assertDependencies(scenario:SecurityScenario):void {
     const byId=new Map(scenario.prerequisites.map(p=>[p.id,p]));
