@@ -4,7 +4,7 @@ import {normalizeForcedOutlineCursor} from './outline-cursor';
 import {z} from "zod";
 import {javaSequenceSchema, type JavaSequence} from "./java-sequence";
 import {polyglotSequenceSchema,type PolyglotSequence} from "./polyglot-sequence";
-import {sourceGroundedSolidityProbe} from './controller-solidity-security-probes';
+import {sourceGroundedSolidityProbe,traceProjectErc1155Callers} from './controller-solidity-security-probes';
 import {privilegedRoleMutationCandidate} from './solidity-security-candidates';
 import {rankTracedSourceCandidates} from './controller-source-candidates';
 import { InvestigationWorkflow } from "./investigation-workflow";
@@ -293,6 +293,15 @@ export async function runLocalAudit(
         if(content.length<=256000)accessibleSoliditySources.set(path,content);
       }catch{}
     }
+    // Trace project-owned ERC1155 call sites BEFORE considering inherited
+    // library entries. A call graph hint directs source reading only; it
+    // never authorizes a transaction without a source-proven assertion.
+    const projectErc1155Callers=[...accessibleSoliditySources.entries()].flatMap(
+      ([path,source])=>traceProjectErc1155Callers(path,source));
+    const projectErc1155CallerPaths=[...new Set(projectErc1155Callers.map(item=>item.path))];
+    if(projectErc1155Callers.length)
+      await appendFile(logFile,'[CONTROLLER_ERC1155_PROJECT_CALLERS] '+
+        JSON.stringify(projectErc1155Callers.slice(0,40))+'\n');
     const SolidityCode=[...accessibleSoliditySources.values()];
     for(const [path,content] of accessibleSoliditySources){
       const risk=privilegedRoleMutationCandidate(path,content,SolidityCode);
@@ -673,7 +682,7 @@ export async function runLocalAudit(
         const ranked=[...new Set([...(limits.initialSourcePaths||[]),
           ...workflow.snapshot().readPaths])].filter(path=>inspected.has(path) &&
           path.startsWith('source-') && /\.(?:sol|java|py|js|mjs|cjs)$/.test(path));
-        const rankedInspected=[...new Set([...privilegedSolidityCandidates.keys(),...tracedCandidates.map(c=>c.path),...ranked].filter(path=>inspected.has(path)))];
+        const rankedInspected=[...new Set([...privilegedSolidityCandidates.keys(),...projectErc1155CallerPaths,...tracedCandidates.map(c=>c.path),...ranked].filter(path=>inspected.has(path)))];
         for(const path of rankedInspected) {
           try {
             const full=await safePath(path);
@@ -783,7 +792,7 @@ export async function runLocalAudit(
         // Use that evidence to choose the next unread source, rather than
         // delegating filename selection to the small model.
         const rankedSources=[...new Set([...privilegedSolidityCandidates.keys(),
-          ...tracedCandidates.map(c=>c.path),...(limits.initialSourcePaths||[])])];
+          ...projectErc1155CallerPaths,...tracedCandidates.map(c=>c.path),...(limits.initialSourcePaths||[])])];
         for(const candidate of rankedSources) {
           if(constraints.path?.length && !constraints.path.includes(candidate))continue;
           if(!candidate.startsWith('source-') || !/\.(?:java|py|js|mjs|cjs|sol)$/.test(candidate) ||
