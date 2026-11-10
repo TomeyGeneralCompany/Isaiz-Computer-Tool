@@ -70,17 +70,34 @@ for(const [extension,language,kind] of [
     'A disallowed caller is rejected before state mutation');
   assert.equal(wf.snapshot().scenarioLedger.scenarios[0].phase,'preparing');
   wf.plan(plan);
-  assert.equal(wf.snapshot().scenarioLedger.scenarios[0].phase,'ready');
+  assert.equal(wf.snapshot().scenarioLedger.scenarios[0].phase,'preparing');
   const verify={...plan,action:'verify_source'};
   const caseId='a'.repeat(64);
   wf.observe(verify,JSON.stringify({status:'behavior_observed',
-    behavior_observed:true,caseId}));
+    behavior_observed:true,caseId,observations:{steps:[{operation:'call',actual:true}]}}));
   assert.equal(wf.snapshot().scenarioLedger.scenarios[0].phase,'reviewing');
   assert.equal(wf.snapshot().scenarioLedger.scenarios[0].outcome,undefined,
     'an observed behavior must not automatically become a finding');
   wf.acceptedReview(source,selector,kind,'review:case:'+caseId,false);
   assert.equal(wf.snapshot().scenarioLedger.scenarios[0].outcome,'rejected');
 }
+const dependencies=new InvestigationWorkflow();
+dependencies.read('source-1/contracts/Dependencies.sol');
+const broken={action:'plan_probe',path:'source-1/contracts/Dependencies.sol',
+  query:'Dependencies.settle',answer:'solidity_sequence',
+  hypothesis:'Unprotected settlement changes accounting state'};
+dependencies.registerControllerPlan(broken,'source-digest','Settlement preserves accounting',
+  'Accounting remains consistent');
+dependencies.plan(broken);
+dependencies.observe({...broken,action:'verify_source'},JSON.stringify({
+  status:'unsupported_dependencies',behavior_observed:false,
+  detail:'Required pinned repository import could not be prepared'}));
+const blockedScenario=dependencies.snapshot().scenarioLedger.scenarios[0];
+assert.equal(blockedScenario.outcome,'unsupported');
+assert.equal(blockedScenario.prerequisites.find(p=>p.id==='runtime')?.state,'blocked');
+assert.equal(blockedScenario.evidence.some(e=>e.kind==='execution'),false,
+  'dependency failures must not masquerade as executed security probes');
+
 const stalled=new InvestigationWorkflow();
 stalled.read('source-1/contracts/stall.sol');
 const blocked={action:'plan_probe',path:'source-1/contracts/stall.sol',
