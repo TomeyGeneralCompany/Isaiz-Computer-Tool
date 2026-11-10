@@ -1,5 +1,6 @@
 import { Annotation, StateGraph, START, END } from '@langchain/langgraph';
 import { isDeepStrictEqual } from 'node:util';
+import {createHash} from 'node:crypto';
 import {ControllerScenarioLedger} from './controller-scenario-lifecycle';
 import type { decodeAuditAction } from './local-audit-protocol';
 type Action = ReturnType<typeof decodeAuditAction>;
@@ -40,7 +41,7 @@ export class InvestigationWorkflow {
     const language=plan.path.endsWith('.sol')?'solidity':
       plan.path.endsWith('.java')?'java':plan.path.endsWith('.py')?'python':'javascript';
     const key=this.scenarioKey(plan.path,plan.query,plan.answer);
-    const id=[plan.path,plan.query,plan.answer].join(':');
+    const id=createHash('sha256').update(key).digest('hex');
     const record=this.scenarios.register({id,path:plan.path,selector:plan.query,
       language,property,suspectedViolation:plan.hypothesis,falsification:falsifier});
     this.scenarioMap.set(key,id);
