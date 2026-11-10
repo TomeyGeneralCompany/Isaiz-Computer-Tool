@@ -853,30 +853,43 @@ export async function runLocalAudit(
         const snapshot=workflow.snapshot();
         const eligible=(limits.initialSourcePaths||[]).filter(path=>
           path.startsWith('source-') && /\.(?:sol|java|py|js|mjs|cjs)$/.test(path));
-        const unread=eligible.filter(path=>!snapshot.readPaths.includes(path));
+        // A file is complete only after its terminal page, not its first read.
+        const unread=eligible.filter(path=>!terminalReadPages.has(path));
         await appendFile(logFile,'[CONTROLLER_CANDIDATE_QUEUE_EXHAUSTED] '+
           JSON.stringify({turn:turn+1,stage:snapshot.stage,
             eligible:eligible.length,read:snapshot.readPaths.length,
             unread:unread.slice(0,12),observations:0})+'\n');
-        if(!unread.length && workflow.finishControllerCandidates()) {
-          constraints=await workflow.constraints();
-          requestSchema={...requestSchema,properties:{...requestSchema.properties,
-            action:{type:'string',enum:['final']}}};
-          await appendFile(logFile,'[CONTROLLER_NO_SUPPORTED_SECURITY_SCENARIOS] '+
-            JSON.stringify({inspected:eligible.length,unsupported:[...probeDispositions.values()]
-              .filter(v=>v.status==='unsupported').length})+'\n');
-        } else if(unread.length) {
-          // Exhausted planning is not exhausted source coverage. Select the
-          // next verified workspace path directly; never hand scheduling to Qwen.
-          for(const path of unread){
-            try {
-              await safePath(path);
-              controllerAction={action:'read_file',path,query:'',answer:'',offset:0};
-              await appendFile(logFile,'[CONTROLLER_EXHAUSTED_QUEUE_RECOVERY] '+
-                JSON.stringify({path,remaining:unread.length})+'\n');
-              break;
-            }catch{}
+        if(!unread.length) {
+          // No executable case exists. Evaluate a controller-owned disposition
+          // once; never burn model turns repeating an invalid final assertion.
+          const disposition=JSON.stringify({findings:[],
+            outcome:'no_testable_candidate',
+            reason:'Inspected all indexed source; no source-grounded executable security scenario qualified.'});
+          const rejection=await limits.validateFinal?.(disposition);
+          if(!rejection) {
+            workflow.finishControllerCandidates();
+            await appendFile(logFile,'[CONTROLLER_NO_SUPPORTED_SECURITY_SCENARIOS] '+
+              JSON.stringify({inspected:eligible.length,accepted:true})+'\n');
+            return disposition;
           }
+          await appendFile(logFile,'[CONTROLLER_UNSUPPORTED_FINAL_REJECTED] '+
+            JSON.stringify({inspected:eligible.length,reason:String(rejection).slice(0,300)})+'\n');
+          throw new Error('CONTROLLER_CANDIDATE_QUEUE_EXHAUSTED: '+String(rejection).slice(0,300));
+        }
+        // Continue actual source coverage instead of inventing a probe.
+        for(const path of unread) {
+          try {
+            await safePath(path);
+            const offsets=[...recentActions.entries()]
+              .filter(([key,value])=>JSON.parse(key)[0]==='read_file' &&
+                JSON.parse(key)[1]===path && value.nextOffset!=null)
+              .map(([,value])=>value.nextOffset as number);
+            controllerAction={action:'read_file',path,query:'',answer:'',
+              offset:offsets.length?Math.max(...offsets):0};
+            await appendFile(logFile,'[CONTROLLER_EXHAUSTED_QUEUE_RECOVERY] '+
+              JSON.stringify({path,remaining:unread.length})+'\n');
+            break;
+          }catch{}
         }
       }
       // Exhaustion is an explicit controller transition. Unsupported/negative
