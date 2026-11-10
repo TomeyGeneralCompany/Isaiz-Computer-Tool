@@ -60,8 +60,9 @@ assert.equal(reviewedTargetFinding(gradedReports,
   'reviewer rejections cannot be converted into passes');
 assert.equal(reviewedTargetFinding(gradedReports,[{caseId:'unknown',verdict:'approve'}],answer),false,
   'review approval must identify a recorded finding case');
-for(const range of ['^0.8.20','>=0.8.0 <0.9.0','0.8.30','^0.7.0 || ^0.8.0'])assert.equal(compilerCompatible(range),true,range);
-for(const range of ['^0.7.0','0.8.19','>=0.8.31','~0.7.1'])assert.equal(compilerCompatible(range),false,range);
+// Keep this matrix aligned with the actual bundled solc versions: 0.8.30, 0.7.6, 0.6.12 and 0.5.17.
+for(const range of ['^0.8.20','>=0.8.0 <0.9.0','0.8.30','^0.7.0 || ^0.8.0','^0.7.0','~0.7.1','^0.6.0','^0.5.0'])assert.equal(compilerCompatible(range),true,range);
+for(const range of ['0.8.19','>=0.8.31','^0.4.0','^0.9.0','<0.5.0'])assert.equal(compilerCompatible(range),false,range);
 assert.equal(compilerCompatible('0.8.x'),null);
 assert.equal(compilerCompatible('0.7.0 - 0.9.0'),null);
 for(const line of ['// target.set(x);','function set(uint x) external {}','const text = "target.set(x)";','/* target.set(x); */'])assert.equal(referencesProbedFunction(line,'Store.set'),false,line);
