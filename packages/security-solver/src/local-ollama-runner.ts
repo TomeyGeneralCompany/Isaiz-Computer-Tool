@@ -4,7 +4,7 @@ import {normalizeForcedOutlineCursor} from './outline-cursor';
 import {z} from "zod";
 import {javaSequenceSchema, type JavaSequence} from "./java-sequence";
 import {polyglotSequenceSchema,type PolyglotSequence} from "./polyglot-sequence";
-import {sourceGroundedSolidityProbe,sourceGroundedSolidityProbes,traceProjectErc1155Callers} from './controller-solidity-security-probes';
+import {sourceGroundedSolidityProbes,traceProjectErc1155Callers} from './controller-solidity-security-probes';
 import {privilegedRoleMutationCandidate} from './solidity-security-candidates';
 import {rankTracedSourceCandidates} from './controller-source-candidates';
 import { InvestigationWorkflow } from "./investigation-workflow";
@@ -1483,7 +1483,7 @@ export async function runLocalAudit(
                 const next=workflow.requireNextUnreadSource(limits.initialSourcePaths||[]);
                 if(!next)workflow.finishControllerCandidates();
                 await appendFile(logFile,'[CONTROLLER_INVALID_PLAN_RECOVERY] '+
-                  JSON.stringify({path:action.path,query:action.query,next})+'\\n');
+                  JSON.stringify({path:action.path,query:action.query,next})+'\n');
               }
               continue;
             }
@@ -1501,7 +1501,7 @@ export async function runLocalAudit(
                 const next=workflow.requireNextUnreadSource(limits.initialSourcePaths||[]);
                 if(!next)workflow.finishControllerCandidates();
                 await appendFile(logFile,'[CONTROLLER_INVALID_PLAN_RECOVERY] '+
-                  JSON.stringify({path:action.path,query:action.query,next})+'\\n');
+                  JSON.stringify({path:action.path,query:action.query,next})+'\n');
               }
             continue;
           }
