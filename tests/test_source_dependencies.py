@@ -67,6 +67,46 @@ class DependencyTests(unittest.TestCase):
                 self.assertFalse((root/"node_modules/unrelated").exists())
                 self.assertFalse((root/"node_modules/.tomey-lock.sha256").exists())
 
+    def test_solidity_large_lockfile_resolves_only_required_closure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            data=archive("package/Contract.sol",b"pragma solidity ^0.8.0;")
+            integrity="sha512-"+base64.b64encode(hashlib.sha512(data).digest()).decode()
+            item={"resolved":"https://registry.npmjs.org/owned/-/owned-1.tgz",
+                  "integrity":integrity}
+            # Reproduce the 88mph failure: more than 4096 lock entries,
+            # but only two packages required for this Solidity import.
+            entries={f"node_modules/unrelated{i}":{"resolved":"https://invalid.test/archive"}
+                     for i in range(4097)}
+            entries["node_modules/@scope/owned"]={**item,"dependencies":{"helper":"1.0.0"}}
+            entries["node_modules/helper"]=item
+            (root/"package.json").write_text(json.dumps({"dependencies":{"@scope/owned":"1"}}))
+            (root/"package-lock.json").write_text(json.dumps({"lockfileVersion":3,"packages":entries}))
+            with patch.object(deps,"download",return_value=data) as download:
+                deps.prepare_dependencies(root,["@scope/owned/Contract.sol"])
+                self.assertEqual(download.call_count,2)
+            self.assertTrue((root/"node_modules/@scope/owned/Contract.sol").is_file())
+            self.assertTrue((root/"node_modules/helper/Contract.sol").is_file())
+            self.assertFalse((root/"node_modules/unrelated0").exists())
+
+    def test_nested_locked_dependency_resolution(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            data=archive()
+            integrity="sha512-"+base64.b64encode(hashlib.sha512(data).digest()).decode()
+            item={"resolved":"https://registry.npmjs.org/owned/-/owned-1.tgz",
+                  "integrity":integrity}
+            entries={"node_modules/owned":{**item,"dependencies":{"helper":"1"}},
+                     "node_modules/owned/node_modules/helper":item,
+                     "node_modules/helper":{"resolved":"https://invalid.test/archive"}}
+            (root/"package.json").write_text(json.dumps({"dependencies":{"owned":"1"}}))
+            (root/"package-lock.json").write_text(json.dumps({"lockfileVersion":3,"packages":entries}))
+            with patch.object(deps,"download",return_value=data) as download:
+                deps.prepare_dependencies(root,["owned/index.js"])
+                self.assertEqual(download.call_count,2)
+            self.assertTrue((root/"node_modules/owned/node_modules/helper/index.js").is_file())
+            self.assertFalse((root/"node_modules/helper").exists())
+
     def test_integrity_and_reuse(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)
