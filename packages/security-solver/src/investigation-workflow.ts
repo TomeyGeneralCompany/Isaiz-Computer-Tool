@@ -63,6 +63,7 @@ export class InvestigationWorkflow {
       this.scenarios.transition(id,'preparing','Resolve verifier prerequisites');
       this.scenarios.addPrerequisite(id,{id:'source',description:'Inspected declaration',dependsOn:[]});
       this.scenarios.addPrerequisite(id,{id:'plan',description:'Validated executable plan',dependsOn:['source']});
+      this.scenarios.addPrerequisite(id,{id:'runtime',description:'Verifier confirms isolated runtime, dependencies and setup',dependsOn:['plan']});
       this.scenarios.satisfy(id,'source',sourceReference);
     }
   }
@@ -70,25 +71,43 @@ export class InvestigationWorkflow {
     const id=this.scenarioMap.get(this.scenarioKey(path,query,kind));
     if(!id||this.scenarios.get(id)?.phase!=='preparing')return;
     this.scenarios.satisfy(id,'plan','controller-validated:'+kind+':'+query);
-    this.scenarios.transition(id,'ready','Exact plan validated');
+    // The verifier must resolve runtime dependencies and setup first.
+    // A syntactically valid sequence alone must never make this READY.
   }
   private observeScenario(action:Action,output:string){
     const id=this.scenarioMap.get(this.scenarioKey(action.path,action.query,action.answer));
     if(!id)return;
-    if(this.scenarios.get(id)?.phase==='ready')
-      this.scenarios.transition(id,'executing','Verifier executed');
     const current=this.scenarios.get(id);
-    if(current?.phase!=='executing')return;
+    if(current?.phase!=='preparing')return;
     let result:any;try{result=JSON.parse(output);}catch{result={status:'tool_error'};}
-    this.scenarios.record(id,{id:'execution:'+current.attempts,kind:'execution',
-      reference:String(result.caseId||result.evidenceFile||'verifier:'+current.attempts),
-      observation:String(result.status||'tool_error')});
-    this.scenarios.transition(id,'observed','Verifier disposition recorded');
-    if(result.status==='behavior_observed')
+    const status=String(result?.status||'tool_error');
+    const supported=new Set(['behavior_observed','behavior_not_observed','observation_only']);
+    if(!supported.has(status) || !result?.observations) {
+      // A failed install, unresolved import, unproven fixture or unavailable
+      // sandbox is a failed prerequisite, NOT a completed experiment.
+      const reason=String(result?.detail||result?.limitation||result?.error||status).slice(0,1000);
+      this.scenarios.block(id,'runtime',reason);
+      this.scenarios.record(id,{id:'setup:blocked',kind:'setup',
+        reference:'runtime:'+status,observation:reason});
+      this.scenarios.finish(id,
+        ['unsupported_dependencies','unsupported_execution','invalid_probe',
+          'blocked_no_runtime','blocked_no_sandbox'].includes(status)?'unsupported':'incomplete',
+        'Isolated runtime prerequisite failed: '+reason);
+      return;
+    }
+    const reference=String(result.caseId||result.evidenceFile||
+      'runtime:'+action.path+':'+action.query+':'+status);
+    this.scenarios.satisfy(id,'runtime',reference);
+    this.scenarios.transition(id,'ready','Verifier confirmed dependency and fixture preparation');
+    this.scenarios.transition(id,'executing','Execute source-grounded isolated experiment');
+    const attempts=this.scenarios.get(id)!.attempts;
+    this.scenarios.record(id,{id:'execution:'+attempts,kind:'execution',
+      reference,observation:status});
+    this.scenarios.transition(id,'observed','Verifier returned actual experiment observations');
+    if(status==='behavior_observed')
       this.scenarios.transition(id,'reviewing','Independent reviewer must assess security relevance');
-    else this.scenarios.finish(id,result.status==='behavior_not_observed'?'rejected':
-      result.status==='unsupported'?'unsupported':'incomplete',
-      'Verifier disposition '+String(result.status||'tool_error'));
+    else this.scenarios.finish(id,status==='behavior_not_observed'?'rejected':'incomplete',
+      'Isolated experiment disposition: '+status);
   }
   acceptedReview(path:string,query:string,kind:string,reference:string,positive:boolean){
     const id=this.scenarioMap.get(this.scenarioKey(path,query,kind));
