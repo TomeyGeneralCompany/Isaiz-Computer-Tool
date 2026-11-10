@@ -59,8 +59,53 @@ async function runSequence(artifact, sequence, transport) {
     if(!deployment || deployment.status!==1)throw new Error('Constructor deployment failed');
     address=await contract.getAddress();
     const steps=[];
+    // Only the explicitly generated ERC1155 test harness gets automatic setup.
+    // These are actual mined transactions, recorded separately from the probe.
+    const harness = artifact.abi.some(x=>x.type==='function' && x.name==='tomeyMint') &&
+      artifact.abi.some(x=>x.type==='function' && x.name==='tomeyMintBatch');
+    const prepared = new Set();
+    async function prepareTransfer(step) {
+      if(!harness || step.operation!=='send' || step.expectRevert===true)return;
+      const name=step.function.split('(')[0];
+      if(!['safeTransferFrom','safeBatchTransferFrom'].includes(name))return;
+      const values=step.args.map(resolve);
+      const [from,to]=values;
+      if(typeof from!=='string' || !accounts.some(a=>a.toLowerCase()===from.toLowerCase()) ||
+         typeof to!=='string' || /^0x0{40}$/i.test(to))return;
+      const ownerIndex=accounts.findIndex(a=>a.toLowerCase()===from.toLowerCase());
+      const sender=step.sender??0;
+      const idList=name==='safeTransferFrom'?[values[2]]:values[2];
+      const amountList=name==='safeTransferFrom'?[values[3]]:values[3];
+      if(!Array.isArray(idList)||!Array.isArray(amountList)||idList.length!==amountList.length||
+         !idList.length||idList.length>32)return;
+      const pairs=idList.map((id,i)=>[String(id),String(amountList[i])]);
+      if(pairs.some(([id,amount])=>!/^(0|[1-9][0-9]{0,77})$/.test(id) ||
+         !/^(0|[1-9][0-9]{0,77})$/.test(amount)))return;
+      const key=JSON.stringify([from,pairs]);
+      if(!prepared.has(key)){
+        const mint=contract.getFunction('tomeyMintBatch(address,uint256[],uint256[])');
+        const tx=await mint.send(from,pairs.map(p=>p[0]),pairs.map(p=>p[1]),{gasLimit:2000000});
+        const receipt=await tx.wait();
+        if(receipt?.status!==1)throw new Error('ERC1155 harness mint setup failed');
+        steps.push({operation:'setup',function:'tomeyMintBatch(address,uint256[],uint256[])',
+          sender:0,gasUsed:receipt.gasUsed.toString(),purpose:'fund transfer prerequisites'});
+        prepared.add(key);
+      }
+      if(ownerIndex!==sender){
+        const approved=await contract.getFunction('isApprovedForAll(address,address)')
+          .staticCall(from,accounts[sender]);
+        if(!approved){
+          const tx=await contract.connect(signers[ownerIndex])
+            .getFunction('setApprovalForAll(address,bool)').send(accounts[sender],true,{gasLimit:2000000});
+          const receipt=await tx.wait();
+          if(receipt?.status!==1)throw new Error('ERC1155 harness approval setup failed');
+          steps.push({operation:'setup',function:'setApprovalForAll(address,bool)',
+            sender:ownerIndex,gasUsed:receipt.gasUsed.toString(),purpose:'authorize transfer sender'});
+        }
+      }
+    }
     for(const step of sequence.steps) {
-      const fn=contract.connect(signers[step.sender??0]).getFunction(step.function);
+      await prepareTransfer(step);\n      const fn=contract.connect(signers[step.sender??0]).getFunction(step.function);
       const fragment=fn.fragment;
       const args=step.args.map(resolve);
       // Encode first: ABI/selector/setup failures must not count as expected reverts.
