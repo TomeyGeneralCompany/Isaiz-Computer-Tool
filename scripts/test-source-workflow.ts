@@ -510,6 +510,17 @@ try {
       })}}));
       return;
     }
+    // This fixture's Solidity methods are a pure renderer and a generic
+    // setter. Neither has a source-grounded security hypothesis. The model
+    // must report no testable candidate instead of inventing a reproduction.
+    if(source.endsWith('.sol') && turn>=3 &&
+       request.format.properties.action.enum.includes('final')) {
+      res.end(JSON.stringify({message:{role:'assistant',content:JSON.stringify({
+        action:'final',path:'',query:'',
+        answer:JSON.stringify({outcome:'no_testable_candidate',findings:[],reason:'This Solidity fixture has no source-grounded violation scenario: neither its pure renderer nor its generic state setter establishes a security invariant.'})
+      })}}));
+      return;
+    }
     assert.ok(request.format.properties.action.enum.includes("plan_probe"));
     assert.ok(request.messages.some((m:any)=>m.content.includes("exported JavaScript")));
     const action=(name:string,path:string,query="",answer="")=>({action:name,path,query,answer});
@@ -612,9 +623,10 @@ try {
     console.log("[REAL_QWEN_LANGUAGE_FINISH] "+JSON.stringify({language,success:result.success,elapsedSeconds:Math.round((Date.now()-languageStart)/1000),auditRecord:result.auditRecord||null}));
     if(!result.success && result.auditRecord)console.error(await readFile(join(root,"data/logs",result.auditRecord),"utf8"));
     assert.equal(result.success,true,JSON.stringify(result));
-    if(stateful) {
-      assert.equal(result.findings.length,0,"Solidity expectation mismatches cannot become findings");
-      assert.equal(caseId,"","observation-only results cannot manufacture verified case IDs");
+    if(stateful || language==='solidity') {
+      assert.equal(result.findings.length,0,
+        "generic Solidity methods cannot produce security findings without source-backed invariants");
+      assert.equal(caseId,"","unsupported or observational Solidity results cannot create verified case IDs");
       continue;
     }
     assert.equal(result.findings.length,1);

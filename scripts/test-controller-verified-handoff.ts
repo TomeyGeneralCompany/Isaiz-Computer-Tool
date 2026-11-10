@@ -40,7 +40,7 @@ try {
     ['Stateful.py','class Counter:\n    def advance(self,by=1):\n        return by\ndef make(start=0):\n    return Counter(start)\n'],
     ['Stateful.cjs','exports.make=function(start){let value=start;return {advance(by){value+=by;return value;}};};'],
     ['Stateful.java','public class Stateful {private int value=0; public int advance(){return ++value;} public int current(){return value;}}'],
-    ['Counter.sol','pragma solidity ^0.8.0; contract Counter {uint public value; function add(uint amount) public {value+=amount;}}']
+    ['Counter.sol',"pragma solidity ^0.8.20; contract Counter {address public operator; constructor(){operator=msg.sender;} function rotateOperator(address next) external {operator=next;} function settle() external {require(msg.sender==operator,\"operator\");}}"]
   ]) {
     const path='source-1/'+file;
     await mkdir(join(root,'source-1'),{recursive:true});
@@ -82,7 +82,7 @@ try {
     ['render.py','render','html_reflection','def render(value):\n    return "<p>"+value+"</p>"\n'],
     ['render.cjs','render','html_reflection','exports.render=function(value){return "<p>"+value+"</p>";};'],
     ['State.java','State.advance','java_sequence','public class State {private int value=0; public int advance(){return ++value;} public int current(){return value;}}'],
-    ['Counter.sol','Counter.add','solidity_sequence','pragma solidity ^0.8.0; contract Counter {uint public value; function add(uint amount) public {value+=amount;}}']
+    ['Counter.sol','Counter.rotateOperator','solidity_sequence',"pragma solidity ^0.8.20; contract Counter {address public operator; constructor(){operator=msg.sender;} function rotateOperator(address next) external {operator=next;} function settle() external {require(msg.sender==operator,\"operator\");}}"]
   ]) {
     const path='source-1/'+file;
     await writeFile(join(root,path),source);

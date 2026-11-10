@@ -4,7 +4,7 @@ import {normalizeForcedOutlineCursor} from './outline-cursor';
 import {z} from "zod";
 import {javaSequenceSchema, type JavaSequence} from "./java-sequence";
 import {polyglotSequenceSchema,type PolyglotSequence} from "./polyglot-sequence";
-import {buildBaselineSequence} from './solidity-probe-inputs';
+import {sourceGroundedSolidityProbes,traceProjectErc1155Callers} from './controller-solidity-security-probes';
 import {privilegedRoleMutationCandidate} from './solidity-security-candidates';
 import {rankTracedSourceCandidates} from './controller-source-candidates';
 import { InvestigationWorkflow } from "./investigation-workflow";
@@ -107,6 +107,7 @@ export async function runLocalAudit(
   let controllerAutoReadCount = 0;
   let indexedLastProgressKey = '';
   let indexedSyntheticStalls = 0;
+  const controllerStalledPaths=new Set<string>();
   let generationBudget = settings.numPredict;
   const root = await realpath(cwd);
   const controller = new AbortController();
@@ -222,6 +223,16 @@ export async function runLocalAudit(
     await appendFile(logFile,'[CONTROLLER_PROBE_DISPOSITION] '+JSON.stringify(record)+'\n');
     await controllerArchive?.append('decision',record);
   };
+  const settleOrphanedSelections=async(reason:string)=>{
+    // A selected probe with no pending verifier request is an orphaned
+    // controller transition. Preserve that failure rather than pretending
+    // an executable experiment ran or blocking all final reporting.
+    for(const [identity] of unresolvedProbes()) {
+      const [path,selector,kind]=JSON.parse(identity) as [string,string,string];
+      workflow?.blockSelectedScenario(path,selector,kind,reason);
+      await recordProbeDisposition(path,selector,kind,'controller_blocked',reason);
+    }
+  };
   let stalledActions = 0;
   const missingRequests=new Map<string,number>();
   const fixedSize=JSON.stringify(messages).length+JSON.stringify(structured ? actionSchema : availableTools).length;
@@ -293,6 +304,15 @@ export async function runLocalAudit(
         if(content.length<=256000)accessibleSoliditySources.set(path,content);
       }catch{}
     }
+    // Trace project-owned ERC1155 call sites BEFORE considering inherited
+    // library entries. A call graph hint directs source reading only; it
+    // never authorizes a transaction without a source-proven assertion.
+    const projectErc1155Callers=[...accessibleSoliditySources.entries()].flatMap(
+      ([path,source])=>traceProjectErc1155Callers(path,source));
+    const projectErc1155CallerPaths=[...new Set(projectErc1155Callers.map(item=>item.path))];
+    if(projectErc1155Callers.length)
+      await appendFile(logFile,'[CONTROLLER_ERC1155_PROJECT_CALLERS] '+
+        JSON.stringify(projectErc1155Callers.slice(0,40))+'\n');
     const SolidityCode=[...accessibleSoliditySources.values()];
     for(const [path,content] of accessibleSoliditySources){
       const risk=privilegedRoleMutationCandidate(path,content,SolidityCode);
@@ -360,7 +380,7 @@ export async function runLocalAudit(
           workflow?.read(path);
           workflow?.observe(action,fitted.output);
           const sourceEvidenceId=await controllerArchive?.append('source',{path,start:delivered.start,end:delivered.end,content:delivered.text,nextOffset:delivered.nextOffset},{source:path});
-          if(sourceEvidenceId)workflow?.recordEvidence(sourceEvidenceId);
+          if(sourceEvidenceId)workflow?.recordSourceEvidence(path,sourceEvidenceId);
           limits.onRead?.(path,{start:delivered.start,end:delivered.end});
           navigation.observe('read_file',path,offset,'',delivered);
           successfulReads++;
@@ -673,32 +693,38 @@ export async function runLocalAudit(
         const ranked=[...new Set([...(limits.initialSourcePaths||[]),
           ...workflow.snapshot().readPaths])].filter(path=>inspected.has(path) &&
           path.startsWith('source-') && /\.(?:sol|java|py|js|mjs|cjs)$/.test(path));
-        const rankedInspected=[...new Set([...privilegedSolidityCandidates.keys(),...tracedCandidates.map(c=>c.path),...ranked].filter(path=>inspected.has(path)))];
+        const rankedInspected=[...new Set([...privilegedSolidityCandidates.keys(),...projectErc1155CallerPaths,...tracedCandidates.map(c=>c.path),...ranked].filter(path=>inspected.has(path)))];
         for(const path of rankedInspected) {
           try {
             const full=await safePath(path);
             let plan:{action:string;path:string;query:string;answer:string;hypothesis:string;sequence?:unknown}|null=null;
             if(path.endsWith('.sol')) {
-              const risk=privilegedSolidityCandidates.get(path);
-              // When source identifies a role mutation with a protected
-              // consumer, test that path before unrelated valid transactions.
-              if(privilegedSolidityCandidates.size && !risk)continue;
+              const source=await readFile(full,'utf8');
               const menu=await solidityIndex.probeMenu(full,64);
-              const entries=risk?menu.filter(entry=>entry.selector===risk.selector):
-                menu.filter(entry=>entry.operation==='send');
-              for(const entry of entries) {
-                if(entry.operation!=='send')continue;
-                const sequence=buildBaselineSequence(menu,entry.selector,!!risk);
-                if(!sequence){await recordProbeDisposition(path,entry.selector,'solidity_sequence','unsupported','baseline_sequence_unavailable');continue;}
-                const candidate={action:'plan_probe',path,query:entry.selector,
+              // Source-grounded AST scenarios, not ABI mutability or guessed
+              // role names, are the only eligible Solidity security probes.
+              const groundedOptions=sourceGroundedSolidityProbes(source,menu);
+              const supported=new Set(groundedOptions.map(entry=>entry.selector));
+              for(const entry of menu.filter(entry=>entry.operation==='send'))
+                if(!supported.has(entry.selector))
+                  await recordProbeDisposition(path,entry.selector,'solidity_sequence',
+                    'unsupported','security_setup_or_assertion_not_source_proven');
+              for(const {selector,probe:grounded} of groundedOptions) {
+                const candidate={action:'plan_probe',path,query:selector,
                   answer:'solidity_sequence',
-                  hypothesis:risk?
-                    'Check whether a nonadministrator can mutate the source-declared privileged '+risk.role+' role. Compare source-proven authority checks and before/after on-chain observations; independent review must establish impact.':
-                    'Observe the declared transaction and getter; check authorization and state effects against source.',
-                  sequence};
+                  hypothesis:grounded.hypothesis,sequence:grounded.sequence};
+                const attempted=workflow.snapshot().observations.some(item=>
+                  item.path===path && item.function===candidate.query &&
+                  item.kind===candidate.answer);
+                if(attempted) {
+                  await recordProbeDisposition(path,candidate.query,candidate.answer,
+                    'observed','existing_workflow_observation');
+                  continue;
+                }
                 const rejection=workflow.validate(candidate as any);
                 if(!rejection){plan=candidate;break;}
-                await recordProbeDisposition(path,candidate.query,candidate.answer,'rejected',String(rejection).slice(0,240));
+                await recordProbeDisposition(path,candidate.query,candidate.answer,
+                  'rejected',String(rejection).slice(0,240));
               }
             }else {
               const traced=tracedCandidates.find(candidate=>candidate.path===path);
@@ -741,6 +767,12 @@ export async function runLocalAudit(
               }
             }
             if(!plan)continue;
+            // Admit only inspected, controller-selected candidates to the
+            // explicit lifecycle. A proposed hypothesis is not a finding.
+            workflow.registerControllerPlan(plan,
+              workflow.latestSourceEvidence(path)||'inspected:'+path,
+              plan.hypothesis,
+              'The isolated experiment does not exhibit the proposed behavior.');
             controllerAction=plan;
             await recordProbeDisposition(path,plan.query,plan.answer,'selected','controller_scheduled');
             await appendFile(logFile,'[CONTROLLER_SOURCE_PROBE_SELECTED] '+
@@ -768,7 +800,7 @@ export async function runLocalAudit(
         // Use that evidence to choose the next unread source, rather than
         // delegating filename selection to the small model.
         const rankedSources=[...new Set([...privilegedSolidityCandidates.keys(),
-          ...tracedCandidates.map(c=>c.path),...(limits.initialSourcePaths||[])])];
+          ...projectErc1155CallerPaths,...tracedCandidates.map(c=>c.path),...(limits.initialSourcePaths||[])])];
         for(const candidate of rankedSources) {
           if(constraints.path?.length && !constraints.path.includes(candidate))continue;
           if(!candidate.startsWith('source-') || !/\.(?:java|py|js|mjs|cjs|sol)$/.test(candidate) ||
@@ -821,12 +853,44 @@ export async function runLocalAudit(
         const snapshot=workflow.snapshot();
         const eligible=(limits.initialSourcePaths||[]).filter(path=>
           path.startsWith('source-') && /\.(?:sol|java|py|js|mjs|cjs)$/.test(path));
-        const unread=eligible.filter(path=>!snapshot.readPaths.includes(path));
+        // A file is complete only after its terminal page, not its first read.
+        const unread=eligible.filter(path=>!terminalReadPages.has(path));
         await appendFile(logFile,'[CONTROLLER_CANDIDATE_QUEUE_EXHAUSTED] '+
           JSON.stringify({turn:turn+1,stage:snapshot.stage,
             eligible:eligible.length,read:snapshot.readPaths.length,
             unread:unread.slice(0,12),observations:0})+'\n');
-        throw new Error('CONTROLLER_CANDIDATE_QUEUE_EXHAUSTED: no controller-selected source or supported probe; inspect candidate selection diagnostics, not model finalization');
+        if(!unread.length) {
+          // No executable case exists. Evaluate a controller-owned disposition
+          // once; never burn model turns repeating an invalid final assertion.
+          const disposition=JSON.stringify({findings:[],
+            outcome:'no_testable_candidate',
+            reason:'Inspected all indexed source; no source-grounded executable security scenario qualified.'});
+          const rejection=await limits.validateFinal?.(disposition);
+          if(!rejection) {
+            workflow.finishControllerCandidates();
+            await appendFile(logFile,'[CONTROLLER_NO_SUPPORTED_SECURITY_SCENARIOS] '+
+              JSON.stringify({inspected:eligible.length,accepted:true})+'\n');
+            return disposition;
+          }
+          await appendFile(logFile,'[CONTROLLER_UNSUPPORTED_FINAL_REJECTED] '+
+            JSON.stringify({inspected:eligible.length,reason:String(rejection).slice(0,300)})+'\n');
+          throw new Error('CONTROLLER_CANDIDATE_QUEUE_EXHAUSTED: '+String(rejection).slice(0,300));
+        }
+        // Continue actual source coverage instead of inventing a probe.
+        for(const path of unread) {
+          try {
+            await safePath(path);
+            const offsets=[...recentActions.entries()]
+              .filter(([key,value])=>JSON.parse(key)[0]==='read_file' &&
+                JSON.parse(key)[1]===path && value.nextOffset!=null)
+              .map(([,value])=>value.nextOffset as number);
+            controllerAction={action:'read_file',path,query:'',answer:'',
+              offset:offsets.length?Math.max(...offsets):0};
+            await appendFile(logFile,'[CONTROLLER_EXHAUSTED_QUEUE_RECOVERY] '+
+              JSON.stringify({path,remaining:unread.length})+'\n');
+            break;
+          }catch{}
+        }
       }
       // Exhaustion is an explicit controller transition. Unsupported/negative
       // observations cannot authorize more source scheduling by the model.
@@ -838,9 +902,10 @@ export async function runLocalAudit(
         const eligible=(limits.initialSourcePaths||[]).filter(path=>
           /^source-[0-9]+\//.test(path) && /\.(?:sol|java|py|js|mjs|cjs)$/.test(path));
         const unreadRemaining=eligible.filter(path=>!terminalReadPages.has(path) && !snapshot.readPaths.includes(path));
-        if(eligible.length && !unreadRemaining.length && unresolvedProbes().length) {
-          await appendFile(logFile,'[CONTROLLER_UNRESOLVED_PROBES] '+JSON.stringify(unresolvedProbes())+'\n');
-          throw new Error('CONTROLLER_UNRESOLVED_PROBES: selected probes require verifier dispositions');
+        if(eligible.length && !unreadRemaining.length &&
+           unresolvedProbes().length && !snapshot.pending) {
+          await appendFile(logFile,'[CONTROLLER_ORPHANED_PROBES] '+JSON.stringify(unresolvedProbes())+'\n');
+          await settleOrphanedSelections('Selected probe lost its executable handoff');
         }
         if(eligible.length && !unreadRemaining.length &&
            workflow.finishControllerCandidates()) {
@@ -852,8 +917,9 @@ export async function runLocalAudit(
         }
       }
       if(fullIndexMode && !controllerAction && constraints?.action?.length===1 &&
-         constraints.action[0]==='final' && unresolvedProbes().length)
-        throw new Error('CONTROLLER_UNRESOLVED_PROBES: final reporting blocked until selected probes have verifier dispositions');
+         constraints.action[0]==='final' && unresolvedProbes().length &&
+         !workflow.snapshot().pending)
+        await settleOrphanedSelections('Orphaned probe cannot be reported as execution');
       // Never delegate source selection, probe execution or workflow transitions
       // to Qwen in controller-owned indexed investigations. Only a semantic
       // final assessment may use the model, after deterministic work is done.
@@ -866,12 +932,46 @@ export async function runLocalAudit(
           permitted.every(action=>action==='final') &&
           !snapshot.pending;
         if(!semanticOnly) {
-          await appendFile(logFile,'[CONTROLLER_UNRESOLVED_ACTION] '+
+          // Repair the controller's own missing transition deterministically.
+          // The model is never an alternate source or verifier scheduler.
+          if(snapshot.pending && permitted.includes('verify_source')) {
+            const p=snapshot.pending;
+            controllerAction={action:'verify_source',path:p.path,query:p.query,
+              answer:p.answer,sequence:p.sequence};
+          } else if(permitted.includes('read_file')) {
+            const outstanding=(limits.initialSourcePaths||[]).filter(path=>
+              /^source-[0-9]+\//.test(path) &&
+              /\.(?:sol|java|py|js|mjs|cjs)$/.test(path) &&
+              !terminalReadPages.has(path));
+            for(const path of outstanding){
+              try{
+                await safePath(path);
+                const offsets=[...recentActions.entries()]
+                  .filter(([key,value])=>JSON.parse(key)[0]==='read_file' &&
+                    JSON.parse(key)[1]===path && value.nextOffset!=null)
+                  .map(([,value])=>value.nextOffset as number);
+                controllerAction={action:'read_file',path,query:'',answer:'',
+                  offset:offsets.length?Math.max(...offsets):0};
+                break;
+              }catch{}
+            }
+          }
+          if(!controllerAction && !snapshot.pending &&
+             !(limits.initialSourcePaths||[]).some(path=>
+               /^source-[0-9]+\//.test(path) &&
+               /\.(?:sol|java|py|js|mjs|cjs)$/.test(path) &&
+               !terminalReadPages.has(path)) &&
+             workflow.finishControllerCandidates()) {
+            constraints=await workflow.constraints();
+            requestSchema={...requestSchema,properties:{...requestSchema.properties,
+              action:{type:'string',enum:['final']}}};
+          }
+          await appendFile(logFile,'[CONTROLLER_ACTION_RECOVERY] '+
             JSON.stringify({turn:turn+1,stage:snapshot.stage,
               permitted,pending:snapshot.pending,
-              readPaths:snapshot.readPaths.length,
-              observations:snapshot.observations.length})+'\n');
-          throw new Error('CONTROLLER_UNRESOLVED_ACTION: controller must select source/probe/transition without Qwen');
+              recovered:controllerAction?.action||'evidence_assessment'})+'\n');
+          if(!controllerAction && constraints?.action?.some(action=>action!=='final'))
+            throw new Error('CONTROLLER_UNRESOLVED_ACTION: no supported action remains after deterministic recovery');
         }
       }
       if(controllerAction && fullIndexMode) {
@@ -883,9 +983,44 @@ export async function runLocalAudit(
           ? indexedSyntheticStalls+1:0;
         indexedLastProgressKey=progressKey;
         if(indexedSyntheticStalls>=12) {
+          const stalled=controllerAction;
+          indexedSyntheticStalls=0;
           await appendFile(logFile,'[INDEXED_CONTROLLER_PROGRESS_STALL] '+
-            JSON.stringify({turn:turn+1,action:controllerAction,progressKey})+'\n');
-          throw new Error('INDEXED_CONTROLLER_PROGRESS_STALL: 12 consecutive controller actions without new source or probe evidence; turn extension cannot repair this');
+            JSON.stringify({turn:turn+1,action:stalled,progressKey})+'\n');
+          // Release an actual stuck plan without inventing a successful probe.
+          if(stalled.action==='verify_source') {
+            const released=workflow.abortPending('Verifier made no progress after repeated controller actions');
+            if(released)await recordProbeDisposition(released.path,released.query,released.kind,
+              'controller_blocked','verifier_no_progress');
+          } else if(stalled.action==='plan_probe') {
+            await recordProbeDisposition(stalled.path,stalled.query,stalled.answer,
+              'rejected','planning_no_progress');
+          }
+          if(stalled.action==='read_file'||stalled.action==='read_solidity'||
+             stalled.action==='outline_solidity')controllerStalledPaths.add(stalled.path);
+          controllerAction=null;
+          const candidates=(limits.initialSourcePaths||[]).filter(path=>
+            /^source-[0-9]+\//.test(path) &&
+            /\.(?:sol|java|py|js|mjs|cjs)$/.test(path) &&
+            !terminalReadPages.has(path) && !controllerStalledPaths.has(path));
+          for(const path of candidates) {
+            try {
+              await safePath(path);
+              controllerAction={action:'read_file',path,query:'',answer:'',offset:0};
+              break;
+            }catch{controllerStalledPaths.add(path);}
+          }
+          if(!controllerAction && !workflow.snapshot().pending &&
+             workflow.finishControllerCandidates()) {
+            constraints=await workflow.constraints();
+            requestSchema={...requestSchema,properties:{...requestSchema.properties,
+              action:{type:'string',enum:['final']}}};
+          }
+          if(!controllerAction && constraints?.action?.some(item=>item!=='final'))
+            throw new Error('CONTROLLER_NO_RECOVERY: unsupported source/probe after bounded recovery');
+          await appendFile(logFile,'[CONTROLLER_STALL_RECOVERY] '+
+            JSON.stringify({previous:stalled.action,
+              next:controllerAction?.path||'final',excluded:controllerStalledPaths.size})+'\n');
         }
       } else if(fullIndexMode && !controllerAction)indexedSyntheticStalls=0;
       if(controllerAction) {
@@ -1048,30 +1183,45 @@ export async function runLocalAudit(
             }
           }
         }
-        // Legacy generic Solidity probe actions are not executable by the
-        // current verifier. When the model named an actual on-chain entry,
-        // construct the supported stateful baseline from the real ABI menu.
-        // Never invent an assertion, selector, or transaction outcome.
+        // Validate EVERY Solidity plan, including model-authored intentions.
+        // Never upgrade an ABI send/getter observation into a security probe.
+        // The source controller owns the scenario; model assertions are ignored.
         if(workflow && action.path.endsWith('.sol') &&
-            ['solidity_function','solidity_call','solidity_transaction'].includes(action.answer) &&
-            ['plan_probe','probe_intent'].includes(action.action)) {
-          let baseline:ReturnType<typeof buildBaselineSequence>=null;
+           ['plan_probe','probe_intent'].includes(action.action)) {
+          let grounded:ReturnType<typeof sourceGroundedSolidityProbe>=null;
           try {
             const full=await safePath(action.path);
+            const source=await readFile(full,'utf8');
             const menu=await solidityIndex.probeMenu(full,64);
-            baseline=buildBaselineSequence(menu,action.query);
+            grounded=sourceGroundedSolidityProbes(source,menu)
+              .find(item=>item.selector===action.query)?.probe||null;
           }catch{}
-          if(baseline) {
-            action.answer='solidity_sequence';action.sequence=baseline;
-            await appendFile(logFile,'[CONTROLLER_SOLIDITY_PROBE_NORMALIZED] '+
-              JSON.stringify({path:action.path,query:action.query,kind:action.answer})+'\n');
-          } else {
-            await appendFile(logFile,'[CONTROLLER_UNSUPPORTED_PROBE] '+
-              JSON.stringify({path:action.path,query:action.query,kind:action.answer})+'\n');
-            workflow.feedback('Unsupported Solidity probe shape. No executable ABI-backed baseline exists for the selected function. Inspect a different declared entry or report the exact capability gap, never substitute an unrelated function.');
-            messages.push({role:'user',content:'The controller could not construct a supported probe for that exact Solidity function. This is not evidence of a vulnerability. Inspect an executable source-backed entry or conclude incomplete. /no_think'});
+          if(!grounded) {
+            await recordProbeDisposition(action.path,action.query,'solidity_sequence',
+              'unsupported','security_setup_or_assertion_not_source_proven');
+            await appendFile(logFile,'[CONTROLLER_UNSUPPORTED_SOLIDITY_SCENARIO] '+
+              JSON.stringify({path:action.path,selector:action.query})+'\n');
+            // An unsupported scenario is a rejected required plan, not a reason
+            // to lock the controller into requesting the same method forever.
+            if(workflow.rejectedRequiredProbePlan())
+              await appendFile(logFile,'[UNSUPPORTED_SOLIDITY_REQUIRED_PROBE_RELEASED] '+
+                JSON.stringify({path:action.path,selector:action.query})+'\n');
+            workflow.feedback('No source-grounded security scenario with a proved '+
+              'caller/role setup and asserted invariant exists for this Solidity method. '+
+              'Do not spend an isolated transaction probe; inspect project callers/wrappers '+
+              'or mark the method unsupported.');
+            messages.push({role:'user',content:
+              'This Solidity method lacks a controller-verifiable security hypothesis, '+
+              'setup, and invariant assertion. It has been skipped as unsupported; '+
+              'inspect a project-owned caller or another source-grounded candidate. /no_think'});
             continue;
           }
+          action.answer='solidity_sequence';
+          action.sequence=grounded.sequence;
+          action.hypothesis=grounded.hypothesis;
+          await appendFile(logFile,'[CONTROLLER_SOLIDITY_SCENARIO_GROUNDED] '+
+            JSON.stringify({path:action.path,selector:action.query,
+              guardedConsumer:grounded.guardedConsumer})+'\n');
         }
         // All three non-Solidity languages obey the same source-owned probe
         // request contract as Solidity. The model may choose an actual method,
@@ -1100,31 +1250,6 @@ export async function runLocalAudit(
         const automaticProbe=action.action==='probe_intent';
         if(automaticProbe) {
           action.action='plan_probe';
-          if(action.answer==='solidity_sequence' && action.path.endsWith('.sol') && !action.sequence) {
-            try {
-              const full=await safePath(action.path);
-              const menu=await solidityIndex.probeMenu(full,64);
-              const baseline=buildBaselineSequence(menu,action.query);
-              if(baseline) {
-                action.sequence=baseline;
-                await appendFile(logFile,'[PROBE_BASELINE_CONSTRUCTED] '+JSON.stringify({path:action.path,query:action.query,read:baseline.steps[0].function})+'\n');
-              }
-            }catch{}
-          }
-          if(!action.query.trim() && action.answer==='solidity_sequence' && action.path.endsWith('.sol') && action.sequence && typeof action.sequence==='object') {
-            try {
-              const full=await safePath(action.path);
-              const menu=await solidityIndex.probeMenu(full,64);
-              const steps=Array.isArray((action.sequence as any).steps)?(action.sequence as any).steps:[];
-              const declared=menu.filter(choice=>steps.some((step:any)=>typeof step.function==='string' &&
-                (step.function===choice.selector.split('.').at(-1) ||
-                 step.function.split('(')[0]===choice.selector.split('.').at(-1))));
-              if(declared.length===1) {
-                action.query=declared[0].selector;
-                await appendFile(logFile,'[PROBE_INTENT_RESOLVED] '+JSON.stringify({path:action.path,query:action.query,kind:action.answer})+'\n');
-              }
-            }catch{}
-          }
           if(!action.query.trim() && ['html_reflection','path_construction'].includes(action.answer)) {
             try {
               const full=await safePath(action.path);
@@ -1363,7 +1488,16 @@ export async function runLocalAudit(
               workflow.feedback(feedback);
               await appendFile(logFile,'[PLAN_REJECTED] '+feedback+'\n');
               messages.push({role:'user',content:feedback+' /no_think'});
-              if(++rejectedPlans>=3)throw new Error('Repeated invalid Solidity probe plans');
+              if(++rejectedPlans>=3) {
+                rejectedPlans=0;
+                await recordProbeDisposition(action.path,action.query,action.answer,'rejected',
+                  'controller_rejected_invalid_probe_plan');
+                workflow.rejectedRequiredProbePlan();
+                const next=workflow.requireNextUnreadSource(limits.initialSourcePaths||[]);
+                if(!next)workflow.finishControllerCandidates();
+                await appendFile(logFile,'[CONTROLLER_INVALID_PLAN_RECOVERY] '+
+                  JSON.stringify({path:action.path,query:action.query,next})+'\n');
+              }
               continue;
             }
           }
@@ -1372,7 +1506,16 @@ export async function runLocalAudit(
             workflow.feedback(feedback);
             await appendFile(logFile,'[PLAN_REJECTED] '+feedback+'\n');
             messages.push({role:'user',content:feedback+' /no_think'});
-            if(++rejectedPlans>=3)throw new Error('Repeated oversized probe plans');
+            if(++rejectedPlans>=3) {
+                rejectedPlans=0;
+                await recordProbeDisposition(action.path,action.query,action.answer,'rejected',
+                  'controller_rejected_oversized_probe_plan');
+                workflow.rejectedRequiredProbePlan();
+                const next=workflow.requireNextUnreadSource(limits.initialSourcePaths||[]);
+                if(!next)workflow.finishControllerCandidates();
+                await appendFile(logFile,'[CONTROLLER_INVALID_PLAN_RECOVERY] '+
+                  JSON.stringify({path:action.path,query:action.query,next})+'\n');
+              }
             continue;
           }
           rejectedPlans=0;
@@ -1466,7 +1609,7 @@ export async function runLocalAudit(
                   workflow.read(caller);
                   workflow.observe(action,fitted.output);
                   const callerEvidenceId=await controllerArchive?.append('source',{path:caller,start:delivered.start,end:delivered.end,content:delivered.text,nextOffset:delivered.nextOffset},{source:caller});
-                  if(callerEvidenceId)workflow?.recordEvidence(callerEvidenceId);
+                  if(callerEvidenceId)workflow?.recordSourceEvidence(caller,callerEvidenceId);
                   limits.onRead?.(caller,{start:delivered.start,end:delivered.end});
                   navigation.observe('read_file',caller,offset,'',delivered);
                   allowance.read(caller,delivered.start,delivered.end,turn);
@@ -1671,6 +1814,21 @@ export async function runLocalAudit(
         controller.signal.throwIfAborted();
         invalidReviewFinals=0;
         unsupportedFinalRejections=0;
+        // Only a final accepted by the independent validator can resolve
+        // a reproduced case as verified. Reject unsupported model claims.
+        if(workflow) {
+          let accepted:any;
+          try{accepted=JSON.parse(message.content);}catch{}
+          const findings=Array.isArray(accepted?.findings)?accepted.findings:[];
+          for(const observation of workflow.snapshot().observations)
+            if(observation.status==='behavior_observed')
+              workflow.acceptedReview(observation.path,observation.function,observation.kind,
+                'validated-final:'+String(observation.caseId||observation.evidenceFile||'review'),
+                typeof observation.caseId==='string' &&
+                /^[a-f0-9]{64}$/.test(observation.caseId) &&
+                findings.some((finding:any)=>finding?.caseId===observation.caseId));
+          await persistMemory();
+        }
         finalAnswer=message.content;stoppingReason="Validated final answer";
         return message.content;
       }
@@ -1987,7 +2145,7 @@ export async function runLocalAudit(
             const id=await controllerArchive?.append('source',{
               path:sourcePath,start:page.start,end:page.end,content:page.text,nextOffset:page.nextOffset
             },{source:sourcePath});
-            if(id)workflow?.recordEvidence(id);
+            if(id)workflow?.recordSourceEvidence(sourcePath,id);
           }
           try {navigation.observe(name,relative(root,full).split(sep).join("/") || ".",offset,String(call.function.arguments?.query || ""),JSON.parse(output));}catch{}
           stalledActions=0;

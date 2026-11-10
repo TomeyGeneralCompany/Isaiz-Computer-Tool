@@ -1,4 +1,7 @@
 name: Source reproduction languages
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 # Crucible trigger: post-merge Level 6 qualification on main; ordinary PR checks remain independent.
 on:
   pull_request:
@@ -117,6 +120,8 @@ jobs:
         run: npx tsx scripts/test-review-evidence-chain.ts
       - name: Validate controller-owned actions and grounded source navigation
         run: npx tsx scripts/test-controller-next-action.ts
+      - name: Validate controller scenario lifecycle and prerequisite graph
+        run: npx tsx scripts/test-controller-scenario-lifecycle.ts
       - name: Regress owned Level 5 Solidity direct-transaction evidence
         run: npx tsx scripts/test-level5-direct-transaction.ts
       - name: Validate controller-owned Gauntlet grading

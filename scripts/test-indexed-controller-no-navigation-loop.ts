@@ -57,11 +57,15 @@ try {
   const beforeOwnedGenerations=generations;
   const ownedReads:string[]=[];
   const ownedLog=join(root,'controller-owned.log');
-  await assert.rejects(runLocalAudit('Inspect source',ownedLog,20000,root,'mock',undefined,{
+  const completed=await runLocalAudit('Inspect source',ownedLog,20000,root,'mock',undefined,{
     productionWorkflow:true,verifyPython:async()=>JSON.stringify({status:'behavior_not_observed'}),
     maxTurns:8,numCtx:8192,numPredict:256,initialSourcePaths:[ownedPath],
     onRead:path=>ownedReads.push(path)
-  }),/CONTROLLER_CANDIDATE_QUEUE_EXHAUSTED|CONTROLLER_UNRESOLVED_ACTION/);
+  });
+  const disposition=JSON.parse(completed);
+  assert.equal(disposition.outcome,'no_testable_candidate');
+  assert.deepEqual(disposition.findings,[]);
+  assert.match(disposition.reason,/no source-grounded executable security scenario/i);
   assert.equal(generations,beforeOwnedGenerations,
     'Controller-owned investigation must not ask Qwen to choose sources or transitions');
   assert.deepEqual(ownedReads,[ownedPath],
