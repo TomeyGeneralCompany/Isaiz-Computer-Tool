@@ -306,6 +306,25 @@ export class InvestigationWorkflow {
       return 'Execute the exact planned probe, including its sequence. No changed test was executed.';
     return null;
   }
+  /** Release a verifier that can no longer make progress. No fabricated test
+   * or case ID is created; the blocked candidate is recorded as incomplete. */
+  abortPending(reason:string) {
+    const pending=this.state.pending;
+    if(!pending || !reason.trim())return null;
+    const id=this.scenarioMap.get(this.scenarioKey(pending.path,pending.query,pending.answer));
+    if(id) {
+      const scenario=this.scenarios.get(id);
+      if(scenario && scenario.phase!=='resolved')
+        this.scenarios.finish(id,'incomplete',reason);
+    }
+    this.observations.push({path:pending.path,function:pending.query,
+      kind:pending.answer,status:'controller_blocked'});
+    this.state.tested.push(key(pending));
+    this.state.pending=null;
+    this.recoveryProbe=null;
+    this.feedback('Controller released an unexecutable plan: '+reason);
+    return {path:pending.path,query:pending.query,kind:pending.answer};
+  }
   plan(action:Action) { this.preparedControllerPlan(action.path,action.query,action.answer);this.recoveryProbe=null;this.requiredProbePlanning=false;this.requiredProbeKind=null;this.requiredProbePlanningRejections=0;this.state.pending=action;this.duplicateProbeRejections=0;this.lastFeedback=''; }
   read(path:string) { this.readPaths.add(path);this.latestSolidityPath=path.endsWith('.sol')?path:null; if(path===this.requiredSource)this.requiredSource=this.requiredSourceQueue.shift()||null; }
   observe(action:Action,output:string) {
