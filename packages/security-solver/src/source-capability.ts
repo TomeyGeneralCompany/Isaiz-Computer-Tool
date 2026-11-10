@@ -47,6 +47,7 @@ export function sourcePriority(path:string):number {
 }
 const supportedCompilers = [
   [0, 8, 30],
+  [0, 8, 4],
   [0, 7, 6],
   [0, 6, 12],
   [0, 5, 17]
