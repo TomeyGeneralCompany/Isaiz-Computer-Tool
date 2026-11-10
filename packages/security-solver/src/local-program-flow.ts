@@ -890,20 +890,38 @@ Do not claim production testing, JavaScript execution, file access or other effe
         },
         validateFinal:async text=>{
           try {
-            let proposed=JSON.parse(text);
+            let proposed: any;
+            try {
+              proposed = JSON.parse(text);
+            } catch (parseError) {
+              if (typeof text === "string" && text.trim().length >= 20 &&
+                  /(?:no testable candidate|no concrete vulnerability|no vulnerability|no reproducible|no verifiable finding|no candidate exists|no reportable)/i.test(text)) {
+                proposed = {
+                  findings: [],
+                  outcome: "no_testable_candidate",
+                  reason: text.trim().slice(0, 1000)
+                };
+              } else {
+                throw parseError;
+              }
+            }
             if(proposed && typeof proposed==="object" && !Array.isArray(proposed)) {
               if(proposed.action==="final") {
                 if(typeof proposed.answer==="string" && proposed.answer.trim().startsWith("{")) {
                   try { const inner=JSON.parse(proposed.answer); if(inner && typeof inner==="object") proposed=inner; } catch {}
+                } else if(typeof proposed.answer==="string" && proposed.answer.trim().length >= 20 &&
+                          /(?:no testable candidate|no concrete vulnerability|no vulnerability|no reproducible|no verifiable finding|no candidate exists|no reportable)/i.test(proposed.answer)) {
+                  proposed = {
+                    findings: [],
+                    outcome: "no_testable_candidate",
+                    reason: proposed.answer.trim().slice(0, 1000)
+                  };
                 } else if(proposed.result && typeof proposed.result==="object") {
                   proposed=proposed.result;
                 }
               }
               if(!("findings" in proposed) || !Array.isArray(proposed.findings)) {
                 proposed.findings=[];
-              }
-              if(!proposed.outcome) {
-                proposed.outcome=proposed.findings.length>0 ? "inspected" : "no_testable_candidate";
               }
               if(proposed.outcome==="no_testable_candidate" && (!proposed.reason || proposed.reason.length < 20)) {
                 proposed.reason=(typeof proposed.answer==="string" && proposed.answer.trim().length >= 20)
@@ -1452,10 +1470,24 @@ Use one enum value per string. Scores are integers 0..3. bet100=false requires d
     const validateReviewFinal=async(text:string):Promise<string|null>=>{
       try {
         const value=reviewSchema.parse(JSON.parse(text));
-        const submissionPolicyFatal=value.verdict==="reject" && value.issues.some(issue=>
-          issue.severity==="fatal" &&
+        const fatalIssues=value.issues.filter(issue=>issue.severity==="fatal");
+        const submissionPolicyFatal=value.verdict==="reject" && fatalIssues.some(issue=>
           /(?:policy|synthetic|owned).*(?:submi|report)|(?:submi|report).*(?:prohibit|forbid|policy)/i.test(issue.description));
-        if(submissionPolicyFatal)return "An external submission prohibition is not a technical defect. Reevaluate source and replay; use recommendation=dont_submit if submission is prohibited.";
+        if(submissionPolicyFatal) {
+          const onlySubmissionPolicy=fatalIssues.every(issue=>
+            /(?:policy|synthetic|owned).*(?:submi|report)|(?:submi|report).*(?:prohibit|forbid|policy)/i.test(issue.description));
+          if(onlySubmissionPolicy) {
+            for(const issue of value.issues) {
+              if(/(?:policy|synthetic|owned).*(?:submi|report)|(?:submi|report).*(?:prohibit|forbid|policy)/i.test(issue.description)) {
+                issue.severity="info";
+              }
+            }
+            value.verdict="approve";
+            value.recommendation="dont_submit";
+          } else {
+            return "An external submission prohibition is not a technical defect. Reevaluate source and replay; use recommendation=dont_submit if submission is prohibited.";
+          }
+        }
         const defect=reviewRejectionDefect(value,chainEvidence);
         if(defect)return defect;
         const entryDefect=entryReviewRejectionDefect(value,entryReplay as Parameters<typeof entryReviewRejectionDefect>[1]);
@@ -1478,7 +1510,7 @@ Use one enum value per string. Scores are integers 0..3. bet100=false requires d
         prompt,schema:z.toJSONSchema(reviewSchema) as Record<string,unknown>,
         model:process.env.LOCAL_OLLAMA_MODEL||'qwen3:4b',
         logFile,signal,numCtx:8192,numPredict:getConfig().LOCAL_HUNT_NUM_PREDICT,
-        validate:validateReviewFinal,maxAttempts:entryFacts ? 5 : 3
+        validate:validateReviewFinal,maxAttempts:5
       });
     } else {
       await runLocalAudit(prompt,logFile,getConfig().SECURITY_HUNT_TIMEOUT_MINUTES*60000,root,process.env.LOCAL_OLLAMA_MODEL || "qwen3:4b",undefined,{

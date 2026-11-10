@@ -45,25 +45,32 @@ export function sourcePriority(path:string):number {
   // directly under contracts/, should be inspected after app callers.
   return score;
 }
-const compiler=[0,8,30];
+const supportedCompilers = [
+  [0, 8, 30],
+  [0, 7, 6],
+  [0, 6, 12],
+  [0, 5, 17]
+];
 const compare=(a:number[],b:number[])=>a[0]-b[0] || a[1]-b[1] || a[2]-b[2];
 /** Unknown syntax stays eligible; exclude only ranges we can conclusively evaluate. */
 export function compilerCompatible(range:string):boolean | null {
   const alternatives=range.trim().split('||');
   let unknown=false;
-  for(const alternative of alternatives) {
-    const tokens=[...alternative.matchAll(/(\^|~|>=|<=|>|<|=)?\s*(\d+)\.(\d+)\.(\d+)/g)];
-    if(!tokens.length || alternative.replace(/(\^|~|>=|<=|>|<|=)?\s*\d+\.\d+\.\d+/g,'').trim()) {unknown=true;continue;}
-    const matches=tokens.every(t=>{
-      const v=t.slice(2).map(Number),cmp=compare(compiler,v);
-      switch(t[1]) {
-        case '>=':return cmp>=0;case '<=':return cmp<=0;case '>':return cmp>0;case '<':return cmp<0;
-        case '^':return cmp>=0 && compare(compiler,v[0]?[v[0]+1,0,0]:v[1]?[0,v[1]+1,0]:[0,0,v[2]+1])<0;
-        case '~':return cmp>=0 && compare(compiler,[v[0],v[1]+1,0])<0;
-        default:return cmp===0;
-      }
-    });
-    if(matches)return true;
+  for(const compiler of supportedCompilers) {
+    for(const alternative of alternatives) {
+      const tokens=[...alternative.matchAll(/(\^|~|>=|<=|>|<|=)?\s*(\d+)\.(\d+)\.(\d+)/g)];
+      if(!tokens.length || alternative.replace(/(\^|~|>=|<=|>|<|=)?\s*\d+\.\d+\.\d+/g,'').trim()) {unknown=true;continue;}
+      const matches=tokens.every(t=>{
+        const v=t.slice(2).map(Number),cmp=compare(compiler,v);
+        switch(t[1]) {
+          case '>=':return cmp>=0;case '<=':return cmp<=0;case '>':return cmp>0;case '<':return cmp<0;
+          case '^':return cmp>=0 && compare(compiler,v[0]?[v[0]+1,0,0]:v[1]?[0,v[1]+1,0]:[0,0,v[2]+1])<0;
+          case '~':return cmp>=0 && compare(compiler,[v[0],v[1]+1,0])<0;
+          default:return cmp===0;
+        }
+      });
+      if(matches)return true;
+    }
   }
   return unknown?null:false;
 }

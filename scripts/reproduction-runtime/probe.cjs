@@ -77,16 +77,33 @@ function solidityImport(name) {
   missingImports.add(name);
   return {error: 'Unresolved repository/package/remapping import: ' + name};
 }
+function resolveSolc(sourceText) {
+  const match = sourceText.match(/\bpragma\s+solidity\s+([^;]+);/);
+  if (!match) return { solc: require('solc'), evmVersion: 'shanghai' };
+  const pragma = match[1].trim();
+  if (/\b0\.5\./.test(pragma) || (/>=\s*0\.5\./.test(pragma) && !/>=\s*0\.[678]\./.test(pragma))) {
+    try { return { solc: require('solc_0_5'), evmVersion: 'petersburg' }; } catch {}
+  }
+  if (/\b0\.6\./.test(pragma) || (/>=\s*0\.6\./.test(pragma) && !/>=\s*0\.[78]\./.test(pragma))) {
+    try { return { solc: require('solc_0_6'), evmVersion: 'istanbul' }; } catch {}
+  }
+  if (/\b0\.7\./.test(pragma) || (/>=\s*0\.7\./.test(pragma) && !/>=\s*0\.8\./.test(pragma))) {
+    try { return { solc: require('solc_0_7'), evmVersion: 'berlin' }; } catch {}
+  }
+  return { solc: require('solc'), evmVersion: 'shanghai' };
+}
+
 async function solidity() {
   const sequenceMode = spec.kind === 'solidity_sequence';
   if (sequenceMode) require('./solidity-sequence.cjs').validateSequence(spec.sequence);
-  const solc = require('solc');
+  const sourceText = fs.readFileSync(sourceFile(spec.file), 'utf8');
+  const { solc, evmVersion } = resolveSolc(sourceText);
   const ganache = require('ganache');
   const { BrowserProvider, ContractFactory } = require('ethers');
   const compiled = JSON.parse(solc.compile(JSON.stringify({
     language: 'Solidity',
-    sources: {[spec.file]: {content: fs.readFileSync(sourceFile(spec.file), 'utf8')}},
-    settings: {...spec.compilerSettings, evmVersion: 'shanghai', outputSelection: {'*': {'*': ['abi', 'evm.bytecode.object']}}}
+    sources: {[spec.file]: {content: sourceText}},
+    settings: {...spec.compilerSettings, evmVersion, outputSelection: {'*': {'*': ['abi', 'evm.bytecode.object']}}}
   }), {import: solidityImport}));
   const errors = (compiled.errors || []).filter(e => e.severity === 'error');
   if (errors.length) {
@@ -109,7 +126,7 @@ async function solidity() {
   const artifact = candidates[0][1];
   const transport = ganache.provider({
     logging: {quiet: true}, wallet: {deterministic: true, totalAccounts: sequenceMode ? 3 : 1},
-    chain: {hardfork: 'shanghai', ...(sequenceMode ? {chainId:1337,time:new Date('2020-01-01T00:00:00Z')} : {})},
+    chain: {hardfork: evmVersion, ...(sequenceMode ? {chainId:1337,time:new Date('2020-01-01T00:00:00Z')} : {})},
     miner: {blockGasLimit: 12000000, ...(sequenceMode ? {timestampIncrement:1} : {})}
   });
   await transport.request({method: 'eth_chainId', params: []});
