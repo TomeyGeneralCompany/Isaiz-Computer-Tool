@@ -517,7 +517,7 @@ try {
        request.format.properties.action.enum.includes('final')) {
       res.end(JSON.stringify({message:{role:'assistant',content:JSON.stringify({
         action:'final',path:'',query:'',
-        answer:JSON.stringify({outcome:'no_testable_candidate',findings:[]})
+        answer:JSON.stringify({outcome:'no_testable_candidate',findings:[],reason:'This Solidity fixture has no source-grounded violation scenario: neither its pure renderer nor its generic state setter establishes a security invariant.'})
       })}}));
       return;
     }
