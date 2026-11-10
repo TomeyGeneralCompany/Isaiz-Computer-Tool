@@ -28,6 +28,43 @@ try {
  assert.deepEqual(sequence?.steps.map(step=>step.function),[
    'operator()','rotateOperator(address)','operator()'
  ],'Controller should observe the state actually modified by the selected function');
+ // Mirror the real 88mph ERC1155 probe menu: the controller must transfer
+ // positive balances to a distinct recipient and observe that recipient.
+ const erc1155Menu=[
+   {selector:'ERC1155Upgradeable.safeTransferFrom',operation:'send' as const,
+     inputs:['address','address','uint256','uint256','bytes']},
+   {selector:'ERC1155Upgradeable.safeBatchTransferFrom',operation:'send' as const,
+     inputs:['address','address','uint256[]','uint256[]','bytes']},
+   {selector:'ERC1155Upgradeable.setApprovalForAll',operation:'send' as const,
+     inputs:['address','bool']},
+   {selector:'ERC1155Upgradeable.balanceOf',operation:'call' as const,
+     inputs:['address','uint256']},
+   {selector:'ERC1155Upgradeable.isApprovedForAll',operation:'call' as const,
+     inputs:['address','address']},
+ ];
+ const single=buildBaselineSequence(erc1155Menu,'ERC1155Upgradeable.safeTransferFrom');
+ const batch=buildBaselineSequence(erc1155Menu,'ERC1155Upgradeable.safeBatchTransferFrom');
+ const approval=buildBaselineSequence(erc1155Menu,'ERC1155Upgradeable.setApprovalForAll');
+ assert.deepEqual(single?.steps[1].args,['$account1','$account2','7','7','0x4142']);
+ assert.deepEqual(batch?.steps[1].args,['$account1','$account2',['7'],['7'],'0x4142']);
+ for(const candidate of [single,batch]){
+   assert.deepEqual(candidate?.steps[0].args,['$account2','7']);
+   assert.deepEqual(candidate?.steps[2].args,['$account2','7']);
+ }
+ assert.equal(approval?.steps[0].function,'isApprovedForAll(address,address)');
+ assert.deepEqual(approval?.steps[0].args,['$account0','$account1']);
+ const {sequenceObservations}=await import('../packages/security-solver/src/source-reproduction');
+ assert.equal(sequenceObservations.safeParse({contract:'0x123',accounts:['0','1','2'],
+   deploymentGasUsed:'200000',steps:[
+     {operation:'observe',function:'balanceOf(address,uint256)',sender:0,actual:'0'},
+     {operation:'setup',function:'tomeyMintBatch(address,uint256[],uint256[])',
+       sender:0,gasUsed:'50000',passed:true,purpose:'fund transfer prerequisites'},
+     {operation:'setup',function:'setApprovalForAll(address,bool)',
+       sender:1,gasUsed:'44000',passed:true,purpose:'authorize transfer sender'},
+     {operation:'send',function:'safeTransferFrom(address,address,uint256,uint256,bytes)',
+       sender:0,valueWei:'0',reverted:false,gasUsed:'31000',passed:true},
+     {operation:'observe',function:'balanceOf(address,uint256)',sender:0,actual:'7'}
+   ]}).success,true,'Real mined ERC1155 setup receipts must be accepted by the source verifier');
  const adapter=await index.probeMenu(join(root,'contracts/modules/AdapterD008.sol'));
  const adapterSeq=buildBaselineSequence(adapter,'AdapterD008.rotateOperator');
  const dependents=await solidityDependentSources(root,
