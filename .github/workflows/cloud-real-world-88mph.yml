@@ -18,6 +18,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
+      IMMUNEFI_ENABLED: 'true'
       LOCAL_OLLAMA_MODEL: qwen3:4b
       LOCAL_MODEL_ADAPTER: ollama
       LOCAL_OLLAMA_TOOL_PROTOCOL: json
@@ -87,6 +88,10 @@ jobs:
                    50000, 10000000, "USD", 0.85, "active", 0, now, now))
           print("Seeded immunefi-88mphv3 program into data/bounty.db")
           PY
+
+      - name: Confirm seeded program eligibility
+        run: |
+          bash scripts/run-one-bounty.sh --list
 
       - name: Run authorized real-world investigation
         id: hunt
