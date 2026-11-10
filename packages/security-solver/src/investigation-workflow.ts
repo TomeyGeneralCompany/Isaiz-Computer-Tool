@@ -1,5 +1,6 @@
 import { Annotation, StateGraph, START, END } from '@langchain/langgraph';
 import { isDeepStrictEqual } from 'node:util';
+import {ControllerScenarioLedger} from './controller-scenario-lifecycle';
 import type { decodeAuditAction } from './local-audit-protocol';
 type Action = ReturnType<typeof decodeAuditAction>;
 type Stage = 'inspect'|'hypothesize'|'test'|'review';
@@ -27,6 +28,64 @@ export function probeHypothesisMismatch(kind:string,hypothesis:string):string|nu
 
 const key = (a:Action) => JSON.stringify([a.path,a.query,a.answer,a.sequence]);
 export class InvestigationWorkflow {
+  readonly scenarios=new ControllerScenarioLedger();
+  private scenarioMap=new Map<string,string>();
+  private scenarioKey(path:string,query:string,kind:string){
+    return JSON.stringify([path,query,kind]);
+  }
+  registerControllerPlan(plan:{path:string;query:string;answer:string;hypothesis:string},
+    sourceReference:string,property:string,falsifier:string) {
+    if(!this.readPaths.has(plan.path))throw new Error('Source not inspected');
+    if(!sourceReference || !property || !falsifier)throw new Error('Ungrounded controller scenario');
+    const language=plan.path.endsWith('.sol')?'solidity':
+      plan.path.endsWith('.java')?'java':plan.path.endsWith('.py')?'python':'javascript';
+    const key=this.scenarioKey(plan.path,plan.query,plan.answer);
+    const id=[plan.path,plan.query,plan.answer].join(':');
+    const record=this.scenarios.register({id,path:plan.path,selector:plan.query,
+      language,property,suspectedViolation:plan.hypothesis,falsification:falsifier});
+    this.scenarioMap.set(key,id);
+    if(record.phase==='discovered'){
+      this.scenarios.record(id,{id:'source:initial',kind:'source',
+        reference:sourceReference,observation:'Inspected declaration '+plan.query});
+      this.scenarios.transition(id,'grounded','Controller selected source-backed candidate');
+      this.scenarios.transition(id,'preparing','Resolve verifier prerequisites');
+      this.scenarios.addPrerequisite(id,{id:'source',description:'Inspected declaration',dependsOn:[]});
+      this.scenarios.addPrerequisite(id,{id:'plan',description:'Validated executable plan',dependsOn:['source']});
+      this.scenarios.satisfy(id,'source',sourceReference);
+    }
+  }
+  preparedControllerPlan(path:string,query:string,kind:string){
+    const id=this.scenarioMap.get(this.scenarioKey(path,query,kind));
+    if(!id||this.scenarios.get(id)?.phase!=='preparing')return;
+    this.scenarios.satisfy(id,'plan','controller-validated:'+kind+':'+query);
+    this.scenarios.transition(id,'ready','Exact plan validated');
+  }
+  private observeScenario(action:Action,output:string){
+    const id=this.scenarioMap.get(this.scenarioKey(action.path,action.query,action.answer));
+    if(!id)return;
+    if(this.scenarios.get(id)?.phase==='ready')
+      this.scenarios.transition(id,'executing','Verifier executed');
+    const current=this.scenarios.get(id);
+    if(current?.phase!=='executing')return;
+    let result:any;try{result=JSON.parse(output);}catch{result={status:'tool_error'};}
+    this.scenarios.record(id,{id:'execution:'+current.attempts,kind:'execution',
+      reference:String(result.caseId||result.evidenceFile||'verifier:'+current.attempts),
+      observation:String(result.status||'tool_error')});
+    this.scenarios.transition(id,'observed','Verifier disposition recorded');
+    if(result.status==='behavior_observed')
+      this.scenarios.transition(id,'reviewing','Independent reviewer must assess security relevance');
+    else this.scenarios.finish(id,result.status==='behavior_not_observed'?'rejected':
+      result.status==='unsupported'?'unsupported':'incomplete',
+      'Verifier disposition '+String(result.status||'tool_error'));
+  }
+  acceptedReview(path:string,query:string,kind:string,reference:string,positive:boolean){
+    const id=this.scenarioMap.get(this.scenarioKey(path,query,kind));
+    if(!id||this.scenarios.get(id)?.phase!=='reviewing')return;
+    this.scenarios.record(id,{id:'review:independent',kind:'review',reference,
+      observation:positive?'Validated positive case':'Validated negative case'});
+    this.scenarios.finish(id,positive?'verified':'rejected',
+      'Independent final validator accepted case disposition');
+  }
   private state:typeof State.State={stage:'inspect',inspections:0,pending:null,tested:[]};
   private readPaths=new Set<string>();
   private outlinedPaths=new Set<string>();
@@ -235,11 +294,12 @@ export class InvestigationWorkflow {
       return 'Execute the exact planned probe, including its sequence. No changed test was executed.';
     return null;
   }
-  plan(action:Action) { this.recoveryProbe=null;this.requiredProbePlanning=false;this.requiredProbeKind=null;this.requiredProbePlanningRejections=0;this.state.pending=action;this.duplicateProbeRejections=0;this.lastFeedback=''; }
+  plan(action:Action) { this.preparedControllerPlan(action.path,action.query,action.answer);this.recoveryProbe=null;this.requiredProbePlanning=false;this.requiredProbeKind=null;this.requiredProbePlanningRejections=0;this.state.pending=action;this.duplicateProbeRejections=0;this.lastFeedback=''; }
   read(path:string) { this.readPaths.add(path);this.latestSolidityPath=path.endsWith('.sol')?path:null; if(path===this.requiredSource)this.requiredSource=this.requiredSourceQueue.shift()||null; }
   observe(action:Action,output:string) {
     if(action.action==='outline_solidity')this.outlinedPaths.add(action.path);
     if(action.action==='verify_source') {
+      this.observeScenario(action,output);
       let result:any;try{result=JSON.parse(output);}catch{}
       this.observations.push({path:action.path,function:action.query,kind:action.answer,
         status:result?.status||'tool_error',...(typeof result?.evidenceFile==='string'?{evidenceFile:result.evidenceFile}:{}),...(typeof result?.behavior_observed==='boolean'?{behaviorObserved:result.behavior_observed}:{}),...(typeof result?.caseId==='string'?{caseId:result.caseId}: {})});
@@ -275,5 +335,5 @@ export class InvestigationWorkflow {
     } else this.state.inspections=Math.max(6,this.state.inspections);
   }
   feedback(message:string,reopen=false) {this.lastFeedback=message.slice(0,400);if(reopen){this.state.inspections=0;this.pageTurns=0;}}
-  snapshot() {return {outlinedPaths:[...this.outlinedPaths],...this.state,pageTurns:this.pageTurns,sourceProgress:this.sourceProgress,decisions:this.decisions,priorNotes:this.priorNotes,readPaths:[...this.readPaths],observations:this.observations,verifiedEvidenceFocus:this.verifiedEvidenceFocus};}
+  snapshot() {return {scenarioLedger:this.scenarios.snapshot(),outlinedPaths:[...this.outlinedPaths],...this.state,pageTurns:this.pageTurns,sourceProgress:this.sourceProgress,decisions:this.decisions,priorNotes:this.priorNotes,readPaths:[...this.readPaths],observations:this.observations,verifiedEvidenceFocus:this.verifiedEvidenceFocus};}
 }
