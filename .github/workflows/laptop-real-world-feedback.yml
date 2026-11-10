@@ -68,6 +68,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           npm ci
+          npm install --prefix scripts/reproduction-runtime --ignore-scripts --no-audit --no-fund
           mkdir -p data/repair-feedback
           # Preserve the actual setup failure instead of reporting a fabricated test exit code.
           # The runner is a systemd service: do not assume the interactive shell's

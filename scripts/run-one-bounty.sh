@@ -13,6 +13,11 @@ done
   echo "Install/configure this checkout first: bash setup-and-run.sh --verify-only" >&2
   exit 2
 }
+
+if [[ ! -d "$ROOT/scripts/reproduction-runtime/node_modules" ]]; then
+  echo "Installing reproduction runtime dependencies..."
+  npm install --prefix "$ROOT/scripts/reproduction-runtime" --ignore-scripts --no-audit --no-fund
+fi
 # Never compete with an installed service or with the running orchestrator.
 mkdir -p data data/one-bounty
 exec 8>data/supervisor.lock
