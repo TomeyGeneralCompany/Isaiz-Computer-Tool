@@ -1,4 +1,7 @@
 name: Source reproduction languages
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 # Crucible trigger: post-merge Level 6 qualification on main; ordinary PR checks remain independent.
 on:
   pull_request:
