@@ -81,13 +81,13 @@ async function runSequence(artifact, sequence, transport) {
         try {const tx=await fn.send(...args,{value:step.valueWei||'0',gasLimit:2000000});receipt=await tx.wait();}
         catch(error) {
           // Only a mined EVM revert is a revert observation, not a transport/ABI error.
-          if(error.receipt?.status!==0 || !step.expectRevert)throw error;
+          if(error.receipt?.status!==0)throw error;
           receipt=error.receipt;
         }
         if(!receipt || ![0,1].includes(receipt.status))throw new Error('No transaction receipt');
         if(receipt.status===0 && receipt.gasUsed>=2000000n)throw new Error('Transaction exhausted its gas limit');
         const reverted=receipt.status===0;
-        if(reverted && !step.expectRevert)throw new Error('Unexpected transaction revert');
+        // A mined revert is evidence, even when the hypothesis expected success.\n        // Record the mismatch rather than aborting and losing the receipt and\n        // subsequent read observations. A revert never proves a vulnerability.
         steps.push({operation:'send',function:fragment.format('sighash'),sender:step.sender??0,
           valueWei:step.valueWei||'0',reverted,gasUsed:receipt.gasUsed.toString(),
           passed:reverted===!!step.expectRevert});
