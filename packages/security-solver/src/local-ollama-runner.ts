@@ -4,7 +4,7 @@ import {normalizeForcedOutlineCursor} from './outline-cursor';
 import {z} from "zod";
 import {javaSequenceSchema, type JavaSequence} from "./java-sequence";
 import {polyglotSequenceSchema,type PolyglotSequence} from "./polyglot-sequence";
-import {sourceGroundedSolidityProbe,traceProjectErc1155Callers} from './controller-solidity-security-probes';
+import {sourceGroundedSolidityProbe,sourceGroundedSolidityProbes,traceProjectErc1155Callers} from './controller-solidity-security-probes';
 import {privilegedRoleMutationCandidate} from './solidity-security-candidates';
 import {rankTracedSourceCandidates} from './controller-source-candidates';
 import { InvestigationWorkflow } from "./investigation-workflow";
@@ -690,26 +690,17 @@ export async function runLocalAudit(
             let plan:{action:string;path:string;query:string;answer:string;hypothesis:string;sequence?:unknown}|null=null;
             if(path.endsWith('.sol')) {
               const source=await readFile(full,'utf8');
-              const risk=privilegedSolidityCandidates.get(path);
               const menu=await solidityIndex.probeMenu(full,64);
-              // ABI mutability is not a vulnerability hypothesis. Inherited
-              // methods need a project caller/wrapper; an isolated library
-              // transaction is never sufficient to schedule a security probe.
-              if(!risk) {
-                for(const entry of menu.filter(entry=>entry.operation==='send'))
-                  await recordProbeDisposition(path,entry.selector,'solidity_sequence',
-                    'unsupported','no_source_grounded_security_hypothesis');
-                continue;
-              }
-              for(const entry of menu.filter(entry=>entry.selector===risk.selector)) {
-                if(entry.operation!=='send')continue;
-                const grounded=sourceGroundedSolidityProbe(source,menu,risk,entry.selector);
-                if(!grounded) {
+              // Source-grounded AST scenarios, not ABI mutability or guessed
+              // role names, are the only eligible Solidity security probes.
+              const groundedOptions=sourceGroundedSolidityProbes(source,menu);
+              const supported=new Set(groundedOptions.map(entry=>entry.selector));
+              for(const entry of menu.filter(entry=>entry.operation==='send'))
+                if(!supported.has(entry.selector))
                   await recordProbeDisposition(path,entry.selector,'solidity_sequence',
                     'unsupported','security_setup_or_assertion_not_source_proven');
-                  continue;
-                }
-                const candidate={action:'plan_probe',path,query:entry.selector,
+              for(const {selector,probe:grounded} of groundedOptions) {
+                const candidate={action:'plan_probe',path,query:selector,
                   answer:'solidity_sequence',
                   hypothesis:grounded.hypothesis,sequence:grounded.sequence};
                 const attempted=workflow.snapshot().observations.some(item=>
@@ -1177,9 +1168,8 @@ export async function runLocalAudit(
             const full=await safePath(action.path);
             const source=await readFile(full,'utf8');
             const menu=await solidityIndex.probeMenu(full,64);
-            const risk=privilegedSolidityCandidates.get(action.path) ||
-              privilegedRoleMutationCandidate(action.path,source,[source,...SolidityCode]);
-            grounded=sourceGroundedSolidityProbe(source,menu,risk,action.query);
+            grounded=sourceGroundedSolidityProbes(source,menu)
+              .find(item=>item.selector===action.query)?.probe||null;
           }catch{}
           if(!grounded) {
             await recordProbeDisposition(action.path,action.query,'solidity_sequence',
