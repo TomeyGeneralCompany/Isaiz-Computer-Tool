@@ -1811,6 +1811,8 @@ export async function runLocalAudit(
             if(observation.status==='behavior_observed')
               workflow.acceptedReview(observation.path,observation.function,observation.kind,
                 'validated-final:'+String(observation.caseId||observation.evidenceFile||'review'),
+                typeof observation.caseId==='string' &&
+                /^[a-f0-9]{64}$/.test(observation.caseId) &&
                 findings.some((finding:any)=>finding?.caseId===observation.caseId));
           await persistMemory();
         }
