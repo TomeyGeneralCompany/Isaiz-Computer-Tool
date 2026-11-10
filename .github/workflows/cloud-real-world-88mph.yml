@@ -57,11 +57,7 @@ jobs:
 
       - name: Initialize isolated database and seed 88mphV3 program
         run: |
-          cat << 'EOF_ENV' > .env
-GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}
-HACKERONE_API_USERNAME=mock-user
-HACKERONE_API_TOKEN=mock-token
-EOF_ENV
+          printf 'GITHUB_TOKEN=%s\nHACKERONE_API_USERNAME=mock-user\nHACKERONE_API_TOKEN=mock-token\n' "${{ secrets.GITHUB_TOKEN }}" > .env
           node --import tsx scripts/initialize-db.ts
           python3 - <<'PY'
           import json, sqlite3, time
