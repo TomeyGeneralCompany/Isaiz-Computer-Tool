@@ -11,7 +11,7 @@ import {buildSourceMap} from '../packages/security-solver/src/source-map';
 import {SoliditySourceIndex} from '../packages/security-solver/src/solidity-source-index';
 import {buildBaselineSequence} from '../packages/security-solver/src/solidity-probe-inputs';
 import {privilegedRoleMutationCandidate} from '../packages/security-solver/src/solidity-security-candidates';
-import {sourceGroundedSolidityProbe,traceProjectErc1155Callers} from '../packages/security-solver/src/controller-solidity-security-probes';
+import {sourceGroundedSolidityProbe,sourceGroundedSolidityProbes,traceProjectErc1155Callers} from '../packages/security-solver/src/controller-solidity-security-probes';
 
 const pending={path:'source-1/src/render.py',query:'render',answer:'html_reflection'};
 assert.deepEqual(controllerOwnedNextAction({
@@ -215,6 +215,22 @@ try {
     'operator=msg.sender;','operator=address(0); /* operator=msg.sender; */'),
     guardedMenu,groundedRisk,'Authority.rotateOperator'),null,
     'commented-out initial values cannot supply security setup');
+  // Role names are source declarations, not a hard-coded vocabulary.
+  const unconventionalRole=guardedSource.replace(/\\boperator\\b/g,'financialCustodian');
+  const unconventionalFile=join(root,'source-1','UnconventionalAuthority.sol');
+  await writeFile(unconventionalFile,unconventionalRole);
+  const unconventionalMenu=await solidityIndex.probeMenu(unconventionalFile,64);
+  assert.equal(privilegedRoleMutationCandidate(unconventionalFile,unconventionalRole,
+    [unconventionalRole]),null,'legacy fixed role list cannot recognize arbitrary declared roles');
+  const discovered=sourceGroundedSolidityProbes(unconventionalRole,unconventionalMenu);
+  assert.ok(discovered.some(item=>item.selector==='Authority.rotateOperator'),
+    'the AST-based controller must recognize arbitrary named guarded storage roles');
+  assert.equal(discovered.find(item=>item.selector==='Authority.rotateOperator')?.probe.guardedConsumer,
+    'Authority.settle');
+  assert.equal(sourceGroundedSolidityProbes(safeSource,await solidityIndex.probeMenu(
+    join(root,'source-1','Authority.sol'),64)).length,0,
+    'unsupported or protected setters must not become vulnerability probes');
+
   const erc1155Menu=[{selector:'ERC1155Upgradeable.safeTransferFrom',operation:'send' as const,
     inputs:['address','address','uint256','uint256','bytes']}];
   assert.equal(sourceGroundedSolidityProbe(
