@@ -1100,6 +1100,11 @@ export async function runLocalAudit(
               'unsupported','security_setup_or_assertion_not_source_proven');
             await appendFile(logFile,'[CONTROLLER_UNSUPPORTED_SOLIDITY_SCENARIO] '+
               JSON.stringify({path:action.path,selector:action.query})+'\n');
+            // An unsupported scenario is a rejected required plan, not a reason
+            // to lock the controller into requesting the same method forever.
+            if(workflow.rejectedRequiredProbePlan())
+              await appendFile(logFile,'[UNSUPPORTED_SOLIDITY_REQUIRED_PROBE_RELEASED] '+
+                JSON.stringify({path:action.path,selector:action.query})+'\n');
             workflow.feedback('No source-grounded security scenario with a proved '+
               'caller/role setup and asserted invariant exists for this Solidity method. '+
               'Do not spend an isolated transaction probe; inspect project callers/wrappers '+
