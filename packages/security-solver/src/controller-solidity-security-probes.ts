@@ -151,7 +151,17 @@ export function sourceGroundedSolidityProbes(source:string,menu:SolidityProbeDec
       const selector=contract.name+'.'+member.name;
       if(!menu.some(entry=>entry.selector===selector&&entry.operation==='send'))
         continue;
-      for(const role of roles) {
+      const parameter=member.parameters[0];
+      if(parameter?.typeName?.type!=='ElementaryTypeName' ||
+         parameter.typeName.name!=='address' ||
+         !/^[A-Za-z_]\w*$/.test(parameter.name||'') ||
+         !member.body?.range)continue;
+      // Avoid O(roles * functions) full-file parsing. The initial AST tells
+      // us which declared role the concrete setter body actually assigns.
+      const text=source.slice(member.body.range[0],member.body.range[1]+1);
+      const likely=roles.filter(role=>
+        new RegExp('\\b'+role+'\\s*=\\s*'+parameter.name+'\\s*;').test(text));
+      for(const role of likely) {
         const candidate={selector,role,method:member.name};
         const probe=sourceGroundedSolidityProbe(source,menu,candidate,selector);
         if(probe) {
