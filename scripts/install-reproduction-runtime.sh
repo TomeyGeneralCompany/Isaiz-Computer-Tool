@@ -24,7 +24,7 @@ if (( ${#packages[@]} )); then
   fi
 fi
 npm install --prefix "$ROOT/scripts/reproduction-runtime" --ignore-scripts --no-audit --no-fund
-node -e 'const r=process.argv[1]; for (const name of ["solc","solc_0_5","solc_0_6","solc_0_7","ethers","ganache"]) require(require.resolve(name,{paths:[r]}));' "$ROOT/scripts/reproduction-runtime"
+node -e 'const r=process.argv[1]; for (const name of ["solc","solc_0_5","solc_0_6","solc_0_7","solc_0_8_4","ethers","ganache"]) require(require.resolve(name,{paths:[r]}));' "$ROOT/scripts/reproduction-runtime"
 if ! bwrap --unshare-all --die-with-parent --ro-bind / / -- /usr/bin/true; then
   echo "Bubblewrap is installed but this host denies the required namespaces. Resolve the host's user-namespace/AppArmor policy before running hunts, then rerun setup." >&2
   exit 2
