@@ -11,6 +11,7 @@ import {buildSourceMap} from '../packages/security-solver/src/source-map';
 import {SoliditySourceIndex} from '../packages/security-solver/src/solidity-source-index';
 import {buildBaselineSequence} from '../packages/security-solver/src/solidity-probe-inputs';
 import {privilegedRoleMutationCandidate} from '../packages/security-solver/src/solidity-security-candidates';
+import {sourceGroundedSolidityProbe} from '../packages/security-solver/src/controller-solidity-security-probes';
 
 const pending={path:'source-1/src/render.py',query:'render',answer:'html_reflection'};
 assert.deepEqual(controllerOwnedNextAction({
@@ -169,5 +170,54 @@ try {
   assert.equal(baseline.steps[1].operation,'send');
   assert.equal((baseline.steps[1] as {sender?:number}).sender,1);
   assert.deepEqual(baseline.steps[1].args,['$account2']);
+  // A generic state-changing function is not a security probe, even when the
+  // verifier can send a transaction and observe a getter.
+  assert.equal(sourceGroundedSolidityProbe(authSource,abi,risk,'Authority.rotateOperator'),null,
+    'an unrelated Vault operator guard does not prove a consumer of Authority.operator');
+  assert.equal(sourceGroundedSolidityProbe(authSource,abi,risk,'Authority.changeAdministrator'),null,
+    'a state-changing ABI entry is not itself a source-grounded security scenario');
+  assert.equal(sourceGroundedSolidityProbe(authSource,abi,null,'Authority.rotateOperator'),null,
+    'no source-supported security hypothesis must fail closed');
+  const guardedSource=authSource.replace(
+    'function changeAdministrator(address next)',
+    'function settle() external {require(msg.sender==operator,"operator only");}\\n'+
+    'function changeAdministrator(address next)'
+  ).replace('}\\nfunction changeAdministrator','}\nfunction changeAdministrator');
+  const guardedFile=join(root,'source-1','AuthorityGuarded.sol');
+  await writeFile(guardedFile,guardedSource);
+  const guardedMenu=await solidityIndex.probeMenu(guardedFile,64);
+  const groundedRisk=privilegedRoleMutationCandidate(
+    'source-1/AuthorityGuarded.sol',guardedSource,[guardedSource]);
+  assert.equal(groundedRisk?.selector,'Authority.rotateOperator');
+  const grounded=sourceGroundedSolidityProbe(guardedSource,guardedMenu,groundedRisk,
+    'Authority.rotateOperator');
+  assert.ok(grounded,'only a complete role initialization, guard and setter qualify');
+  assert.equal(grounded.guardedConsumer,'Authority.settle');
+  assert.deepEqual(grounded.sequence.steps,[
+    {operation:'call',function:'operator()',args:[],expect:'$account0'},
+    {operation:'send',function:'rotateOperator(address)',args:['$account2'],sender:1},
+    {operation:'call',function:'operator()',args:[],expect:'$account2'}
+  ],'the attack must prove an account1-driven change from account0 to account2');
+  assert.equal(sourceGroundedSolidityProbe(guardedSource.replace(
+    'operator=msg.sender','operator=address(0)'),guardedMenu,groundedRisk,'Authority.rotateOperator'),null,
+    'unknown initial role state is unsupported; do not invent fixture conditions');
+  assert.equal(sourceGroundedSolidityProbe(guardedSource.replace(
+    'require(next!=address(0),"zero");operator=next;',
+    'require(msg.sender==administrator,"admin");operator=next;'),
+    guardedMenu,groundedRisk,'Authority.rotateOperator'),null,
+    'protected setters are not unauthorized-mutation candidates');
+  const erc1155Menu=[{selector:'ERC1155Upgradeable.safeTransferFrom',operation:'send' as const,
+    inputs:['address','address','uint256','uint256','bytes']}];
+  assert.equal(sourceGroundedSolidityProbe(
+    'contract ERC1155Upgradeable {function safeTransferFrom(address,address,uint256,uint256,bytes memory) external {}}',
+    erc1155Menu,null,'ERC1155Upgradeable.safeTransferFrom'),null,
+    'isolated inherited ERC1155 method has no application caller or violated invariant');
+  assert.equal(sourceGroundedSolidityProbe(
+    'contract ERC1155Upgradeable {function safeBatchTransferFrom(address,address,uint256[] memory,uint256[] memory,bytes memory) external {}}',
+    [{selector:'ERC1155Upgradeable.safeBatchTransferFrom',operation:'send',
+      inputs:['address','address','uint256[]','uint256[]','bytes']}],
+    null,'ERC1155Upgradeable.safeBatchTransferFrom'),null,
+    'generic batch transfers must never consume a security probe');
+
   console.log('Controller owned-next-action, grounded source citations and verified probe memory PASSED');
 } finally {await rm(root,{recursive:true,force:true});}
