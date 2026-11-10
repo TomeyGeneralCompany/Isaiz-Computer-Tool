@@ -104,17 +104,64 @@ def prepare_dependencies(repository: Path, required_imports: list[str] | None = 
     if lock.get("lockfileVersion") not in (2, 3) or not isinstance(lock.get("packages"), dict):
         raise DependencyError("Target requires npm lockfile v2/v3")
     entries = [(name, item) for name, item in lock["packages"].items() if name]
-    if len(entries) > 4096:
-        raise DependencyError("Target lockfile exceeds 4096 package entries")
     if required_imports is not None:
+        # A large lockfile is an inventory, not an installation request. Limit
+        # the *selected* dependency closure, not the entire repository lock.
+        # Solidity compiler diagnostics give import paths; resolve each to its
+        # longest locked package prefix (including scoped npm packages).
+        locked = dict(entries)
         selected = set()
+        pending = []
         for request in required_imports:
-            candidates = [name for name, _ in entries if name.startswith("node_modules/")
+            if not isinstance(request, str) or not request or len(request) > 4096:
+                raise DependencyError("Invalid npm import request")
+            candidates = [name for name in locked if name.startswith("node_modules/")
                           and (request == name[13:] or request.startswith(name[13:] + "/"))]
             if not candidates:
                 raise DependencyError("No locked npm package supplies import: " + request)
-            selected.add(max(candidates, key=len))
+            pending.append(max(candidates, key=len))
+        # Include lockfile-declared runtime dependencies, respecting nested npm
+        # resolution (nearest node_modules wins). Do not download unrelated
+        # development dependencies from the rest of the lockfile.
+        while pending:
+            name = pending.pop()
+            if name in selected:
+                continue
+            selected.add(name)
+            if len(selected) > 4096:
+                raise DependencyError("Selected npm dependency closure exceeds 4096 package entries")
+            item = locked[name]
+            if not isinstance(item, dict):
+                raise DependencyError("Malformed npm lockfile package entry")
+            dependencies = item.get("dependencies", {})
+            if not isinstance(dependencies, dict):
+                raise DependencyError("Malformed locked npm dependencies")
+            for dependency in dependencies:
+                if not isinstance(dependency, str) or not dependency or "/" in dependency.strip("/").replace("@", "", 1) and not dependency.startswith("@"):
+                    raise DependencyError("Invalid locked npm dependency name")
+                # node_modules/parent/node_modules/child, then progressively
+                # hoisted ancestors, ending at root node_modules/child.
+                parent = name
+                resolved = None
+                while True:
+                    candidate = parent + "/node_modules/" + dependency
+                    if candidate in locked:
+                        resolved = candidate
+                        break
+                    marker = parent.rfind("/node_modules/")
+                    if marker < 0:
+                        break
+                    parent = parent[:marker]
+                if resolved is None:
+                    candidate = "node_modules/" + dependency
+                    if candidate in locked:
+                        resolved = candidate
+                if resolved is None:
+                    raise DependencyError("Locked npm dependency is missing: " + dependency)
+                pending.append(resolved)
         entries = [(name, item) for name, item in entries if name in selected]
+    elif len(entries) > 4096:
+        raise DependencyError("Target lockfile exceeds 4096 package entries")
     # Parent packages must be materialized before nested dependencies.
     entries.sort(key=lambda entry: (entry[0].count("/"), entry[0]))
     started = time.monotonic()
