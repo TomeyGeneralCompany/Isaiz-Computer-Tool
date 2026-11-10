@@ -107,6 +107,7 @@ export async function runLocalAudit(
   let controllerAutoReadCount = 0;
   let indexedLastProgressKey = '';
   let indexedSyntheticStalls = 0;
+  const controllerStalledPaths=new Set<string>();
   let generationBudget = settings.numPredict;
   const root = await realpath(cwd);
   const controller = new AbortController();
@@ -966,9 +967,44 @@ export async function runLocalAudit(
           ? indexedSyntheticStalls+1:0;
         indexedLastProgressKey=progressKey;
         if(indexedSyntheticStalls>=12) {
+          const stalled=controllerAction;
+          indexedSyntheticStalls=0;
           await appendFile(logFile,'[INDEXED_CONTROLLER_PROGRESS_STALL] '+
-            JSON.stringify({turn:turn+1,action:controllerAction,progressKey})+'\n');
-          throw new Error('INDEXED_CONTROLLER_PROGRESS_STALL: 12 consecutive controller actions without new source or probe evidence; turn extension cannot repair this');
+            JSON.stringify({turn:turn+1,action:stalled,progressKey})+'\n');
+          // Release an actual stuck plan without inventing a successful probe.
+          if(stalled.action==='verify_source') {
+            const released=workflow.abortPending('Verifier made no progress after repeated controller actions');
+            if(released)await recordProbeDisposition(released.path,released.query,released.kind,
+              'controller_blocked','verifier_no_progress');
+          } else if(stalled.action==='plan_probe') {
+            await recordProbeDisposition(stalled.path,stalled.query,stalled.answer,
+              'rejected','planning_no_progress');
+          }
+          if(stalled.action==='read_file'||stalled.action==='read_solidity'||
+             stalled.action==='outline_solidity')controllerStalledPaths.add(stalled.path);
+          controllerAction=null;
+          const candidates=(limits.initialSourcePaths||[]).filter(path=>
+            /^source-[0-9]+\//.test(path) &&
+            /\.(?:sol|java|py|js|mjs|cjs)$/.test(path) &&
+            !terminalReadPages.has(path) && !controllerStalledPaths.has(path));
+          for(const path of candidates) {
+            try {
+              await safePath(path);
+              controllerAction={action:'read_file',path,query:'',answer:'',offset:0};
+              break;
+            }catch{controllerStalledPaths.add(path);}
+          }
+          if(!controllerAction && !workflow.snapshot().pending &&
+             workflow.finishControllerCandidates()) {
+            constraints=await workflow.constraints();
+            requestSchema={...requestSchema,properties:{...requestSchema.properties,
+              action:{type:'string',enum:['final']}}};
+          }
+          if(!controllerAction && constraints?.action?.some(item=>item!=='final'))
+            throw new Error('CONTROLLER_NO_RECOVERY: unsupported source/probe after bounded recovery');
+          await appendFile(logFile,'[CONTROLLER_STALL_RECOVERY] '+
+            JSON.stringify({previous:stalled.action,
+              next:controllerAction?.path||'final',excluded:controllerStalledPaths.size})+'\n');
         }
       } else if(fullIndexMode && !controllerAction)indexedSyntheticStalls=0;
       if(controllerAction) {
