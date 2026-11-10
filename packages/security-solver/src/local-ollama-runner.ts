@@ -223,6 +223,16 @@ export async function runLocalAudit(
     await appendFile(logFile,'[CONTROLLER_PROBE_DISPOSITION] '+JSON.stringify(record)+'\n');
     await controllerArchive?.append('decision',record);
   };
+  const settleOrphanedSelections=async(reason:string)=>{
+    // A selected probe with no pending verifier request is an orphaned
+    // controller transition. Preserve that failure rather than pretending
+    // an executable experiment ran or blocking all final reporting.
+    for(const [identity] of unresolvedProbes()) {
+      const [path,selector,kind]=JSON.parse(identity) as [string,string,string];
+      workflow?.blockSelectedScenario(path,selector,kind,reason);
+      await recordProbeDisposition(path,selector,kind,'controller_blocked',reason);
+    }
+  };
   let stalledActions = 0;
   const missingRequests=new Map<string,number>();
   const fixedSize=JSON.stringify(messages).length+JSON.stringify(structured ? actionSchema : availableTools).length;
@@ -879,9 +889,10 @@ export async function runLocalAudit(
         const eligible=(limits.initialSourcePaths||[]).filter(path=>
           /^source-[0-9]+\//.test(path) && /\.(?:sol|java|py|js|mjs|cjs)$/.test(path));
         const unreadRemaining=eligible.filter(path=>!terminalReadPages.has(path) && !snapshot.readPaths.includes(path));
-        if(eligible.length && !unreadRemaining.length && unresolvedProbes().length) {
-          await appendFile(logFile,'[CONTROLLER_UNRESOLVED_PROBES] '+JSON.stringify(unresolvedProbes())+'\n');
-          throw new Error('CONTROLLER_UNRESOLVED_PROBES: selected probes require verifier dispositions');
+        if(eligible.length && !unreadRemaining.length &&
+           unresolvedProbes().length && !snapshot.pending) {
+          await appendFile(logFile,'[CONTROLLER_ORPHANED_PROBES] '+JSON.stringify(unresolvedProbes())+'\n');
+          await settleOrphanedSelections('Selected probe lost its executable handoff');
         }
         if(eligible.length && !unreadRemaining.length &&
            workflow.finishControllerCandidates()) {
@@ -893,8 +904,9 @@ export async function runLocalAudit(
         }
       }
       if(fullIndexMode && !controllerAction && constraints?.action?.length===1 &&
-         constraints.action[0]==='final' && unresolvedProbes().length)
-        throw new Error('CONTROLLER_UNRESOLVED_PROBES: final reporting blocked until selected probes have verifier dispositions');
+         constraints.action[0]==='final' && unresolvedProbes().length &&
+         !workflow.snapshot().pending)
+        await settleOrphanedSelections('Orphaned probe cannot be reported as execution');
       // Never delegate source selection, probe execution or workflow transitions
       // to Qwen in controller-owned indexed investigations. Only a semantic
       // final assessment may use the model, after deterministic work is done.
