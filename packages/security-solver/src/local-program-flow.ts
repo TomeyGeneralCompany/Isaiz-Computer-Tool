@@ -890,7 +890,32 @@ Do not claim production testing, JavaScript execution, file access or other effe
         },
         validateFinal:async text=>{
           try {
-            const proposed=JSON.parse(text);
+            let proposed=JSON.parse(text);
+            if(proposed && typeof proposed==="object" && !Array.isArray(proposed)) {
+              if(proposed.action==="final") {
+                if(typeof proposed.answer==="string" && proposed.answer.trim().startsWith("{")) {
+                  try { const inner=JSON.parse(proposed.answer); if(inner && typeof inner==="object") proposed=inner; } catch {}
+                } else if(proposed.result && typeof proposed.result==="object") {
+                  proposed=proposed.result;
+                }
+              }
+              if(!("findings" in proposed) || !Array.isArray(proposed.findings)) {
+                proposed.findings=[];
+              }
+              if(!proposed.outcome) {
+                proposed.outcome=proposed.findings.length>0 ? "inspected" : "no_testable_candidate";
+              }
+              if(proposed.outcome==="no_testable_candidate" && (!proposed.reason || proposed.reason.length < 20)) {
+                proposed.reason=(typeof proposed.answer==="string" && proposed.answer.trim().length >= 20)
+                  ? proposed.answer.trim().slice(0,1000)
+                  : "No testable vulnerability candidate found in inspected sources";
+              }
+              delete proposed.action;
+              delete proposed.path;
+              delete proposed.query;
+              delete proposed.answer;
+              delete proposed.offset;
+            }
             // Case IDs are verifier-generated, never model-generated. Suppress
             // unsupported proposals before giving Qwen another expensive final
             // retry; the normal coverage checks still decide whether to stop.

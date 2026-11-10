@@ -123,7 +123,7 @@ export async function runLocalAudit(
     try {const request=JSON.parse(await readFile(cancellationPath,"utf8"));if(request.requestedAt>=auditStartedAt)controller.abort("operator_cancelled");}catch{}
     finally{checkingCancellation=false;}
   },250);
-  const allowance=new AuditAllowance(settings.maxTurns,auditStartedAt,timeoutMs,limits.dynamicAllowance);
+  const allowance=new AuditAllowance(settings.maxTurns,auditStartedAt,timeoutMs,limits.dynamicAllowance,640,limits.productionWorkflow === true && limits.dynamicAllowance === true);
   let timer = setTimeout(() => controller.abort(), timeoutMs);
   let usedTurns=0, finalAnswer:string|undefined, stoppingReason="Inspection interrupted";
   let emptyFinals=0;
@@ -485,7 +485,7 @@ export async function runLocalAudit(
         }
       }
     }
-    for (let turn = 0; turn < allowance.turns; turn++) {
+    for (let turn = 0; allowance.unbounded || turn < allowance.turns; turn++) {
       usedTurns=turn+1;
       controller.signal.throwIfAborted();
       // Keep stable history; send fresh controller state only with this request.
