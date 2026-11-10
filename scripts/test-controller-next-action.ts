@@ -216,7 +216,7 @@ try {
     guardedMenu,groundedRisk,'Authority.rotateOperator'),null,
     'commented-out initial values cannot supply security setup');
   // Role names are source declarations, not a hard-coded vocabulary.
-  const unconventionalRole=guardedSource.replace(/\\boperator\\b/g,'financialCustodian');
+  const unconventionalRole=guardedSource.replace(/\boperator\b/g,'financialCustodian');
   const unconventionalFile=join(root,'source-1','UnconventionalAuthority.sol');
   await writeFile(unconventionalFile,unconventionalRole);
   const unconventionalMenu=await solidityIndex.probeMenu(unconventionalFile,64);
