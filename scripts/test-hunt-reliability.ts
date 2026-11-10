@@ -61,7 +61,7 @@ assert.equal(reviewedTargetFinding(gradedReports,
 assert.equal(reviewedTargetFinding(gradedReports,[{caseId:'unknown',verdict:'approve'}],answer),false,
   'review approval must identify a recorded finding case');
 // Compiler matrix: bundled versions are 0.8.30, 0.7.6, 0.6.12, and 0.5.17.
-for(const range of ['^0.8.20','>=0.8.0 <0.9.0','0.8.30','^0.7.0 || ^0.8.0','^0.7.0','~0.7.1','^0.6.0','^0.5.0'])assert.equal(compilerCompatible(range),true,range);
+for(const range of ['^0.8.20','>=0.8.0 <0.9.0','0.8.30','0.8.4','^0.7.0 || ^0.8.0','^0.7.0','~0.7.1','^0.6.0','^0.5.0'])assert.equal(compilerCompatible(range),true,range);
 for(const range of ['0.8.19','>=0.8.31','^0.4.0','^0.9.0','<0.5.0'])assert.equal(compilerCompatible(range),false,range);
 assert.equal(compilerCompatible('0.8.x'),null);
 assert.equal(compilerCompatible('0.7.0 - 0.9.0'),null);

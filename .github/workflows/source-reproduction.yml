@@ -41,6 +41,8 @@ jobs:
         run: npx tsx scripts/test-solidity-protocol.ts
       - name: Test local Solidity transaction executor
         run: node scripts/test-solidity-sequence.cjs
+      - name: Compile and execute exact Solidity 0.8.4 alongside supported versions
+        run: node --import tsx scripts/test-multi-version-solidity.ts
       - name: Replay 2000-file Python and Java entry-to-sink routes in isolated runtimes
         timeout-minutes: 15
         run: node --import tsx scripts/test-controller-indexed-entry-replay.ts

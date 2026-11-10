@@ -8,6 +8,7 @@
     "solc": "0.8.30",
     "solc_0_5": "npm:solc@0.5.17",
     "solc_0_6": "npm:solc@0.6.12",
-    "solc_0_7": "npm:solc@0.7.6"
+    "solc_0_7": "npm:solc@0.7.6",
+    "solc_0_8_4": "npm:solc@0.8.4"
   }
 }
