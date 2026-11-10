@@ -105,7 +105,8 @@ async function runSequence(artifact, sequence, transport) {
       }
     }
     for(const step of sequence.steps) {
-      await prepareTransfer(step);\n      const fn=contract.connect(signers[step.sender??0]).getFunction(step.function);
+      await prepareTransfer(step);
+      const fn=contract.connect(signers[step.sender??0]).getFunction(step.function);
       const fragment=fn.fragment;
       const args=step.args.map(resolve);
       // Encode first: ABI/selector/setup failures must not count as expected reverts.
