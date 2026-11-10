@@ -100,3 +100,44 @@ export function sourceGroundedSolidityProbe(
     sequence,guardedConsumer:contractName+'.'+consumers[0].name
   };
 }
+
+/** Source-backed *navigation hints*, not vulnerability findings. Trace actual
+ * calls from project contracts before considering an inherited ERC1155 entry.
+ * AST traversal ignores comments and bare method declarations. Callers still
+ * require independent reachability, setup and a security assertion to qualify.
+ */
+export function traceProjectErc1155Callers(path:string,source:string):
+  Array<{path:string;selector:string;calledMethod:string;line:number}> {
+  if(!path.endsWith('.sol') || source.length>256000 ||
+     !/\\bsafe(?:Batch)?TransferFrom\\s*\\(/.test(source))return [];
+  let ast:any;
+  try {ast=parse(source,{range:true,loc:true});}catch{return [];}
+  const results:Array<{path:string;selector:string;calledMethod:string;line:number}>=[];
+  for(const contract of (ast.children||[])) {
+    if(contract.type!=='ContractDefinition' ||
+       /^(?:ERC1155Upgradeable|IERC1155(?:Upgradeable)?)$/.test(contract.name))continue;
+    for(const fn of contract.subNodes||[]) {
+      if(fn.type!=='FunctionDefinition' || !fn.body)continue;
+      const declared=fn.name||(fn.isConstructor?'constructor':'');
+      if(!declared)continue;
+      let seen=0;
+      const walk=(node:any,depth:number):void=>{
+        if(!node || typeof node!=='object' || depth>48 || seen++>4000)return;
+        if(Array.isArray(node)) {for(const child of node)walk(child,depth+1);return;}
+        if(node.type==='FunctionCall') {
+          const called=node.expression?.type==='MemberAccess'
+            ? node.expression.memberName
+            : node.expression?.type==='Identifier'?node.expression.name:'';
+          if(called==='safeTransferFrom' || called==='safeBatchTransferFrom') {
+            results.push({path,selector:contract.name+'.'+declared,calledMethod:called,
+              line:node.loc?.start?.line||1});
+          }
+        }
+        for(const [key,child] of Object.entries(node))
+          if(key!=='range' && key!=='loc')walk(child,depth+1);
+      };
+      walk(fn.body,0);
+    }
+  }
+  return results.slice(0,40);
+}
