@@ -864,7 +864,17 @@ export async function runLocalAudit(
             JSON.stringify({inspected:eligible.length,unsupported:[...probeDispositions.values()]
               .filter(v=>v.status==='unsupported').length})+'\n');
         } else if(unread.length) {
-          throw new Error('CONTROLLER_CANDIDATE_QUEUE_EXHAUSTED: unread source remains but the controller has no action');
+          // Exhausted planning is not exhausted source coverage. Select the
+          // next verified workspace path directly; never hand scheduling to Qwen.
+          for(const path of unread){
+            try {
+              await safePath(path);
+              controllerAction={action:'read_file',path,query:'',answer:'',offset:0};
+              await appendFile(logFile,'[CONTROLLER_EXHAUSTED_QUEUE_RECOVERY] '+
+                JSON.stringify({path,remaining:unread.length})+'\n');
+              break;
+            }catch{}
+          }
         }
       }
       // Exhaustion is an explicit controller transition. Unsupported/negative
