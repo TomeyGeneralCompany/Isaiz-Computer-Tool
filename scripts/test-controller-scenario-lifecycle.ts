@@ -53,4 +53,46 @@ cycle.register({...input,id:'source-1/src/app.py:render:python_sequence',
   path:'source-1/src/app.py',selector:'render',language:'python'});
 assert.throws(()=>cycle.addPrerequisite('source-1/src/app.py:render:python_sequence',
   {id:'missing',description:'Broken dependency',dependsOn:['not-there']}),/Unknown prerequisite/);
+
+const {InvestigationWorkflow}=await import('../packages/security-solver/src/investigation-workflow');
+for(const [extension,language,kind] of [
+  ['sol','solidity','solidity_sequence'],['java','java','java_sequence'],
+  ['py','python','python_sequence'],['js','javascript','javascript_sequence']
+] as const){
+  const source='source-1/contracts/Scenario.'+extension;
+  const selector=language==='solidity'?'Scenario.update':language==='java'?'Scenario.update':'update';
+  const wf=new InvestigationWorkflow();
+  wf.read(source);
+  const plan={action:'plan_probe',path:source,query:selector,answer:kind,
+    hypothesis:'A caller may modify protected state without authorization.'};
+  wf.registerControllerPlan(plan,'test-source-digest:'+source,
+    'Only approved callers may modify state',
+    'A disallowed caller is rejected before state mutation');
+  assert.equal(wf.snapshot().scenarioLedger.scenarios[0].phase,'preparing');
+  wf.plan(plan);
+  assert.equal(wf.snapshot().scenarioLedger.scenarios[0].phase,'ready');
+  const verify={...plan,action:'verify_source'};
+  const caseId='a'.repeat(64);
+  wf.observe(verify,JSON.stringify({status:'behavior_observed',
+    behavior_observed:true,caseId}));
+  assert.equal(wf.snapshot().scenarioLedger.scenarios[0].phase,'reviewing');
+  assert.equal(wf.snapshot().scenarioLedger.scenarios[0].outcome,undefined,
+    'an observed behavior must not automatically become a finding');
+  wf.acceptedReview(source,selector,kind,'review:case:'+caseId,false);
+  assert.equal(wf.snapshot().scenarioLedger.scenarios[0].outcome,'rejected');
+}
+const stalled=new InvestigationWorkflow();
+stalled.read('source-1/contracts/stall.sol');
+const blocked={action:'plan_probe',path:'source-1/contracts/stall.sol',
+  query:'Vault.withdraw',answer:'solidity_sequence',
+  hypothesis:'Hypothesis with rejected authorization'};
+stalled.registerControllerPlan(blocked,'source-digest','Protected withdrawal',
+  'Unauthorized execution reverts');
+stalled.plan(blocked);
+assert.ok(stalled.abortPending('Unresolvable runtime preparation'));
+assert.equal(stalled.snapshot().scenarioLedger.scenarios[0].outcome,'incomplete');
+assert.equal(stalled.snapshot().observations[0].status,'controller_blocked');
+assert.equal(stalled.snapshot().scenarioLedger.scenarios[0].evidence.some(e=>e.kind==='execution'),false,
+  'a blocked controller must not fabricate verifier evidence');
+
 console.log('Controller scenario lifecycle, prerequisites, recovery, evidence and review PASSED');
