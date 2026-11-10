@@ -92,7 +92,7 @@ function resolveSolc(sourceText) {
   }
   // 88mph V3's actual application contracts pin pragma solidity 0.8.4.
   // Do not try compiling an exact 0.8.4 pragma with solc 0.8.30.
-  if (/^(?:=\\s*)?0\\.8\\.4(?:\\s|$)/.test(pragma)) {
+  if (/^(?:=\s*)?0\.8\.4(?:\s|$)/.test(pragma)) {
     return { solc: require('solc_0_8_4'), evmVersion: 'berlin' };
   }
   return { solc: require('solc'), evmVersion: 'shanghai' };
