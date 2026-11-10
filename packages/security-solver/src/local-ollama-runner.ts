@@ -4,7 +4,7 @@ import {normalizeForcedOutlineCursor} from './outline-cursor';
 import {z} from "zod";
 import {javaSequenceSchema, type JavaSequence} from "./java-sequence";
 import {polyglotSequenceSchema,type PolyglotSequence} from "./polyglot-sequence";
-import {buildBaselineSequence} from './solidity-probe-inputs';
+import {sourceGroundedSolidityProbe} from './controller-solidity-security-probes';
 import {privilegedRoleMutationCandidate} from './solidity-security-candidates';
 import {rankTracedSourceCandidates} from './controller-source-candidates';
 import { InvestigationWorkflow } from "./investigation-workflow";
@@ -679,26 +679,41 @@ export async function runLocalAudit(
             const full=await safePath(path);
             let plan:{action:string;path:string;query:string;answer:string;hypothesis:string;sequence?:unknown}|null=null;
             if(path.endsWith('.sol')) {
+              const source=await readFile(full,'utf8');
               const risk=privilegedSolidityCandidates.get(path);
-              // When source identifies a role mutation with a protected
-              // consumer, test that path before unrelated valid transactions.
-              if(privilegedSolidityCandidates.size && !risk)continue;
               const menu=await solidityIndex.probeMenu(full,64);
-              const entries=risk?menu.filter(entry=>entry.selector===risk.selector):
-                menu.filter(entry=>entry.operation==='send');
-              for(const entry of entries) {
+              // ABI mutability is not a vulnerability hypothesis. Inherited
+              // methods need a project caller/wrapper; an isolated library
+              // transaction is never sufficient to schedule a security probe.
+              if(!risk) {
+                for(const entry of menu.filter(entry=>entry.operation==='send'))
+                  await recordProbeDisposition(path,entry.selector,'solidity_sequence',
+                    'unsupported','no_source_grounded_security_hypothesis');
+                continue;
+              }
+              for(const entry of menu.filter(entry=>entry.selector===risk.selector)) {
                 if(entry.operation!=='send')continue;
-                const sequence=buildBaselineSequence(menu,entry.selector,!!risk);
-                if(!sequence){await recordProbeDisposition(path,entry.selector,'solidity_sequence','unsupported','baseline_sequence_unavailable');continue;}
+                const grounded=sourceGroundedSolidityProbe(source,menu,risk,entry.selector);
+                if(!grounded) {
+                  await recordProbeDisposition(path,entry.selector,'solidity_sequence',
+                    'unsupported','security_setup_or_assertion_not_source_proven');
+                  continue;
+                }
                 const candidate={action:'plan_probe',path,query:entry.selector,
                   answer:'solidity_sequence',
-                  hypothesis:risk?
-                    'Check whether a nonadministrator can mutate the source-declared privileged '+risk.role+' role. Compare source-proven authority checks and before/after on-chain observations; independent review must establish impact.':
-                    'Observe the declared transaction and getter; check authorization and state effects against source.',
-                  sequence};
+                  hypothesis:grounded.hypothesis,sequence:grounded.sequence};
+                const attempted=workflow.snapshot().observations.some(item=>
+                  item.path===path && item.function===candidate.query &&
+                  item.kind===candidate.answer);
+                if(attempted) {
+                  await recordProbeDisposition(path,candidate.query,candidate.answer,
+                    'observed','existing_workflow_observation');
+                  continue;
+                }
                 const rejection=workflow.validate(candidate as any);
                 if(!rejection){plan=candidate;break;}
-                await recordProbeDisposition(path,candidate.query,candidate.answer,'rejected',String(rejection).slice(0,240));
+                await recordProbeDisposition(path,candidate.query,candidate.answer,
+                  'rejected',String(rejection).slice(0,240));
               }
             }else {
               const traced=tracedCandidates.find(candidate=>candidate.path===path);
@@ -826,7 +841,16 @@ export async function runLocalAudit(
           JSON.stringify({turn:turn+1,stage:snapshot.stage,
             eligible:eligible.length,read:snapshot.readPaths.length,
             unread:unread.slice(0,12),observations:0})+'\n');
-        throw new Error('CONTROLLER_CANDIDATE_QUEUE_EXHAUSTED: no controller-selected source or supported probe; inspect candidate selection diagnostics, not model finalization');
+        if(!unread.length && workflow.finishControllerCandidates()) {
+          constraints=await workflow.constraints();
+          requestSchema={...requestSchema,properties:{...requestSchema.properties,
+            action:{type:'string',enum:['final']}}};
+          await appendFile(logFile,'[CONTROLLER_NO_SUPPORTED_SECURITY_SCENARIOS] '+
+            JSON.stringify({inspected:eligible.length,unsupported:[...probeDispositions.values()]
+              .filter(v=>v.status==='unsupported').length})+'\n');
+        } else if(unread.length) {
+          throw new Error('CONTROLLER_CANDIDATE_QUEUE_EXHAUSTED: unread source remains but the controller has no action');
+        }
       }
       // Exhaustion is an explicit controller transition. Unsupported/negative
       // observations cannot authorize more source scheduling by the model.
@@ -1048,30 +1072,41 @@ export async function runLocalAudit(
             }
           }
         }
-        // Legacy generic Solidity probe actions are not executable by the
-        // current verifier. When the model named an actual on-chain entry,
-        // construct the supported stateful baseline from the real ABI menu.
-        // Never invent an assertion, selector, or transaction outcome.
+        // Validate EVERY Solidity plan, including model-authored intentions.
+        // Never upgrade an ABI send/getter observation into a security probe.
+        // The source controller owns the scenario; model assertions are ignored.
         if(workflow && action.path.endsWith('.sol') &&
-            ['solidity_function','solidity_call','solidity_transaction'].includes(action.answer) &&
-            ['plan_probe','probe_intent'].includes(action.action)) {
-          let baseline:ReturnType<typeof buildBaselineSequence>=null;
+           ['plan_probe','probe_intent'].includes(action.action)) {
+          let grounded:ReturnType<typeof sourceGroundedSolidityProbe>=null;
           try {
             const full=await safePath(action.path);
+            const source=await readFile(full,'utf8');
             const menu=await solidityIndex.probeMenu(full,64);
-            baseline=buildBaselineSequence(menu,action.query);
+            const risk=privilegedSolidityCandidates.get(action.path) ||
+              privilegedRoleMutationCandidate(action.path,source,[source,...SolidityCode]);
+            grounded=sourceGroundedSolidityProbe(source,menu,risk,action.query);
           }catch{}
-          if(baseline) {
-            action.answer='solidity_sequence';action.sequence=baseline;
-            await appendFile(logFile,'[CONTROLLER_SOLIDITY_PROBE_NORMALIZED] '+
-              JSON.stringify({path:action.path,query:action.query,kind:action.answer})+'\n');
-          } else {
-            await appendFile(logFile,'[CONTROLLER_UNSUPPORTED_PROBE] '+
-              JSON.stringify({path:action.path,query:action.query,kind:action.answer})+'\n');
-            workflow.feedback('Unsupported Solidity probe shape. No executable ABI-backed baseline exists for the selected function. Inspect a different declared entry or report the exact capability gap, never substitute an unrelated function.');
-            messages.push({role:'user',content:'The controller could not construct a supported probe for that exact Solidity function. This is not evidence of a vulnerability. Inspect an executable source-backed entry or conclude incomplete. /no_think'});
+          if(!grounded) {
+            await recordProbeDisposition(action.path,action.query,'solidity_sequence',
+              'unsupported','security_setup_or_assertion_not_source_proven');
+            await appendFile(logFile,'[CONTROLLER_UNSUPPORTED_SOLIDITY_SCENARIO] '+
+              JSON.stringify({path:action.path,selector:action.query})+'\n');
+            workflow.feedback('No source-grounded security scenario with a proved '+
+              'caller/role setup and asserted invariant exists for this Solidity method. '+
+              'Do not spend an isolated transaction probe; inspect project callers/wrappers '+
+              'or mark the method unsupported.');
+            messages.push({role:'user',content:
+              'This Solidity method lacks a controller-verifiable security hypothesis, '+
+              'setup, and invariant assertion. It has been skipped as unsupported; '+
+              'inspect a project-owned caller or another source-grounded candidate. /no_think'});
             continue;
           }
+          action.answer='solidity_sequence';
+          action.sequence=grounded.sequence;
+          action.hypothesis=grounded.hypothesis;
+          await appendFile(logFile,'[CONTROLLER_SOLIDITY_SCENARIO_GROUNDED] '+
+            JSON.stringify({path:action.path,selector:action.query,
+              guardedConsumer:grounded.guardedConsumer})+'\n');
         }
         // All three non-Solidity languages obey the same source-owned probe
         // request contract as Solidity. The model may choose an actual method,
@@ -1100,31 +1135,6 @@ export async function runLocalAudit(
         const automaticProbe=action.action==='probe_intent';
         if(automaticProbe) {
           action.action='plan_probe';
-          if(action.answer==='solidity_sequence' && action.path.endsWith('.sol') && !action.sequence) {
-            try {
-              const full=await safePath(action.path);
-              const menu=await solidityIndex.probeMenu(full,64);
-              const baseline=buildBaselineSequence(menu,action.query);
-              if(baseline) {
-                action.sequence=baseline;
-                await appendFile(logFile,'[PROBE_BASELINE_CONSTRUCTED] '+JSON.stringify({path:action.path,query:action.query,read:baseline.steps[0].function})+'\n');
-              }
-            }catch{}
-          }
-          if(!action.query.trim() && action.answer==='solidity_sequence' && action.path.endsWith('.sol') && action.sequence && typeof action.sequence==='object') {
-            try {
-              const full=await safePath(action.path);
-              const menu=await solidityIndex.probeMenu(full,64);
-              const steps=Array.isArray((action.sequence as any).steps)?(action.sequence as any).steps:[];
-              const declared=menu.filter(choice=>steps.some((step:any)=>typeof step.function==='string' &&
-                (step.function===choice.selector.split('.').at(-1) ||
-                 step.function.split('(')[0]===choice.selector.split('.').at(-1))));
-              if(declared.length===1) {
-                action.query=declared[0].selector;
-                await appendFile(logFile,'[PROBE_INTENT_RESOLVED] '+JSON.stringify({path:action.path,query:action.query,kind:action.answer})+'\n');
-              }
-            }catch{}
-          }
           if(!action.query.trim() && ['html_reflection','path_construction'].includes(action.answer)) {
             try {
               const full=await safePath(action.path);
