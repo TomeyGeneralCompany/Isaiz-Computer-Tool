@@ -1,5 +1,8 @@
 name: Cloud Real-World 88mph Investigation
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
