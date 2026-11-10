@@ -90,6 +90,11 @@ function resolveSolc(sourceText) {
   if (/\b0\.7\./.test(pragma) || (/>=\s*0\.7\./.test(pragma) && !/>=\s*0\.8\./.test(pragma))) {
     try { return { solc: require('solc_0_7'), evmVersion: 'berlin' }; } catch {}
   }
+  // 88mph V3's actual application contracts pin pragma solidity 0.8.4.
+  // Do not try compiling an exact 0.8.4 pragma with solc 0.8.30.
+  if (/^(?:=\\s*)?0\\.8\\.4(?:\\s|$)/.test(pragma)) {
+    return { solc: require('solc_0_8_4'), evmVersion: 'berlin' };
+  }
   return { solc: require('solc'), evmVersion: 'shanghai' };
 }
 
