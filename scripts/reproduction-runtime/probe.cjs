@@ -104,9 +104,9 @@ async function solidity() {
   // derived harness so transfer probes can establish real balances on-chain.
   // Never modify the target source or use the harness as impact evidence.
   const erc1155Harness = sequenceMode &&
-    /(?:^|\\/)ERC1155Upgradeable\\.sol$/.test(spec.file) &&
-    /\\bcontract\\s+ERC1155Upgradeable\\b/.test(sourceText) &&
-    /^ERC1155Upgradeable\\.(?:safeTransferFrom|safeBatchTransferFrom|setApprovalForAll)$/.test(spec.function);
+    /(?:^|\/)ERC1155Upgradeable\.sol$/.test(spec.file) &&
+    /\bcontract\s+ERC1155Upgradeable\b/.test(sourceText) &&
+    /^ERC1155Upgradeable\.(?:safeTransferFrom|safeBatchTransferFrom|setApprovalForAll)$/.test(spec.function);
   const harnessName = 'TomeyERC1155ProbeHarness';
   const harnessSource = erc1155Harness ? sourceText + `
 contract TomeyERC1155ProbeHarness is ERC1155Upgradeable {
