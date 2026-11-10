@@ -44,7 +44,47 @@ async function execute(s) {
  const mismatch=structuredClone(sequence);mismatch.steps.at(-1).expect=['22',true];
  assert.equal((await execute(mismatch)).steps.at(-1).passed,false);
  const unexpected=structuredClone(sequence);unexpected.steps[2].expectRevert=false;
- await assert.rejects(execute(unexpected),/revert/i);
+ const unexpectedResult=await execute(unexpected);
+ assert.equal(unexpectedResult.steps[2].reverted,true);
+ assert.equal(unexpectedResult.steps[2].passed,false);
+ assert.match(unexpectedResult.steps[2].gasUsed,/^[0-9]+$/);
+ assert.equal(unexpectedResult.steps[3].passed,true,
+   'Read after an unexpected mined revert must remain observable');
+ // ERC-1155-like setup: a transfer without minted balance must revert,
+ // but the failed transfer and unchanged balance are both recorded.
+ const tokenSource=`pragma solidity ^0.8.20;
+ contract TokenFixture {
+   mapping(address => uint256) public balanceOf;
+   function mint(address to,uint256 amount) external {balanceOf[to]+=amount;}
+   function safeTransferFrom(address from,address to,uint256 amount) external {
+     require(msg.sender==from,"unauthorized");
+     require(balanceOf[from]>=amount,"insufficient balance");
+     balanceOf[from]-=amount;balanceOf[to]+=amount;
+   }
+ }`;
+ const tokenCompiled=JSON.parse(solc.compile(JSON.stringify({language:'Solidity',
+   sources:{'TokenFixture.sol':{content:tokenSource}},settings:{evmVersion:'shanghai',
+   outputSelection:{'*':{'*':['abi','evm.bytecode.object']}}}})));
+ const tokenArtifact=tokenCompiled.contracts['TokenFixture.sol'].TokenFixture;
+ const tokenTransport=ganache.provider({logging:{quiet:true},wallet:{deterministic:true,totalAccounts:3},
+   chain:{hardfork:'shanghai'},miner:{blockGasLimit:12000000}});
+ try {
+   const tokenResult=await runSequence(tokenArtifact,{constructorArgs:[],steps:[
+     {operation:'observe',function:'balanceOf(address)',args:['$account0']},
+     {operation:'send',function:'safeTransferFrom(address,address,uint256)',
+       args:['$account0','$account1','1'],expectRevert:false},
+     {operation:'observe',function:'balanceOf(address)',args:['$account0']},
+     {operation:'send',function:'mint(address,uint256)',args:['$account0','2']},
+     {operation:'send',function:'safeTransferFrom(address,address,uint256)',
+       args:['$account0','$account1','1']},
+     {operation:'call',function:'balanceOf(address)',args:['$account1'],expect:'1'}
+   ]},tokenTransport);
+   assert.equal(tokenResult.steps[1].reverted,true);
+   assert.equal(tokenResult.steps[1].passed,false);
+   assert.equal(tokenResult.steps[2].actual,'0');
+   assert.equal(tokenResult.steps[4].reverted,false);
+   assert.equal(tokenResult.steps[5].passed,true);
+ } finally {await tokenTransport.disconnect();}
  // Regression: controller-produced source-derived state observation, rather
  // than an unrelated gated view function, runs in the real local EVM.
  const authoritySource=`pragma solidity ^0.8.20;
