@@ -60,7 +60,7 @@ assert.equal(reviewedTargetFinding(gradedReports,
   'reviewer rejections cannot be converted into passes');
 assert.equal(reviewedTargetFinding(gradedReports,[{caseId:'unknown',verdict:'approve'}],answer),false,
   'review approval must identify a recorded finding case');
-// Keep this matrix aligned with the actual bundled solc versions: 0.8.30, 0.7.6, 0.6.12 and 0.5.17.
+// Compiler matrix: bundled versions are 0.8.30, 0.7.6, 0.6.12, and 0.5.17.
 for(const range of ['^0.8.20','>=0.8.0 <0.9.0','0.8.30','^0.7.0 || ^0.8.0','^0.7.0','~0.7.1','^0.6.0','^0.5.0'])assert.equal(compilerCompatible(range),true,range);
 for(const range of ['0.8.19','>=0.8.31','^0.4.0','^0.9.0','<0.5.0'])assert.equal(compilerCompatible(range),false,range);
 assert.equal(compilerCompatible('0.8.x'),null);
@@ -122,7 +122,7 @@ assert.doesNotThrow(()=>JSON.parse(auditCheckpoint(Array(80).fill('read Store.so
 const root=await mkdtemp(join(tmpdir(),'capability-'));
 try {
  execFileSync('git',['init','-q',root]);
- await writeFile(join(root,'Old.sol'),'pragma solidity ^0.4.0; contract Old {}');
+ await writeFile(join(root,'Old.sol'),'pragma solidity ^0.4.24; contract Old {}');
  execFileSync('git',['-C',root,'add','.']);
  assert.equal((await inspectSourceCapability(root)).blocked,true);
  await writeFile(join(root,'New.sol'),'pragma solidity ^0.8.0; contract New {}');
@@ -158,7 +158,7 @@ try {
  const nestedCapability=await inspectSourceCapability(parent);
  assert.equal(nestedCapability.blocked,false,'Nested submodule sources must be inspected');
  assert.equal(nestedCapability.compatibleFiles,1);
- await writeFile(join(nested,'Owned.sol'),'pragma solidity ^0.4.0; contract Owned {}');
+ await writeFile(join(nested,'Owned.sol'),'pragma solidity ^0.4.24; contract Owned {}');
  assert.equal((await inspectSourceCapability(parent)).blocked,true,'Unsupported nested source still blocks');
  process.env.GITHUB_TOKEN='fixture';
  const config={...loadConfig(),IMMUNEFI_ENABLED:true,SECURITY_MIN_REWARD_CENTS:0};
