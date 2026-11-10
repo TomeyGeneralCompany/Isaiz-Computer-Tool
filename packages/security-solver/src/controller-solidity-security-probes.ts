@@ -47,7 +47,9 @@ export function sourceGroundedSolidityProbe(
   // The starting value is not assumed: deployment by account0 must initialize
   // the protected role to msg.sender, or the expected baseline is unsupported.
   const init=new RegExp('\\b'+role+'\\s*=\\s*msg\\s*\\.\\s*sender\\s*;');
-  if(!init.test(extract(constructor[0])))return null;
+  // Comments are never evidence of actual initialization.
+  const withoutComments=(text:string)=>text.replace(/\/\/[^\n]*|\/\*[\s\S]*?\*\//g,'');
+  if(!init.test(withoutComments(extract(constructor[0]))))return null;
   const roleStorage=members.some(member=>member.type==='StateVariableDeclaration' &&
     (member.variables||[]).some((variable:any)=>
       variable.name===candidate.role && variable.visibility==='public' &&
@@ -72,14 +74,31 @@ export function sourceGroundedSolidityProbe(
     .replace(/\/\/[^\n]*|\/\*[\s\S]*?\*\//g,'')
     .replace(/^\s*\{|\}\s*$/g,'').trim();
   if(!new RegExp('^'+role+'\\s*=\\s*'+parameter+'\\s*;$').test(remaining))return null;
-  // A different contract declaring its own identically named role is not a
-  // protected consumer of this storage slot. Require a guard in THIS contract.
-  const guard=new RegExp('\\brequire\\s*\\(\\s*(?:msg\\s*\\.\\s*sender\\s*==\\s*'+role+
-    '|'+role+'\\s*==\\s*msg\\s*\\.\\s*sender)\\b');
+  // A different contract's role, or a guard written only in a comment/string,
+  // is not authorization evidence. Inspect the actual require(...) AST call.
+  const isRole=(node:any)=>node?.type==='Identifier' && node.name===candidate.role;
+  const isSender=(node:any)=>node?.type==='MemberAccess' &&
+    node.memberName==='sender' && node.expression?.type==='Identifier' &&
+    node.expression.name==='msg';
+  const isRoleGuard=(node:any)=>node?.type==='BinaryOperation' &&
+    node.operator==='==' &&
+    ((isSender(node.left)&&isRole(node.right))||(isRole(node.left)&&isSender(node.right)));
+  const hasGuard=(body:any):boolean=>{
+    let scanned=0;
+    const walk=(node:any,depth:number):boolean=>{
+      if(!node || typeof node!=='object' || depth>48 || scanned++>4000)return false;
+      if(Array.isArray(node))return node.some(child=>walk(child,depth+1));
+      if(node.type==='FunctionCall' && node.expression?.type==='Identifier' &&
+         node.expression.name==='require' && isRoleGuard(node.arguments?.[0]))return true;
+      return Object.entries(node).some(([key,child])=>
+        key!=='range' && key!=='loc' && walk(child,depth+1));
+    };
+    return walk(body,0);
+  };
   const consumers=functions.filter(fn=>fn!==setter[0] && !fn.isConstructor &&
     ['public','external'].includes(fn.visibility) &&
     !['view','pure'].includes(fn.stateMutability||'') &&
-    guard.test(extract(fn)) && !!extract(fn));
+    hasGuard(fn.body));
   if(!consumers.length)return null;
   const getter=menu.find(item=>item.selector===contractName+'.'+candidate.role &&
     item.operation==='call' && item.inputs.length===0);
