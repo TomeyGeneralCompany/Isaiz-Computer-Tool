@@ -1393,7 +1393,16 @@ export async function runLocalAudit(
               workflow.feedback(feedback);
               await appendFile(logFile,'[PLAN_REJECTED] '+feedback+'\n');
               messages.push({role:'user',content:feedback+' /no_think'});
-              if(++rejectedPlans>=3)throw new Error('Repeated invalid Solidity probe plans');
+              if(++rejectedPlans>=3) {
+                rejectedPlans=0;
+                await recordProbeDisposition(action.path,action.query,action.answer,'rejected',
+                  'controller_rejected_invalid_probe_plan');
+                workflow.rejectedRequiredProbePlan();
+                const next=workflow.requireNextUnreadSource(limits.initialSourcePaths||[]);
+                if(!next)workflow.finishControllerCandidates();
+                await appendFile(logFile,'[CONTROLLER_INVALID_PLAN_RECOVERY] '+
+                  JSON.stringify({path:action.path,query:action.query,next})+'\\n');
+              }
               continue;
             }
           }
@@ -1402,7 +1411,16 @@ export async function runLocalAudit(
             workflow.feedback(feedback);
             await appendFile(logFile,'[PLAN_REJECTED] '+feedback+'\n');
             messages.push({role:'user',content:feedback+' /no_think'});
-            if(++rejectedPlans>=3)throw new Error('Repeated oversized probe plans');
+            if(++rejectedPlans>=3) {
+                rejectedPlans=0;
+                await recordProbeDisposition(action.path,action.query,action.answer,'rejected',
+                  'controller_rejected_oversized_probe_plan');
+                workflow.rejectedRequiredProbePlan();
+                const next=workflow.requireNextUnreadSource(limits.initialSourcePaths||[]);
+                if(!next)workflow.finishControllerCandidates();
+                await appendFile(logFile,'[CONTROLLER_INVALID_PLAN_RECOVERY] '+
+                  JSON.stringify({path:action.path,query:action.query,next})+'\\n');
+              }
             continue;
           }
           rejectedPlans=0;
