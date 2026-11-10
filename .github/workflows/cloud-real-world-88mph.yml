@@ -29,6 +29,7 @@ jobs:
       LOCAL_CONTROLLER_FULL_SOURCE_INDEX: 'true'
       AUTOHACK_OLLAMA_URL: http://127.0.0.1:11434/api/chat
       AUTOHACK_SINGLE_BOUNTY_DIAGNOSTIC: '1'
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
