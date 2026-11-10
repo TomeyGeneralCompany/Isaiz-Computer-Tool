@@ -137,7 +137,7 @@ def prepare_dependencies(repository: Path, required_imports: list[str] | None = 
             if not isinstance(dependencies, dict):
                 raise DependencyError("Malformed locked npm dependencies")
             for dependency in dependencies:
-                if not isinstance(dependency, str) or not dependency or "/" in dependency.strip("/").replace("@", "", 1) and not dependency.startswith("@"):
+                if not isinstance(dependency, str) or not re.fullmatch(r"(?:@[A-Za-z0-9_.-]+/)?[A-Za-z0-9_.-]+", dependency):
                     raise DependencyError("Invalid locked npm dependency name")
                 # node_modules/parent/node_modules/child, then progressively
                 # hoisted ancestors, ending at root node_modules/child.
