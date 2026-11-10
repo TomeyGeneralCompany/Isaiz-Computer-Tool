@@ -77,6 +77,8 @@ export function sourceGroundedSolidityProbe(
   const guard=new RegExp('\\brequire\\s*\\(\\s*(?:msg\\s*\\.\\s*sender\\s*==\\s*'+role+
     '|'+role+'\\s*==\\s*msg\\s*\\.\\s*sender)\\b');
   const consumers=functions.filter(fn=>fn!==setter[0] && !fn.isConstructor &&
+    ['public','external'].includes(fn.visibility) &&
+    !['view','pure'].includes(fn.stateMutability||'') &&
     guard.test(extract(fn)) && !!extract(fn));
   if(!consumers.length)return null;
   const getter=menu.find(item=>item.selector===contractName+'.'+candidate.role &&
