@@ -119,6 +119,44 @@ async function execute(s) {
    assert.equal(output.steps[2].actual,output.accounts[1]);
    assert.notEqual(output.steps[0].actual,output.steps[2].actual);
  } finally {await authorityTransport.disconnect();}
+ // Controller preparation must mine and record balance/approval setup before
+ // the actual transfer, without treating setup as vulnerability evidence.
+ const harnessSource=`pragma solidity ^0.8.20;
+ contract TomeyERC1155ProbeHarness {
+   mapping(uint256=>mapping(address=>uint256)) private balances;
+   mapping(address=>mapping(address=>bool)) private approvals;
+   function balanceOf(address a,uint256 id) external view returns(uint256){return balances[id][a];}
+   function isApprovedForAll(address a,address b) external view returns(bool){return approvals[a][b];}
+   function setApprovalForAll(address b,bool approved) external {approvals[msg.sender][b]=approved;}
+   function tomeyMintBatch(address a,uint256[] memory ids,uint256[] memory amounts) external {
+     for(uint i=0;i<ids.length;i++)balances[ids[i]][a]+=amounts[i];
+   }
+   function tomeyMint(address a,uint256 id,uint256 amount) external {balances[id][a]+=amount;}
+   function safeTransferFrom(address a,address b,uint256 id,uint256 amount,bytes memory) external {
+     require(msg.sender==a||approvals[a][msg.sender],"approval");
+     require(balances[id][a]>=amount,"balance");
+     balances[id][a]-=amount;balances[id][b]+=amount;
+   }
+ }`;
+ const hc=JSON.parse(solc.compile(JSON.stringify({language:'Solidity',
+   sources:{'Harness.sol':{content:harnessSource}},
+   settings:{evmVersion:'shanghai',outputSelection:{'*':{'*':['abi','evm.bytecode.object']}}}})));
+ assert.deepEqual((hc.errors||[]).filter(e=>e.severity==='error'),[]);
+ const ha=hc.contracts['Harness.sol'].TomeyERC1155ProbeHarness;
+ const ht=ganache.provider({logging:{quiet:true},wallet:{deterministic:true,totalAccounts:3},
+   chain:{hardfork:'shanghai'},miner:{blockGasLimit:12000000}});
+ try{
+   const h=await runSequence(ha,{constructorArgs:[],steps:[
+     {operation:'send',function:'safeTransferFrom(address,address,uint256,uint256,bytes)',
+       args:['$account0','$account2','1','3','0x'],sender:1},
+     {operation:'call',function:'balanceOf(address,uint256)',args:['$account2','1'],expect:'3'}
+   ]},ht);
+   assert.equal(h.steps[0].operation,'setup');
+   assert.equal(h.steps[1].operation,'setup');
+   assert.equal(h.steps[2].operation,'send');
+   assert.equal(h.steps[2].reverted,false);
+   assert.equal(h.steps[3].passed,true);
+ }finally{await ht.disconnect();}
  const wrongArgs=structuredClone(sequence);wrongArgs.steps[2].args=['not an integer'];
  await assert.rejects(execute(wrongArgs),/invalid|argument/i,'Invalid ABI input cannot masquerade as an expected revert');
  const readAsSend={constructorArgs:['0','$account0'],steps:[{operation:'send',function:'value()',args:[]},sequence.steps[0]]};
