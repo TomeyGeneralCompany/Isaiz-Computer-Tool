@@ -122,6 +122,49 @@ export function sourceGroundedSolidityProbe(
   };
 }
 
+/**
+ * Enumerate role-mutation hypotheses from inspected AST declarations rather
+ * than a list of guessed role names. Every result must still pass the full
+ * same-contract initialization, setter, guard, ABI and assertion checks above.
+ * No generic ABI state change is upgraded to a security hypothesis.
+ */
+export function sourceGroundedSolidityProbes(source:string,menu:SolidityProbeDeclaration[]):
+  Array<{selector:string;probe:GroundedSolidityProbe}> {
+  if(source.length>256000)return [];
+  let ast:any;
+  try{ast=parse(source,{range:true});}catch{return [];}
+  const results:Array<{selector:string;probe:GroundedSolidityProbe}>=[];
+  for(const contract of (ast.children||[])) {
+    if(contract.type!=='ContractDefinition'||!contract.name)continue;
+    const members:any[]=contract.subNodes||[];
+    const roles=members.filter(node=>node.type==='StateVariableDeclaration')
+      .flatMap(node=>node.variables||[]).filter(variable=>
+        variable.visibility==='public' &&
+        variable.typeName?.type==='ElementaryTypeName' &&
+        variable.typeName?.name==='address' &&
+        /^[A-Za-z_]\w*$/.test(variable.name||''))
+      .map(variable=>variable.name).slice(0,64);
+    for(const member of members) {
+      if(member.type!=='FunctionDefinition'||!member.name||
+         !['public','external'].includes(member.visibility) ||
+         member.isConstructor || member.parameters?.length!==1)continue;
+      const selector=contract.name+'.'+member.name;
+      if(!menu.some(entry=>entry.selector===selector&&entry.operation==='send'))
+        continue;
+      for(const role of roles) {
+        const candidate={selector,role,method:member.name};
+        const probe=sourceGroundedSolidityProbe(source,menu,candidate,selector);
+        if(probe) {
+          results.push({selector,probe});
+          break;
+        }
+      }
+      if(results.length>=64)return results;
+    }
+  }
+  return results;
+}
+
 /** Source-backed *navigation hints*, not vulnerability findings. Trace actual
  * calls from project contracts before considering an inherited ERC1155 entry.
  * AST traversal ignores comments and bare method declarations. Callers still
