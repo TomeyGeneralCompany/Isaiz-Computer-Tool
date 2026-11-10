@@ -11,7 +11,7 @@ import {buildSourceMap} from '../packages/security-solver/src/source-map';
 import {SoliditySourceIndex} from '../packages/security-solver/src/solidity-source-index';
 import {buildBaselineSequence} from '../packages/security-solver/src/solidity-probe-inputs';
 import {privilegedRoleMutationCandidate} from '../packages/security-solver/src/solidity-security-candidates';
-import {sourceGroundedSolidityProbe} from '../packages/security-solver/src/controller-solidity-security-probes';
+import {sourceGroundedSolidityProbe,traceProjectErc1155Callers} from '../packages/security-solver/src/controller-solidity-security-probes';
 
 const pending={path:'source-1/src/render.py',query:'render',answer:'html_reflection'};
 assert.deepEqual(controllerOwnedNextAction({
@@ -218,6 +218,24 @@ try {
       inputs:['address','address','uint256[]','uint256[]','bytes']}],
     null,'ERC1155Upgradeable.safeBatchTransferFrom'),null,
     'generic batch transfers must never consume a security probe');
+
+  const wrapperCode='pragma solidity ^0.8.20; contract ProjectERC1155Caller {'+
+    'function forward(address token,address from,address to,uint256 id,uint256 amount,bytes calldata data) external {'+
+    'IERC1155(token).safeTransferFrom(from,to,id,amount,data);}' +
+    'function forwardBatch(address token,address from,address to,uint256[] calldata ids,uint256[] calldata amounts,bytes calldata data) external {'+
+    'IERC1155(token).safeBatchTransferFrom(from,to,ids,amounts,data);}' +
+    '}';
+  const wrappers=traceProjectErc1155Callers('source-1/contracts/ProjectERC1155Caller.sol',wrapperCode);
+  assert.deepEqual(wrappers.map(item=>[item.selector,item.calledMethod]),[
+    ['ProjectERC1155Caller.forward','safeTransferFrom'],
+    ['ProjectERC1155Caller.forwardBatch','safeBatchTransferFrom']
+  ],'project ERC1155 call sites must be traced to their wrappers before probe selection');
+  assert.deepEqual(traceProjectErc1155Callers('source-1/libs/ERC1155Upgradeable.sol',
+    'contract ERC1155Upgradeable {function safeTransferFrom(address from) public {} }'),[],
+    'declarations of inherited library methods are not project caller scenarios');
+  assert.deepEqual(traceProjectErc1155Callers('source-1/Comments.sol',
+    'contract Comments { /* token.safeTransferFrom(from,to,id,amount,data); */ function safe() external {} }'),[],
+    'comments do not constitute caller-chain evidence');
 
   console.log('Controller owned-next-action, grounded source citations and verified probe memory PASSED');
 } finally {await rm(root,{recursive:true,force:true});}
