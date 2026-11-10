@@ -765,6 +765,12 @@ export async function runLocalAudit(
               }
             }
             if(!plan)continue;
+            // Admit only inspected, controller-selected candidates to the
+            // explicit lifecycle. A proposed hypothesis is not a finding.
+            workflow.registerControllerPlan(plan,
+              workflow.snapshot().evidenceReferences.at(-1)||'inspected:'+path,
+              plan.hypothesis,
+              'The isolated experiment does not exhibit the proposed behavior.');
             controllerAction=plan;
             await recordProbeDisposition(path,plan.query,plan.answer,'selected','controller_scheduled');
             await appendFile(logFile,'[CONTROLLER_SOURCE_PROBE_SELECTED] '+
@@ -1695,6 +1701,19 @@ export async function runLocalAudit(
         controller.signal.throwIfAborted();
         invalidReviewFinals=0;
         unsupportedFinalRejections=0;
+        // Only a final accepted by the independent validator can resolve
+        // a reproduced case as verified. Reject unsupported model claims.
+        if(workflow) {
+          let accepted:any;
+          try{accepted=JSON.parse(message.content);}catch{}
+          const findings=Array.isArray(accepted?.findings)?accepted.findings:[];
+          for(const observation of workflow.snapshot().observations)
+            if(observation.status==='behavior_observed')
+              workflow.acceptedReview(observation.path,observation.function,observation.kind,
+                'validated-final:'+String(observation.caseId||observation.evidenceFile||'review'),
+                findings.some((finding:any)=>finding?.caseId===observation.caseId));
+          await persistMemory();
+        }
         finalAnswer=message.content;stoppingReason="Validated final answer";
         return message.content;
       }
