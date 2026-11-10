@@ -12,6 +12,7 @@ assert.equal(compilerCompatible("0.6.12"), true, "Solidity 0.6.12 must be compat
 assert.equal(compilerCompatible("^0.6.0"), true, "Solidity ^0.6.0 must be compatible");
 assert.equal(compilerCompatible("0.7.6"), true, "Solidity 0.7.6 must be compatible");
 assert.equal(compilerCompatible("^0.7.0"), true, "Solidity ^0.7.0 must be compatible");
+assert.equal(compilerCompatible("0.8.4"), true, "Solidity 0.8.4 exact pragma must be compatible");
 assert.equal(compilerCompatible("0.8.30"), true, "Solidity 0.8.30 must be compatible");
 assert.equal(compilerCompatible("^0.8.0"), true, "Solidity ^0.8.0 must be compatible");
 assert.equal(compilerCompatible("^0.8.24"), true, "Solidity ^0.8.24 must be compatible");
@@ -54,6 +55,18 @@ contract LegacyStorage06 {
     evm: "berlin",
     source: `pragma solidity 0.7.6;
 contract LegacyStorage07 {
+    uint256 public stored;
+    constructor(uint256 initial) { stored = initial; }
+    function update(uint256 next) public { stored = next; }
+    function query() public view returns (uint256) { return stored; }
+}`
+  },
+  {
+    name: "0.8.4",
+    pkg: "./reproduction-runtime/node_modules/solc_0_8_4",
+    evm: "berlin",
+    source: `pragma solidity 0.8.4;
+contract Storage084 {
     uint256 public stored;
     constructor(uint256 initial) { stored = initial; }
     function update(uint256 next) public { stored = next; }
