@@ -369,7 +369,7 @@ export async function runLocalAudit(
           workflow?.read(path);
           workflow?.observe(action,fitted.output);
           const sourceEvidenceId=await controllerArchive?.append('source',{path,start:delivered.start,end:delivered.end,content:delivered.text,nextOffset:delivered.nextOffset},{source:path});
-          if(sourceEvidenceId)workflow?.recordEvidence(sourceEvidenceId);
+          if(sourceEvidenceId)workflow?.recordSourceEvidence(path,sourceEvidenceId);
           limits.onRead?.(path,{start:delivered.start,end:delivered.end});
           navigation.observe('read_file',path,offset,'',delivered);
           successfulReads++;
@@ -768,7 +768,7 @@ export async function runLocalAudit(
             // Admit only inspected, controller-selected candidates to the
             // explicit lifecycle. A proposed hypothesis is not a finding.
             workflow.registerControllerPlan(plan,
-              workflow.snapshot().evidenceReferences.at(-1)||'inspected:'+path,
+              workflow.latestSourceEvidence(path)||'inspected:'+path,
               plan.hypothesis,
               'The isolated experiment does not exhibit the proposed behavior.');
             controllerAction=plan;
@@ -1558,7 +1558,7 @@ export async function runLocalAudit(
                   workflow.read(caller);
                   workflow.observe(action,fitted.output);
                   const callerEvidenceId=await controllerArchive?.append('source',{path:caller,start:delivered.start,end:delivered.end,content:delivered.text,nextOffset:delivered.nextOffset},{source:caller});
-                  if(callerEvidenceId)workflow?.recordEvidence(callerEvidenceId);
+                  if(callerEvidenceId)workflow?.recordSourceEvidence(caller,callerEvidenceId);
                   limits.onRead?.(caller,{start:delivered.start,end:delivered.end});
                   navigation.observe('read_file',caller,offset,'',delivered);
                   allowance.read(caller,delivered.start,delivered.end,turn);
@@ -2092,7 +2092,7 @@ export async function runLocalAudit(
             const id=await controllerArchive?.append('source',{
               path:sourcePath,start:page.start,end:page.end,content:page.text,nextOffset:page.nextOffset
             },{source:sourcePath});
-            if(id)workflow?.recordEvidence(id);
+            if(id)workflow?.recordSourceEvidence(sourcePath,id);
           }
           try {navigation.observe(name,relative(root,full).split(sep).join("/") || ".",offset,String(call.function.arguments?.query || ""),JSON.parse(output));}catch{}
           stalledActions=0;
