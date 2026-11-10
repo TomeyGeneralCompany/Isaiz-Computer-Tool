@@ -19,6 +19,16 @@ assert.equal(expired.extend(75,100001),null);
 const fixed=new AuditAllowance(80,0,100000);
 for(let i=61;i<=75;i++)fixed.read('file',i*100,(i+1)*100,i);
 assert.equal(fixed.extend(75,90000),null);
+
+// Production investigations have no cumulative turn or wall-clock ceiling.
+// Evidence-backed extensions remain possible beyond the former 640-turn cap.
+const unbounded=new AuditAllowance(80,0,100000,true,640,true);
+for(let i=621;i<=639;i++)unbounded.read('late-file',i*100,(i+1)*100,i);
+unbounded.turns=640;
+assert.ok(unbounded.extend(639,90000),'Productive work beyond turn 640 must extend');
+assert.equal(unbounded.turns,680);
+assert.equal(unbounded.snapshot().hardTurns,null);
+assert.equal(unbounded.snapshot().unbounded,true);
 assert.ok(sourcePriority('contracts/Vault.sol')>sourcePriority('.solcover.js'));
 assert.ok(sourcePriority('src/Vault.sol')>sourcePriority('vendors/foo/tests/x.js'));
 console.log('Progress extensions, repeated/overlapping reads, expiry and source priority PASSED');

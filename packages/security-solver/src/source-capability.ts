@@ -72,9 +72,11 @@ export async function inspectSourceCapability(directory:string,signal?:AbortSign
   const {stdout}=await execute('git',['-c','core.hooksPath=/dev/null','ls-files',...(recurseSubmodules?['--recurse-submodules']:[]),'-z'],{cwd:root,maxBuffer:2000000,timeout:10000,signal});
   const files=stdout.split('\0').filter(Boolean);
   const unsupported:string[]=[];const sourcePaths:string[]=[];let candidates=0,compatible=0,unknown=false;
+  const hasSolidity=files.some(f=>f.endsWith(".sol"));
   for(const file of files) {
     signal?.throwIfAborted();
     if(!/\.(sol|py|js|mjs|cjs|java)$/.test(file) || /(?:^|\/)(?:node_modules)\//.test(file) || /(?:hardhat|webpack|eslint|prettier)\.config\.[cm]?js$/.test(file))continue;
+    if(hasSolidity && !file.endsWith(".sol") && /(?:^|\/)(?:test|tests|__tests__|testing|fixtures|fixture|mocks|mock|deploy|deploy-configs|scripts|\.github)\//i.test(file))continue;
     if(++candidates>10000) {unknown=true;break;}
     let full:string;
     try {
