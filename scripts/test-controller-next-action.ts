@@ -206,6 +206,15 @@ try {
     'require(msg.sender==administrator,"admin");operator=next;'),
     guardedMenu,groundedRisk,'Authority.rotateOperator'),null,
     'protected setters are not unauthorized-mutation candidates');
+  assert.equal(sourceGroundedSolidityProbe(guardedSource.replace(
+    'require(msg.sender==operator,"operator only");',
+    'string memory note="require(msg.sender==operator)";'),
+    guardedMenu,groundedRisk,'Authority.rotateOperator'),null,
+    'an authorization rule inside a string is not an AST-enforced guard');
+  assert.equal(sourceGroundedSolidityProbe(guardedSource.replace(
+    'operator=msg.sender;','operator=address(0); /* operator=msg.sender; */'),
+    guardedMenu,groundedRisk,'Authority.rotateOperator'),null,
+    'commented-out initial values cannot supply security setup');
   const erc1155Menu=[{selector:'ERC1155Upgradeable.safeTransferFrom',operation:'send' as const,
     inputs:['address','address','uint256','uint256','bytes']}];
   assert.equal(sourceGroundedSolidityProbe(
