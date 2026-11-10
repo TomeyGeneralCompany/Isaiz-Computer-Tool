@@ -31,6 +31,17 @@ const key = (a:Action) => JSON.stringify([a.path,a.query,a.answer,a.sequence]);
 export class InvestigationWorkflow {
   readonly scenarios=new ControllerScenarioLedger();
   private scenarioMap=new Map<string,string>();
+  private sourceEvidence=new Map<string,string[]>();
+  recordSourceEvidence(path:string,id:string){
+    if(!this.readPaths.has(path)||!/^[a-f0-9]{64}$/.test(id))
+      throw new Error('Cannot attach evidence to an unread source');
+    const old=this.sourceEvidence.get(path)||[];
+    if(!old.includes(id))this.sourceEvidence.set(path,[...old,id].slice(-64));
+    this.recordEvidence(id);
+  }
+  latestSourceEvidence(path:string):string|undefined {
+    return this.sourceEvidence.get(path)?.at(-1);
+  }
   private scenarioKey(path:string,query:string,kind:string){
     return JSON.stringify([path,query,kind]);
   }
@@ -336,5 +347,5 @@ export class InvestigationWorkflow {
     } else this.state.inspections=Math.max(6,this.state.inspections);
   }
   feedback(message:string,reopen=false) {this.lastFeedback=message.slice(0,400);if(reopen){this.state.inspections=0;this.pageTurns=0;}}
-  snapshot() {return {scenarioLedger:this.scenarios.snapshot(),outlinedPaths:[...this.outlinedPaths],...this.state,pageTurns:this.pageTurns,sourceProgress:this.sourceProgress,decisions:this.decisions,priorNotes:this.priorNotes,readPaths:[...this.readPaths],observations:this.observations,verifiedEvidenceFocus:this.verifiedEvidenceFocus};}
+  snapshot() {return {sourceEvidenceByPath:[...this.sourceEvidence],scenarioLedger:this.scenarios.snapshot(),outlinedPaths:[...this.outlinedPaths],...this.state,pageTurns:this.pageTurns,sourceProgress:this.sourceProgress,decisions:this.decisions,priorNotes:this.priorNotes,readPaths:[...this.readPaths],observations:this.observations,verifiedEvidenceFocus:this.verifiedEvidenceFocus};}
 }
