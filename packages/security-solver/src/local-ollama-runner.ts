@@ -4,7 +4,7 @@ import {normalizeForcedOutlineCursor} from './outline-cursor';
 import {z} from "zod";
 import {javaSequenceSchema, type JavaSequence} from "./java-sequence";
 import {polyglotSequenceSchema,type PolyglotSequence} from "./polyglot-sequence";
-import {sourceGroundedSolidityProbes,traceProjectErc1155Callers} from './controller-solidity-security-probes';
+import {sourceGroundedSolidityProbe,sourceGroundedSolidityProbes,traceProjectErc1155Callers} from './controller-solidity-security-probes';
 import {privilegedRoleMutationCandidate} from './solidity-security-candidates';
 import {rankTracedSourceCandidates} from './controller-source-candidates';
 import { InvestigationWorkflow } from "./investigation-workflow";
