@@ -412,7 +412,7 @@ try {
   // an accepted final: read the exact next file only if the action schema allows it.
   const coverageRead=(messages:Array<{content?:string}>,allowed?:string[]):string|null=>{
     for(const message of [...messages].reverse()) {
-      const hint=String(message.content||"").match(/Suggested next file:\\s*(source-\\d+\\/[A-Za-z0-9_./-]+\\.(?:sol|java|js|mjs|cjs|py))\\b/i)?.[1];
+      const hint=String(message.content||"").match(/Suggested next file:\s*(source-\d+\/[A-Za-z0-9_./-]+\.(?:sol|java|js|mjs|cjs|py))\b/i)?.[1];
       if(hint) return !allowed || allowed.includes(hint) ? hint : null;
     }
     return null;
