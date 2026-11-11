@@ -926,6 +926,8 @@ export async function runLocalAudit(
       // Never delegate source selection, probe execution or workflow transitions
       // to Qwen in controller-owned indexed investigations. Only a semantic
       // final assessment may use the model, after deterministic work is done.
+      // A controller-locked verified case is the strongest reason to permit
+      // that final assessment, not a reason to reject the handoff.
       // An unresolved action is a controller defect, not a model prompt.
       if(fullIndexMode && workflow && !controllerAction &&
          process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false') {
