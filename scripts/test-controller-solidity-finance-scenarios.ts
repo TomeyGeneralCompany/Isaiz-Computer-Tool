@@ -36,7 +36,7 @@ assert.equal(sourceGroundedOwnerGuardProbes(source.replace('__Ownable_init();','
 // An earlier inherited contract with no initializer cannot suppress a later
 // independently source-proven finance contract in the same compilation unit.
 const mixedContracts=source.replace('contract DInterest is',
-  'contract UninitializedDecoy is BoringOwnable { function noop() external onlyOwner {} }\\ncontract DInterest is');
+  'contract UninitializedDecoy is BoringOwnable { function noop() external onlyOwner {} }\ncontract DInterest is');
 assert.notEqual(mixedContracts,source,'Fixture must contain the target declaration');
 const mixedPlans=sourceGroundedOwnerGuardProbes(mixedContracts,menu,context);
 assert.ok(mixedPlans.some(p=>p.selector==='DInterest.setGlobalDepositCap'),
