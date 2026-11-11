@@ -38,7 +38,10 @@ export function sourceStatefulPlans(file:string,source:string):StatefulSourcePla
       const returned=/\breturn\s*\{([\s\S]{0,3000})/.exec(tail);
       if(!returned)continue;
       const method=/\b([A-Za-z][A-Za-z0-9_]*)\s*\(([^)]*)\)\s*\{/g;
-      for(const m of returned[1].matchAll(method)){
+      const declared=[...returned[1].matchAll(method)];
+      const getter=declared.find(m=>!m[2].trim() &&
+        /^(?:get[A-Z]|is[A-Z]|current|count|balance|size|value|total|owner)/.test(m[1]));
+      for(const m of declared){
         if(['constructor','toString','valueOf'].includes(m[1]))continue;
         const selectedArgs=parameterFixtures(m[2],false,1);
         if(!selectedArgs)continue;
@@ -48,7 +51,9 @@ export function sourceStatefulPlans(file:string,source:string):StatefulSourcePla
         plans.push({kind:'javascript_sequence',selector:m[1],factoryLine:lineAt(source,f.index!),
           methodLine:lineAt(source,f.index!+returned.index+returned[0].indexOf(m[0])),
           sequence:{factory:f[1],constructor:ctor,
-            steps:[{method:m[1],args:selectedArgs},{method:m[1],args:selectedArgs}]}});
+            steps:getter && getter[1]!==m[1]
+              ? [{method:getter[1],args:[]},{method:m[1],args:selectedArgs},{method:getter[1],args:[]}]
+              : [{method:m[1],args:selectedArgs},{method:m[1],args:selectedArgs}]}});
         if(plans.length>=32)return plans;
       }
       if(plans.length>=32)break;
@@ -64,6 +69,8 @@ export function sourceStatefulPlans(file:string,source:string):StatefulSourcePla
       const body=tail.slice(0,Math.min(next?.index??tail.length,5000));
       const method=/^    def\s+([A-Za-z][A-Za-z0-9_]*)\s*\(\s*self\s*(?:,\s*([^)]*))?\)\s*(?:->\s*[A-Za-z]\w*)?\s*:/gm;
       const named=[...body.matchAll(method)].filter(x=>!x[1].startsWith('_'));
+      const getter=named.find(m=>!(m[2]||'').trim() &&
+        /^(?:get[A-Z]|is[A-Z]|current|count|balance|size|value|total|owner)/.test(m[1]));
       const factoryRe=new RegExp('^def\\s+([A-Za-z][A-Za-z0-9_]*)\\s*\\(([^)]*)\\)\\s*(?:->\\s*[A-Za-z]\\w*\\s*)?:[ \\t]*(?:\\n(?:[ \\t]+[^\\n]*\\n){0,6}[ \\t]+)?return\\s+'+cls[1]+'\\s*\\(','gm');
       const make=factoryRe.exec(source);
       if(!make)continue;
@@ -74,7 +81,9 @@ export function sourceStatefulPlans(file:string,source:string):StatefulSourcePla
         plans.push({kind:'python_sequence',selector:m[1],factoryLine:lineAt(source,make.index),
           methodLine:lineAt(source,cls.index!+cls[0].length+m.index!),
           sequence:{factory:make[1],constructor:ctor,
-            steps:[{method:m[1],args},{method:m[1],args}]}});
+            steps:getter && getter[1]!==m[1]
+              ? [{method:getter[1],args:[]},{method:m[1],args},{method:getter[1],args:[]}]
+              : [{method:m[1],args},{method:m[1],args}]}});
         if(plans.length>=32)return plans;
       }
       if(plans.length>=32)break;
