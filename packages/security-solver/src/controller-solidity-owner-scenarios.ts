@@ -1,7 +1,7 @@
 import {parse} from '@solidity-parser/parser';
 import {posix} from 'node:path';
 import type {SolidityProbeDeclaration} from './solidity-probe-inputs';
-import type {GroundedSolidityProbe} from './controller-solidity-security-probes';
+import {sourceGroundedSolidityProbes,type GroundedSolidityProbe} from './controller-solidity-security-probes';
 
 /**
  * Source-backed owner-gated scalar transition experiments.
@@ -126,4 +126,11 @@ export function sourceGroundedOwnerGuardProbes(
     }
   }
   return results;
+}
+
+/** Shared admission for controller-owned and model-proposed Solidity plans. */
+export function controllerSourceGroundedSolidityProbes(source:string,menu:SolidityProbeDeclaration[],
+  context?:{path:string;peers:Array<{path:string;source:string}>}) {
+  return [...sourceGroundedSolidityProbes(source,menu,context),
+    ...sourceGroundedOwnerGuardProbes(source,menu,context)];
 }
