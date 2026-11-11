@@ -105,7 +105,7 @@ jobs:
           set -e
           # A completed process is not necessarily a completed investigation:
           # the summary is authoritative for source-coverage status.
-          summary="$(find data/one-bounty -maxdepth 1 -type f -name '*.json' -printf '%T@ %p\\n' | sort -nr | head -1 | cut -d' ' -f2-)"
+          summary="$(find data/one-bounty -maxdepth 1 -type f -name '*.json' -printf '%T@ %p\n' | sort -nr | head -1 | cut -d' ' -f2-)"
           if [[ "$status" == 0 && -n "$summary" ]]; then
             if ! node -e 'const s=require("./"+process.argv[1]);if(s.investigationCoverage!=="completed" && s.coverage?.status!=="completed"){console.error("INVESTIGATION_INCOMPLETE: "+(s.coverage?.detail||s.investigationCoverage||"unknown"));process.exit(1)}' "$summary"; then
               status=3
