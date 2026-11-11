@@ -514,15 +514,17 @@ contract Vault is Authority {
  function settle() external {require(msg.sender==operator,"operator only");}
 }""")
             sequence={"constructorArgs":[],"steps":[
-                {"operation":"observe","function":"operator()","args":[]},
+                {"operation":"call","function":"operator()","args":[],"expect":"$account0"},
                 {"operation":"send","function":"rotateOperator(address)","args":["$account2"],"sender":1},
-                {"operation":"observe","function":"operator()","args":[]}
+                {"operation":"call","function":"operator()","args":[],"expect":"$account2"}
             ]}
             spec={"file":"Authority.sol","function":"Authority.rotateOperator","kind":"solidity_sequence",
                   "nonce":"a"*32,"sequence":sequence}
             result=driver.run_probe(repo,spec)
             self.assertEqual(result["status"],"behavior_observed",result)
             self.assertTrue(result["behavior_observed"])
+            self.assertTrue(result["observations"]["steps"][0]["passed"])
+            self.assertTrue(result["observations"]["steps"][2]["passed"])
             self.assertNotEqual(result["observations"]["steps"][0]["actual"],
                                 result["observations"]["steps"][2]["actual"])
             self.assertEqual(driver.run_probe(repo,spec)["observations"],result["observations"])
