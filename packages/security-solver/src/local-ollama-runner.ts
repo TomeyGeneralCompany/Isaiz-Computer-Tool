@@ -703,7 +703,10 @@ export async function runLocalAudit(
               const menu=await solidityIndex.probeMenu(full,64);
               // Source-grounded AST scenarios, not ABI mutability or guessed
               // role names, are the only eligible Solidity security probes.
-              const groundedOptions=sourceGroundedSolidityProbes(source,menu);
+              const groundedOptions=sourceGroundedSolidityProbes(source,menu,{
+                 path,peers:[...accessibleSoliditySources.entries()]
+                   .map(([peerPath,peerSource])=>({path:peerPath,source:peerSource}))
+               });
               const supported=new Set(groundedOptions.map(entry=>entry.selector));
               for(const entry of menu.filter(entry=>entry.operation==='send'))
                 if(!supported.has(entry.selector))
@@ -1193,8 +1196,10 @@ export async function runLocalAudit(
             const full=await safePath(action.path);
             const source=await readFile(full,'utf8');
             const menu=await solidityIndex.probeMenu(full,64);
-            grounded=sourceGroundedSolidityProbes(source,menu)
-              .find(item=>item.selector===action.query)?.probe||null;
+            grounded=sourceGroundedSolidityProbes(source,menu,{
+                path:action.path,peers:[...accessibleSoliditySources.entries()]
+                  .map(([peerPath,peerSource])=>({path:peerPath,source:peerSource}))
+              }).find(item=>item.selector===action.query)?.probe||null;
           }catch{}
           if(!grounded) {
             await recordProbeDisposition(action.path,action.query,'solidity_sequence',
