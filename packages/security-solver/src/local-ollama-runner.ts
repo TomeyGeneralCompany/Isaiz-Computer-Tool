@@ -5,6 +5,8 @@ import {z} from "zod";
 import {javaSequenceSchema, type JavaSequence} from "./java-sequence";
 import {polyglotSequenceSchema,type PolyglotSequence} from "./polyglot-sequence";
 import {sourceGroundedSolidityProbe,sourceGroundedSolidityProbes,traceProjectErc1155Callers} from './controller-solidity-security-probes';
+import {controllerSourceGroundedSolidityProbes} from './controller-solidity-owner-scenarios';
+import {deliveredSourcePageComplete} from './controller-source-pagination';
 import {privilegedRoleMutationCandidate} from './solidity-security-candidates';
 import {rankTracedSourceCandidates} from './controller-source-candidates';
 import { InvestigationWorkflow } from "./investigation-workflow";
@@ -385,7 +387,7 @@ export async function runLocalAudit(
           navigation.observe('read_file',path,offset,'',delivered);
           successfulReads++;
           recentActions.set(JSON.stringify(['read_file',path,offset,'']),{turn:-1,nextOffset:delivered.nextOffset,response:fitted.message});
-          if(delivered.nextOffset===null)terminalReadPages.set(path,{offset,response:fitted.message});
+          if(deliveredSourcePageComplete(delivered))terminalReadPages.set(path,{offset,response:fitted.message});
           events.push(JSON.stringify({tool:'read_file',path,offset,end:delivered.end,nextOffset:delivered.nextOffset,status:'prefetched'}).slice(0,180));
           await appendFile(logFile,'[INITIAL_SOURCE_READ] '+JSON.stringify({path,start:delivered.start,end:delivered.end,nextOffset:delivered.nextOffset})+'\n');
           await recordToolActivity(logFile,{phase:'completed',tool:'read_file',
@@ -703,7 +705,7 @@ export async function runLocalAudit(
               const menu=await solidityIndex.probeMenu(full,64);
               // Source-grounded AST scenarios, not ABI mutability or guessed
               // role names, are the only eligible Solidity security probes.
-              const groundedOptions=sourceGroundedSolidityProbes(source,menu,{
+              const groundedOptions=controllerSourceGroundedSolidityProbes(source,menu,{
                  path,peers:[...accessibleSoliditySources.entries()]
                    .map(([peerPath,peerSource])=>({path:peerPath,source:peerSource}))
                });
@@ -1196,7 +1198,7 @@ export async function runLocalAudit(
             const full=await safePath(action.path);
             const source=await readFile(full,'utf8');
             const menu=await solidityIndex.probeMenu(full,64);
-            grounded=sourceGroundedSolidityProbes(source,menu,{
+            grounded=controllerSourceGroundedSolidityProbes(source,menu,{
                 path:action.path,peers:[...accessibleSoliditySources.entries()]
                   .map(([peerPath,peerSource])=>({path:peerPath,source:peerSource}))
               }).find(item=>item.selector===action.query)?.probe||null;
@@ -1622,7 +1624,7 @@ export async function runLocalAudit(
                   sourceTotals.set(caller,delivered.totalCharacters);
                   recentActions.set(JSON.stringify(['read_file',caller,offset,'']),
                     {turn,nextOffset:delivered.nextOffset,response:fitted.message});
-                  if(delivered.nextOffset===null)
+                  if(deliveredSourcePageComplete(delivered))
                     terminalReadPages.set(caller,{offset,response:fitted.message});
                   messages.push(request,fitted.message);
                   await appendFile(logFile,'[CONTROLLER_CALLER_PAGE_READ] '+
@@ -2097,10 +2099,9 @@ export async function runLocalAudit(
             }
           } else if (name === "read_file") {
             const rawPage = await readSourcePage(full,offset,pageSize);
-            // A terminal page must never be scheduled again, even if formatting
-            // its optional probe menu fails. The source cursor is authoritative.
-            const readPath=relative(root,full).split(sep).join('/');
-            if(rawPage.nextOffset===null)terminalReadPages.set(readPath,{offset:rawPage.start});
+            // Do not mark the raw page terminal here. Context fitting may
+            // shorten its delivered range and produce a non-null nextOffset.
+            // Only the finally delivered page (below) is evidence of EOF.
             output = fitOutput(JSON.stringify(rawPage)).output;
             const page = JSON.parse(output) as typeof rawPage;
             // Present grounded choices as soon as a file's last page is read,
@@ -2147,7 +2148,7 @@ export async function runLocalAudit(
             limits.onRead?.(sourcePath,{start:page.start,end:page.end});
             await appendFile(logFile,'[READ_OK] '+sourcePath+
               ` offset=${page.start} end=${page.end} nextOffset=${page.nextOffset}\n`);
-            if(page.nextOffset===null)terminalReadPages.set(sourcePath,{offset:page.start});
+            if(deliveredSourcePageComplete(page))terminalReadPages.set(sourcePath,{offset:page.start});
             const id=await controllerArchive?.append('source',{
               path:sourcePath,start:page.start,end:page.end,content:page.text,nextOffset:page.nextOffset
             },{source:sourcePath});
