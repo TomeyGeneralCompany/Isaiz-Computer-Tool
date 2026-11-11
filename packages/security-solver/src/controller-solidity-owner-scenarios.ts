@@ -55,7 +55,7 @@ export function sourceGroundedOwnerGuardProbes(
     const externalInit=functions.find(n=>n.name==='initialize' &&
       ['external','public'].includes(n.visibility) &&
       (n.modifiers||[]).some((m:any)=>m.name==='initializer'));
-    if(!externalInit || !externalInit.body)return [];
+    if(!externalInit || !externalInit.body)continue;
     const initText=body(externalInit);
     const helpers=functions.filter(n=>n.name && n.name!=='initialize' &&
       new RegExp('\\b'+escape(n.name)+'\\s*\\(').test(initText));
