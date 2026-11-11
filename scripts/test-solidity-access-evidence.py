@@ -23,7 +23,8 @@ require(msg.sender==administrator,"admin");administrator=next;
 }""")
             consumer=root/"Vault.sol"
             consumer.write_text("""pragma solidity ^0.8.20;
-contract Vault {address public operator;
+import "./Authority.sol";
+contract Vault is Authority {
 function settle() external {require(msg.sender==operator,"operator only");}
 }""")
             a=["0x"+"11"*20,"0x"+"22"*20,"0x"+"33"*20]
@@ -66,7 +67,9 @@ function settle() external {require(msg.sender==operator,"operator only");}
             consumer.unlink()
             self.assertFalse(authorization_transition_observed(root,authority,"Authority.rotateOperator",d),
                 "a public setter without independent evidence of a protected role is not a verified security issue")
-            consumer.write_text("contract Vault {function settle() external {require(msg.sender==operator);}}")
+            consumer.write_text("contract Unrelated {address public operator; function settle() external {require(msg.sender==operator);}}")
+            self.assertFalse(authorization_transition_observed(root,authority,"Authority.rotateOperator",d),
+                "A role guard in an unrelated contract must not prove an inherited privileged consumer")
             authority.write_text(authority.read_text().replace('require(next!=address(0),"zero");operator=next;',
               'require(msg.sender==administrator,"admin");operator=next;'))
             self.assertFalse(authorization_transition_observed(root,authority,"Authority.rotateOperator",d))

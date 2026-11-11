@@ -17,14 +17,14 @@ export function roleConsumerImpactSequence(source:string,role:string,mutator:str
      !/\bcredit\s*\[\s*\w+\s*\]\s*\+=/.test(settle[1]))
     return null;
   return {constructorArgs:[],steps:[
-    {operation:'observe',function:role+'()',args:[]},
+    {operation:'call',function:role+'()',args:[],expect:'$account0'},
     {operation:'send',function:'fund(uint256)',args:['5'],sender:0},
     {operation:'send',function:'settle(address,uint256)',args:['$account1','1'],sender:2,expectRevert:true},
-    {operation:'observe',function:'credit(address)',args:['$account1']},
+    {operation:'call',function:'credit(address)',args:['$account1'],expect:'0'},
     {operation:'send',function:mutator+'(address)',args:['$account2'],sender:1},
-    {operation:'observe',function:role+'()',args:[]},
+    {operation:'call',function:role+'()',args:[],expect:'$account2'},
     {operation:'send',function:'settle(address,uint256)',args:['$account1','1'],sender:2},
-    {operation:'observe',function:'credit(address)',args:['$account1']}
+    {operation:'call',function:'credit(address)',args:['$account1'],expect:'1'}
   ]};
 }
 
@@ -35,19 +35,19 @@ export function roleConsumerImpactObserved(observations:unknown,role:string,muta
      !Array.isArray(data.steps)||data.steps.length!==8)return false;
   const [before,fund,blocked,creditBefore,mutation,after,consumer,creditAfter]=data.steps as Array<Record<string,unknown>>;
   const eq=(a:unknown,b:unknown)=>typeof a==='string'&&typeof b==='string'&&a.toLowerCase()===b.toLowerCase();
-  return before.operation==='observe' && before.function===role+'()' &&
-    eq(before.actual,data.accounts[0]) &&
+  return before.operation==='call' && before.function===role+'()' &&
+    before.passed===true && eq(before.actual,data.accounts[0]) &&
     fund.operation==='send' && fund.function==='fund(uint256)' && fund.passed===true && fund.reverted===false &&
     blocked.operation==='send' && blocked.function==='settle(address,uint256)' &&
     blocked.sender===2 && blocked.reverted===true && blocked.passed===true &&
-    creditBefore.operation==='observe' && creditBefore.function==='credit(address)' &&
-    creditBefore.actual==='0' &&
+    creditBefore.operation==='call' && creditBefore.function==='credit(address)' &&
+    creditBefore.passed===true && creditBefore.actual==='0' &&
     mutation.operation==='send' && mutation.function===mutator+'(address)' &&
     mutation.sender===1 && mutation.passed===true && mutation.reverted===false &&
-    after.operation==='observe' && after.function===role+'()' &&
-    eq(after.actual,data.accounts[2]) &&
+    after.operation==='call' && after.function===role+'()' &&
+    after.passed===true && eq(after.actual,data.accounts[2]) &&
     consumer.operation==='send' && consumer.function==='settle(address,uint256)' &&
     consumer.sender===2 && consumer.passed===true && consumer.reverted===false &&
-    creditAfter.operation==='observe' && creditAfter.function==='credit(address)' &&
-    creditAfter.actual==='1';
+    creditAfter.operation==='call' && creditAfter.function==='credit(address)' &&
+    creditAfter.passed===true && creditAfter.actual==='1';
 }

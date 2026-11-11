@@ -39,19 +39,45 @@ def authorization_transition_observed(repository: Path, file: Path, selector: st
         # privileged consumer before scanning any other authorized file.
         privileged=bool(re.search(
             r"\brequire\s*\(\s*msg\s*\.\s*sender\s*==\s*"+re.escape(role)+r"\b",source))
-        count=0
+        # A role guard in an unrelated contract is not a consumer of the
+        # tested role. Only an actual import plus direct inheritance links a
+        # derived contract's guard to this role's storage.
+        base_name=selector.split(".")[0]
+        repository_root=repository.resolve()
+        source_file=file.resolve()
         for candidate in repository.rglob("*.sol"):
             if privileged:
                 break
-            count+=1
-            if count>200:
-                break
-            if candidate.stat().st_size>256000:
+            if candidate==file or candidate.is_symlink() or candidate.stat().st_size>256000:
                 continue
             text=candidate.read_text(encoding="utf8")
-            if re.search(r"\brequire\s*\(\s*msg\s*\.\s*sender\s*==\s*"+re.escape(role)+r"\b",text):
-                privileged=True
-                break
+            stripped=re.sub(r"//[^\\n]*|/\\*[\\s\\S]*?\\*/","",text)
+            imports=re.findall(r"\\bimport\\b[^;]{0,1000}[\"']([^\"']+)[\"']\\s*;",stripped)
+            linked=False
+            for imported in imports:
+                resolved=(candidate.parent/imported).resolve()
+                if resolved.is_relative_to(repository_root) and resolved==source_file:
+                    linked=True
+                    break
+            if not linked:
+                continue
+            for declaration in re.finditer(r"\\bcontract\\s+([A-Za-z_]\\w*)\\s+is\\s+([^{};]{1,300})\\{",stripped):
+                bases=declaration.group(2)
+                if not re.search(r"(?<![A-Za-z0-9_])"+re.escape(base_name)+r"(?![A-Za-z0-9_])",bases):
+                    continue
+                depth=1
+                pos=declaration.end()
+                while pos<len(stripped) and depth:
+                    depth+=(stripped[pos]=="{")-(stripped[pos]=="}")
+                    pos+=1
+                if depth:
+                    continue
+                derived_body=stripped[declaration.end():pos-1]
+                if re.search(r"\\baddress\\s+(?:public\\s+)?"+re.escape(role)+r"\\s*;",derived_body):
+                    continue
+                if re.search(r"\\brequire\\s*\\(\\s*msg\\s*\\.\\s*sender\\s*==\\s*"+re.escape(role)+r"\\b",derived_body):
+                    privileged=True
+                    break
         if not privileged:
             return False
         role_getter=role+"()"

@@ -29,6 +29,11 @@ const run=async(seq:unknown)=>{
  try{return await runSequence(artifact,seq,provider);}finally{await provider.disconnect();}
 };
 const first=await run(sequence);
+assert.equal(first.steps[0].operation,'call');
+assert.equal(first.steps[0].passed,true,'Initial role assertion must pass');
+assert.equal(first.steps[3].passed,true,'Initial beneficiary balance assertion must pass');
+assert.equal(first.steps[5].passed,true,'Post-mutation role assertion must pass');
+assert.equal(first.steps[7].passed,true,'Final beneficiary balance assertion must pass');
 assert.equal(first.steps[2].reverted,true,'Unauthorised consumer must initially be blocked');
 assert.equal(first.steps[4].reverted,false,'Role setter must be executable by nonadministrator');
 assert.equal(first.steps[6].reverted,false,'Consumer must become executable after role transfer');

@@ -509,8 +509,8 @@ contract Authority {
  function changeAdministrator(address next) external {require(msg.sender==administrator,"admin");administrator=next;}
 }""")
             (repo/"Vault.sol").write_text("""pragma solidity ^0.8.20;
-contract Vault {
- address public operator;
+import "./Authority.sol";
+contract Vault is Authority {
  function settle() external {require(msg.sender==operator,"operator only");}
 }""")
             sequence={"constructorArgs":[],"steps":[

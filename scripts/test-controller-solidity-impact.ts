@@ -12,14 +12,14 @@ assert.ok(soliditySequenceSchema.safeParse(sequence).success);
 assert.equal(sequence.steps.length,8);
 const accounts=['0x'+'11'.repeat(20),'0x'+'22'.repeat(20),'0x'+'33'.repeat(20)];
 const observations={accounts,steps:[
- {operation:'observe',function:'operator()',actual:accounts[0]},
+ {operation:'call',function:'operator()',actual:accounts[0],passed:true},
  {operation:'send',function:'fund(uint256)',sender:0,passed:true,reverted:false},
  {operation:'send',function:'settle(address,uint256)',sender:2,passed:true,reverted:true},
- {operation:'observe',function:'credit(address)',actual:'0'},
+ {operation:'call',function:'credit(address)',actual:'0',passed:true},
  {operation:'send',function:'rotateOperator(address)',sender:1,passed:true,reverted:false},
- {operation:'observe',function:'operator()',actual:accounts[2]},
+ {operation:'call',function:'operator()',actual:accounts[2],passed:true},
  {operation:'send',function:'settle(address,uint256)',sender:2,passed:true,reverted:false},
- {operation:'observe',function:'credit(address)',actual:'1'}
+ {operation:'call',function:'credit(address)',actual:'1',passed:true}
 ]};
 assert.ok(roleConsumerImpactObserved(observations,'operator','rotateOperator'));
 const selector=sink.split('/').at(-1)!.replace(/\.sol$/,'')+'.rotateOperator';
@@ -43,7 +43,11 @@ for(const patch of [
  {index:4,field:'passed',value:false},
  {index:5,field:'actual',value:accounts[0]},
  {index:6,field:'reverted',value:true},
- {index:7,field:'actual',value:'0'}
+ {index:7,field:'actual',value:'0'},
+ {index:0,field:'passed',value:false},
+ {index:3,field:'passed',value:false},
+ {index:5,field:'passed',value:false},
+ {index:7,field:'passed',value:false}
 ]){
  const changed=structuredClone(observations);
  (changed.steps[patch.index] as Record<string,unknown>)[patch.field]=patch.value;
