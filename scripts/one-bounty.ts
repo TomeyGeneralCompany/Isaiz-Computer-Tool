@@ -40,6 +40,16 @@ The time limit applies to INACTIVITY, not to total time while work continues.
 No automatic bounty submission. No program discovery, scheduler or loop.
 The result is saved in data/one-bounty/ for inspection.`;
 
+/** Prefer a recent, successfully checked runnable-source repository over an untested program. */
+function confirmedSourceCapability(summary:string|null):number {
+  try {
+    const tracking=JSON.parse(summary||'{}');
+    const evidence=tracking.sourceCapabilities;
+    if(evidence?.scopes!==JSON.stringify(tracking.scopes||[]))return 0;
+    const checks=Object.values(evidence.checks||{}) as Array<{blocked?:boolean;checkedAt?:number}>;
+    return checks.some(c=>c.blocked===false && Number.isFinite(c.checkedAt) && Date.now()-(c.checkedAt as number)<24*3600000)?1:0;
+  }catch{return 0;}
+}
 async function main() {
   const options=parseOneBountyArgs(process.argv.slice(2));
   if(options.help){console.log(usage);return;}
@@ -60,7 +70,7 @@ async function main() {
     return;
   }
   const matches=options.program?ranked.filter(x=>[x.program.id,x.program.providerProgramId||'',x.program.name]
-    .some(s=>s.toLowerCase()===options.program!.toLowerCase())):ranked.slice(0,1);
+    .some(s=>s.toLowerCase()===options.program!.toLowerCase())): [...ranked].sort((a,b)=>confirmedSourceCapability(b.program.scopeSummary)-confirmedSourceCapability(a.program.scopeSummary)).slice(0,1);
   if(matches.length!==1)throw new Error(options.program?
     'No unique eligible program matches '+options.program+'. Run --list and choose one listed ID.':
     'No eligible, assessed programs available. Run --list to inspect the selection result.');
