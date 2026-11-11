@@ -51,8 +51,8 @@ def authorization_transition_observed(repository: Path, file: Path, selector: st
             if candidate==file or candidate.is_symlink() or candidate.stat().st_size>256000:
                 continue
             text=candidate.read_text(encoding="utf8")
-            stripped=re.sub(r"//[^\\n]*|/\\*[\\s\\S]*?\\*/","",text)
-            imports=re.findall(r"\\bimport\\b[^;]{0,1000}[\"']([^\"']+)[\"']\\s*;",stripped)
+            stripped=re.sub(r"//[^\n]*|/\*[\s\S]*?\*/","",text)
+            imports=re.findall(r"\bimport\b[^;]{0,1000}[\"']([^\"']+)[\"']\s*;",stripped)
             linked=False
             for imported in imports:
                 resolved=(candidate.parent/imported).resolve()
@@ -61,7 +61,7 @@ def authorization_transition_observed(repository: Path, file: Path, selector: st
                     break
             if not linked:
                 continue
-            for declaration in re.finditer(r"\\bcontract\\s+([A-Za-z_]\\w*)\\s+is\\s+([^{};]{1,300})\\{",stripped):
+            for declaration in re.finditer(r"\bcontract\s+([A-Za-z_]\w*)\s+is\s+([^{};]{1,300})\{",stripped):
                 bases=declaration.group(2)
                 if not re.search(r"(?<![A-Za-z0-9_])"+re.escape(base_name)+r"(?![A-Za-z0-9_])",bases):
                     continue
@@ -73,9 +73,9 @@ def authorization_transition_observed(repository: Path, file: Path, selector: st
                 if depth:
                     continue
                 derived_body=stripped[declaration.end():pos-1]
-                if re.search(r"\\baddress\\s+(?:public\\s+)?"+re.escape(role)+r"\\s*;",derived_body):
+                if re.search(r"\baddress\s+(?:public\s+)?"+re.escape(role)+r"\s*;",derived_body):
                     continue
-                if re.search(r"\\brequire\\s*\\(\\s*msg\\s*\\.\\s*sender\\s*==\\s*"+re.escape(role)+r"\\b",derived_body):
+                if re.search(r"\brequire\s*\(\s*msg\s*\.\s*sender\s*==\s*"+re.escape(role)+r"\b",derived_body):
                     privileged=True
                     break
         if not privileged:
