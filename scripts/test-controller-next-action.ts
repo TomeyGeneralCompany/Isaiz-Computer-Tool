@@ -174,6 +174,27 @@ try {
   // verifier can send a transaction and observe a getter.
   assert.equal(sourceGroundedSolidityProbe(authSource,abi,risk,'Authority.rotateOperator'),null,
     'an unrelated Vault operator guard does not prove a consumer of Authority.operator');
+  const inheritedSource='pragma solidity ^0.8.20; import "./Authority.sol"; '+
+    'contract InheritedVault is Authority {'+
+    'function settle(address recipient,uint256 amount) external {'+
+    'require(msg.sender==operator,"operator"); payable(recipient);}}';
+  const inheritedContext={path:'source-1/Authority.sol',peers:[
+    {path:'source-1/Authority.sol',source:authSource},
+    {path:'source-1/InheritedVault.sol',source:inheritedSource}
+  ]};
+  const inherited=sourceGroundedSolidityProbes(authSource,abi,inheritedContext);
+  assert.equal(inherited.find(p=>p.selector==='Authority.rotateOperator')?.probe.guardedConsumer,
+    'InheritedVault.settle',
+    'an AST-proven inherited role guard is an executable source-backed consumer');
+  const disconnected=sourceGroundedSolidityProbes(authSource,abi,{
+    ...inheritedContext,peers:[{path:'source-1/unrelated/InheritedVault.sol',source:inheritedSource}]
+  });
+  assert.equal(disconnected.length,0,'unresolved relative import cannot establish role inheritance');
+  const shadowed=inheritedSource.replace('function settle(', 'address public operator; function settle(');
+  assert.equal(sourceGroundedSolidityProbes(authSource,abi,{...inheritedContext,
+    peers:[{path:'source-1/InheritedVault.sol',source:shadowed}]}).length,0,
+    'shadowed role storage cannot be attributed to imported base contract');
+
   assert.equal(sourceGroundedSolidityProbe(authSource,abi,risk,'Authority.changeAdministrator'),null,
     'a state-changing ABI entry is not itself a source-grounded security scenario');
   assert.equal(sourceGroundedSolidityProbe(authSource,abi,null,'Authority.rotateOperator'),null,
