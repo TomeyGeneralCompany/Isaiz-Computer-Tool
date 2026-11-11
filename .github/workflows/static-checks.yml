@@ -99,7 +99,10 @@ jobs:
       - name: Verify Level 6 indexed prompt fits actual Qwen context reservation
         run: node --import tsx scripts/test-level6-index-prompt-envelope.ts
       - name: Verify paginated source inspection and evidence spans
-        run: npx tsx scripts/test-source-inspection.ts
+        run: |
+          npx tsx scripts/test-source-inspection.ts
+          npx tsx scripts/test-controller-source-pagination.ts
+          npx tsx scripts/test-controller-solidity-finance-scenarios.ts
       - name: Verify state mutex crash recovery and concurrent claims
         run: npx tsx scripts/test-state-mutex.ts
       - name: Exercise production program assessment and truncated output recovery
