@@ -155,7 +155,7 @@ export class ControllerScenarioLedger {
     scenario.outcome=outcome;scenario.reason=reason.slice(0,1000);
   }
   unresolved():SecurityScenario[]{return this.all().filter(s=>s.phase!=='resolved');}
-  snapshot():{version:1;scenarios:SecurityScenario[];history:typeof this.history}{
+  snapshot():{version:1;scenarios:SecurityScenario[];history:Array<{id:string;from:ScenarioPhase;to:ScenarioPhase;reason:string}>}{
     return clone({version:1 as const,scenarios:this.all(),history:this.history});
   }
   restore(data:unknown):void {
