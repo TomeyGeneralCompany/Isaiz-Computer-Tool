@@ -15,6 +15,7 @@ export interface ControllerReviewGrounds {
   verifiedLocalEntryInjection:boolean;
   independentlyReplayed:boolean;
   replayedProbeKind:string|null;
+  sourceBackedNonadminRoleMutation:boolean;
   immutableFacts:string[];
   unresolvedQuestions:string[];
   // Only observed or source-cited blockers can be used as factual grounds.
@@ -24,6 +25,42 @@ export interface ControllerReviewGrounds {
 const lineRef=(file:string,line:number)=>file+':'+line;
 const escapingOperation=/(?:\breplace\s*\(\s*['"][<>&]['"]\s*,\s*['"]&(?:lt|gt|amp);|\b(?:escapeHtml|encodeForHTML|StringEscapeUtils\.escapeHtml|html\.escape|markupsafe\.escape)\s*\()/i;
 const explicitlyPlainText=/\btext\/plain\b/i;
+
+/** A narrow, source-and-replay-backed fact, NOT an impact verdict.
+ * An independently executed nonadministrator transaction changed the role
+ * used by a source-linked privileged consumer. The reviewer still decides
+ * whether the downstream consequence and deployment scope are established.
+ */
+function replayedSourceLinkedRoleMutation(evidence:ReviewEvidence,
+  replay:{status?:string;kind?:string;behavior_observed?:boolean;observations?:unknown}|null|undefined):boolean {
+  if(evidence.language!=='solidity'||replay?.kind!=='solidity_sequence'||
+     replay.status!=='behavior_observed'||replay.behavior_observed!==true)return false;
+  const observations=replay.observations as {accounts?:unknown;steps?:unknown}|undefined;
+  if(!observations||!Array.isArray(observations.accounts)||
+     observations.accounts.length<3||!Array.isArray(observations.steps))return false;
+  const steps=observations.steps as Array<Record<string,unknown>>;
+  const accounts=observations.accounts;
+  const eq=(a:unknown,b:unknown)=>typeof a==='string'&&typeof b==='string'&&a.toLowerCase()===b.toLowerCase();
+  for(let i=0;i+2<steps.length;i++) {
+    const [before,mutation,after]=steps.slice(i,i+3);
+    const role=/^(operator|owner|administrator|admin|manager|guardian|controller|authority)\(\)$/i.exec(String(before.function||''));
+    const setter=/^([A-Za-z_]\w*)\(address\)$/.exec(String(mutation.function||''));
+    if(!role||!setter||before.operation!=='call'||after.operation!=='call'||
+       after.function!==before.function||before.passed!==true||after.passed!==true||
+       mutation.operation!=='send'||mutation.sender!==1||mutation.passed!==true||
+       mutation.reverted!==false||!eq(before.actual,accounts[0])||
+       !eq(after.actual,accounts[2])||eq(accounts[0],accounts[1]))continue;
+    const roleName=role[1],method=setter[1];
+    const setterLine=evidence.links.some(link=>
+      new RegExp('\\bfunction\\s+'+method+'\\s*\\(').test(link.code) &&
+      new RegExp('\\b'+roleName+'\\s*=\\s*[A-Za-z_]\\w*\\s*;').test(link.code) &&
+      !/\bmsg\s*\.\s*sender\b|\bonly(?:Admin|Owner|Role|Operator)\b/.test(link.code));
+    const consumer=evidence.links.some(link=>
+      new RegExp('\\brequire\\s*\\(\\s*msg\\s*\\.\\s*sender\\s*==\\s*'+roleName+'\\b').test(link.code));
+    if(setterLine&&consumer)return true;
+  }
+  return false;
+}
 
 /** Produce a finite list of provenance-cited facts, not narrative guesses. */
 export function controllerReviewGrounds(evidence:ReviewEvidence,
@@ -37,15 +74,18 @@ export function controllerReviewGrounds(evidence:ReviewEvidence,
     .map(link=>lineRef(link.file,link.line));
   const plain=evidence.links.filter(link=>explicitlyPlainText.test(link.code))
     .map(link=>lineRef(link.file,link.line));
+  const sourceBackedNonadminRoleMutation=replayedSourceLinkedRoleMutation(evidence,replay);
   const immutableFacts=[
     'Source-backed evidence digest '+evidence.sourceDigest+' ('+evidence.language+')',
     ...evidence.links.map(link=>lineRef(link.file,link.line)+': '+link.code.trim()).slice(0,70),
     ...(verified?['Independent sandbox entry replay preserved the exact attacker-chosen HTML markup in the handler output.']:[]),
-    ...(independentlyReplayed?['Independent sandbox replay recorded '+replay!.status+' for '+(replay!.kind||evidence.kind)+'.']:[])
+    ...(independentlyReplayed?['Independent sandbox replay recorded '+replay!.status+' for '+(replay!.kind||evidence.kind)+'.']:[]),
+    ...(sourceBackedNonadminRoleMutation?['Source and replay establish that account1, distinct from the account0 administrator, changed the protected role to account2. This does not itself prove downstream consumer impact.']:[])
   ];
   return {
     sourceDigest:evidence.sourceDigest,language:evidence.language,
     verifiedLocalEntryInjection:verified,independentlyReplayed,
+    sourceBackedNonadminRoleMutation,
     replayedProbeKind:independentlyReplayed ? replay?.kind||evidence.kind:null,
     immutableFacts,
     unresolvedQuestions:[
@@ -76,6 +116,13 @@ export function controllerReviewGroundDefect(
     const prose=decision.issues.map(x=>x.description).join(' ' )+' '+decision.reasoning;
     if(/\b(?:no (?:supported|executed|recorded|successful) (?:probe|test|reproduction)|nothing (?:was |has been )?reproduced|no (?:runtime )?observation)\b/i.test(prose))
       return 'The independent controller replay recorded the executed probe and its actual observations. A rejection must assess security significance without denying the completed test.';
+  }
+  if(grounds.sourceBackedNonadminRoleMutation) {
+    const prose=decision.issues.map(x=>x.description).join(' ')+' '+decision.reasoning;
+    const claimsAdminGuard=/\b(?:function|setter|rotateOperator|role mutation)\b.{0,180}\b(?:checks? (?:for )?the caller|requires? (?:the )?caller|restricted to|only (?:the )?administrator)\b.{0,90}\b(?:administrator|admin|owner)\b/i.test(prose);
+    const deniesGuard=/\b(?:does not|doesn't|no|without|lacks?|missing)\b.{0,95}\b(?:admin|administrator|owner|caller|authorization)\b/i.test(prose);
+    if(claimsAdminGuard&&!deniesGuard)
+      return 'The replayed nonadministrator account1 changed the protected role, and the recorded setter source has no administrator caller guard. Do not attribute the separate administrator-change function guard to this setter. Assess actual consumer impact and scope independently; no finding is automatically approved.';
   }
   if(!grounds.verifiedLocalEntryInjection)return null;
   const fatal=decision.issues.filter(x=>x.severity==='fatal');
