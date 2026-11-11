@@ -7,7 +7,6 @@ import {polyglotSequenceSchema,type PolyglotSequence} from "./polyglot-sequence"
 import {sourceGroundedSolidityProbe,sourceGroundedSolidityProbes,traceProjectErc1155Callers} from './controller-solidity-security-probes';
 import {controllerSourceGroundedSolidityProbes} from './controller-solidity-owner-scenarios';
 import {deliveredSourcePageComplete} from './controller-source-pagination';
-import {indexedPhaseStatus} from './controller-indexed-phase';
 import {privilegedRoleMutationCandidate} from './solidity-security-candidates';
 import {rankTracedSourceCandidates} from './controller-source-candidates';
 import { InvestigationWorkflow } from "./investigation-workflow";
@@ -677,24 +676,6 @@ export async function runLocalAudit(
         constraints=await workflow.constraints();
         await appendFile(logFile,'[INDEXED_COMPLETED_REQUIREMENT_RELEASED] '+
           JSON.stringify({path:alreadyRead,turn:turn+1})+'\n');
-      }
-      // Full-index investigations must finish delivered pages of EVERY indexed
-      // source before scheduling a plan in any supported language. An early
-      // 'plan_probe' constraint cannot bypass the controller's reading phase.
-      const indexedPhase=fullIndexMode
-        ? indexedPhaseStatus(limits.initialSourcePaths||[],terminalReadPages.keys())
-        : null;
-      if(indexedPhase && !indexedPhase.ready &&
-         constraints?.action?.includes('plan_probe')) {
-        constraints={...constraints,
-          action:['read_file'],
-          // Leave the path constraint open: controllerOwnedNextAction would
-          // otherwise restart the sole remaining file at offset=0 each turn.
-          // Indexed reading fallback supplies the persistent next offset.
-          path:[]};
-        await appendFile(logFile,'[CONTROLLER_READING_BEFORE_EXPERIMENT] '+
-          JSON.stringify({completed:indexedPhase.completed,eligible:indexedPhase.eligible,
-            remaining:indexedPhase.remaining.length})+'\n');
       }
       let controllerAction=structured && workflow && process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false' ?
         controllerOwnedNextAction(constraints,workflow.snapshot().pending) : null;
