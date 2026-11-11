@@ -23,7 +23,7 @@ assert.ok(cap,'Actual 88mph v3 source must yield a guarded finance-state experim
 soliditySequenceSchema.parse(cap.probe.sequence);
 assert.equal(cap.probe.sequence.steps.length,7);
 assert.deepEqual(cap.probe.sequence.steps.filter(s=>s.operation==='send').map(s=>s.sender),[0,1,0]);
-assert.equal(cap.probe.sequence.steps.filter(s=>s.operation==='send')[1].expectRevert,true);
+assert.equal((cap.probe.sequence.steps.filter(s=>s.operation==='send')[1] as any).expectRevert,true);
 assert.equal(cap.probe.sequence.steps.at(-1)?.operation,'call');
 assert.equal((cap.probe.sequence.steps.at(-1) as any).expect,'2');
 assert.ok(!plans.some(p=>p.selector==='DInterest.setMinDepositAmount'),
