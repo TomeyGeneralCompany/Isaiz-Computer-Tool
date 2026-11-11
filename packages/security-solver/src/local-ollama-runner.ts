@@ -5,6 +5,7 @@ import {z} from "zod";
 import {javaSequenceSchema, type JavaSequence} from "./java-sequence";
 import {polyglotSequenceSchema,type PolyglotSequence} from "./polyglot-sequence";
 import {sourceGroundedSolidityProbe,sourceGroundedSolidityProbes,traceProjectErc1155Callers} from './controller-solidity-security-probes';
+import {controllerSourceGroundedSolidityProbes} from './controller-solidity-owner-scenarios';
 import {privilegedRoleMutationCandidate} from './solidity-security-candidates';
 import {rankTracedSourceCandidates} from './controller-source-candidates';
 import { InvestigationWorkflow } from "./investigation-workflow";
@@ -703,7 +704,7 @@ export async function runLocalAudit(
               const menu=await solidityIndex.probeMenu(full,64);
               // Source-grounded AST scenarios, not ABI mutability or guessed
               // role names, are the only eligible Solidity security probes.
-              const groundedOptions=sourceGroundedSolidityProbes(source,menu,{
+              const groundedOptions=controllerSourceGroundedSolidityProbes(source,menu,{
                  path,peers:[...accessibleSoliditySources.entries()]
                    .map(([peerPath,peerSource])=>({path:peerPath,source:peerSource}))
                });
@@ -1196,7 +1197,7 @@ export async function runLocalAudit(
             const full=await safePath(action.path);
             const source=await readFile(full,'utf8');
             const menu=await solidityIndex.probeMenu(full,64);
-            grounded=sourceGroundedSolidityProbes(source,menu,{
+            grounded=controllerSourceGroundedSolidityProbes(source,menu,{
                 path:action.path,peers:[...accessibleSoliditySources.entries()]
                   .map(([peerPath,peerSource])=>({path:peerPath,source:peerSource}))
               }).find(item=>item.selector===action.query)?.probe||null;
