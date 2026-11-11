@@ -93,4 +93,48 @@ const facts=controllerReviewGrounds(ev,entry);
 assert.deepEqual(facts.sourceBackedTextOnlyResponse,['src/HttpHandler.java:19']);
 assert.equal(controllerReviewGroundDefect(reject('The response at src/HttpHandler.java:19 is text/plain.'),facts),null,
   'real source-backed content type is an admissible factual ground, not automatic approval');
+
+const solidityRoleSource:ReviewEvidence={
+  language:'solidity',kind:'solidity_sequence',sourceDigest:'b'.repeat(64),
+  reachabilityRequirement:'Source and local EVM authorization transition',
+  summary:'Source-backed role mutation with inherited consumer',unresolved:[],
+  links:[
+    {file:'contracts/Authority.sol',line:5,relationship:'role declaration',
+      code:'address public operator;'},
+    {file:'contracts/Authority.sol',line:7,relationship:'role setter',
+      code:'function rotateOperator(address next) external {require(next!=address(0),"zero");operator=next;}'},
+    {file:'contracts/Vault.sol',line:5,relationship:'inherited consumer',
+      code:'contract Vault is Authority {'},
+    {file:'contracts/Vault.sol',line:11,relationship:'protected consumer',
+      code:'require(msg.sender==operator,"operator only");'}
+  ]
+};
+const accounts=['0x'+'11'.repeat(20),'0x'+'22'.repeat(20),'0x'+'33'.repeat(20)];
+const roleReplay={status:'behavior_observed',kind:'solidity_sequence',behavior_observed:true,
+  observations:{accounts,steps:[
+    {operation:'call',function:'operator()',actual:accounts[0],passed:true},
+    {operation:'send',function:'rotateOperator(address)',sender:1,passed:true,reverted:false},
+    {operation:'call',function:'operator()',actual:accounts[2],passed:true}
+  ]}};
+const roleFacts=controllerReviewGrounds(solidityRoleSource,null,roleReplay);
+assert.equal(roleFacts.sourceBackedNonadminRoleMutation,true);
+assert.match(controllerReviewGroundDefect(reject(
+  'The function requires a non-zero address and checks for the caller being the administrator.'
+),roleFacts)||'',/no administrator caller guard/);
+assert.equal(controllerReviewGroundDefect(reject(
+  'The role transition occurred, but no downstream protected consumer operation was executed.'
+),roleFacts),null,'missing consumer impact remains a legitimate independent rejection');
+assert.equal(controllerReviewGrounds(solidityRoleSource,null,{
+  ...roleReplay,observations:{accounts,steps:[
+    {operation:'call',function:'operator()',actual:accounts[0],passed:true},
+    {operation:'send',function:'rotateOperator(address)',sender:1,passed:true,reverted:true},
+    {operation:'call',function:'operator()',actual:accounts[0],passed:true}
+  ]}
+}).sourceBackedNonadminRoleMutation,false,'reverted mutation is not a successful role change');
+assert.equal(controllerReviewGrounds({...solidityRoleSource,links:
+  solidityRoleSource.links.map(link=>link.code.includes('rotateOperator')
+    ? {...link,code:'function rotateOperator(address next) external {require(msg.sender==administrator,"admin");operator=next;}'}
+    : link)},null,roleReplay).sourceBackedNonadminRoleMutation,false,
+  'an actual source-declared administrator guard must not be disregarded');
+
 console.log('Shared four-language immutable review fact boundary PASSED');

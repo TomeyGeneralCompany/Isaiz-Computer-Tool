@@ -29,7 +29,7 @@ try {
     ['render.py','def safe(value):\n    return "<p>safe</p>"\ndef render(value):\n    return "<p>"+value+"</p>"\n','safe','render'],
     ['render.cjs','exports.safe=function(value){return "<p>safe</p>";};\nexports.render=function(value){return "<p>"+value+"</p>";};','safe','render'],
     ['Render.java','public class Render {public static String safe(String value){return "<p>safe</p>";} public static String render(String value){return "<p>"+value+"</p>";}}','Render.safe','Render.render'],
-    ['Counter.sol','pragma solidity ^0.8.0; contract Counter {uint public value; function first(uint amount) public {value+=amount;} function second(uint amount) public {value+=amount;}}','Counter.first','Counter.second'],
+    ['Counter.sol','pragma solidity ^0.8.20; contract Counter {address public firstRole; address public secondRole; constructor(){firstRole=msg.sender;secondRole=msg.sender;} function first(address next) external {firstRole=next;} function second(address next) external {secondRole=next;} function firstGuard() external {require(msg.sender==firstRole,"first role");} function secondGuard() external {require(msg.sender==secondRole,"second role");}}','Counter.first','Counter.second'],
   ];
   await mkdir(join(root,'source-1'));
   for(const [name,code,first,second] of fixtures) {

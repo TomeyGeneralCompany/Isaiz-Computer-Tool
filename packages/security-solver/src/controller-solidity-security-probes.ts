@@ -1,0 +1,264 @@
+import {parse} from '@solidity-parser/parser';
+import {posix} from 'node:path';
+import type {SolidityProbeDeclaration} from './solidity-probe-inputs';
+import type {SoliditySequence} from './solidity-sequence';
+import {roleConsumerImpactSequence,inheritedRoleConsumerImpactSequence} from './controller-solidity-consumer-impact';
+
+/** A probe is eligible only when source establishes a security rule, a
+ * reproducible caller/role setup, and an assertion which can falsify the
+ * suspected violation. ABI mutability alone is never a security hypothesis.
+ *
+ * This intentionally supports one narrow scenario: a nonadmin changing a
+ * role that protects another entry point. Other Solidity methods require a
+ * separately proven scenario and are skipped, not given fixture transactions.
+ */
+type RoleMutation = {selector:string;role:string;method:string};
+export type GroundedSolidityProbe = {
+  hypothesis:string;
+  sequence:SoliditySequence;
+  guardedConsumer:string;
+};
+
+export function sourceGroundedSolidityProbe(
+  source:string,
+  menu:SolidityProbeDeclaration[],
+  candidate:RoleMutation|null|undefined,
+  requestedSelector:string,
+  context?:{path:string;peers:Array<{path:string;source:string}>}
+):GroundedSolidityProbe|null {
+  if(!candidate || candidate.selector!==requestedSelector || source.length>256000)return null;
+  const separator=requestedSelector.lastIndexOf('.');
+  if(separator<1)return null;
+  const contractName=requestedSelector.slice(0,separator);
+  const mutation=requestedSelector.slice(separator+1);
+  if(candidate.method!==mutation || !/^[A-Za-z_]\w*$/.test(candidate.role))return null;
+  let ast:any;
+  try {ast=parse(source,{range:true});}catch{return null;}
+  const contracts=(ast.children||[]).filter((node:any)=>
+    node.type==='ContractDefinition' && node.name===contractName);
+  if(contracts.length!==1)return null;
+  const members:any[]=contracts[0].subNodes||[];
+  const functions=members.filter(node=>node.type==='FunctionDefinition');
+  const constructor=functions.filter(node=>node.isConstructor);
+  if(constructor.length!==1 || constructor[0].parameters?.length!==0)return null;
+  const extract=(node:any):string=>{
+    if(!node?.body?.range)return '';
+    return source.slice(node.body.range[0],node.body.range[1]+1);
+  };
+  const literal=(value:string)=>value.replace(/[.*+?^$\{\}()|[\]\\]/g,'\\$&');
+  const role=literal(candidate.role);
+  // The starting value is not assumed: deployment by account0 must initialize
+  // the protected role to msg.sender, or the expected baseline is unsupported.
+  const init=new RegExp('\\b'+role+'\\s*=\\s*msg\\s*\\.\\s*sender\\s*;');
+  // Comments are never evidence of actual initialization.
+  const withoutComments=(text:string)=>text.replace(/\/\/[^\n]*|\/\*[\s\S]*?\*\//g,'');
+  if(!init.test(withoutComments(extract(constructor[0]))))return null;
+  const roleStorage=members.some(member=>member.type==='StateVariableDeclaration' &&
+    (member.variables||[]).some((variable:any)=>
+      variable.name===candidate.role && variable.visibility==='public' &&
+      variable.typeName?.type==='ElementaryTypeName' && variable.typeName.name==='address'));
+  if(!roleStorage)return null;
+
+  const setter=functions.filter(fn=>fn.name===mutation && !fn.isConstructor);
+  if(setter.length!==1 || !['public','external'].includes(setter[0].visibility) ||
+     (setter[0].modifiers||[]).length!==0 || setter[0].parameters?.length!==1)return null;
+  const param=setter[0].parameters[0];
+  if(param?.typeName?.type!=='ElementaryTypeName' ||
+     param.typeName.name!=='address' || !/^[A-Za-z_]\w*$/.test(param.name||''))return null;
+  const parameter=literal(param.name);
+  const setterBody=extract(setter[0]);
+  if(!setterBody)return null;
+  // Permit a single nonzero-address validation, but no implicit modifiers,
+  // unknown helper calls, conditional branches or caller authorization.
+  // Those cases need a source-specific setup and must not be guessed.
+  const nonzero=new RegExp('require\\s*\\(\\s*'+parameter+
+    '\\s*!=\\s*address\\s*\\(\\s*0\\s*\\)\\s*(?:,\\s*(?:"[^"\\n]*"|\x27[^\x27\\n]*\x27))?\\s*\\)\\s*;','g');
+  const remaining=setterBody.replace(nonzero,'')
+    .replace(/\/\/[^\n]*|\/\*[\s\S]*?\*\//g,'')
+    .replace(/^\s*\{|\}\s*$/g,'').trim();
+  if(!new RegExp('^'+role+'\\s*=\\s*'+parameter+'\\s*;$').test(remaining))return null;
+  // A different contract's role, or a guard written only in a comment/string,
+  // is not authorization evidence. Inspect the actual require(...) AST call.
+  const isRole=(node:any)=>node?.type==='Identifier' && node.name===candidate.role;
+  const isSender=(node:any)=>node?.type==='MemberAccess' &&
+    node.memberName==='sender' && node.expression?.type==='Identifier' &&
+    node.expression.name==='msg';
+  const isRoleGuard=(node:any)=>node?.type==='BinaryOperation' &&
+    node.operator==='==' &&
+    ((isSender(node.left)&&isRole(node.right))||(isRole(node.left)&&isSender(node.right)));
+  const hasGuard=(body:any):boolean=>{
+    let scanned=0;
+    const walk=(node:any,depth:number):boolean=>{
+      if(!node || typeof node!=='object' || depth>48 || scanned++>4000)return false;
+      if(Array.isArray(node))return node.some(child=>walk(child,depth+1));
+      if(node.type==='FunctionCall' && node.expression?.type==='Identifier' &&
+         node.expression.name==='require' && isRoleGuard(node.arguments?.[0]))return true;
+      return Object.entries(node).some(([key,child])=>
+        key!=='range' && key!=='loc' && walk(child,depth+1));
+    };
+    return walk(body,0);
+  };
+  const consumers=functions.filter(fn=>fn!==setter[0] && !fn.isConstructor &&
+    ['public','external'].includes(fn.visibility) &&
+    !['view','pure'].includes(fn.stateMutability||'') &&
+    hasGuard(fn.body));
+  // Inherited role-guarded entry points are security consumers of the base
+  // role too. Verify the real import path, direct Solidity inheritance, and
+  // parsed require(msg.sender == role) AST; a lexical mention never qualifies.
+  const inheritedConsumers:Array<{consumer:string;peerPath:string;peerSource:string;contract:string}>=[];
+  if(!consumers.length && context && context.path.endsWith('.sol')) {
+    for(const peer of context.peers.slice(0,200)) {
+      if(peer.path===context.path || !peer.path.endsWith('.sol') ||
+         peer.source.length>256000)continue;
+      let peerAst:any;
+      try {peerAst=parse(peer.source,{range:true});} catch {continue;}
+      const imports=(peerAst.children||[]).filter((node:any)=>
+        node.type==='ImportDirective' && typeof node.path==='string' &&
+        posix.normalize(posix.join(posix.dirname(peer.path),node.path))===context.path);
+      if(!imports.length)continue;
+      for(const derived of peerAst.children||[]) {
+        if(derived.type!=='ContractDefinition' || !derived.name ||
+           !(derived.baseContracts||[]).some((base:any)=>
+             base.baseName?.namePath===contractName))continue;
+        const derivedMembers:any[]=derived.subNodes||[];
+        // Shadowed storage would break the proposed inherited-role invariant.
+        if(derivedMembers.some(member=>member.type==='StateVariableDeclaration' &&
+           (member.variables||[]).some((variable:any)=>variable.name===candidate.role)))
+          continue;
+        for(const fn of derivedMembers) {
+          if(fn.type==='FunctionDefinition' && fn.name && !fn.isConstructor &&
+             ['public','external'].includes(fn.visibility) &&
+             !['view','pure'].includes(fn.stateMutability||'') &&
+             hasGuard(fn.body))
+            inheritedConsumers.push({consumer:derived.name+'.'+fn.name,peerPath:peer.path,peerSource:peer.source,contract:derived.name});
+        }
+      }
+    }
+  }
+  if(!consumers.length && !inheritedConsumers.length)return null;
+  const consumer=consumers.length
+    ? contractName+'.'+consumers[0].name
+    : inheritedConsumers[0].consumer;
+  const getter=menu.find(item=>item.selector===contractName+'.'+candidate.role &&
+    item.operation==='call' && item.inputs.length===0);
+  const entry=menu.find(item=>item.selector===requestedSelector &&
+    item.operation==='send' && item.inputs.length===1 &&
+    /^address(?: payable)?$/.test(item.inputs[0]));
+  if(!getter || !entry)return null;
+  const observedGetter=candidate.role+'()';
+  const setterSignature=mutation+'('+entry.inputs.join(',')+')';
+  const baseFile=context?.path.replace(/^source-[0-9]+\//,'')||'';
+  const inherited=inheritedConsumers[0];
+  const impact=inherited && baseFile
+    ? inheritedRoleConsumerImpactSequence(source,inherited.peerSource,candidate.role,mutation,
+        baseFile,inherited.peerPath.replace(/^source-[0-9]+\//,''),inherited.contract)
+    : roleConsumerImpactSequence(source,candidate.role,mutation);
+  const sequence:SoliditySequence=impact || {constructorArgs:[],steps:[
+    {operation:'call',function:observedGetter,args:[],expect:'$account0'},
+    {operation:'send',function:setterSignature,args:['$account2'],sender:1},
+    {operation:'call',function:observedGetter,args:[],expect:'$account2'}
+  ]};
+  return {
+    hypothesis:'Source declares '+candidate.role+' as an account0-initialized role that gates '+
+      consumer+'; caller account1 must not be able to set it to account2 via '+
+      requestedSelector+'. The test is falsified by a rejected unauthorized send or by '+
+      'failure of the asserted account0-to-account2 role transition.'+
+      (impact?' The controller additionally verifies a denied-before and allowed-after protected consumer transaction with a measured balance change.':''),
+    sequence,guardedConsumer:consumer
+  };
+}
+
+/**
+ * Enumerate role-mutation hypotheses from inspected AST declarations rather
+ * than a list of guessed role names. Every result must still pass the full
+ * same-contract initialization, setter, guard, ABI and assertion checks above.
+ * No generic ABI state change is upgraded to a security hypothesis.
+ */
+export function sourceGroundedSolidityProbes(source:string,menu:SolidityProbeDeclaration[],
+  context?:{path:string;peers:Array<{path:string;source:string}>}):
+  Array<{selector:string;probe:GroundedSolidityProbe}> {
+  if(source.length>256000)return [];
+  let ast:any;
+  try{ast=parse(source,{range:true});}catch{return [];}
+  const results:Array<{selector:string;probe:GroundedSolidityProbe}>=[];
+  for(const contract of (ast.children||[])) {
+    if(contract.type!=='ContractDefinition'||!contract.name)continue;
+    const members:any[]=contract.subNodes||[];
+    const roles=members.filter(node=>node.type==='StateVariableDeclaration')
+      .flatMap(node=>node.variables||[]).filter(variable=>
+        variable.visibility==='public' &&
+        variable.typeName?.type==='ElementaryTypeName' &&
+        variable.typeName?.name==='address' &&
+        /^[A-Za-z_]\w*$/.test(variable.name||''))
+      .map(variable=>variable.name).slice(0,64);
+    for(const member of members) {
+      if(member.type!=='FunctionDefinition'||!member.name||
+         !['public','external'].includes(member.visibility) ||
+         member.isConstructor || member.parameters?.length!==1)continue;
+      const selector=contract.name+'.'+member.name;
+      if(!menu.some(entry=>entry.selector===selector&&entry.operation==='send'))
+        continue;
+      const parameter=member.parameters[0];
+      if(parameter?.typeName?.type!=='ElementaryTypeName' ||
+         parameter.typeName.name!=='address' ||
+         !/^[A-Za-z_]\w*$/.test(parameter.name||'') ||
+         !member.body?.range)continue;
+      // Avoid O(roles * functions) full-file parsing. The initial AST tells
+      // us which declared role the concrete setter body actually assigns.
+      const text=source.slice(member.body.range[0],member.body.range[1]+1);
+      const likely=roles.filter(role=>
+        new RegExp('\\b'+role+'\\s*=\\s*'+parameter.name+'\\s*;').test(text));
+      for(const role of likely) {
+        const candidate={selector,role,method:member.name};
+        const probe=sourceGroundedSolidityProbe(source,menu,candidate,selector,context);
+        if(probe) {
+          results.push({selector,probe});
+          break;
+        }
+      }
+      if(results.length>=64)return results;
+    }
+  }
+  return results;
+}
+
+/** Source-backed *navigation hints*, not vulnerability findings. Trace actual
+ * calls from project contracts before considering an inherited ERC1155 entry.
+ * AST traversal ignores comments and bare method declarations. Callers still
+ * require independent reachability, setup and a security assertion to qualify.
+ */
+export function traceProjectErc1155Callers(path:string,source:string):
+  Array<{path:string;selector:string;calledMethod:string;line:number}> {
+  if(!path.endsWith('.sol') || source.length>256000 ||
+     !/\bsafe(?:Batch)?TransferFrom\s*\(/.test(source))return [];
+  let ast:any;
+  try {ast=parse(source,{range:true,loc:true});}catch{return [];}
+  const results:Array<{path:string;selector:string;calledMethod:string;line:number}>=[];
+  for(const contract of (ast.children||[])) {
+    if(contract.type!=='ContractDefinition' ||
+       /^(?:ERC1155Upgradeable|IERC1155(?:Upgradeable)?)$/.test(contract.name))continue;
+    for(const fn of contract.subNodes||[]) {
+      if(fn.type!=='FunctionDefinition' || !fn.body)continue;
+      const declared=fn.name||(fn.isConstructor?'constructor':'');
+      if(!declared)continue;
+      let seen=0;
+      const walk=(node:any,depth:number):void=>{
+        if(!node || typeof node!=='object' || depth>48 || seen++>4000)return;
+        if(Array.isArray(node)) {for(const child of node)walk(child,depth+1);return;}
+        if(node.type==='FunctionCall') {
+          const called=node.expression?.type==='MemberAccess'
+            ? node.expression.memberName
+            : node.expression?.type==='Identifier'?node.expression.name:'';
+          if(called==='safeTransferFrom' || called==='safeBatchTransferFrom') {
+            results.push({path,selector:contract.name+'.'+declared,calledMethod:called,
+              line:node.loc?.start?.line||1});
+          }
+        }
+        for(const [key,child] of Object.entries(node))
+          if(key!=='range' && key!=='loc')walk(child,depth+1);
+      };
+      walk(fn.body,0);
+    }
+  }
+  return results.slice(0,40);
+}

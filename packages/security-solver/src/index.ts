@@ -146,7 +146,10 @@ async function huntProgramImpl(
       throw new Error(result.error || "Program hunt did not complete");
     }
 
-    huntSucceeded = true;
+    // A bounded/unsupported source inventory is a truthful partial result,
+    // not a successfully completed security investigation. Keep the scoped
+    // coverage record without advancing completed-hunt timestamps/counts.
+    huntSucceeded = coverage === "completed";
 
     // Quality gate: filter out low-value findings before DB insertion
     const config = getConfig();

@@ -39,31 +39,63 @@ def authorization_transition_observed(repository: Path, file: Path, selector: st
         # privileged consumer before scanning any other authorized file.
         privileged=bool(re.search(
             r"\brequire\s*\(\s*msg\s*\.\s*sender\s*==\s*"+re.escape(role)+r"\b",source))
-        count=0
+        # A role guard in an unrelated contract is not a consumer of the
+        # tested role. Only an actual import plus direct inheritance links a
+        # derived contract's guard to this role's storage.
+        base_name=selector.split(".")[0]
+        repository_root=repository.resolve()
+        source_file=file.resolve()
         for candidate in repository.rglob("*.sol"):
             if privileged:
                 break
-            count+=1
-            if count>200:
-                break
-            if candidate.stat().st_size>256000:
+            if candidate==file or candidate.is_symlink() or candidate.stat().st_size>256000:
                 continue
             text=candidate.read_text(encoding="utf8")
-            if re.search(r"\brequire\s*\(\s*msg\s*\.\s*sender\s*==\s*"+re.escape(role)+r"\b",text):
-                privileged=True
-                break
+            stripped=re.sub(r"//[^\n]*|/\*[\s\S]*?\*/","",text)
+            imports=re.findall(r"\bimport\b[^;]{0,1000}[\"']([^\"']+)[\"']\s*;",stripped)
+            linked=False
+            for imported in imports:
+                resolved=(candidate.parent/imported).resolve()
+                if resolved.is_relative_to(repository_root) and resolved==source_file:
+                    linked=True
+                    break
+            if not linked:
+                continue
+            for declaration in re.finditer(r"\bcontract\s+([A-Za-z_]\w*)\s+is\s+([^{};]{1,300})\{",stripped):
+                bases=declaration.group(2)
+                if not re.search(r"(?<![A-Za-z0-9_])"+re.escape(base_name)+r"(?![A-Za-z0-9_])",bases):
+                    continue
+                depth=1
+                pos=declaration.end()
+                while pos<len(stripped) and depth:
+                    depth+=(stripped[pos]=="{")-(stripped[pos]=="}")
+                    pos+=1
+                if depth:
+                    continue
+                derived_body=stripped[declaration.end():pos-1]
+                if re.search(r"\baddress\s+(?:public\s+)?"+re.escape(role)+r"\s*;",derived_body):
+                    continue
+                if re.search(r"\brequire\s*\(\s*msg\s*\.\s*sender\s*==\s*"+re.escape(role)+r"\b",derived_body):
+                    privileged=True
+                    break
         if not privileged:
             return False
         role_getter=role+"()"
-        before=next((i for i,s in enumerate(steps) if s.get("operation")=="observe"
-                     and s.get("function")==role_getter),None)
+        # The executable Solidity sequence runtime emits getter observations
+        # as "call"; older regression fixtures used "observe". Accept both
+        # only with a concrete returned value and a successful assertion.
+        def getter_observation(step):
+            return (step.get("operation") in ("call", "observe")
+                    and step.get("function")==role_getter
+                    and step.get("passed") is True
+                    and isinstance(step.get("actual"),str))
+        before=next((i for i,s in enumerate(steps) if getter_observation(s)),None)
         send=next((i for i,s in enumerate(steps) if s.get("operation")=="send"
                    and s.get("function","").startswith(function+"(")
                    and s.get("sender")==1 and not s.get("reverted") and s.get("passed")),None)
         if before is None or send is None or before>=send:
             return False
-        after=next((i for i in range(send+1,len(steps)) if steps[i].get("operation")=="observe"
-                    and steps[i].get("function")==role_getter),None)
+        after=next((i for i in range(send+1,len(steps)) if getter_observation(steps[i])),None)
         if after is None:
             return False
         prior=str(steps[before]["actual"]).lower()

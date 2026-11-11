@@ -12,7 +12,17 @@ function validateSequence(s) {
   };
   const args = a => {if(!Array.isArray(a)||a.length>32)throw new Error('Invalid ABI arguments');a.forEach(v=>value(v));};
   const wei = v => {if(v!==undefined && (typeof v!=='string'||!/^(0|[1-9][0-9]{0,29})$/.test(v)))throw new Error('Invalid wei amount');};
-  object(s,['constructorArgs','steps'],['constructorArgs','constructorValueWei','steps']);
+  object(s,['constructorArgs','steps'],['constructorArgs','constructorValueWei','steps','deployment']);
+  if(s.deployment!==undefined) {
+    object(s.deployment,['file','contract']);
+    if(typeof s.deployment.file!=='string' || s.deployment.file.length>512 ||
+       !/^[A-Za-z0-9_.\/-]+\.sol$/.test(s.deployment.file) ||
+       s.deployment.file.startsWith('/') ||
+       s.deployment.file.split('/').some(x=>x==='..'||x==='.') ||
+       typeof s.deployment.contract!=='string' ||
+       !/^[A-Za-z_]\w*$/.test(s.deployment.contract))
+      throw new Error('Invalid repository-local derived deployment');
+  }
   args(s.constructorArgs);wei(s.constructorValueWei);
   if(JSON.stringify(s).length>16000 || !Array.isArray(s.steps) || !s.steps.length || s.steps.length>16)throw new Error('Invalid sequence length');
   for(const step of s.steps) {

@@ -324,6 +324,8 @@ assert.ok(flowText.includes("prioritized candidate file(s) remain unread"),"cove
 assert.ok(flowText.includes("State only what the selected files"),"do not accept repository-wide negative claims");
 assert.ok(controllerText.includes("requireInvestigationAfterEmpty=true;"),"coverage-driven final rejection must reopen tool actions");
 assert.ok(controllerText.includes("requiredNextSource"),"coverage rejection must enforce a fresh eligible source read");
+assert.ok(controllerText.includes("status:'source_index_exhausted'"),
+  "terminal indexed source rejection must be structured rather than a raw tool error");
 assert.ok(controllerText.includes("[EMPTY_FINAL_RECOVER]"),"repeated empty finals must reopen source investigation");
 assert.ok(controllerText.includes("requireInvestigationAfterEmpty"),"recovery must require a tool action rather than another empty final");
 assert.ok(!controllerText.includes("recentActions.clear();stalledActions=0"),"final rejection must preserve read history");
@@ -331,11 +333,11 @@ const livePolyglot=process.argv.includes("--real-model-polyglot");
 const realQwenLanguage=process.env.LOTUS_REAL_QWEN_LANGUAGE?.trim().toLowerCase();
 if(realQwenLanguage && (!livePolyglot || !["javascript","java","solidity"].includes(realQwenLanguage)))
   throw new Error("LOTUS_REAL_QWEN_LANGUAGE requires --real-model-polyglot and javascript, java, or solidity");
-if(livePolyglot) {
-  // Only the real-model CI fixture receives the bounded source-investigation turn budget.
-  process.env.LOCAL_HUNT_MAX_TURNS="48";
-  process.env.LOCAL_HUNT_DYNAMIC_ALLOWANCE="false";
-}
+// CI fixtures must have a finite investigation allowance even when production
+// uses dynamic, unattended controller budgets. A scripted mock must not silently
+// consume a hosted job forever when a source-coverage transition regresses.
+process.env.LOCAL_HUNT_MAX_TURNS=livePolyglot?"48":"96";
+process.env.LOCAL_HUNT_DYNAMIC_ALLOWANCE="false";
 if(livePolyglot && !process.env.AUTOHACK_OLLAMA_URL)throw new Error("Real polyglot run requires AUTOHACK_OLLAMA_URL");
 // Emit audit-file progress independently of the model response and retain its
 // trace in CI artifacts when a real-model language fails or reaches its deadline.
@@ -407,6 +409,21 @@ try {
   let policyOffset=0,policyDone=false;
   let turn=0, caseId="", source="", caller="", selector="", stateful=false,reviewMode=false,reviewIndex=0,reviewOffset=0;
   let evidenceRepairReads:string[]=[];
+  // The model fixture must honor the *actual* controller coverage rejection.
+  // Never substitute a guessed source or turn an incomplete investigation into
+  // an accepted final: read the exact next file only if the action schema allows it.
+  const coverageRead=(messages:Array<{content?:string}>,allowed?:string[]):string|null=>{
+    for(const message of [...messages].reverse()) {
+      const hint=String(message.content||"").match(/Suggested next file:\s*(source-\d+\/[A-Za-z0-9_./-]+\.(?:sol|java|js|mjs|cjs|py))\b/i)?.[1];
+      if(hint) return !allowed || allowed.includes(hint) ? hint : null;
+    }
+    return null;
+  };
+  assert.equal(coverageRead([{content:"Inspection is incomplete. Suggested next file: source-1/Render.sol"}],["source-1/Render.sol"]),"source-1/Render.sol");
+  assert.equal(coverageRead([{content:"Suggested next file: source-2/Other.sol"}],["source-1/Render.sol"]),null,
+    "fixture must not bypass controller path constraints");
+  assert.equal(coverageRead([{content:"Suggested next file: ../outside.sol"}]),null,
+    "fixture must never follow an unscoped source hint");
   const reviewFiles=["source/Store.sol","evidence/report.txt","evidence/replay.json","evidence/policy.txt"];
   const sequence={constructorArgs:["5"],steps:[
     {operation:"call",function:"value()",args:[],expect:"5"},
@@ -438,6 +455,14 @@ try {
         const result=JSON.parse(last.split("\n")[0].slice(12));
         if(result.name==="read_file") {
           const page=JSON.parse(result.output);
+          // Source exhaustion is structured controller feedback, not another
+          // page to reread. The fixture must never parse it as an invalid JSON
+          // tool error or request a completed terminal page again.
+          if(page.status==='source_index_exhausted') {
+            assert.equal(page.verified,false,"exhausted source is not a verified security case");
+            assert.ok(request.format.properties.action.enum.includes('final'),
+              "completed indexed source must permit an evidence-limited final");
+          }
           if(page.nextOffset!=null) {
             const previous=[...request.messages].reverse().map((m:any)=>{try{return JSON.parse(m.content);}catch{return null;}}).find((a:any)=>a?.action==='read_file');
             res.end(JSON.stringify({message:{role:"assistant",content:JSON.stringify({
@@ -507,6 +532,28 @@ try {
       turn--;
       res.end(JSON.stringify({message:{role:"assistant",content:JSON.stringify({
         action:"read_file",path,offset:0,query:"",answer:""
+      })}}));
+      return;
+    }
+    // A rejected no-testable-candidate final is a coverage obligation, not a
+    // reason to repeat the same conclusion. Read the controller-nominated
+    // source, then reassess the fixture without inventing a vulnerability.
+    const requiredCoverage=coverageRead(request.messages,request.format.properties.path?.enum);
+    if(!reviewMode && source.endsWith(".sol") && requiredCoverage &&
+       request.format.properties.action.enum.includes("read_file")) {
+      res.end(JSON.stringify({message:{role:"assistant",content:JSON.stringify({
+        action:"read_file",path:requiredCoverage,offset:0,query:"",answer:""
+      })}}));
+      return;
+    }
+    // This fixture's Solidity methods are a pure renderer and a generic
+    // setter. Neither has a source-grounded security hypothesis. The model
+    // must report no testable candidate instead of inventing a reproduction.
+    if(source.endsWith('.sol') && turn>=1 &&
+       request.format.properties.action.enum.includes('final')) {
+      res.end(JSON.stringify({message:{role:'assistant',content:JSON.stringify({
+        action:'final',path:'',query:'',
+        answer:JSON.stringify({outcome:'no_testable_candidate',findings:[],reason:'This Solidity fixture has no source-grounded violation scenario: neither its pure renderer nor its generic state setter establishes a security invariant.'})
       })}}));
       return;
     }
@@ -612,10 +659,22 @@ try {
     console.log("[REAL_QWEN_LANGUAGE_FINISH] "+JSON.stringify({language,success:result.success,elapsedSeconds:Math.round((Date.now()-languageStart)/1000),auditRecord:result.auditRecord||null}));
     if(!result.success && result.auditRecord)console.error(await readFile(join(root,"data/logs",result.auditRecord),"utf8"));
     assert.equal(result.success,true,JSON.stringify(result));
-    if(stateful) {
-      assert.equal(result.findings.length,0,"Solidity expectation mismatches cannot become findings");
-      assert.equal(caseId,"","observation-only results cannot manufacture verified case IDs");
+    if(stateful || (language==='solidity' && result.findings.length===0)) {
+      assert.equal(result.findings.length,0,
+        "unsupported Solidity state changes cannot produce findings");
+      assert.equal(caseId,"","unsupported or observational Solidity results cannot create verified case IDs");
       continue;
+    }
+    // The shared owned workspace also contains Java, JS and Python fixtures.
+    // A Solidity-labeled iteration may legitimately reproduce an independently
+    // verified case in another language; forbid false Solidity findings rather
+    // than discard or mislabel cross-language source evidence.
+    if(language==='solidity') {
+      for(const finding of result.findings) {
+        const caseRecord=await readSourceCase(finding.reproductionCaseId,program);
+        assert.notEqual(caseRecord.spec.kind,'solidity_sequence',
+          'generic Solidity setters must never be promoted to security findings');
+      }
     }
     assert.equal(result.findings.length,1);
     assert.ok(result.coverageDetail && !result.coverageDetail.includes("1 failed probes") && !result.coverageDetail.includes("1 unsupported probes"),"invented probe should be stopped at declaration preflight");

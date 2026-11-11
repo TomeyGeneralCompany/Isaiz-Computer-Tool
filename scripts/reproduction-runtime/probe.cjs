@@ -123,10 +123,26 @@ contract TomeyERC1155ProbeHarness is ERC1155Upgradeable {
         _mintBatch(to, ids, amounts, "");
     }
 }` : sourceText;
+  // A derived deployment must be explicitly selected by the controller from
+  // authorized source, with an actual import and direct inheritance of the
+  // probed base. Never compile model-provided Solidity or external sources.
+  const deployment = sequenceMode ? spec.sequence.deployment : null;
+  let derivedText = null;
+  if(deployment) {
+    if(erc1155Harness)throw new Error('Cannot combine derived deployment and ERC1155 harness');
+    derivedText = fs.readFileSync(sourceFile(deployment.file),'utf8');
+    const baseContract = spec.function.split('.')[0];
+    const imports = [...derivedText.matchAll(/\bimport\b[^;]{0,1000}["']([^"']+)["']\s*;/g)]
+      .map(match=>path.posix.normalize(path.posix.join(path.posix.dirname(deployment.file),match[1])));
+    if(!imports.includes(path.posix.normalize(spec.file)) ||
+       !new RegExp('\\bcontract\\s+'+deployment.contract+
+         '\\s+is\\s+'+baseContract+'\\s*\\{').test(derivedText))
+      throw new Error('Derived deployment must directly import and inherit the probed base');
+  }
   const effectiveSpec = erc1155Harness ? {...spec, function: spec.function.replace('ERC1155Upgradeable.', harnessName + '.')} : spec;
   const compiled = JSON.parse(solc.compile(JSON.stringify({
     language: 'Solidity',
-    sources: {[spec.file]: {content: harnessSource}},
+    sources: {[spec.file]: {content: harnessSource}, ...(deployment ? {[deployment.file]:{content:derivedText}} : {})},
     settings: {...spec.compilerSettings, evmVersion, outputSelection: {'*': {'*': ['abi', 'evm.bytecode.object']}}}
   }), {import: solidityImport}));
   const errors = (compiled.errors || []).filter(e => e.severity === 'error');
@@ -137,8 +153,9 @@ contract TomeyERC1155ProbeHarness is ERC1155Upgradeable {
   }
   const parts = effectiveSpec.function.split('.');
   const functionName = parts.pop();
-  const contractName = parts.pop();
-  const candidates = Object.entries(compiled.contracts?.[spec.file] || {}).filter(([name, artifact]) =>
+  const contractName = deployment ? deployment.contract : parts.pop();
+  const selectedFile = deployment ? deployment.file : spec.file;
+  const candidates = Object.entries(compiled.contracts?.[selectedFile] || {}).filter(([name, artifact]) =>
     (!contractName || name === contractName) && artifact.evm.bytecode.object &&
     (sequenceMode || !artifact.abi.some(a => a.type === 'constructor' && a.inputs.length)) &&
     artifact.abi.some(a => a.type === 'function' && a.name === functionName &&
