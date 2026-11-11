@@ -1,4 +1,5 @@
 import {parse} from '@solidity-parser/parser';
+import {posix} from 'node:path';
 import type {SolidityProbeDeclaration} from './solidity-probe-inputs';
 import type {SoliditySequence} from './solidity-sequence';
 
@@ -21,7 +22,8 @@ export function sourceGroundedSolidityProbe(
   source:string,
   menu:SolidityProbeDeclaration[],
   candidate:RoleMutation|null|undefined,
-  requestedSelector:string
+  requestedSelector:string,
+  context?:{path:string;peers:Array<{path:string;source:string}>}
 ):GroundedSolidityProbe|null {
   if(!candidate || candidate.selector!==requestedSelector || source.length>256000)return null;
   const separator=requestedSelector.lastIndexOf('.');
@@ -99,7 +101,43 @@ export function sourceGroundedSolidityProbe(
     ['public','external'].includes(fn.visibility) &&
     !['view','pure'].includes(fn.stateMutability||'') &&
     hasGuard(fn.body));
-  if(!consumers.length)return null;
+  // Inherited role-guarded entry points are security consumers of the base
+  // role too. Verify the real import path, direct Solidity inheritance, and
+  // parsed require(msg.sender == role) AST; a lexical mention never qualifies.
+  const inheritedConsumers:string[]=[];
+  if(!consumers.length && context && context.path.endsWith('.sol')) {
+    for(const peer of context.peers.slice(0,200)) {
+      if(peer.path===context.path || !peer.path.endsWith('.sol') ||
+         peer.source.length>256000)continue;
+      let peerAst:any;
+      try {peerAst=parse(peer.source,{range:true});} catch {continue;}
+      const imports=(peerAst.children||[]).filter((node:any)=>
+        node.type==='ImportDirective' && typeof node.path==='string' &&
+        posix.normalize(posix.join(posix.dirname(peer.path),node.path))===context.path);
+      if(!imports.length)continue;
+      for(const derived of peerAst.children||[]) {
+        if(derived.type!=='ContractDefinition' || !derived.name ||
+           !(derived.baseContracts||[]).some((base:any)=>
+             base.baseName?.namePath===contractName))continue;
+        const derivedMembers:any[]=derived.subNodes||[];
+        // Shadowed storage would break the proposed inherited-role invariant.
+        if(derivedMembers.some(member=>member.type==='StateVariableDeclaration' &&
+           (member.variables||[]).some((variable:any)=>variable.name===candidate.role)))
+          continue;
+        for(const fn of derivedMembers) {
+          if(fn.type==='FunctionDefinition' && fn.name && !fn.isConstructor &&
+             ['public','external'].includes(fn.visibility) &&
+             !['view','pure'].includes(fn.stateMutability||'') &&
+             hasGuard(fn.body))
+            inheritedConsumers.push(derived.name+'.'+fn.name);
+        }
+      }
+    }
+  }
+  if(!consumers.length && !inheritedConsumers.length)return null;
+  const consumer=consumers.length
+    ? contractName+'.'+consumers[0].name
+    : inheritedConsumers[0];
   const getter=menu.find(item=>item.selector===contractName+'.'+candidate.role &&
     item.operation==='call' && item.inputs.length===0);
   const entry=menu.find(item=>item.selector===requestedSelector &&
@@ -115,10 +153,10 @@ export function sourceGroundedSolidityProbe(
   ]};
   return {
     hypothesis:'Source declares '+candidate.role+' as an account0-initialized role that gates '+
-      consumers[0].name+'; caller account1 must not be able to set it to account2 via '+
+      consumer+'; caller account1 must not be able to set it to account2 via '+
       requestedSelector+'. The test is falsified by a rejected unauthorized send or by '+
       'failure of the asserted account0-to-account2 role transition.',
-    sequence,guardedConsumer:contractName+'.'+consumers[0].name
+    sequence,guardedConsumer:consumer
   };
 }
 
@@ -128,7 +166,8 @@ export function sourceGroundedSolidityProbe(
  * same-contract initialization, setter, guard, ABI and assertion checks above.
  * No generic ABI state change is upgraded to a security hypothesis.
  */
-export function sourceGroundedSolidityProbes(source:string,menu:SolidityProbeDeclaration[]):
+export function sourceGroundedSolidityProbes(source:string,menu:SolidityProbeDeclaration[],
+  context?:{path:string;peers:Array<{path:string;source:string}>}):
   Array<{selector:string;probe:GroundedSolidityProbe}> {
   if(source.length>256000)return [];
   let ast:any;
@@ -163,7 +202,7 @@ export function sourceGroundedSolidityProbes(source:string,menu:SolidityProbeDec
         new RegExp('\\b'+role+'\\s*=\\s*'+parameter.name+'\\s*;').test(text));
       for(const role of likely) {
         const candidate={selector,role,method:member.name};
-        const probe=sourceGroundedSolidityProbe(source,menu,candidate,selector);
+        const probe=sourceGroundedSolidityProbe(source,menu,candidate,selector,context);
         if(probe) {
           results.push({selector,probe});
           break;
