@@ -28,12 +28,26 @@ function settle() external {require(msg.sender==operator,"operator only");}
 }""")
             a=["0x"+"11"*20,"0x"+"22"*20,"0x"+"33"*20]
             steps=[
-                {"operation":"observe","function":"operator()","actual":a[0]},
+                {"operation":"call","function":"operator()","sender":0,"actual":a[0],"passed":True},
                 {"operation":"send","function":"rotateOperator(address)","sender":1,"passed":True,"reverted":False},
-                {"operation":"observe","function":"operator()","actual":a[2]}
+                {"operation":"call","function":"operator()","sender":0,"actual":a[2],"passed":True}
             ]
             d={"accounts":a,"steps":steps}
             self.assertTrue(authorization_transition_observed(root,authority,"Authority.rotateOperator",d))
+            # Reproduce the production runner's actual call/send/call receipt
+            # shape, not the obsolete synthetic "observe" label.
+            self.assertFalse(authorization_transition_observed(
+                root,authority,"Authority.rotateOperator",
+                {"accounts":a,"steps":[dict(steps[0],passed=False),steps[1],steps[2]]}),
+                "a failed initial getter assertion is not proof")
+            self.assertFalse(authorization_transition_observed(
+                root,authority,"Authority.rotateOperator",
+                {"accounts":a,"steps":[steps[0],steps[1],dict(steps[2],actual=a[0])]}),
+                "no actual state transition means no unauthorized role change")
+            self.assertFalse(authorization_transition_observed(
+                root,authority,"Authority.rotateOperator",
+                {"accounts":a,"steps":[steps[0],dict(steps[1],sender=0),steps[2]]}),
+                "an authorized deployer changing a role is not an unauthorized change")
             external_source=authority.read_text()
             public_source=external_source.replace(
                 'rotateOperator(address next) external',
@@ -79,9 +93,9 @@ require(msg.sender==operator,"operator only");
 }""")
             accounts=["0x"+"11"*20,"0x"+"22"*20,"0x"+"33"*20]
             events=[
-                {"operation":"observe","function":"operator()","actual":accounts[0]},
+                {"operation":"call","function":"operator()","sender":0,"actual":accounts[0],"passed":True},
                 {"operation":"send","function":"rotateOperator(address)","sender":1,"passed":True,"reverted":False},
-                {"operation":"observe","function":"operator()","actual":accounts[2]}
+                {"operation":"call","function":"operator()","sender":0,"actual":accounts[2],"passed":True}
             ]
             self.assertTrue(authorization_transition_observed(
                 root,target,"Service2048.rotateOperator",
