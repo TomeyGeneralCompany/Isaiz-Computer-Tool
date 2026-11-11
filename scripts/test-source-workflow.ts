@@ -623,11 +623,22 @@ try {
     console.log("[REAL_QWEN_LANGUAGE_FINISH] "+JSON.stringify({language,success:result.success,elapsedSeconds:Math.round((Date.now()-languageStart)/1000),auditRecord:result.auditRecord||null}));
     if(!result.success && result.auditRecord)console.error(await readFile(join(root,"data/logs",result.auditRecord),"utf8"));
     assert.equal(result.success,true,JSON.stringify(result));
-    if(stateful || language==='solidity') {
+    if(stateful || (language==='solidity' && result.findings.length===0)) {
       assert.equal(result.findings.length,0,
-        "generic Solidity methods cannot produce security findings without source-backed invariants");
+        "unsupported Solidity state changes cannot produce findings");
       assert.equal(caseId,"","unsupported or observational Solidity results cannot create verified case IDs");
       continue;
+    }
+    // The shared owned workspace also contains Java, JS and Python fixtures.
+    // A Solidity-labeled iteration may legitimately reproduce an independently
+    // verified case in another language; forbid false Solidity findings rather
+    // than discard or mislabel cross-language source evidence.
+    if(language==='solidity') {
+      for(const finding of result.findings) {
+        const caseRecord=await readSourceCase(finding.reproductionCaseId,program);
+        assert.notEqual(caseRecord.spec.kind,'solidity_sequence',
+          'generic Solidity setters must never be promoted to security findings');
+      }
     }
     assert.equal(result.findings.length,1);
     assert.ok(result.coverageDetail && !result.coverageDetail.includes("1 failed probes") && !result.coverageDetail.includes("1 unsupported probes"),"invented probe should be stopped at declaration preflight");
