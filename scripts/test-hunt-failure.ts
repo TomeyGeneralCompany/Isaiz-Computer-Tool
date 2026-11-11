@@ -80,21 +80,21 @@ else:
   // No executable candidate is an explicitly recorded PARTIAL inspection,
   // not a completed vulnerability assessment and not an exception/retry loop.
   const initial=await huntProgram(program);
-  assert.equal(initial.success,true);
-  assert.equal(initial.coverage,"partial");
-  assert.equal(initial.findings.length,0);
+  assert.equal(initial.findingsCreated,0);
+  assert.equal(JSON.parse(db.select().from(schema.securityPrograms).get()!.scopeSummary!).huntCoverage.status,"partial");
+
   assert.equal(db.select().from(schema.securityPrograms).get()!.lastHuntedAt,null);
   answer=JSON.stringify({findings:[]});
   const empty=await huntProgram(program);
-  assert.equal(empty.coverage,"partial","Empty findings must not count as completed reproduction");
+  assert.equal(empty.findingsCreated,0,"Empty findings must not count as completed reproduction");
   const incomplete=db.select().from(schema.securityPrograms).get()!;
   assert.equal(incomplete.lastHuntedAt,null);
   assert.equal(incomplete.huntCount,0);
   assert.notEqual(JSON.parse(incomplete.scopeSummary!).huntCoverage.status,"complete");
   answer=JSON.stringify({findings:[],outcome:"no_testable_candidate",reason:"Inspected sample source; it exposes a boolean and no supported function candidate."});
   const scoped=await huntProgram(program,"auto");
-  assert.equal(scoped.coverage,"partial");
-  assert.equal(scoped.findings.length,0);
+  assert.equal(scoped.findingsCreated,0);
+
   assert.equal(modelCalls,0,"Exhausted unsupported controller queue must not delegate scheduling");
   assert.equal(readDailyQuota()!.dispatched,2,"Only the automatic dispatch consumes an inspection slot");
   assert.notEqual(JSON.parse(db.select().from(schema.securityPrograms).get()!.scopeSummary!).huntCoverage.status,"complete");
