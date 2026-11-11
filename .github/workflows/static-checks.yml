@@ -103,6 +103,7 @@ jobs:
           npx tsx scripts/test-source-inspection.ts
           npx tsx scripts/test-controller-source-pagination.ts
           npx tsx scripts/test-controller-solidity-finance-scenarios.ts
+          python3 tests/test_static_hardhat_settings.py
       - name: Verify state mutex crash recovery and concurrent claims
         run: npx tsx scripts/test-state-mutex.ts
       - name: Exercise production program assessment and truncated output recovery
