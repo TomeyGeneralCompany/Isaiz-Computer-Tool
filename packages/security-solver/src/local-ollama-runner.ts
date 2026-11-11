@@ -1976,7 +1976,8 @@ export async function runLocalAudit(
                   JSON.stringify({path,completedFiles:terminalReadPages.size,
                     observations:observations.length,pending:!!workflow?.snapshot().pending,
                     turn:turn+1})+'\n');
-                throw new Error('SOURCE_INDEX_EXHAUSTED: '+feedback);
+                const exhausted=Object.assign(new Error('SOURCE_INDEX_EXHAUSTED: '+feedback),{code:'SOURCE_INDEX_EXHAUSTED'});
+                throw exhausted;
               }
             }
           }
@@ -2165,7 +2166,14 @@ export async function runLocalAudit(
         } catch (error) {
           controller.signal.throwIfAborted();
           if(error instanceof Error && error.message.startsWith("AUDIT_STALLED:"))throw error;
-          output = "Tool error: " + String(error);
+          // A completed indexed source queue is a recoverable controller handoff,
+          // not malformed plain text sent to the model. Preserve the rejection
+          // as structured tool evidence; the next turn must obey workflow
+          // constraints (probe, pending verification, or validated final).
+          output=(error as any)?.code==='SOURCE_INDEX_EXHAUSTED'
+            ? JSON.stringify({status:'source_index_exhausted',verified:false,
+                detail:String(error),nextActions:['plan_probe','verify_source','final']})
+            : "Tool error: " + String(error);
           if((error as any)?.code === "ENOENT") {
             const key=JSON.stringify([call.function.name,resolve(root,String(call.function.arguments?.path || "."))]);
             const count=(missingRequests.get(key)||0)+1;missingRequests.set(key,count);
