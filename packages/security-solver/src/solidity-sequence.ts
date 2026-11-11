@@ -60,17 +60,6 @@ const stepBase = {function:{type:"string",maxLength:200},args:argsJson,sender:{t
 const weiJson = {type:"string",pattern:"^(0|[1-9][0-9]{0,29})$"};
 export const soliditySequenceJsonSchema = {type:"object",additionalProperties:false,
   properties:{constructorArgs:argsJson,constructorValueWei:weiJson,
-    preparation:{type:'object',additionalProperties:false,properties:{
-      deployments:{type:'array',maxItems:8,items:{type:'object',additionalProperties:false,
-        properties:{id:{type:'string'},file:{type:'string'},contract:{type:'string'},constructorArgs:argsJson,valueWei:weiJson},
-        required:['id','file','contract','constructorArgs']}},
-      operations:{type:'array',maxItems:24,items:{type:'object',additionalProperties:false,
-        properties:{id:{type:'string'},deploymentId:{type:'string'},...stepBase,valueWei:weiJson,expectRevert:{type:'boolean'}},
-        required:['id','deploymentId','function','args','sender']}},
-      checks:{type:'array',maxItems:16,items:{type:'object',additionalProperties:false,
-        properties:{id:{type:'string'},deploymentId:{type:'string'},...stepBase,expect:valueJson},
-        required:['id','deploymentId','function','args','sender','expect']}}
-    },required:['deployments','operations','checks']},
     deployment:{type:'object',additionalProperties:false,properties:{file:{type:'string',maxLength:512},contract:{type:'string',maxLength:100}},required:['file','contract']},steps:{type:"array",minItems:1,maxItems:16,items:{anyOf:[
     {type:"object",additionalProperties:false,properties:{operation:{const:"send"},...stepBase,valueWei:weiJson,expectRevert:{type:"boolean"}},required:["operation","function","args"]},
     {type:"object",additionalProperties:false,properties:{operation:{const:"call"},...stepBase,expect:valueJson},required:["operation","function","args","expect"]},
