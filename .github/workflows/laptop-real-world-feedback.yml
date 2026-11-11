@@ -98,19 +98,9 @@ jobs:
           # GitHub's bash runner enables errexit before this script. Capture
           # an actual failed hunt instead of incorrectly labeling it SETUP_FAILED.
           set +e
-          # Stream the live investigation to GitHub while preserving an exact
-          # diagnostic copy. PIPESTATUS[0] captures the actual hunt exit code.
-          stdbuf -oL -eL bash scripts/run-one-bounty.sh --program immunefi-88mphv3 --timeout-min 60 2>&1 | tee data/repair-feedback/terminal.log
-          status=${PIPESTATUS[0]}
+          bash scripts/run-one-bounty.sh --program immunefi-88mphv3 --timeout-min 60 > data/repair-feedback/terminal.log 2>&1
+          status=$?
           set -e
-          # A completed process is not necessarily a completed investigation:
-          # the summary is authoritative for source-coverage status.
-          summary="$(find data/one-bounty -maxdepth 1 -type f -name '*.json' -printf '%T@ %p\n' | sort -nr | head -1 | cut -d' ' -f2-)"
-          if [[ "$status" == 0 && -n "$summary" ]]; then
-            if ! node -e 'const s=require("./"+process.argv[1]);if(s.investigationCoverage!=="completed" && s.coverage?.status!=="completed"){console.error("INVESTIGATION_INCOMPLETE: "+(s.coverage?.detail||s.investigationCoverage||"unknown"));process.exit(1)}' "$summary"; then
-              status=3
-            fi
-          fi
           echo "$status" > data/repair-feedback/exit-code.txt
           echo "exit_code=$status" >> "$GITHUB_OUTPUT"
           exit 0

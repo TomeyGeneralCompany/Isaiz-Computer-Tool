@@ -346,37 +346,6 @@ def prepare_java_classpath(repository: Path, target: Path, destination: Path) ->
     return copied
 
 
-
-def static_hardhat_compiler_settings(repository: Path, source: str) -> dict:
-    """Read a strictly bounded declarative compiler setting; never execute config.
-
-    The real 88mph v3 Hardhat config pins solc 0.8.4 and optimizer runs 200.
-    Executing a target's hardhat.config.ts would cross the sandbox boundary.
-    """
-    config = next((repository / name for name in ('hardhat.config.ts', 'hardhat.config.js')
-                   if (repository / name).is_file()), None)
-    if config is None:
-        return {}
-    if config.is_symlink() or not config.resolve().is_relative_to(repository) or config.stat().st_size > 256000:
-        raise ValueError('Unsafe Hardhat compiler config')
-    text = config.read_text(encoding='utf8')
-    # Match only literal values in a standard Hardhat solidity settings block.
-    # Reject dynamic expressions, interpolations and unsupported compiler keys.
-    match = re.search(
-        r'''\bsolidity\s*:\s*\{\s*version\s*:\s*["'](\d+\.\d+\.\d+)["']\s*,\s*'''
-        r'''settings\s*:\s*\{\s*optimizer\s*:\s*\{\s*enabled\s*:\s*(true|false)\s*,\s*runs\s*:\s*(\d{1,5})\b''',
-        text)
-    if not match:
-        return {}
-    version, enabled, runs = match.groups()
-    pragma = re.search(r'\bpragma\s+solidity\s+([^;]+);', source)
-    if not pragma or not re.fullmatch(r'=?(?:\s*)' + re.escape(version), pragma.group(1).strip()):
-        return {}
-    if not 1 <= int(runs) <= 10000:
-        raise ValueError('Hardhat optimizer runs outside bounded range')
-    return {'optimizer': {'enabled': enabled == 'true', 'runs': int(runs)}}
-
-
 def run_probe(repository: Path, specification: dict, _dependency_round: int = 0) -> dict:
     repository=repository.resolve(strict=True)
     if not repository.is_dir(): raise ValueError('Repository directory required')
@@ -463,11 +432,6 @@ def run_probe(repository: Path, specification: dict, _dependency_round: int = 0)
         except (DependencyError, OSError, ValueError) as error:
             return {'status':'unsupported_dependencies','behavior_observed':False,'detail':str(error)[:1000]}
     specification = {**specification, 'compilerSettings': {}}
-    if language == 'solidity' and not (repository/'foundry.toml').is_file():
-        try:
-            specification = {**specification, 'compilerSettings': static_hardhat_compiler_settings(repository, target.read_text(encoding='utf8'))}
-        except (OSError, UnicodeError, ValueError) as error:
-            return {'status':'unsupported_dependencies','behavior_observed':False,'detail':str(error)[:1000]}
     if language == 'solidity' and (repository/'foundry.toml').is_file():
         try:
             import tomllib

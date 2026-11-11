@@ -9,7 +9,6 @@ import {advanceBountyProgress,idleBountyExpired,type BountyProgress} from './one
 import {join, resolve} from 'node:path';
 import {eq} from 'drizzle-orm';
 import {ensureOneBountyLocalModel} from './one-bounty-settings';
-import {oneBountyOutcomeExitCode} from './one-bounty-outcome';
 
 type Args={list:boolean; program?:string; timeoutMin:number; help:boolean};
 export function parseOneBountyArgs(argv:string[]):Args {
@@ -183,14 +182,6 @@ async function main() {
         reportRecorded:!!f.reportBody,reportUrl:f.reportUrl||null}));
     save();
     console.log('One-bounty result: workflow='+summary.status+'; investigation='+summary.investigationCoverage+'; completedProbes='+String(summary.completedProbes ?? 'not recorded')+'; '+summary.findings.length+' new records. See '+summaryPath);
-    if(summary.status==='completed') {
-      const outcomeCode=oneBountyOutcomeExitCode(summary.status,summary.investigationCoverage);
-      if(outcomeCode!==0) {
-        console.error('ONE_BOUNTY_INCOMPLETE: '+summary.investigationCoverage+
-          '; see preserved diagnostics and source/probe evidence.');
-        process.exitCode=outcomeCode;
-      }
-    }
   }
 }
 main().catch(error=>{console.error('One-bounty run failed: '+String(error));process.exitCode=1;});

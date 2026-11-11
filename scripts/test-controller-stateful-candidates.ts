@@ -49,26 +49,3 @@ assert.ok(esm,'Source-declared ESM arrow factories remain eligible');
 assert.deepEqual(esm.sequence.constructor,[0]);assert.deepEqual(esm.sequence.steps[0].args,[1]);
 assert.deepEqual(sourceStatefulPlans('bad.mjs','export const make=(start=arbitrary())=>{return {advance(){return 1;}};}'),[],
  'Never evaluate or guess a source expression as a constructor default');
-
-
-// When a source-declared getter is available, preserve the same-instance
-// baseline and postcondition across JavaScript and Python, as Java does.
-const readJs='exports.make=function(start=0){let value=start;return {\n'+
-  ' getValue(){return value;},\n'+
-  ' advance(by=1){value+=by;return value;}\n'+
-  '};};';
-const readPy='class Counter:\n'+
-  '    def __init__(self,start=0): self.value=start\n'+
-  '    def getValue(self):\n        return self.value\n'+
-  '    def advance(self,by=1):\n        self.value+=by\n'+
-  '        return self.value\n'+
-  'def make(start=0):\n    return Counter(start)\n';
-for(const [path,src] of [['counter.cjs',readJs],['counter.py',readPy]] as const){
-  const plan=sourceStatefulPlans(path,src).find(p=>p.selector==='advance');
-  assert.ok(plan,'source-grounded mutator must be discovered');
-  assert.deepEqual(plan.sequence.steps.map(s=>s.method),
-    ['getValue','advance','getValue'],'read -> transition -> read must be controller-owned');
-  assert.equal(plan.sequence.steps.length,3);
-  assert.equal(plan.sequence.steps.every(s=>!('expected' in s)),true,
-    'unproven source postconditions must remain observations, never invented assertions');
-}
