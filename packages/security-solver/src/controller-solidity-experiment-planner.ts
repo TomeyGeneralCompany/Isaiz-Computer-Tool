@@ -94,6 +94,106 @@ function directOwnerExperiment(snapshot:SourceSnapshot,contract:any,menu:readonl
       witness(snapshot,setter,selector),witness(snapshot,owner,contract.name+'.owner'),
       witness(snapshot,state,contract.name+'.'+state.name)]};
 }
+
+/**
+ * Source-proven BoringOwnable initialization + public scalar setter.
+ * Accept only an actual imported base, proven owner initializer, proven guard,
+ * and a setter whose only state mutation is the observable public field.
+ * Supports the 88mph Vesting02.setMPHMinter authorization experiment.
+ */
+function inheritedOwnerExperiment(
+  snapshot:SourceSnapshot,contract:any,method:string,menu:readonly SolidityProbeDeclaration[],
+  sources:ReadonlyMap<string,SourceSnapshot>
+):{hypothesis:string;property:string;sequence:SoliditySequence;witnesses:SourceWitness[]}|null {
+  const text=snapshot.content;
+  if(!(contract.baseContracts||[]).some((b:any)=>b.baseName?.namePath==='BoringOwnable'))return null;
+  const imports=(parse(text,{range:true}) as any).children.filter((n:any)=>n.type==='ImportDirective');
+  const ownerImport=imports.find((n:any)=>typeof n.path==='string'&&
+    posix.basename(n.path)==='BoringOwnable.sol');
+  if(!ownerImport)return null;
+  const ownerPath=posix.normalize(posix.join(posix.dirname(snapshot.path),ownerImport.path));
+  const peer=sources.get(ownerPath);
+  if(!peer)return null;
+  let peerAst:any;
+  try{peerAst=parse(peer.content,{range:true});}catch{return null;}
+  const base=(peerAst.children||[]).find((n:any)=>
+    n.type==='ContractDefinition'&&n.name==='BoringOwnable');
+  if(!base)return null;
+  const baseFunctions:any[]=base.subNodes||[];
+  const ownerInit=baseFunctions.find((n:any)=>n.type==='FunctionDefinition'&&n.name==='__Ownable_init');
+  const guard=baseFunctions.find((n:any)=>n.type==='ModifierDefinition'&&n.name==='onlyOwner');
+  const ownerGetter=baseFunctions.find((n:any)=>n.type==='FunctionDefinition'&&n.name==='owner');
+  if(!ownerInit||!guard||!ownerGetter ||
+    !/\b_owner\s*=\s*msg\s*\.\s*sender\s*;/.test(body(peer.content,ownerInit)) ||
+    !/\brequire\s*\(\s*msg\s*\.\s*sender\s*==\s*_owner\b/.test(body(peer.content,guard)) ||
+    !/\breturn\s+_owner\s*;/.test(body(peer.content,ownerGetter)))return null;
+  const members:any[]=contract.subNodes||[];
+  const functions=members.filter(n=>n.type==='FunctionDefinition');
+  const initializer=functions.find(n=>n.name==='initialize'&&
+    ['public','external'].includes(n.visibility)&&
+    (n.modifiers||[]).some((m:any)=>m.name==='initializer')&&
+    /\b__Ownable_init\s*\(\s*\)\s*;/.test(body(text,n)));
+  if(!initializer)return null;
+  // An initialized contract may have external dependencies; this experiment
+  // only allows direct ERC721 name initialization and storing a token address.
+  const initBody=body(text,initializer);
+  const reducedInit=initBody.replace(/\b__Ownable_init\s*\(\s*\)\s*;/g,'')
+    .replace(/\b__ERC721_init\s*\(\s*[A-Za-z_]\w*\s*,\s*[A-Za-z_]\w*\s*\)\s*;/g,'')
+    .replace(/\b[A-Za-z_]\w*\s*=\s*IERC20\s*\(\s*[A-Za-z_]\w*\s*\)\s*;/g,'')
+    .replace(/[{}\s]/g,'');
+  if(reducedInit)return null;
+  const initTypes=(initializer.parameters||[]).map((p:any)=>p.typeName?.name);
+  if(JSON.stringify(initTypes)!==JSON.stringify(['address','string','string']))return null;
+  const setter=functions.find(n=>n.name===method&&
+    ['public','external'].includes(n.visibility)&&n.parameters?.length===1&&
+    (n.modifiers||[]).some((m:any)=>m.name==='onlyOwner'));
+  if(!setter || setter.parameters[0].typeName?.name!=='address')return null;
+  const param=setter.parameters[0].name;
+  if(!identifier.test(param||''))return null;
+  const stateVariables=members.filter(n=>n.type==='StateVariableDeclaration')
+    .flatMap(n=>n.variables||[]);
+  const setterBody=body(text,setter);
+  const candidate=stateVariables.find((v:any)=>
+    v.visibility==='public'&&identifier.test(v.name||'')&&
+    new RegExp('\\b'+v.name+'\\s*=\\s*[A-Za-z_]\\w*\\s*\\(\\s*'+param+'\\s*\\)\\s*;').test(setterBody));
+  if(!candidate)return null;
+  const assignment=new RegExp('\\b'+candidate.name+'\\s*=\\s*[A-Za-z_]\\w*\\s*\\(\\s*'+param+'\\s*\\)\\s*;');
+  const remaining=setterBody.replace(assignment,'')
+    .replace(/\brequire\s*\([^;]*\)\s*;/g,'')
+    .replace(/\bemit\s+[A-Za-z_]\w*\s*\([^;]*\)\s*;/g,'')
+    .replace(/[{}\s]/g,'');
+  if(remaining)return null;
+  const selector=contract.name+'.'+method;
+  const abi=menu.find(m=>m.selector===selector&&m.operation==='send'&&
+    m.inputs.length===1&&m.inputs[0]==='address');
+  if(!abi)return null;
+  const sequence:SoliditySequence={constructorArgs:[],steps:[
+    {operation:'send',function:'initialize(address,string,string)',
+      args:['$account2','LOTUS-Test','LOTUS'],sender:0},
+    {operation:'call',function:'owner()',args:[],expect:'$account0'},
+    {operation:'call',function:candidate.name+'()',args:[],
+      expect:'0x0000000000000000000000000000000000000000'},
+    {operation:'send',function:method+'(address)',args:['$account2'],
+      sender:1,expectRevert:true},
+    {operation:'call',function:candidate.name+'()',args:[],
+      expect:'0x0000000000000000000000000000000000000000'},
+    {operation:'send',function:method+'(address)',args:['$account2'],sender:0},
+    {operation:'call',function:candidate.name+'()',args:[],expect:'$account2'}
+  ]};
+  return {
+    hypothesis:'Non-owner must not change '+candidate.name+'; initialized owner may.',
+    property:'source-proven inherited BoringOwnable authorization',
+    sequence,witnesses:[
+      witness(snapshot,initializer,contract.name+'.initialize'),
+      witness(snapshot,setter,selector),
+      witness(snapshot,candidate,contract.name+'.'+candidate.name),
+      witness(peer,ownerInit,'BoringOwnable.__Ownable_init'),
+      witness(peer,guard,'BoringOwnable.onlyOwner'),
+      witness(peer,ownerGetter,'BoringOwnable.owner')
+    ]
+  };
+}
+
 export function constructSolidityExperiments(input:ConstructionInput):ConstructionResult {
   if(!/^[a-f0-9]{40}$/.test(input.repositoryCommit))
     return {ok:false,code:'INVALID_COMMIT',detail:'Expected a source commit SHA'};
@@ -126,6 +226,8 @@ export function constructSolidityExperiments(input:ConstructionInput):Constructi
     witnesses:[witness(target,contract,input.targetSelector)]});
   const direct=directOwnerExperiment(target,contract,input.declarations,method);
   if(direct)choices.push(direct);
+  const inherited=inheritedOwnerExperiment(target,contract,method,input.declarations,indexed);
+  if(inherited)choices.push(inherited);
   if(!choices.length)return {ok:false,code:'UNKNOWN_ASSERTION',
     detail:'No source-grounded security setup and falsifiable assertion for '+input.targetSelector};
   const seen=new Set<string>(),out:PreparedSecurityExperiment[]=[];
