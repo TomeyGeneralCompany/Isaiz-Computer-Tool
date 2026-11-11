@@ -688,7 +688,10 @@ export async function runLocalAudit(
          constraints?.action?.includes('plan_probe')) {
         constraints={...constraints,
           action:['read_file'],
-          path:indexedPhase.remaining};
+          // Leave the path constraint open: controllerOwnedNextAction would
+          // otherwise restart the sole remaining file at offset=0 each turn.
+          // Indexed reading fallback supplies the persistent next offset.
+          path:[]};
         await appendFile(logFile,'[CONTROLLER_READING_BEFORE_EXPERIMENT] '+
           JSON.stringify({completed:indexedPhase.completed,eligible:indexedPhase.eligible,
             remaining:indexedPhase.remaining.length})+'\n');
