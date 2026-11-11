@@ -55,15 +55,21 @@ def authorization_transition_observed(repository: Path, file: Path, selector: st
         if not privileged:
             return False
         role_getter=role+"()"
-        before=next((i for i,s in enumerate(steps) if s.get("operation")=="observe"
-                     and s.get("function")==role_getter),None)
+        # The executable Solidity sequence runtime emits getter observations
+        # as "call"; older regression fixtures used "observe". Accept both
+        # only with a concrete returned value and a successful assertion.
+        def getter_observation(step):
+            return (step.get("operation") in ("call", "observe")
+                    and step.get("function")==role_getter
+                    and step.get("passed") is True
+                    and isinstance(step.get("actual"),str))
+        before=next((i for i,s in enumerate(steps) if getter_observation(s)),None)
         send=next((i for i,s in enumerate(steps) if s.get("operation")=="send"
                    and s.get("function","").startswith(function+"(")
                    and s.get("sender")==1 and not s.get("reverted") and s.get("passed")),None)
         if before is None or send is None or before>=send:
             return False
-        after=next((i for i in range(send+1,len(steps)) if steps[i].get("operation")=="observe"
-                    and steps[i].get("function")==role_getter),None)
+        after=next((i for i in range(send+1,len(steps)) if getter_observation(steps[i])),None)
         if after is None:
             return False
         prior=str(steps[before]["actual"]).lower()
