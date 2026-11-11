@@ -12,7 +12,7 @@ function validateSequence(s) {
   };
   const args = a => {if(!Array.isArray(a)||a.length>32)throw new Error('Invalid ABI arguments');a.forEach(v=>value(v));};
   const wei = v => {if(v!==undefined && (typeof v!=='string'||!/^(0|[1-9][0-9]{0,29})$/.test(v)))throw new Error('Invalid wei amount');};
-  object(s,['constructorArgs','steps'],['constructorArgs','constructorValueWei','steps','deployment']);
+  object(s,['constructorArgs','steps'],['constructorArgs','constructorValueWei','steps','deployment','preparation']);
   if(s.deployment!==undefined) {
     object(s.deployment,['file','contract']);
     if(typeof s.deployment.file!=='string' || s.deployment.file.length>512 ||
@@ -22,6 +22,41 @@ function validateSequence(s) {
        typeof s.deployment.contract!=='string' ||
        !/^[A-Za-z_]\w*$/.test(s.deployment.contract))
       throw new Error('Invalid repository-local derived deployment');
+  }
+  if(s.preparation!==undefined) {
+    const p=s.preparation;
+    object(p,['deployments','operations','checks']);
+    if(!Array.isArray(p.deployments)||p.deployments.length>8 ||
+       !Array.isArray(p.operations)||p.operations.length>24 ||
+       !Array.isArray(p.checks)||p.checks.length>16)
+      throw new Error('Invalid preparation bounds');
+    const ids=new Set(),deployments=new Set();
+    const id=v=>typeof v==='string'&&/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(v);
+    const method=v=>typeof v==='string'&&/^[A-Za-z_]\\w*(?:\\([A-Za-z0-9_,()[\\]]*\\))?$/.test(v);
+    for(const d of p.deployments) {
+      object(d,['id','file','contract','constructorArgs'],['id','file','contract','constructorArgs','valueWei']);
+      if(!id(d.id)||ids.has(d.id)||typeof d.file!=='string' ||
+         !/^[A-Za-z0-9_.\\/-]+\\.sol$/.test(d.file) || d.file.startsWith('/') ||
+         d.file.split('/').some(x=>x==='..'||x==='.') ||
+         typeof d.contract!=='string'||!/^[A-Za-z_]\\w*$/.test(d.contract))
+        throw new Error('Invalid preparation deployment');
+      ids.add(d.id);deployments.add(d.id);args(d.constructorArgs);wei(d.valueWei);
+    }
+    for(const step of [...p.operations,...p.checks]) {
+      const check=p.checks.includes(step);
+      object(step,check?['id','deploymentId','function','args','sender','expect']:
+        ['id','deploymentId','function','args','sender'],
+        check?['id','deploymentId','function','args','sender','expect']:
+        ['id','deploymentId','function','args','sender','valueWei','expectRevert']);
+      if(!id(step.id)||ids.has(step.id)||!deployments.has(step.deploymentId) ||
+         !method(step.function)||!Number.isInteger(step.sender)||
+         step.sender<0||step.sender>2)
+        throw new Error('Invalid preparation operation');
+      ids.add(step.id);args(step.args);
+      if(check)value(step.expect);
+      else {wei(step.valueWei);if(step.expectRevert!==undefined&&typeof step.expectRevert!=='boolean')
+        throw new Error('Invalid preparation revert expectation');}
+    }
   }
   args(s.constructorArgs);wei(s.constructorValueWei);
   if(JSON.stringify(s).length>16000 || !Array.isArray(s.steps) || !s.steps.length || s.steps.length>16)throw new Error('Invalid sequence length');
@@ -46,7 +81,7 @@ function normalize(v) {
   if(typeof v==='string'||typeof v==='boolean')return v;
   throw new Error('Unsupported ABI result');
 }
-async function runSequence(artifact, sequence, transport) {
+async function runSequence(artifact, sequence, transport, preparationArtifacts={}) {
   validateSequence(sequence);
   const {BrowserProvider, ContractFactory}=require('ethers');
   if(!artifact?.evm?.bytecode?.object || !/^[0-9a-fA-F]+$/.test(artifact.evm.bytecode.object))
@@ -56,19 +91,78 @@ async function runSequence(artifact, sequence, transport) {
     const signers=await Promise.all([0,1,2].map(i=>provider.getSigner(i)));
     const accounts=await Promise.all(signers.map(s=>s.getAddress()));
     let address;
+    const deployed=new Map();
+    const setupSteps=[];
     const resolve = v => {
       if(Array.isArray(v))return v.map(resolve);
       if(typeof v==='string' && /^\$account[012]$/.test(v))return accounts[Number(v.at(-1))];
+      if(typeof v==='string'&&/^\\$deployment:[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(v)){
+        const item=deployed.get(v.slice('$deployment:'.length));
+        if(!item)throw new Error('Unresolved earlier deployment '+v);
+        return item.address;
+      }
       if(v==='$contract') {if(!address)throw new Error('$contract is unavailable in constructor arguments');return address;}
       if(typeof v==='string' && v.startsWith('$'))throw new Error('Unknown local address reference');
       return v;
     };
+    // Preparation runs only in this isolated EVM. Each deployment and setup
+    // operation is source-declared and evidence-checked before the main probe.
+    const preparation=sequence.preparation;
+    if(preparation) {
+      for(const d of preparation.deployments) {
+        const depArtifact=preparationArtifacts[d.file]?.[d.contract];
+        if(!depArtifact?.evm?.bytecode?.object ||
+           !/^[a-fA-F0-9]+$/.test(depArtifact.evm.bytecode.object))
+          throw new Error('Missing or unlinked preparation contract '+d.file+':'+d.contract);
+        const dep=await new ContractFactory(depArtifact.abi,depArtifact.evm.bytecode.object,signers[0])
+          .deploy(...d.constructorArgs.map(resolve),{value:d.valueWei||'0',gasLimit:10000000});
+        const receipt=await dep.deploymentTransaction().wait();
+        if(receipt?.status!==1)throw new Error('Preparation deployment failed: '+d.id);
+        const depAddress=await dep.getAddress();
+        deployed.set(d.id,{contract:dep,address:depAddress,receipt});
+        setupSteps.push({operation:'setup',function:'deploy:'+d.file+':'+d.contract,
+          sender:0,passed:true,gasUsed:receipt.gasUsed.toString(),purpose:'prepare '+d.id});
+      }
+      for(const op of preparation.operations) {
+        const item=deployed.get(op.deploymentId);
+        const fn=item.contract.connect(signers[op.sender]).getFunction(op.function);
+        const fragment=fn.fragment;
+        if(!['payable','nonpayable'].includes(fragment.stateMutability))
+          throw new Error('Preparation operation must change state: '+op.id);
+        const values=op.args.map(resolve);
+        item.contract.interface.encodeFunctionData(fragment,values);
+        if(fragment.stateMutability!=='payable'&&BigInt(op.valueWei||'0')!==0n)
+          throw new Error('Nonpayable preparation operation: '+op.id);
+        let receipt;
+        try {const tx=await fn.send(...values,{value:op.valueWei||'0',gasLimit:2000000});receipt=await tx.wait();}
+        catch(error) {if(error.receipt?.status!==0)throw error;receipt=error.receipt;}
+        if(!receipt||![0,1].includes(receipt.status))
+          throw new Error('Preparation missing transaction receipt: '+op.id);
+        const actualReverted=receipt.status===0;
+        setupSteps.push({operation:'setup',function:fragment.format('sighash'),
+          sender:op.sender,gasUsed:receipt.gasUsed.toString(),
+          passed:actualReverted===!!op.expectRevert,purpose:'preparation operation '+op.id});
+        if(actualReverted!==!!op.expectRevert)
+          throw new Error('Preparation transaction expectation failed: '+op.id);
+      }
+      for(const check of preparation.checks) {
+        const item=deployed.get(check.deploymentId);
+        const fn=item.contract.connect(signers[check.sender]).getFunction(check.function);
+        if(!['view','pure'].includes(fn.fragment.stateMutability))
+          throw new Error('Preparation check must be read-only: '+check.id);
+        const result=await fn.staticCallResult(...check.args.map(resolve),{gasLimit:1000000});
+        const actual=normalize(fn.fragment.outputs.length===1?result[0]:result);
+        const expected=normalize(resolve(check.expect));
+        if(JSON.stringify(actual)!==JSON.stringify(expected))
+          throw new Error('Preparation check failed: '+check.id);
+      }
+    }
     const contract=await new ContractFactory(artifact.abi,artifact.evm.bytecode.object,signers[0])
       .deploy(...sequence.constructorArgs.map(resolve),{value:sequence.constructorValueWei||'0',gasLimit:10000000});
     const deployment=await contract.deploymentTransaction().wait();
     if(!deployment || deployment.status!==1)throw new Error('Constructor deployment failed');
     address=await contract.getAddress();
-    const steps=[];
+    const steps=[...setupSteps];
     // Only the explicitly generated ERC1155 test harness gets automatic setup.
     // These are actual mined transactions, recorded separately from the probe.
     const harness = artifact.abi.some(x=>x.type==='function' && x.name==='tomeyMint') &&
