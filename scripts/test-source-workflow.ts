@@ -331,11 +331,11 @@ const livePolyglot=process.argv.includes("--real-model-polyglot");
 const realQwenLanguage=process.env.LOTUS_REAL_QWEN_LANGUAGE?.trim().toLowerCase();
 if(realQwenLanguage && (!livePolyglot || !["javascript","java","solidity"].includes(realQwenLanguage)))
   throw new Error("LOTUS_REAL_QWEN_LANGUAGE requires --real-model-polyglot and javascript, java, or solidity");
-if(livePolyglot) {
-  // Only the real-model CI fixture receives the bounded source-investigation turn budget.
-  process.env.LOCAL_HUNT_MAX_TURNS="48";
-  process.env.LOCAL_HUNT_DYNAMIC_ALLOWANCE="false";
-}
+// CI fixtures must have a finite investigation allowance even when production
+// uses dynamic, unattended controller budgets. A scripted mock must not silently
+// consume a hosted job forever when a source-coverage transition regresses.
+process.env.LOCAL_HUNT_MAX_TURNS=livePolyglot?"48":"96";
+process.env.LOCAL_HUNT_DYNAMIC_ALLOWANCE="false";
 if(livePolyglot && !process.env.AUTOHACK_OLLAMA_URL)throw new Error("Real polyglot run requires AUTOHACK_OLLAMA_URL");
 // Emit audit-file progress independently of the model response and retain its
 // trace in CI artifacts when a real-model language fails or reaches its deadline.
@@ -407,6 +407,21 @@ try {
   let policyOffset=0,policyDone=false;
   let turn=0, caseId="", source="", caller="", selector="", stateful=false,reviewMode=false,reviewIndex=0,reviewOffset=0;
   let evidenceRepairReads:string[]=[];
+  // The model fixture must honor the *actual* controller coverage rejection.
+  // Never substitute a guessed source or turn an incomplete investigation into
+  // an accepted final: read the exact next file only if the action schema allows it.
+  const coverageRead=(messages:Array<{content?:string}>,allowed?:string[]):string|null=>{
+    for(const message of [...messages].reverse()) {
+      const hint=String(message.content||"").match(/Suggested next file:\\s*(source-\\d+\\/[A-Za-z0-9_./-]+\\.(?:sol|java|js|mjs|cjs|py))\\b/i)?.[1];
+      if(hint) return !allowed || allowed.includes(hint) ? hint : null;
+    }
+    return null;
+  };
+  assert.equal(coverageRead([{content:"Inspection is incomplete. Suggested next file: source-1/Render.sol"}],["source-1/Render.sol"]),"source-1/Render.sol");
+  assert.equal(coverageRead([{content:"Suggested next file: source-2/Other.sol"}],["source-1/Render.sol"]),null,
+    "fixture must not bypass controller path constraints");
+  assert.equal(coverageRead([{content:"Suggested next file: ../outside.sol"}]),null,
+    "fixture must never follow an unscoped source hint");
   const reviewFiles=["source/Store.sol","evidence/report.txt","evidence/replay.json","evidence/policy.txt"];
   const sequence={constructorArgs:["5"],steps:[
     {operation:"call",function:"value()",args:[],expect:"5"},
@@ -507,6 +522,17 @@ try {
       turn--;
       res.end(JSON.stringify({message:{role:"assistant",content:JSON.stringify({
         action:"read_file",path,offset:0,query:"",answer:""
+      })}}));
+      return;
+    }
+    // A rejected no-testable-candidate final is a coverage obligation, not a
+    // reason to repeat the same conclusion. Read the controller-nominated
+    // source, then reassess the fixture without inventing a vulnerability.
+    const requiredCoverage=coverageRead(request.messages,request.format.properties.path?.enum);
+    if(!reviewMode && source.endsWith(".sol") && requiredCoverage &&
+       request.format.properties.action.enum.includes("read_file")) {
+      res.end(JSON.stringify({message:{role:"assistant",content:JSON.stringify({
+        action:"read_file",path:requiredCoverage,offset:0,query:"",answer:""
       })}}));
       return;
     }
