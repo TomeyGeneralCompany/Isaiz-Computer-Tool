@@ -324,6 +324,8 @@ assert.ok(flowText.includes("prioritized candidate file(s) remain unread"),"cove
 assert.ok(flowText.includes("State only what the selected files"),"do not accept repository-wide negative claims");
 assert.ok(controllerText.includes("requireInvestigationAfterEmpty=true;"),"coverage-driven final rejection must reopen tool actions");
 assert.ok(controllerText.includes("requiredNextSource"),"coverage rejection must enforce a fresh eligible source read");
+assert.ok(controllerText.includes("status:'source_index_exhausted'"),
+  "terminal indexed source rejection must be structured rather than a raw tool error");
 assert.ok(controllerText.includes("[EMPTY_FINAL_RECOVER]"),"repeated empty finals must reopen source investigation");
 assert.ok(controllerText.includes("requireInvestigationAfterEmpty"),"recovery must require a tool action rather than another empty final");
 assert.ok(!controllerText.includes("recentActions.clear();stalledActions=0"),"final rejection must preserve read history");
@@ -453,6 +455,14 @@ try {
         const result=JSON.parse(last.split("\n")[0].slice(12));
         if(result.name==="read_file") {
           const page=JSON.parse(result.output);
+          // Source exhaustion is structured controller feedback, not another
+          // page to reread. The fixture must never parse it as an invalid JSON
+          // tool error or request a completed terminal page again.
+          if(page.status==='source_index_exhausted') {
+            assert.equal(page.verified,false,"exhausted source is not a verified security case");
+            assert.ok(request.format.properties.action.enum.includes('final'),
+              "completed indexed source must permit an evidence-limited final");
+          }
           if(page.nextOffset!=null) {
             const previous=[...request.messages].reverse().map((m:any)=>{try{return JSON.parse(m.content);}catch{return null;}}).find((a:any)=>a?.action==='read_file');
             res.end(JSON.stringify({message:{role:"assistant",content:JSON.stringify({
@@ -539,7 +549,7 @@ try {
     // This fixture's Solidity methods are a pure renderer and a generic
     // setter. Neither has a source-grounded security hypothesis. The model
     // must report no testable candidate instead of inventing a reproduction.
-    if(source.endsWith('.sol') && turn>=3 &&
+    if(source.endsWith('.sol') && turn>=1 &&
        request.format.properties.action.enum.includes('final')) {
       res.end(JSON.stringify({message:{role:'assistant',content:JSON.stringify({
         action:'final',path:'',query:'',
