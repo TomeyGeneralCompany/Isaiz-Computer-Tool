@@ -2098,10 +2098,9 @@ export async function runLocalAudit(
             }
           } else if (name === "read_file") {
             const rawPage = await readSourcePage(full,offset,pageSize);
-            // A terminal page must never be scheduled again, even if formatting
-            // its optional probe menu fails. The source cursor is authoritative.
-            const readPath=relative(root,full).split(sep).join('/');
-            if(rawPage.nextOffset===null)terminalReadPages.set(readPath,{offset:rawPage.start});
+            // Do not mark the raw page terminal here. Context fitting may
+            // shorten its delivered range and produce a non-null nextOffset.
+            // Only the finally delivered page (below) is evidence of EOF.
             output = fitOutput(JSON.stringify(rawPage)).output;
             const page = JSON.parse(output) as typeof rawPage;
             // Present grounded choices as soon as a file's last page is read,
