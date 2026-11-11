@@ -2,6 +2,7 @@ import {parse} from '@solidity-parser/parser';
 import {posix} from 'node:path';
 import type {SolidityProbeDeclaration} from './solidity-probe-inputs';
 import type {SoliditySequence} from './solidity-sequence';
+import {roleConsumerImpactSequence,inheritedRoleConsumerImpactSequence} from './controller-solidity-consumer-impact';
 
 /** A probe is eligible only when source establishes a security rule, a
  * reproducible caller/role setup, and an assertion which can falsify the
@@ -104,7 +105,7 @@ export function sourceGroundedSolidityProbe(
   // Inherited role-guarded entry points are security consumers of the base
   // role too. Verify the real import path, direct Solidity inheritance, and
   // parsed require(msg.sender == role) AST; a lexical mention never qualifies.
-  const inheritedConsumers:string[]=[];
+  const inheritedConsumers:Array<{consumer:string;peerPath:string;peerSource:string;contract:string}>=[];
   if(!consumers.length && context && context.path.endsWith('.sol')) {
     for(const peer of context.peers.slice(0,200)) {
       if(peer.path===context.path || !peer.path.endsWith('.sol') ||
@@ -129,7 +130,7 @@ export function sourceGroundedSolidityProbe(
              ['public','external'].includes(fn.visibility) &&
              !['view','pure'].includes(fn.stateMutability||'') &&
              hasGuard(fn.body))
-            inheritedConsumers.push(derived.name+'.'+fn.name);
+            inheritedConsumers.push({consumer:derived.name+'.'+fn.name,peerPath:peer.path,peerSource:peer.source,contract:derived.name});
         }
       }
     }
@@ -137,7 +138,7 @@ export function sourceGroundedSolidityProbe(
   if(!consumers.length && !inheritedConsumers.length)return null;
   const consumer=consumers.length
     ? contractName+'.'+consumers[0].name
-    : inheritedConsumers[0];
+    : inheritedConsumers[0].consumer;
   const getter=menu.find(item=>item.selector===contractName+'.'+candidate.role &&
     item.operation==='call' && item.inputs.length===0);
   const entry=menu.find(item=>item.selector===requestedSelector &&
@@ -146,7 +147,13 @@ export function sourceGroundedSolidityProbe(
   if(!getter || !entry)return null;
   const observedGetter=candidate.role+'()';
   const setterSignature=mutation+'('+entry.inputs.join(',')+')';
-  const sequence:SoliditySequence={constructorArgs:[],steps:[
+  const baseFile=context?.path.replace(/^source-[0-9]+\//,'')||'';
+  const inherited=inheritedConsumers[0];
+  const impact=inherited && baseFile
+    ? inheritedRoleConsumerImpactSequence(source,inherited.peerSource,candidate.role,mutation,
+        baseFile,inherited.peerPath.replace(/^source-[0-9]+\//,''),inherited.contract)
+    : roleConsumerImpactSequence(source,candidate.role,mutation);
+  const sequence:SoliditySequence=impact || {constructorArgs:[],steps:[
     {operation:'call',function:observedGetter,args:[],expect:'$account0'},
     {operation:'send',function:setterSignature,args:['$account2'],sender:1},
     {operation:'call',function:observedGetter,args:[],expect:'$account2'}
@@ -155,7 +162,8 @@ export function sourceGroundedSolidityProbe(
     hypothesis:'Source declares '+candidate.role+' as an account0-initialized role that gates '+
       consumer+'; caller account1 must not be able to set it to account2 via '+
       requestedSelector+'. The test is falsified by a rejected unauthorized send or by '+
-      'failure of the asserted account0-to-account2 role transition.',
+      'failure of the asserted account0-to-account2 role transition.'+
+      (impact?' The controller additionally verifies a denied-before and allowed-after protected consumer transaction with a measured balance change.':''),
     sequence,guardedConsumer:consumer
   };
 }

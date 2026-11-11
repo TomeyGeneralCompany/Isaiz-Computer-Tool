@@ -5,12 +5,17 @@ const abiValue = z.union([scalar, z.array(z.union([scalar,z.array(scalar).max(32
 const args = z.array(abiValue).max(32);
 const sender = z.number().int().min(0).max(2);
 const wei = z.string().regex(/^(0|[1-9][0-9]{0,29})$/);
+const deployment = z.object({
+  file:z.string().min(1).max(512).regex(/^[A-Za-z0-9_.\/-]+\.sol$/)
+    .refine(v=>!v.startsWith('/')&&!v.split('/').some(part=>part==='..'||part==='.'),'Repository-relative Solidity path required'),
+  contract:z.string().regex(/^[A-Za-z_]\w*$/)
+}).strict();
 const signature = z.string().min(1).max(200).regex(/^[A-Za-z_][A-Za-z0-9_]*(?:\([A-Za-z0-9_,()[\]]*\))?$/);
 const send = z.object({operation:z.literal("send"),function:signature,args,sender:sender.optional(),
   valueWei:wei.optional(),expectRevert:z.boolean().optional()}).strict();
 const observe = z.object({operation:z.literal('observe'),function:signature,args,sender:sender.optional()}).strict();
 const call = z.object({operation:z.literal("call"),function:signature,args,sender:sender.optional(),expect:abiValue}).strict();
-export const soliditySequenceSchema = z.object({constructorArgs:args,constructorValueWei:wei.optional(),
+export const soliditySequenceSchema = z.object({constructorArgs:args,constructorValueWei:wei.optional(),deployment:deployment.optional(),
   steps:z.array(z.discriminatedUnion("operation",[send,call,observe])).min(1).max(16)}).strict()
   .refine(s=>s.steps.some(step=>step.operation === "call" || step.operation === "observe"),"Include at least one read observation")
   .refine(s=>JSON.stringify(s).length<=16000,"Sequence exceeds 16KB");
@@ -28,7 +33,7 @@ const argsJson = {type:"array",maxItems:32,items:valueJson};
 const stepBase = {function:{type:"string",maxLength:200},args:argsJson,sender:{type:"integer",minimum:0,maximum:2}};
 const weiJson = {type:"string",pattern:"^(0|[1-9][0-9]{0,29})$"};
 export const soliditySequenceJsonSchema = {type:"object",additionalProperties:false,
-  properties:{constructorArgs:argsJson,constructorValueWei:weiJson,steps:{type:"array",minItems:1,maxItems:16,items:{anyOf:[
+  properties:{constructorArgs:argsJson,constructorValueWei:weiJson,deployment:{type:'object',additionalProperties:false,properties:{file:{type:'string',maxLength:512},contract:{type:'string',maxLength:100}},required:['file','contract']},steps:{type:"array",minItems:1,maxItems:16,items:{anyOf:[
     {type:"object",additionalProperties:false,properties:{operation:{const:"send"},...stepBase,valueWei:weiJson,expectRevert:{type:"boolean"}},required:["operation","function","args"]},
     {type:"object",additionalProperties:false,properties:{operation:{const:"call"},...stepBase,expect:valueJson},required:["operation","function","args","expect"]},
     {type:"object",additionalProperties:false,properties:{operation:{const:"observe"},...stepBase},required:["operation","function","args"]},

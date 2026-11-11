@@ -17,7 +17,7 @@ import { SourceReads } from "./source-inspection";
 import { execFileSync } from "node:child_process";
 import { beginLocalJob } from "./local-job";
 import { randomBytes, createHash } from "node:crypto";
-import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
 import { eq, and, inArray } from "drizzle-orm";
 import { z } from "zod";
@@ -1441,7 +1441,16 @@ export async function independentReview(finding:SecurityFinding,program:Security
       entryReplay as Parameters<typeof controllerVerifiedLocalHtmlReview>[1]) ||
       (reachability==='direct_transaction' ?
         controllerVerifiedLocalSolidityConsumerReview({
-          source:targetCode,selector:record.spec.function,
+          source:targetCode,sourceFile:record.spec.file,selector:record.spec.function,
+          consumerSource:await (async()=>{
+            const deployment=(record.spec.sequence as {deployment?:{file?:string}}|undefined)?.deployment;
+            if(!deployment?.file)return undefined;
+            try {
+              const full=await realpath(resolve(repository,deployment.file));
+              if(!full.startsWith(resolve(repository)+sep))return undefined;
+              return await readFile(full,'utf8');
+            }catch{return undefined;}
+          })(),
           sequence:record.spec.sequence,replay
         }) : null);
     if(observedTechnical) {

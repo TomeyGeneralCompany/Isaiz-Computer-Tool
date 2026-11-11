@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {createRequire} from 'node:module';
 import {generateCrucible} from './lotus-crucible-generator';
-import {roleConsumerImpactSequence,roleConsumerImpactObserved} from '../packages/security-solver/src/controller-solidity-consumer-impact';
+import {roleConsumerImpactSequence,roleConsumerImpactObserved,inheritedRoleConsumerImpactSequence,inheritedRoleConsumerImpactObserved} from '../packages/security-solver/src/controller-solidity-consumer-impact';
 const require=createRequire(import.meta.url);
 const solc=require('./reproduction-runtime/node_modules/solc');
 const ganache=require('./reproduction-runtime/node_modules/ganache');
@@ -62,4 +62,28 @@ try{
  assert.equal(roleConsumerImpactObserved(securedEvidence,'operator','rotateOperator'),false,
   'Authorized setter must not pass vulnerable mutation sequence');
 }finally{await provider.disconnect();}
+// The inherited settlement consumer must run on the derived deployment;
+// probing the standalone authority cannot prove downstream credit impact.
+const baseFile='contracts/settlement/SettlementAuthority.sol';
+const derivedFile='contracts/settlement/SettlementVault.sol';
+const baseSource='pragma solidity ^0.8.20; contract SettlementAuthority { address public operator; constructor(){operator=msg.sender;} function rotateOperator(address next) external {require(next!=address(0),"zero");operator=next;} }';
+const derivedSource='pragma solidity ^0.8.20; import "./SettlementAuthority.sol"; contract SettlementVault is SettlementAuthority { mapping(address=>uint256) public credit; uint256 public totalCredit; function fund(address recipient,uint256 amount) external {credit[recipient]+=amount;totalCredit+=amount;} function settle(address recipient,uint256 amount) external {require(msg.sender==operator,"operator only");require(amount>0&&amount<=totalCredit,"bad amount");credit[recipient]+=amount;totalCredit-=amount;} }';
+const derivedSequence=inheritedRoleConsumerImpactSequence(baseSource,derivedSource,'operator','rotateOperator',baseFile,derivedFile,'SettlementVault');
+assert.ok(derivedSequence);
+const derivedCompile=JSON.parse(solc.compile(JSON.stringify({
+ language:'Solidity',sources:{[baseFile]:{content:baseSource},[derivedFile]:{content:derivedSource}},
+ settings:{evmVersion:'shanghai',outputSelection:{'*':{'*':['abi','evm.bytecode.object']}}}
+})));
+assert.deepEqual((derivedCompile.errors||[]).filter((e:any)=>e.severity==='error'),[]);
+const derivedArtifact=derivedCompile.contracts[derivedFile].SettlementVault;
+const derivedProvider=ganache.provider({logging:{quiet:true},wallet:{deterministic:true,totalAccounts:3},
+ chain:{hardfork:'shanghai',chainId:1337,time:new Date('2020-01-01T00:00:00Z')},
+ miner:{blockGasLimit:12000000,timestampIncrement:1}});
+try{
+ const observed=await runSequence(derivedArtifact,derivedSequence,derivedProvider);
+ assert.ok(inheritedRoleConsumerImpactObserved(observed,'operator','rotateOperator'));
+ const tampered=structuredClone(observed);
+ tampered.steps[7].reverted=true;
+ assert.equal(inheritedRoleConsumerImpactObserved(tampered,'operator','rotateOperator'),false);
+}finally{await derivedProvider.disconnect();}
 console.log('Solidity independent EVM denied-before/allowed-after protected consumer impact and secure-control rejection PASSED');

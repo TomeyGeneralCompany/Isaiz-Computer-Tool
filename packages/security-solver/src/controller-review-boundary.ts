@@ -7,7 +7,7 @@
  */
 import type {ReviewEvidence} from './review-evidence-chain';
 import {entryReplayFacts,type EntryReviewObservation} from './entry-review-evidence';
-import {roleConsumerImpactSequence,roleConsumerImpactObserved} from './controller-solidity-consumer-impact';
+import {roleConsumerImpactSequence,roleConsumerImpactObserved,inheritedRoleConsumerImpactSequence,inheritedRoleConsumerImpactObserved} from './controller-solidity-consumer-impact';
 
 export interface ControllerReviewGrounds {
   sourceDigest:string;
@@ -208,7 +208,7 @@ export function controllerVerifiedLocalHtmlReview(
  * neither a claim about deployment nor an external bounty submission.
  */
 export function controllerVerifiedLocalSolidityConsumerReview(input:{
- source:string;selector:string;sequence:unknown;
+ source:string;selector:string;sequence:unknown;consumerSource?:string;sourceFile?:string;
  replay:{status?:string;kind?:string;behavior_observed?:boolean;observations?:unknown}
 }) {
   const {source,selector,sequence,replay}=input;
@@ -224,9 +224,15 @@ export function controllerVerifiedLocalSolidityConsumerReview(input:{
   const assigned=/\b(operator|owner|administrator|admin|manager|guardian|controller|authority)\s*=\s*[A-Za-z_]\w*\s*;/i.exec(source.slice(bodyStart,close));
   if(!assigned)return null;
   const role=assigned[1];
-  const expected=roleConsumerImpactSequence(source,role,mutator);
+  const deployed=(sequence as {deployment?:{file?:string;contract?:string}}).deployment;
+  const expected=deployed && input.consumerSource && input.sourceFile && deployed.file && deployed.contract
+    ? inheritedRoleConsumerImpactSequence(source,input.consumerSource,role,mutator,
+        input.sourceFile,deployed.file,deployed.contract)
+    : deployed ? null : roleConsumerImpactSequence(source,role,mutator);
   if(!expected || JSON.stringify(expected)!==JSON.stringify(sequence) ||
-     !roleConsumerImpactObserved(replay.observations,role,mutator))return null;
+     !(deployed
+       ? inheritedRoleConsumerImpactObserved(replay.observations,role,mutator)
+       : roleConsumerImpactObserved(replay.observations,role,mutator)))return null;
   return {
     verdict:'approve' as const,recommendation:'dont_submit' as const,
     severity:'low' as const,confidence:0.78,bet100:false,
