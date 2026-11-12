@@ -1,6 +1,7 @@
 import { Annotation, StateGraph, START, END } from '@langchain/langgraph';
 import { isDeepStrictEqual } from 'node:util';
 import {createHash} from 'node:crypto';
+import {ControllerStageLock} from './controller-stage-lock';
 import {ControllerScenarioLedger} from './controller-scenario-lifecycle';
 import type { decodeAuditAction } from './local-audit-protocol';
 type Action = ReturnType<typeof decodeAuditAction>;
@@ -29,6 +30,11 @@ export function probeHypothesisMismatch(kind:string,hypothesis:string):string|nu
 
 const key = (a:Action) => JSON.stringify([a.path,a.query,a.answer,a.sequence]);
 export class InvestigationWorkflow {
+  private stageLock:ControllerStageLock|null=null;
+  bindStageLock(lock:ControllerStageLock){
+    if(this.stageLock)throw new Error('STAGE_LOCK_ALREADY_BOUND');
+    this.stageLock=lock;
+  }
   readonly scenarios=new ControllerScenarioLedger();
   private scenarioMap=new Map<string,string>();
   private sourceEvidence=new Map<string,string[]>();
@@ -180,6 +186,20 @@ export class InvestigationWorkflow {
     this.state.inspections=0;this.pageTurns=0;this.lastFeedback='';
   }
   async constraints() {
+    if(this.stageLock){
+      const stage=this.stageLock.currentStage;
+      if(stage==='READ')return {action:['read_file']};
+      if(stage==='ANALYZE')return {action:['finalize_analysis']};
+      if(stage==='EXPERIMENT'){
+        if(this.state.pending){
+          const p=this.state.pending;
+          return {action:['verify_source'],path:[p.path],query:[p.query],answer:[p.answer]};
+        }
+        return {action:['plan_probe','probe_intent']};
+      }
+      if(stage==='REVIEW'||stage==='REPORT')return {action:['final']};
+      throw new Error('STAGE_LOCKED: '+stage);
+    }
     if(this.pageTurns>=8)this.state.inspections=Math.max(6,this.state.inspections);
     this.state=await graph.invoke(this.state);
     if(this.requiredSource)return {action:['read_file'],path:[this.requiredSource]};
@@ -213,7 +233,7 @@ export class InvestigationWorkflow {
       ['read_file','read_solidity','outline_solidity','search_files','list_files','plan_probe','final']};
   }
   note():string {
-    const note={unansweredQuestion:this.decisions.length?{...this.decisions.at(-1)!,path:this.decisions.at(-1)!.path.slice(0,160),question:this.decisions.at(-1)!.question.slice(0,250)}:undefined,priorNavigation:this.priorNotes.slice(-1).map(n=>n.slice(0,200)),pageTurns:this.pageTurns,stage:this.state.stage,inspectionsSinceDecision:this.state.inspections,
+    const note={unansweredQuestion:this.decisions.length?{...this.decisions.at(-1)!,path:this.decisions.at(-1)!.path.slice(0,160),question:this.decisions.at(-1)!.question.slice(0,250)}:undefined,priorNavigation:this.priorNotes.slice(-1).map(n=>n.slice(0,200)),pageTurns:this.pageTurns,stage:this.stageLock?.currentStage||this.state.stage,inspectionsSinceDecision:this.state.inspections,
       recentReadPaths:[...this.readPaths].slice(-3).map(p=>p.slice(0,160)),nextUnreadPages:[...this.nextOffsets].filter(([,offset])=>offset!==null).slice(-3).map(([path,offset])=>({path:path.slice(0,160),offset})),pending:this.state.pending ? {path:this.state.pending.path.slice(0,160),function:this.state.pending.query,kind:this.state.pending.answer} : null,
       observations:this.observations.slice(-2).map(o=>({...o,path:o.path.slice(0,160)})),
       // Compact controller-owned case ledger survives Qwen context eviction.
@@ -222,6 +242,14 @@ export class InvestigationWorkflow {
       evidenceReferences:this.evidenceReferences.slice(-3),verifiedEvidenceFocus:this.verifiedEvidenceFocus,feedback:this.lastFeedback.slice(0,240),
       instruction:this.verifiedEvidenceFocus?'The controller has locked a source-reproduced case '+this.verifiedEvidenceFocus+'. Assess its technical security significance against the recorded observations, caller chain and mitigations. Do not select new navigation or probes; a supported negative judgment is valid.':this.state.pending?'Execute the planned probe with exactly its path, function, kind and sequence.':
         'Read relevant source, then plan_probe with path, query=function, answer=probe kind, hypothesis=claim AND disproof condition. After six inspections or eight source pages, choose plan_probe, continue_inspection with a specific unanswered question in hypothesis and the next path/offset/query, or an incomplete final. Continue only to obtain that missing evidence; no forced unrelated test. A failed or unsupported verification is not proof of absence or presence. After inspecting recorded evidence, change candidate or request specific missing context; do not repeat completed evidence pages. Read recorded evidenceFile pages when an observation leaves context instead of repeating its probe. After testing inspect caller/mitigations before reporting; observations alone are not findings.'};
+    if(this.stageLock?.currentStage==='READ')
+      note.instruction='READ stage locked: complete every indexed source page. Never plan, execute or review experiments before the controller verifies complete source coverage.';
+    else if(this.stageLock?.currentStage==='EXPERIMENT')
+      note.instruction=this.state.pending?'Execute only the exact queued controller-selected verifier request.':'Execute only the next controller-queued experiment. Do not select unqueued experiments or read new source pages.';
+    else if(this.stageLock?.currentStage==='REVIEW')
+      note.instruction='All queued experiments are terminal. Independently review recorded observation evidence; do not run new experiments.';
+    else if(this.stageLock?.currentStage==='REPORT')
+      note.instruction='Independent review completed. Produce only the validated evidence-based report.';
     // Evidence is controller-owned and must survive conversation compaction.
     // Discard navigation prose before dropping a verified reproduction record.
     while(JSON.stringify(note).length>1800 && note.priorNavigation.length)note.priorNavigation.shift();
@@ -299,6 +327,15 @@ export class InvestigationWorkflow {
     return next;
   }
   validate(action:Action):string|null {
+    if(this.stageLock){
+      const stage=this.stageLock.currentStage;
+      if(stage==='REVIEW' && action.action==='final'){
+        // A proposed final is input to independent review, not a report.
+      }else{
+        try{this.stageLock.assertActionAllowed(action.action);}
+        catch(error){return String(error);}
+      }
+    }
     if(this.requiredSource && (action.action!=='read_file' || action.path!==this.requiredSource))return 'Read the required candidate source '+this.requiredSource+' before other actions.';
     if(action.action==='continue_inspection') {
       if(!action.hypothesis?.trim() || action.hypothesis.trim().length<20 || !action.path || action.path.length>512)
@@ -352,9 +389,15 @@ export class InvestigationWorkflow {
     this.feedback('Controller released an unexecutable plan: '+reason);
     return {path:pending.path,query:pending.query,kind:pending.answer};
   }
-  plan(action:Action) { this.preparedControllerPlan(action.path,action.query,action.answer);this.recoveryProbe=null;this.requiredProbePlanning=false;this.requiredProbeKind=null;this.requiredProbePlanningRejections=0;this.state.pending=action;this.duplicateProbeRejections=0;this.lastFeedback=''; }
-  read(path:string) { this.readPaths.add(path);this.latestSolidityPath=path.endsWith('.sol')?path:null; if(path===this.requiredSource)this.requiredSource=this.requiredSourceQueue.shift()||null; }
+  plan(action:Action) {
+    this.stageLock?.assertActionAllowed('plan_probe');
+    this.preparedControllerPlan(action.path,action.query,action.answer);this.recoveryProbe=null;this.requiredProbePlanning=false;this.requiredProbeKind=null;this.requiredProbePlanningRejections=0;this.state.pending=action;this.duplicateProbeRejections=0;this.lastFeedback=''; }
+  read(path:string) {
+    this.stageLock?.assertActionAllowed('read_file');
+    this.readPaths.add(path);this.latestSolidityPath=path.endsWith('.sol')?path:null; if(path===this.requiredSource)this.requiredSource=this.requiredSourceQueue.shift()||null; }
   observe(action:Action,output:string) {
+    if(this.stageLock && ['verify_source','verify_python','read_file','read_solidity'].includes(action.action))
+      this.stageLock.assertActionAllowed(action.action);
     if(action.action==='outline_solidity')this.outlinedPaths.add(action.path);
     if(action.action==='verify_source') {
       this.observeScenario(action,output);
@@ -393,5 +436,7 @@ export class InvestigationWorkflow {
     } else this.state.inspections=Math.max(6,this.state.inspections);
   }
   feedback(message:string,reopen=false) {this.lastFeedback=message.slice(0,400);if(reopen){this.state.inspections=0;this.pageTurns=0;}}
-  snapshot() {return {sourceEvidenceByPath:[...this.sourceEvidence],scenarioLedger:this.scenarios.snapshot(),outlinedPaths:[...this.outlinedPaths],...this.state,pageTurns:this.pageTurns,sourceProgress:this.sourceProgress,decisions:this.decisions,priorNotes:this.priorNotes,readPaths:[...this.readPaths],observations:this.observations,verifiedEvidenceFocus:this.verifiedEvidenceFocus};}
+  snapshot() {return {sourceEvidenceByPath:[...this.sourceEvidence],scenarioLedger:this.scenarios.snapshot(),outlinedPaths:[...this.outlinedPaths],...this.state,
+    stage:this.stageLock?({INDEX:'inspect',READ:'inspect',ANALYZE:'hypothesize',EXPERIMENT:'test',REVIEW:'review',REPORT:'review',COMPLETE:'review'} as const)[this.stageLock.currentStage]:this.state.stage,
+    ...(this.stageLock?{lockedStage:this.stageLock.currentStage}:{}),pageTurns:this.pageTurns,sourceProgress:this.sourceProgress,decisions:this.decisions,priorNotes:this.priorNotes,readPaths:[...this.readPaths],observations:this.observations,verifiedEvidenceFocus:this.verifiedEvidenceFocus};}
 }

@@ -375,6 +375,7 @@ export async function runLocalAudit(
     // fingerprint them, but does not mark them read or permit experimentation.
     if(workflow && (limits.controllerIndex ?? process.env.LOCAL_CONTROLLER_FULL_SOURCE_INDEX==='true')) {
       stageLock=new ControllerStageLock();
+      workflow.bindStageLock(stageLock);
       const indexedPaths=[...new Set(limits.initialSourcePaths||[])].filter(path=>
         /^source-[0-9]+\/.+\.(?:sol|java|py|js|mjs|cjs)$/.test(path));
       const inventory=[];
