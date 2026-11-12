@@ -467,7 +467,7 @@ export async function runLocalAudit(
           const path=relative(root,full).split(sep).join('/');
           sourceTotals.set(path,delivered.totalCharacters);
           if(stageLock && /^source-[0-9]+\//.test(path))
-            stageLock.recordRead({path,start:delivered.start,end:delivered.end,totalCharacters:delivered.totalCharacters});
+            stageLock.recordRead({path,start:delivered.start,end:delivered.end,totalCharacters:delivered.totalCharacters,text:delivered.text});
           allowance.read(path,delivered.start,delivered.end,0);
           workflow?.read(path);
           workflow?.observe(action,fitted.output);
@@ -2368,7 +2368,7 @@ export async function runLocalAudit(
             sourceTotals.set(sourcePath,page.totalCharacters);
             if(stageLock && /^source-[0-9]+\//.test(sourcePath))
               stageLock.recordRead({path:sourcePath,start:page.start,end:page.end,
-                totalCharacters:page.totalCharacters});
+                totalCharacters:page.totalCharacters,text:page.text});
             allowance.read(sourcePath,page.start,page.end,turn+1);
             activityCount=page.text.length;successfulReads++;
             workflow?.read(sourcePath);

@@ -8,7 +8,7 @@ async function test(){
  stages.completeIndex([{path:'source-1/A.sol',sha256:hash(content),characters:4}]);
  stages.discover('first');stages.discover('second');
  assert.throws(()=>stages.assertActionAllowed('verify_source'),/STAGE_LOCKED/);
- stages.recordRead({path:'source-1/A.sol',start:0,end:4,totalCharacters:4});
+ stages.recordRead({path:'source-1/A.sol',start:0,end:4,totalCharacters:4,text:'test'});
  await stages.completeReading(async()=>content);
  assert.throws(()=>stages.assertActionAllowed('plan_probe'),/STAGE_LOCKED/);
  stages.completeAnalysis();stages.requireCandidate('first');
