@@ -61,7 +61,7 @@ export class ControllerStageLock {
    this.assertActionAllowed('verify_source');
    if(!this.candidates.has(id)||this.candidates.get(id)!==null)throw new Error('EXPERIMENT_NOT_PENDING');
    this.candidates.set(id,result);
-   if(result==='observed')this.reviews.set(id,false);
+   this.reviews.set(id,false);
  }
  completeExperiments(){
    if(this.stage!=='EXPERIMENT'||this.completedCount!==this.candidateCount)

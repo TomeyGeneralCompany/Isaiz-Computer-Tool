@@ -18,7 +18,9 @@ async function test(){
  stages.finishExperiment('second','observed');
  stages.completeExperiments();
  assert.throws(()=>stages.assertActionAllowed('final'),/STAGE_LOCKED/);
- stages.review('second');stages.completeReviews();
+ stages.review('second');
+ assert.throws(()=>stages.completeReviews(),/REVIEWS_INCOMPLETE/);
+ stages.review('first');stages.completeReviews();
  stages.completeReport(true);
  assert.deepEqual(stages.currentStage,'COMPLETE');
  console.log('Experiment exhaust/review/report stage locks PASSED');

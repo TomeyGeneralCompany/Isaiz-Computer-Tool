@@ -668,11 +668,7 @@ export async function runLocalAudit(
         await appendFile(logFile,'[EXPERIMENT_COMPLETE] '+
           JSON.stringify({resolved:stageLock.completedCount})+'\n');
         await appendFile(logFile,'[STAGE_UNLOCK] EXPERIMENT -> REVIEW\n');
-        if(!workflow?.snapshot().observations.some(o=>o.status==='behavior_observed')){
-          stageLock.completeReviews();
-          await appendFile(logFile,'[REVIEW_COMPLETE] '+JSON.stringify({eligible:0})+'\n');
-          await appendFile(logFile,'[STAGE_UNLOCK] REVIEW -> REPORT\n');
-        }
+        // Every terminal experiment, including unsupported, requires a review disposition.
       }
       if(stageLock?.currentStage==='READ')constraints={action:['read_file']};
       if(stageLock?.currentStage==='EXPERIMENT' && !workflow?.snapshot().pending)
@@ -2058,11 +2054,7 @@ export async function runLocalAudit(
         if(stageLock){
           if(!limits.validateFinal)throw new Error('REVIEW_VALIDATOR_REQUIRED');
           if(stageLock.currentStage==='REVIEW'){
-            for(const {id,plan} of stagedPlans){
-              if(workflow?.snapshot().observations.some(o=>o.path===plan.path &&
-                o.function===plan.query && o.status==='behavior_observed'))
-                stageLock.review(id);
-            }
+            for(const {id} of stagedPlans)stageLock.review(id);
             stageLock.completeReviews();
             await appendFile(logFile,'[REVIEW_COMPLETE] All eligible observations reviewed\n');
             await appendFile(logFile,'[STAGE_UNLOCK] REVIEW -> REPORT\n');
