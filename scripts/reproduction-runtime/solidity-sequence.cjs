@@ -32,7 +32,7 @@ function validateSequence(s) {
       throw new Error('Invalid preparation bounds');
     const ids=new Set(),deployments=new Set();
     const id=v=>typeof v==='string'&&/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(v);
-    const method=v=>typeof v==='string'&&/^[A-Za-z_]\\w*(?:\\([A-Za-z0-9_,()[\\]]*\\))?$/.test(v);
+    const method=v=>typeof v==='string'&&/^[A-Za-z_]\w*(?:\([A-Za-z0-9_,()[\]]*\))?$/.test(v);
     for(const d of p.deployments) {
       object(d,['id','file','contract','constructorArgs'],['id','file','contract','constructorArgs','valueWei']);
       if(!id(d.id)||ids.has(d.id)||typeof d.file!=='string' ||
@@ -96,7 +96,7 @@ async function runSequence(artifact, sequence, transport, preparationArtifacts={
     const resolve = v => {
       if(Array.isArray(v))return v.map(resolve);
       if(typeof v==='string' && /^\$account[012]$/.test(v))return accounts[Number(v.at(-1))];
-      if(typeof v==='string'&&/^\\$deployment:[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(v)){
+      if(typeof v==='string'&&/^\$deployment:[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(v)){
         const item=deployed.get(v.slice('$deployment:'.length));
         if(!item)throw new Error('Unresolved earlier deployment '+v);
         return item.address;
