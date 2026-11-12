@@ -628,7 +628,13 @@ export async function runLocalAudit(
                 stageLock.discover(id);stagedPlans.push({id,plan});
               }
             } else {
+              const queuedSelectors=new Set<string>();
               for(const candidate of controllerPolyglotPlans(path,source)){
+                // A declaration with several adapters represents one
+                // hypothesis at this stage, not permission to replay the
+                // same method with every available probe adapter.
+                if(queuedSelectors.has(candidate.query))continue;
+                queuedSelectors.add(candidate.query);
                 const plan={action:'plan_probe' as const,path,query:candidate.query,
                   answer:candidate.answer,hypothesis:candidate.hypothesis,
                   ...('sequence' in candidate?{sequence:candidate.sequence}:{})};
@@ -670,7 +676,15 @@ export async function runLocalAudit(
         await appendFile(logFile,'[STAGE_UNLOCK] EXPERIMENT -> REVIEW\n');
         // Every terminal experiment, including unsupported, requires a review disposition.
       }
-      if(stageLock?.currentStage==='READ')constraints={action:['read_file']};
+      if(stageLock?.currentStage==='READ'){
+        const ranked=[...new Set([...privilegedSolidityCandidates.keys(),
+          ...projectErc1155CallerPaths,...tracedCandidates.map(c=>c.path),
+          ...(limits.initialSourcePaths||[])])];
+        const next=ranked.find(path=>stageLock!.coverage.hasIndexed(path) &&
+          !stageLock!.coverage.complete(path));
+        if(!next)throw new Error('READ_STAGE_NO_UNREAD_SOURCE_WITHOUT_CERTIFICATE');
+        constraints={action:['read_file'],path:[next]};
+      }
       if(stageLock?.currentStage==='EXPERIMENT' && !workflow?.snapshot().pending)
         constraints={action:['plan_probe','probe_intent']};
       if(stageLock?.currentStage==='REVIEW'||stageLock?.currentStage==='REPORT')
