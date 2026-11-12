@@ -16,6 +16,7 @@ export class ControllerStageLock {
  private candidates=new Map<string,Outcome|null>();
  private reviews=new Map<string,boolean>();
  private finalized=false;
+ private analyzed=new Map<string,'complete'|'unsupported'>();
  get currentStage(){return this.stage;}
  get candidateCount(){return this.candidates.size;}
  get completedCount(){return [...this.candidates.values()].filter(x=>x!==null).length;}
@@ -42,8 +43,14 @@ export class ControllerStageLock {
    if(this.finalized||!id)throw new Error('DISCOVERY_CLOSED');
    if(!this.candidates.has(id))this.candidates.set(id,null);
  }
+ noteAnalyzed(path:string,status:'complete'|'unsupported'){
+   if(this.stage!=='ANALYZE'||!this.coverage.hasIndexed(path)||this.analyzed.has(path))
+     throw new Error('INVALID_ANALYSIS_RECORD');
+   this.analyzed.set(path,status);
+ }
  completeAnalysis(){
-   if(this.stage!=='ANALYZE')throw new Error('ANALYSIS_STAGE_REQUIRED');
+   if(this.stage!=='ANALYZE'||this.analyzed.size!==this.coverage.count)
+     throw new Error('ANALYSIS_INCOMPLETE');
    this.finalized=true;this.advance('ANALYZE','EXPERIMENT');
  }
  requireCandidate(id:string){

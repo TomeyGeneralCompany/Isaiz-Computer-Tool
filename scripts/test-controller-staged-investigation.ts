@@ -11,6 +11,7 @@ async function test(){
  stages.recordRead({path:'source-1/A.sol',start:0,end:4,totalCharacters:4,text:'test'});
  await stages.completeReading(async()=>content);
  assert.throws(()=>stages.assertActionAllowed('plan_probe'),/STAGE_LOCKED/);
+ stages.noteAnalyzed('source-1/A.sol','complete');
  stages.completeAnalysis();stages.requireCandidate('first');
  stages.finishExperiment('first','unsupported');
  assert.throws(()=>stages.completeExperiments(),/EXPERIMENTS_INCOMPLETE/);

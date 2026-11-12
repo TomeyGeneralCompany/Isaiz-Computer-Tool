@@ -19,6 +19,9 @@ async function run(){
  await assert.rejects(lock.completeReading(async()=> 'altered'),/SOURCE_CHANGED/);
  await lock.completeReading(async p=>p.endsWith('A.sol')?'abcd':'ef');
  assert.equal(lock.currentStage,'ANALYZE');
+ assert.throws(()=>lock.completeAnalysis(),/ANALYSIS_INCOMPLETE/);
+ lock.noteAnalyzed('source-1/A.sol','complete');
+ lock.noteAnalyzed('source-1/B.sol','complete');
  assert.throws(()=>lock.assertActionAllowed('verify_source'),/STAGE_LOCKED/);
  lock.completeAnalysis();
  assert.equal(lock.currentStage,'EXPERIMENT');

@@ -615,6 +615,7 @@ export async function runLocalAudit(
         // finished. Collect every source-grounded option into a frozen queue.
         for(const path of [...new Set(limits.initialSourcePaths||[])].filter(p=>
           /^source-[0-9]+\/.+\.(?:sol|java|py|js|mjs|cjs)$/.test(p))){
+          let analyzed='complete' as 'complete'|'unsupported';
           try {
             const full=await safePath(path),source=await readFile(full,'utf8');
             if(path.endsWith('.sol')){
@@ -637,9 +638,11 @@ export async function runLocalAudit(
               }
             }
           }catch(error){
+            analyzed='unsupported';
             await appendFile(logFile,'[ANALYSIS_CANDIDATE_UNAVAILABLE] '+
               JSON.stringify({path,error:String(error).slice(0,240)})+'\n');
           }
+          stageLock.noteAnalyzed(path,analyzed);
         }
         stageLock.completeAnalysis();
         await appendFile(logFile,'[ANALYSIS_COMPLETE] '+
@@ -1465,6 +1468,13 @@ export async function runLocalAudit(
           messages.push({role:'user',content:'Experiment selection is controller-owned. Await the next queued action. /no_think'});
           continue;
         }
+        if(stageLock && action.action==='verify_source' &&
+          activeStageCandidate!==JSON.stringify([action.path,action.query,action.answer])){
+          await appendFile(logFile,'[STAGE_ACTION_REJECTED] '+JSON.stringify({
+            stage:stageLock.currentStage,reason:'verifier_not_for_active_candidate'})+'\n');
+          messages.push({role:'user',content:'The controller has not scheduled this verifier request. /no_think'});
+          continue;
+        }
         if(stageLock && !(['final'].includes(action.action) &&
           stageLock.currentStage==='REVIEW')){
           try {
@@ -2045,6 +2055,7 @@ export async function runLocalAudit(
           await persistMemory();
         }
         if(stageLock){
+          if(!limits.validateFinal)throw new Error('REVIEW_VALIDATOR_REQUIRED');
           if(stageLock.currentStage==='REVIEW'){
             for(const {id,plan} of stagedPlans){
               if(workflow?.snapshot().observations.some(o=>o.path===plan.path &&
@@ -2086,7 +2097,15 @@ export async function runLocalAudit(
           offset:call.function.arguments?.offset ?? 0,kind:String(call.function.arguments?.kind ?? "").slice(0,80)});
         try {
           const name = call.function.name;
-          if(stageLock)stageLock.assertActionAllowed(call.function.name);
+          if(stageLock){
+            stageLock.assertActionAllowed(call.function.name);
+            if(['verify_source','verify_python'].includes(call.function.name) &&
+              activeStageCandidate!==JSON.stringify([
+                String(call.function.arguments?.path||''),
+                String(call.function.arguments?.query||''),
+                String(call.function.arguments?.kind||'')]))
+              throw new Error('STAGE_LOCKED: VERIFIER_CANDIDATE_MISMATCH');
+          }
           let path = String(call.function.arguments?.path ?? ".");
           if (["read_file","list_files","search_files","outline_solidity","read_solidity"].includes(name))
             path=await canonicalSourceReadPath(path);

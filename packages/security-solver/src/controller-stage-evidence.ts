@@ -19,6 +19,7 @@ export class ControllerSourceCoverage {
   }
   get indexed(){return this.frozen;}
   get count(){return this.index.size;}
+  hasIndexed(path:string){return this.index.has(path);}
   record(page:SourceRead){
     if(!this.frozen)throw new Error('SOURCE_NOT_INDEXED');
     const file=this.index.get(page.path);
