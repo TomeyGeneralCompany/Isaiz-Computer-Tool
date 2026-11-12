@@ -15,7 +15,33 @@ const send = z.object({operation:z.literal("send"),function:signature,args,sende
   valueWei:wei.optional(),expectRevert:z.boolean().optional()}).strict();
 const observe = z.object({operation:z.literal('observe'),function:signature,args,sender:sender.optional()}).strict();
 const call = z.object({operation:z.literal("call"),function:signature,args,sender:sender.optional(),expect:abiValue}).strict();
-export const soliditySequenceSchema = z.object({constructorArgs:args,constructorValueWei:wei.optional(),deployment:deployment.optional(),
+const prepId=z.string().regex(/^[A-Za-z][A-Za-z0-9_-]{0,63}$/);
+const prepDeployment=z.object({id:prepId,file:deployment.shape.file,contract:deployment.shape.contract,
+  constructorArgs:args,valueWei:wei.optional()}).strict();
+const prepSend=z.object({id:prepId,deploymentId:prepId,function:signature,args,
+  sender,valueWei:wei.optional(),expectRevert:z.boolean().optional()}).strict();
+const prepCheck=z.object({id:prepId,deploymentId:prepId,function:signature,args,
+  sender,expect:abiValue}).strict();
+export const solidityPreparationSchema=z.object({
+  deployments:z.array(prepDeployment).max(8),
+  operations:z.array(prepSend).max(24),
+  checks:z.array(prepCheck).max(16)
+}).strict().superRefine((plan,ctx)=>{
+  const ids=new Set<string>();
+  const deployed=new Set<string>();
+  for(const d of plan.deployments) {
+    if(ids.has(d.id))ctx.addIssue({code:z.ZodIssueCode.custom,message:'Duplicate preparation ID '+d.id});
+    ids.add(d.id);deployed.add(d.id);
+  }
+  for(const item of [...plan.operations,...plan.checks]) {
+    if(ids.has(item.id))ctx.addIssue({code:z.ZodIssueCode.custom,message:'Duplicate preparation ID '+item.id});
+    ids.add(item.id);
+    if(!deployed.has(item.deploymentId))ctx.addIssue({code:z.ZodIssueCode.custom,
+      message:'Unknown preparation deployment '+item.deploymentId});
+  }
+});
+export type SolidityPreparation=z.infer<typeof solidityPreparationSchema>;
+export const soliditySequenceSchema = z.object({constructorArgs:args,constructorValueWei:wei.optional(),deployment:deployment.optional(),preparation:solidityPreparationSchema.optional(),
   steps:z.array(z.discriminatedUnion("operation",[send,call,observe])).min(1).max(16)}).strict()
   .refine(s=>s.steps.some(step=>step.operation === "call" || step.operation === "observe"),"Include at least one read observation")
   .refine(s=>JSON.stringify(s).length<=16000,"Sequence exceeds 16KB");
@@ -33,7 +59,8 @@ const argsJson = {type:"array",maxItems:32,items:valueJson};
 const stepBase = {function:{type:"string",maxLength:200},args:argsJson,sender:{type:"integer",minimum:0,maximum:2}};
 const weiJson = {type:"string",pattern:"^(0|[1-9][0-9]{0,29})$"};
 export const soliditySequenceJsonSchema = {type:"object",additionalProperties:false,
-  properties:{constructorArgs:argsJson,constructorValueWei:weiJson,deployment:{type:'object',additionalProperties:false,properties:{file:{type:'string',maxLength:512},contract:{type:'string',maxLength:100}},required:['file','contract']},steps:{type:"array",minItems:1,maxItems:16,items:{anyOf:[
+  properties:{constructorArgs:argsJson,constructorValueWei:weiJson,
+    deployment:{type:'object',additionalProperties:false,properties:{file:{type:'string',maxLength:512},contract:{type:'string',maxLength:100}},required:['file','contract']},steps:{type:"array",minItems:1,maxItems:16,items:{anyOf:[
     {type:"object",additionalProperties:false,properties:{operation:{const:"send"},...stepBase,valueWei:weiJson,expectRevert:{type:"boolean"}},required:["operation","function","args"]},
     {type:"object",additionalProperties:false,properties:{operation:{const:"call"},...stepBase,expect:valueJson},required:["operation","function","args","expect"]},
     {type:"object",additionalProperties:false,properties:{operation:{const:"observe"},...stepBase},required:["operation","function","args"]},

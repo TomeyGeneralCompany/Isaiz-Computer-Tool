@@ -1,0 +1,11 @@
+import assert from 'node:assert/strict';
+import {orderPreparation,type PreparationPrerequisite} from '../packages/security-solver/src/controller-solidity-prerequisites';
+const w={path:'contracts/A.sol',sourceSha256:'a'.repeat(64),start:0,end:10,symbol:'A'};
+const a:PreparationPrerequisite={id:'a',kind:'deploy',dependsOn:[],sourceEvidence:[w],parameters:{}};
+const b:PreparationPrerequisite={id:'b',kind:'initialize',dependsOn:['a'],sourceEvidence:[w],parameters:{}};
+assert.deepEqual(orderPreparation([b,a]),{ok:true,ordered:[a,b]});
+assert.equal(orderPreparation([{...a,dependsOn:['b']},b]).ok,false);
+assert.equal(orderPreparation([a,a]).ok,false);
+assert.equal(orderPreparation([{...b,dependsOn:['missing']}]).ok,false);
+assert.equal(orderPreparation([{...a,sourceEvidence:[]}]).ok,false);
+console.log('Preparation graph constraints passed');
