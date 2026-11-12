@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
+import {controllerGroundedSolidityOptions} from '../packages/security-solver/src/local-ollama-runner';
 import {generateCrucible} from './lotus-crucible-generator';
 import {roleConsumerImpactSequence,roleConsumerImpactObserved,inheritedRoleConsumerImpactSequence,inheritedRoleConsumerImpactObserved} from '../packages/security-solver/src/controller-solidity-consumer-impact';
 import {soliditySequenceSchema} from '../packages/security-solver/src/solidity-sequence';
@@ -84,4 +86,58 @@ assert.deepEqual(grounded[0].probe.sequence,inherited,
 assert.equal(inheritedRoleConsumerImpactSequence(baseSource,derivedSource.replace('is SettlementAuthority','is Other'), 'operator','rotateOperator',baseFile,derivedFile,'SettlementVault'),null);
 assert.equal(inheritedRoleConsumerImpactSequence(baseSource,derivedSource.replace('msg.sender==operator','msg.sender==administrator'), 'operator','rotateOperator',baseFile,derivedFile,'SettlementVault'),null);
 assert.equal(inheritedRoleConsumerImpactObserved({accounts,steps:[]},'operator','rotateOperator'),false);
+
+// Production handoff admission must include #206's source-proven constructor
+// without changing legacy role-mutation admissions or accepting unproved input.
+const directSource=`pragma solidity ^0.8.20;
+contract Vault {
+  address public owner;
+  uint256 public reserve;
+  constructor(){ owner = msg.sender; }
+  function setReserve(uint256 value) external {
+    require(msg.sender == owner, "owner only");
+    reserve = value;
+  }
+}`;
+const directPath='source-1/contracts/Vault.sol';
+const directMenu=[
+ {selector:'Vault.setReserve',operation:'send' as const,inputs:['uint256']},
+ {selector:'Vault.reserve',operation:'call' as const,inputs:[]},
+ {selector:'Vault.owner',operation:'call' as const,inputs:[]}
+];
+const directSnapshots=[{path:directPath,content:directSource,
+ sha256:createHash('sha256').update(directSource).digest('hex')}];
+const firstHandoff=controllerGroundedSolidityOptions(
+ directPath,directSource,directMenu,directSnapshots,'a'.repeat(40));
+assert.equal(firstHandoff.length,1,'The new source-proven scenario must qualify for scheduling');
+assert.equal(firstHandoff[0].selector,'Vault.setReserve');
+assert.equal(firstHandoff[0].probe.sequence.steps.length,6);
+assert.deepEqual(firstHandoff,controllerGroundedSolidityOptions(
+ directPath,directSource,directMenu,directSnapshots,'a'.repeat(40)),
+ 'Automatic selection and model-intent validation must use one canonical scenario');
+assert.equal(controllerGroundedSolidityOptions(
+ directPath,directSource,directMenu,directSnapshots,null).length,0,
+ 'Unverifiable repository revision cannot authorize a newly constructed scenario');
+const wrongSource=directSource.replace('require(msg.sender == owner, "owner only");','');
+const wrongSnapshots=[{path:directPath,content:wrongSource,
+ sha256:createHash('sha256').update(wrongSource).digest('hex')}];
+assert.equal(controllerGroundedSolidityOptions(directPath,wrongSource,directMenu,
+ wrongSnapshots,'a'.repeat(40)).length,0,
+ 'An unguarded state mutation must never acquire a fabricated security assertion');
+assert.equal(controllerGroundedSolidityOptions(directPath,directSource,directMenu,
+ [{...directSnapshots[0],sha256:'b'.repeat(64)}],'a'.repeat(40)).length,0,
+ 'Source-hash mismatch cannot authorize a new experiment');
+const legacyHandoff=controllerGroundedSolidityOptions('source-1/'+baseFile,
+ baseSource,[
+  {selector:'SettlementAuthority.operator',operation:'call',inputs:[]},
+  {selector:'SettlementAuthority.rotateOperator',operation:'send',inputs:['address']}
+ ],[
+  {path:'source-1/'+baseFile,content:baseSource,
+   sha256:createHash('sha256').update(baseSource).digest('hex')},
+  {path:'source-1/'+derivedFile,content:derivedSource,
+   sha256:createHash('sha256').update(derivedSource).digest('hex')}
+ ],null);
+assert.deepEqual(legacyHandoff,grounded,
+ 'Existing role-mutation controller behavior survives a missing source revision');
+
 console.log('Controller role mutation to protected-consumer impact, negative evidence and source scope PASSED');
