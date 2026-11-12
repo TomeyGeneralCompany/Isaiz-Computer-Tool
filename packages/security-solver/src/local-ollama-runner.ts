@@ -4,7 +4,9 @@ import {normalizeForcedOutlineCursor} from './outline-cursor';
 import {z} from "zod";
 import {javaSequenceSchema, type JavaSequence} from "./java-sequence";
 import {polyglotSequenceSchema,type PolyglotSequence} from "./polyglot-sequence";
-import {sourceGroundedSolidityProbe,sourceGroundedSolidityProbes,traceProjectErc1155Callers} from './controller-solidity-security-probes';
+import {sourceGroundedSolidityProbe,sourceGroundedSolidityProbes,traceProjectErc1155Callers,type GroundedSolidityProbe} from './controller-solidity-security-probes';
+import {constructSolidityExperiments,type SourceSnapshot} from './controller-solidity-experiment-planner';
+import type {SolidityProbeDeclaration} from './solidity-probe-inputs';
 import {privilegedRoleMutationCandidate} from './solidity-security-candidates';
 import {rankTracedSourceCandidates} from './controller-source-candidates';
 import { InvestigationWorkflow } from "./investigation-workflow";
@@ -24,6 +26,7 @@ import { auditActionSchema, auditProtocolPrompt, decodeAuditAction } from "./loc
 import { readFile, realpath, appendFile, writeFile, rename, mkdtemp } from "node:fs/promises";
 import { resolve, relative, sep, join } from "node:path";
 import { createHash } from "node:crypto";
+import {execFileSync} from "node:child_process";
 
 type Message = { role: string; content: string; tool_name?: string; tool_calls?: Array<{ function: { name: string; arguments: Record<string, unknown> } }> };
 async function recordToolActivity(logFile:string,event:Record<string,unknown>):Promise<void> {
@@ -83,6 +86,41 @@ export interface LocalAuditLimits {
     Promise<{callers:string[];promoted?:{caseId:string;path:string;selector:string;kind:string}}|null>;
   verifyPython?: (path:string,functionName:string,kind:string,sequence?:SoliditySequence | JavaSequence | PolyglotSequence) => Promise<string>;
 }
+
+/**
+ * Canonical Solidity experiment admission for controller selection AND
+ * model-proposed action validation. No model-provided assertions are used.
+ * The existing role-mutation constructor remains the first-class fallback.
+ * A missing/unverifiable source revision never permits a new scenario.
+ */
+export function controllerGroundedSolidityOptions(
+  path:string,source:string,menu:SolidityProbeDeclaration[],
+  snapshots:readonly SourceSnapshot[],repositoryCommit:string|null
+):Array<{selector:string;probe:GroundedSolidityProbe}> {
+  const peers=snapshots.map(s=>({path:s.path,source:s.content}));
+  const legacy=sourceGroundedSolidityProbes(source,menu,{path,peers});
+  if(!repositoryCommit)return legacy;
+  const eligible=new Map(legacy.map(item=>[item.selector,item]));
+  const seen=new Set<string>();
+  for(const entry of menu) {
+    if(entry.operation!=='send'||seen.has(entry.selector))continue;
+    seen.add(entry.selector);
+    if(eligible.has(entry.selector))continue;
+    const candidate=constructSolidityExperiments({
+      repositoryCommit,targetPath:path,targetSelector:entry.selector,
+      sources:snapshots,declarations:menu
+    });
+    if(!candidate.ok)continue;
+    const constructed=candidate.experiments[0];
+    if(!constructed||constructed.selector!==entry.selector)continue;
+    eligible.set(entry.selector,{selector:entry.selector,probe:{
+      hypothesis:constructed.hypothesis,sequence:constructed.sequence,
+      guardedConsumer:''
+    }});
+  }
+  return [...eligible.values()];
+}
+
 export async function runLocalAudit(
   prompt: string, logFile: string, timeoutMs: number, cwd: string,
   model: string, systemPrompt?: string, limits: Partial<LocalAuditLimits> = {},
@@ -297,6 +335,36 @@ export async function runLocalAudit(
     // change the source-derived role, selector or read order.
     const privilegedSolidityCandidates=new Map<string,{selector:string;role:string;method:string}>();
     const accessibleSoliditySources=new Map<string,string>();
+    // Source identities are acquired read-only from the existing checked-out
+    // bounty repository. No LOTUS application SHA is substituted for a target SHA.
+    const sourceRepositoryCommits=new Map<string,string|null>();
+    const sourceRevision=(path:string):string|null=>{
+      const dir=/^(source-[0-9]+)\//.exec(path)?.[1];
+      if(!dir)return null;
+      if(sourceRepositoryCommits.has(dir))return sourceRepositoryCommits.get(dir)!;
+      let revision:string|null=null;
+      try {
+        const value=execFileSync('git',['-C',join(root,dir),'rev-parse','--verify','HEAD'],
+          {encoding:'utf8',timeout:3000,stdio:['ignore','pipe','ignore']}).trim();
+        if(/^[a-f0-9]{40}$/.test(value))revision=value;
+      }catch{}
+      sourceRepositoryCommits.set(dir,revision);
+      return revision;
+    };
+    const groundedControllerOptions=async(path:string,source:string,menu:SolidityProbeDeclaration[])=>{
+      const sourceEntries=new Map(accessibleSoliditySources);
+      sourceEntries.set(path,source);
+      const repoPrefix=path.split('/')[0]+'/';
+      const snapshots:SourceSnapshot[]=[...sourceEntries.entries()]
+        .filter(([candidate])=>candidate.startsWith(repoPrefix))
+        .map(([candidate,content])=>({
+          path:candidate,content,sha256:createHash('sha256').update(content).digest('hex')
+        }));
+      const revision=sourceRevision(path);
+      if(!revision)await appendFile(logFile,'[CONTROLLER_SCENARIO_REVISION_UNAVAILABLE] '+
+        JSON.stringify({path})+'\n');
+      return controllerGroundedSolidityOptions(path,source,menu,snapshots,revision);
+    };
     for(const path of [...new Set(limits.initialSourcePaths||[])].slice(0,200)){
       if(!path.startsWith('source-')||!path.endsWith('.sol'))continue;
       try{
@@ -703,10 +771,7 @@ export async function runLocalAudit(
               const menu=await solidityIndex.probeMenu(full,64);
               // Source-grounded AST scenarios, not ABI mutability or guessed
               // role names, are the only eligible Solidity security probes.
-              const groundedOptions=sourceGroundedSolidityProbes(source,menu,{
-                 path,peers:[...accessibleSoliditySources.entries()]
-                   .map(([peerPath,peerSource])=>({path:peerPath,source:peerSource}))
-               });
+              const groundedOptions=await groundedControllerOptions(path,source,menu);
               const supported=new Set(groundedOptions.map(entry=>entry.selector));
               for(const entry of menu.filter(entry=>entry.operation==='send'))
                 if(!supported.has(entry.selector))
@@ -1196,10 +1261,8 @@ export async function runLocalAudit(
             const full=await safePath(action.path);
             const source=await readFile(full,'utf8');
             const menu=await solidityIndex.probeMenu(full,64);
-            grounded=sourceGroundedSolidityProbes(source,menu,{
-                path:action.path,peers:[...accessibleSoliditySources.entries()]
-                  .map(([peerPath,peerSource])=>({path:peerPath,source:peerSource}))
-              }).find(item=>item.selector===action.query)?.probe||null;
+            grounded=(await groundedControllerOptions(action.path,source,menu))
+              .find(item=>item.selector===action.query)?.probe||null;
           }catch{}
           if(!grounded) {
             await recordProbeDisposition(action.path,action.query,'solidity_sequence',
