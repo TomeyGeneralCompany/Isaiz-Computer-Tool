@@ -140,9 +140,16 @@ contract TomeyERC1155ProbeHarness is ERC1155Upgradeable {
       throw new Error('Derived deployment must directly import and inherit the probed base');
   }
   const effectiveSpec = erc1155Harness ? {...spec, function: spec.function.replace('ERC1155Upgradeable.', harnessName + '.')} : spec;
+  const preparationSources={};
+  if(sequenceMode && spec.sequence.preparation) {
+    for(const item of spec.sequence.preparation.deployments) {
+      if(item.file===spec.file || (deployment && item.file===deployment.file))continue;
+      preparationSources[item.file]={content:fs.readFileSync(sourceFile(item.file),'utf8')};
+    }
+  }
   const compiled = JSON.parse(solc.compile(JSON.stringify({
     language: 'Solidity',
-    sources: {[spec.file]: {content: harnessSource}, ...(deployment ? {[deployment.file]:{content:derivedText}} : {})},
+    sources: {[spec.file]: {content: harnessSource}, ...(deployment ? {[deployment.file]:{content:derivedText}} : {}), ...preparationSources},
     settings: {...spec.compilerSettings, evmVersion, outputSelection: {'*': {'*': ['abi', 'evm.bytecode.object']}}}
   }), {import: solidityImport}));
   const errors = (compiled.errors || []).filter(e => e.severity === 'error');
@@ -172,7 +179,7 @@ contract TomeyERC1155ProbeHarness is ERC1155Upgradeable {
   });
   await transport.request({method: 'eth_chainId', params: []});
   try {
-    if (sequenceMode) return await require('./solidity-sequence.cjs').runSequence(artifact, spec.sequence, transport);
+    if (sequenceMode) return await require('./solidity-sequence.cjs').runSequence(artifact, spec.sequence, transport, compiled.contracts || {});
     const provider = new BrowserProvider(transport);
     const signer = await provider.getSigner();
     const contract = await new ContractFactory(artifact.abi, artifact.evm.bytecode.object, signer)

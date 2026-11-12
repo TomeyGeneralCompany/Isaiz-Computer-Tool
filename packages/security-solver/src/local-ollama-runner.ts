@@ -1,10 +1,13 @@
 import {ControllerEvidenceArchive} from './controller-evidence-archive';
+import {ControllerStageLock,type Outcome} from './controller-stage-lock';
 import {modelProfile} from './model-profile';
 import {normalizeForcedOutlineCursor} from './outline-cursor';
 import {z} from "zod";
 import {javaSequenceSchema, type JavaSequence} from "./java-sequence";
 import {polyglotSequenceSchema,type PolyglotSequence} from "./polyglot-sequence";
-import {sourceGroundedSolidityProbe,sourceGroundedSolidityProbes,traceProjectErc1155Callers} from './controller-solidity-security-probes';
+import {sourceGroundedSolidityProbe,sourceGroundedSolidityProbes,traceProjectErc1155Callers,type GroundedSolidityProbe} from './controller-solidity-security-probes';
+import {constructSolidityExperiments,type SourceSnapshot} from './controller-solidity-experiment-planner';
+import type {SolidityProbeDeclaration} from './solidity-probe-inputs';
 import {privilegedRoleMutationCandidate} from './solidity-security-candidates';
 import {rankTracedSourceCandidates} from './controller-source-candidates';
 import { InvestigationWorkflow } from "./investigation-workflow";
@@ -24,6 +27,7 @@ import { auditActionSchema, auditProtocolPrompt, decodeAuditAction } from "./loc
 import { readFile, realpath, appendFile, writeFile, rename, mkdtemp } from "node:fs/promises";
 import { resolve, relative, sep, join } from "node:path";
 import { createHash } from "node:crypto";
+import {execFileSync} from "node:child_process";
 
 type Message = { role: string; content: string; tool_name?: string; tool_calls?: Array<{ function: { name: string; arguments: Record<string, unknown> } }> };
 async function recordToolActivity(logFile:string,event:Record<string,unknown>):Promise<void> {
@@ -83,6 +87,41 @@ export interface LocalAuditLimits {
     Promise<{callers:string[];promoted?:{caseId:string;path:string;selector:string;kind:string}}|null>;
   verifyPython?: (path:string,functionName:string,kind:string,sequence?:SoliditySequence | JavaSequence | PolyglotSequence) => Promise<string>;
 }
+
+/**
+ * Canonical Solidity experiment admission for controller selection AND
+ * model-proposed action validation. No model-provided assertions are used.
+ * The existing role-mutation constructor remains the first-class fallback.
+ * A missing/unverifiable source revision never permits a new scenario.
+ */
+export function controllerGroundedSolidityOptions(
+  path:string,source:string,menu:SolidityProbeDeclaration[],
+  snapshots:readonly SourceSnapshot[],repositoryCommit:string|null
+):Array<{selector:string;probe:GroundedSolidityProbe}> {
+  const peers=snapshots.map(s=>({path:s.path,source:s.content}));
+  const legacy=sourceGroundedSolidityProbes(source,menu,{path,peers});
+  if(!repositoryCommit)return legacy;
+  const eligible=new Map(legacy.map(item=>[item.selector,item]));
+  const seen=new Set<string>();
+  for(const entry of menu) {
+    if(entry.operation!=='send'||seen.has(entry.selector))continue;
+    seen.add(entry.selector);
+    if(eligible.has(entry.selector))continue;
+    const candidate=constructSolidityExperiments({
+      repositoryCommit,targetPath:path,targetSelector:entry.selector,
+      sources:snapshots,declarations:menu
+    });
+    if(!candidate.ok)continue;
+    const constructed=candidate.experiments[0];
+    if(!constructed||constructed.selector!==entry.selector)continue;
+    eligible.set(entry.selector,{selector:entry.selector,probe:{
+      hypothesis:constructed.hypothesis,sequence:constructed.sequence,
+      guardedConsumer:''
+    }});
+  }
+  return [...eligible.values()];
+}
+
 export async function runLocalAudit(
   prompt: string, logFile: string, timeoutMs: number, cwd: string,
   model: string, systemPrompt?: string, limits: Partial<LocalAuditLimits> = {},
@@ -144,6 +183,10 @@ export async function runLocalAudit(
   let unsupportedFinalRejections=0;
   let lastWorkflowRejection='';
   const sourceTotals=new Map<string,number>();
+  let stageLock:ControllerStageLock|null=null;
+  const stagedPlans:Array<{id:string;plan:{action:'plan_probe';path:string;query:string;answer:string;hypothesis:string;sequence?:unknown}}>=[];
+  const stagedAttempted=new Set<string>();
+  let activeStageCandidate:string|null=null;
   const hypotheses:Array<{turn:number;path:string;statement:string}>=[];
   const renew=async(turn:number)=>{
     const extension=allowance.extend(turn,Date.now());
@@ -297,6 +340,53 @@ export async function runLocalAudit(
     // change the source-derived role, selector or read order.
     const privilegedSolidityCandidates=new Map<string,{selector:string;role:string;method:string}>();
     const accessibleSoliditySources=new Map<string,string>();
+    // Source identities are acquired read-only from the existing checked-out
+    // bounty repository. No LOTUS application SHA is substituted for a target SHA.
+    const sourceRepositoryCommits=new Map<string,string|null>();
+    const sourceRevision=(path:string):string|null=>{
+      const dir=/^(source-[0-9]+)\//.exec(path)?.[1];
+      if(!dir)return null;
+      if(sourceRepositoryCommits.has(dir))return sourceRepositoryCommits.get(dir)!;
+      let revision:string|null=null;
+      try {
+        const value=execFileSync('git',['-C',join(root,dir),'rev-parse','--verify','HEAD'],
+          {encoding:'utf8',timeout:3000,stdio:['ignore','pipe','ignore']}).trim();
+        if(/^[a-f0-9]{40}$/.test(value))revision=value;
+      }catch{}
+      sourceRepositoryCommits.set(dir,revision);
+      return revision;
+    };
+    const groundedControllerOptions=async(path:string,source:string,menu:SolidityProbeDeclaration[])=>{
+      const sourceEntries=new Map(accessibleSoliditySources);
+      sourceEntries.set(path,source);
+      const repoPrefix=path.split('/')[0]+'/';
+      const snapshots:SourceSnapshot[]=[...sourceEntries.entries()]
+        .filter(([candidate])=>candidate.startsWith(repoPrefix))
+        .map(([candidate,content])=>({
+          path:candidate,content,sha256:createHash('sha256').update(content).digest('hex')
+        }));
+      const revision=sourceRevision(path);
+      if(!revision)await appendFile(logFile,'[CONTROLLER_SCENARIO_REVISION_UNAVAILABLE] '+
+        JSON.stringify({path})+'\n');
+      return controllerGroundedSolidityOptions(path,source,menu,snapshots,revision);
+    };
+    // Production controller: freeze the entire authorized source inventory
+    // before the first paginated source read. Indexing can inspect bytes to
+    // fingerprint them, but does not mark them read or permit experimentation.
+    if(workflow && (limits.controllerIndex ?? process.env.LOCAL_CONTROLLER_FULL_SOURCE_INDEX==='true')) {
+      stageLock=new ControllerStageLock();
+      const indexedPaths=[...new Set(limits.initialSourcePaths||[])].filter(path=>
+        /^source-[0-9]+\/.+\.(?:sol|java|py|js|mjs|cjs)$/.test(path));
+      const inventory=[];
+      for(const path of indexedPaths){
+        const content=await readFile(await safePath(path),'utf8');
+        inventory.push({path,characters:content.length,
+          sha256:createHash('sha256').update(content).digest('hex')});
+      }
+      stageLock.completeIndex(inventory);
+      await appendFile(logFile,'[INDEX_COMPLETE] '+JSON.stringify({files:inventory.length})+'\n');
+      await appendFile(logFile,'[STAGE_UNLOCK] INDEX -> READ\n');
+    }
     for(const path of [...new Set(limits.initialSourcePaths||[])].slice(0,200)){
       if(!path.startsWith('source-')||!path.endsWith('.sol'))continue;
       try{
@@ -362,7 +452,7 @@ export async function runLocalAudit(
     if(structured && (workflow || limits.prefetchReadOnly) && process.env.AUTOHACK_AUTO_SOURCE_PREFETCH !== 'false') {
       for(const seededPath of seededPaths) {
         const seeded=limits.initialSourceLocations?.find(item=>item.path===seededPath);
-        const offset=seeded?.offset ?? 0;
+        const offset=stageLock?0:(seeded?.offset ?? 0);
         try {
           controller.signal.throwIfAborted();
           const full=await safePath(seededPath);
@@ -376,6 +466,8 @@ export async function runLocalAudit(
           messages.push(request,fitted.message);
           const path=relative(root,full).split(sep).join('/');
           sourceTotals.set(path,delivered.totalCharacters);
+          if(stageLock && /^source-[0-9]+\//.test(path))
+            stageLock.recordRead({path,start:delivered.start,end:delivered.end,totalCharacters:delivered.totalCharacters});
           allowance.read(path,delivered.start,delivered.end,0);
           workflow?.read(path);
           workflow?.observe(action,fitted.output);
@@ -391,6 +483,10 @@ export async function runLocalAudit(
           await recordToolActivity(logFile,{phase:'completed',tool:'read_file',
             path,offset:delivered.start,end:delivered.end,nextOffset:delivered.nextOffset,
             origin:'controller_prefetch'});
+          // Guided candidates are allowed to be discovered here, never fired
+          // during READ. The ANALYZE stage will reconstruct their executable
+          // plans from the complete source snapshot.
+          if(stageLock?.currentStage==='READ')continue;
           if(!workflow || process.env.AUTOHACK_GUIDED_SOURCE_PROBES==='false' || !limits.verifyPython)continue;
           // Guided probe discovery is controller-owned. The model sees paginated
           // source pages, but the controller may inspect the complete authorized
@@ -510,6 +606,75 @@ export async function runLocalAudit(
       controller.signal.throwIfAborted();
       // Keep stable history; send fresh controller state only with this request.
       let constraints=workflow ? await workflow.constraints() : limits.actionConstraints?.();
+      if(stageLock?.currentStage==='READ' && stageLock.coverage.allComplete) {
+        await stageLock.completeReading(async path=>readFile(await safePath(path),'utf8'));
+        await appendFile(logFile,'[READ_COMPLETE] '+JSON.stringify({
+          indexed:stageLock.coverage.count,complete:stageLock.coverage.completedCount})+'\n');
+        await appendFile(logFile,'[STAGE_UNLOCK] READ -> ANALYZE\n');
+        // No experiment is constructed or dispatched until the entire reader
+        // finished. Collect every source-grounded option into a frozen queue.
+        for(const path of [...new Set(limits.initialSourcePaths||[])].filter(p=>
+          /^source-[0-9]+\/.+\.(?:sol|java|py|js|mjs|cjs)$/.test(p))){
+          try {
+            const full=await safePath(path),source=await readFile(full,'utf8');
+            if(path.endsWith('.sol')){
+              const menu=await solidityIndex.probeMenu(full,64);
+              for(const {selector,probe} of await groundedControllerOptions(path,source,menu)){
+                const plan={action:'plan_probe' as const,path,query:selector,
+                  answer:'solidity_sequence',hypothesis:probe.hypothesis,sequence:probe.sequence};
+                const id=JSON.stringify([path,selector,plan.answer]);
+                stageLock.discover(id);stagedPlans.push({id,plan});
+              }
+            } else {
+              for(const candidate of controllerPolyglotPlans(path,source)){
+                const plan={action:'plan_probe' as const,path,query:candidate.query,
+                  answer:candidate.answer,hypothesis:candidate.hypothesis,
+                  ...('sequence' in candidate?{sequence:candidate.sequence}:{})};
+                const id=JSON.stringify([path,plan.query,plan.answer]);
+                if(!stagedPlans.some(x=>x.id===id)){
+                  stageLock.discover(id);stagedPlans.push({id,plan});
+                }
+              }
+            }
+          }catch(error){
+            await appendFile(logFile,'[ANALYSIS_CANDIDATE_UNAVAILABLE] '+
+              JSON.stringify({path,error:String(error).slice(0,240)})+'\n');
+          }
+        }
+        stageLock.completeAnalysis();
+        await appendFile(logFile,'[ANALYSIS_COMPLETE] '+
+          JSON.stringify({candidates:stageLock.candidateCount})+'\n');
+        await appendFile(logFile,'[STAGE_UNLOCK] ANALYZE -> EXPERIMENT\n');
+        constraints=workflow?await workflow.constraints():constraints;
+      }
+      // A selected candidate which never reached the verifier must be
+      // explicitly closed, not left as a ghost probe blocking the queue.
+      if(stageLock?.currentStage==='EXPERIMENT' && activeStageCandidate &&
+        !workflow?.snapshot().pending){
+        stageLock.finishExperiment(activeStageCandidate,'incomplete');
+        await appendFile(logFile,'[STAGED_EXPERIMENT_RESULT] '+
+          JSON.stringify({id:activeStageCandidate,outcome:'incomplete',
+            reason:'selected_probe_never_reached_verifier'})+'\n');
+        activeStageCandidate=null;
+      }
+      if(stageLock?.currentStage==='EXPERIMENT' &&
+        stageLock.completedCount===stageLock.candidateCount &&
+        !workflow?.snapshot().pending){
+        stageLock.completeExperiments();
+        await appendFile(logFile,'[EXPERIMENT_COMPLETE] '+
+          JSON.stringify({resolved:stageLock.completedCount})+'\n');
+        await appendFile(logFile,'[STAGE_UNLOCK] EXPERIMENT -> REVIEW\n');
+        if(!workflow?.snapshot().observations.some(o=>o.status==='behavior_observed')){
+          stageLock.completeReviews();
+          await appendFile(logFile,'[REVIEW_COMPLETE] '+JSON.stringify({eligible:0})+'\n');
+          await appendFile(logFile,'[STAGE_UNLOCK] REVIEW -> REPORT\n');
+        }
+      }
+      if(stageLock?.currentStage==='READ')constraints={action:['read_file']};
+      if(stageLock?.currentStage==='EXPERIMENT' && !workflow?.snapshot().pending)
+        constraints={action:['plan_probe','probe_intent']};
+      if(stageLock?.currentStage==='REVIEW'||stageLock?.currentStage==='REPORT')
+        constraints={action:['final']};
       // The inspection graph moves into hypothesis mode after six source reads.
       // Keep source reading *eligible* while controller-ranked, scoped sources
       // remain unread; otherwise a repetitive small model cannot be redirected
@@ -536,7 +701,7 @@ export async function runLocalAudit(
       // controller-owned probe planning, never back to speculative source reads.
       const eligibleForProbe=[...new Set(limits.initialSourcePaths||[])].filter(path=>
         path.startsWith('source-') && ['.sol','.java','.py','.js','.mjs','.cjs'].some(ext=>path.endsWith(ext)));
-      const sourceStageComplete=!!workflow && eligibleForProbe.length>0 &&
+      const sourceStageComplete=!!workflow && (!stageLock || stageLock.currentStage!=='READ') && eligibleForProbe.length>0 &&
         eligibleForProbe.every(path=>terminalReadPages.has(path));
       if(sourceStageComplete && constraints?.action?.includes('read_file') &&
          !workflow!.snapshot().pending && !workflow!.snapshot().verifiedEvidenceFocus) {
@@ -677,11 +842,40 @@ export async function runLocalAudit(
       }
       let controllerAction=structured && workflow && process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false' ?
         controllerOwnedNextAction(constraints,workflow.snapshot().pending) : null;
+      // Stage-authoritative experiment dispatcher: use only the queue frozen
+      // after full reading and analysis. No other controller path may select.
+      if(stageLock?.currentStage==='EXPERIMENT' && !controllerAction &&
+        !workflow?.snapshot().pending){
+        for(const {id,plan} of stagedPlans){
+          if(stagedAttempted.has(id))continue;
+          stagedAttempted.add(id);
+          const error=workflow!.validate(plan as any);
+          if(error){
+            await recordProbeDisposition(plan.path,plan.query,plan.answer,'rejected',error);
+            stageLock.finishExperiment(id,'rejected');
+            continue;
+          }
+          try {
+            stageLock.requireCandidate(id);
+            workflow!.registerControllerPlan(plan,
+              workflow!.latestSourceEvidence(plan.path)||'inspected:'+plan.path,
+              plan.hypothesis,
+              'The isolated experiment does not exhibit the proposed behavior.');
+            activeStageCandidate=id;
+            controllerAction=plan;
+            await recordProbeDisposition(plan.path,plan.query,plan.answer,'selected','stage_queue');
+            break;
+          }catch(error){
+            await recordProbeDisposition(plan.path,plan.query,plan.answer,'rejected',String(error));
+            stageLock.finishExperiment(id,'rejected');
+          }
+        }
+      }
       // The controller has already inspected actual source and knows the
       // verifier's accepted formats. When a grounded probe is executable,
       // choose the exact declaration and plan instead of asking Qwen to guess.
       // The normal workflow validator and isolated verifier remain mandatory.
-      if(!controllerAction && structured && workflow &&
+      if(!controllerAction && !stageLock && structured && workflow &&
          process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false' &&
          !workflow.snapshot().verifiedEvidenceFocus &&
          // Probe progression is bounded by evidence-backed candidates, not an arbitrary count.
@@ -703,10 +897,7 @@ export async function runLocalAudit(
               const menu=await solidityIndex.probeMenu(full,64);
               // Source-grounded AST scenarios, not ABI mutability or guessed
               // role names, are the only eligible Solidity security probes.
-              const groundedOptions=sourceGroundedSolidityProbes(source,menu,{
-                 path,peers:[...accessibleSoliditySources.entries()]
-                   .map(([peerPath,peerSource])=>({path:peerPath,source:peerSource}))
-               });
+              const groundedOptions=await groundedControllerOptions(path,source,menu);
               const supported=new Set(groundedOptions.map(entry=>entry.selector));
               for(const entry of menu.filter(entry=>entry.operation==='send'))
                 if(!supported.has(entry.selector))
@@ -846,7 +1037,7 @@ export async function runLocalAudit(
           }catch{}
         }
       }
-      if(fullIndexMode && structured && workflow &&
+      if(!stageLock && fullIndexMode && structured && workflow &&
          process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false' &&
          !controllerAction && !workflow.snapshot().observations.length &&
          !workflow.snapshot().verifiedEvidenceFocus) {
@@ -873,6 +1064,7 @@ export async function runLocalAudit(
             workflow.finishControllerCandidates();
             await appendFile(logFile,'[CONTROLLER_NO_SUPPORTED_SECURITY_SCENARIOS] '+
               JSON.stringify({inspected:eligible.length,accepted:true})+'\n');
+            if(stageLock)throw new Error('STAGE_LOCKED: premature disposition');
             return disposition;
           }
           await appendFile(logFile,'[CONTROLLER_UNSUPPORTED_FINAL_REJECTED] '+
@@ -1196,10 +1388,8 @@ export async function runLocalAudit(
             const full=await safePath(action.path);
             const source=await readFile(full,'utf8');
             const menu=await solidityIndex.probeMenu(full,64);
-            grounded=sourceGroundedSolidityProbes(source,menu,{
-                path:action.path,peers:[...accessibleSoliditySources.entries()]
-                  .map(([peerPath,peerSource])=>({path:peerPath,source:peerSource}))
-              }).find(item=>item.selector===action.query)?.probe||null;
+            grounded=(await groundedControllerOptions(action.path,source,menu))
+              .find(item=>item.selector===action.query)?.probe||null;
           }catch{}
           if(!grounded) {
             await recordProbeDisposition(action.path,action.query,'solidity_sequence',
@@ -1266,6 +1456,26 @@ export async function runLocalAudit(
                 await appendFile(logFile,'[PROBE_INTENT_RESOLVED] '+JSON.stringify({path:action.path,query:action.query,kind:action.answer})+'\n');
               }
             }catch{}
+          }
+        }
+        if(stageLock && !controllerAction &&
+          ['plan_probe','probe_intent'].includes(action.action)){
+          await appendFile(logFile,'[STAGE_ACTION_REJECTED] '+
+            JSON.stringify({stage:stageLock.currentStage,reason:'controller_queue_only'})+'\n');
+          messages.push({role:'user',content:'Experiment selection is controller-owned. Await the next queued action. /no_think'});
+          continue;
+        }
+        if(stageLock && !(['final'].includes(action.action) &&
+          stageLock.currentStage==='REVIEW')){
+          try {
+            stageLock.assertActionAllowed(action.action);
+            if(['plan_probe','probe_intent'].includes(action.action))
+              stageLock.requireCandidate(JSON.stringify([action.path,action.query,action.answer]));
+          }catch(error){
+            await appendFile(logFile,'[STAGE_ACTION_REJECTED] '+
+              JSON.stringify({stage:stageLock.currentStage,action:action.action,error:String(error)})+'\n');
+            messages.push({role:'user',content:'Controller stage lock rejected this action. Follow the current controller stage. /no_think'});
+            continue;
           }
         }
         if(constraints && Object.entries(constraints).some(([key,values])=>!values!.includes(action[key as "action"|"path"|"query"|"answer"]))) {
@@ -1834,6 +2044,20 @@ export async function runLocalAudit(
                 findings.some((finding:any)=>finding?.caseId===observation.caseId));
           await persistMemory();
         }
+        if(stageLock){
+          if(stageLock.currentStage==='REVIEW'){
+            for(const {id,plan} of stagedPlans){
+              if(workflow?.snapshot().observations.some(o=>o.path===plan.path &&
+                o.function===plan.query && o.status==='behavior_observed'))
+                stageLock.review(id);
+            }
+            stageLock.completeReviews();
+            await appendFile(logFile,'[REVIEW_COMPLETE] All eligible observations reviewed\n');
+            await appendFile(logFile,'[STAGE_UNLOCK] REVIEW -> REPORT\n');
+          }
+          stageLock.completeReport(true);
+          await appendFile(logFile,'[REPORT_COMPLETE] Validated report finalized\n');
+        }
         finalAnswer=message.content;stoppingReason="Validated final answer";
         return message.content;
       }
@@ -1862,6 +2086,7 @@ export async function runLocalAudit(
           offset:call.function.arguments?.offset ?? 0,kind:String(call.function.arguments?.kind ?? "").slice(0,80)});
         try {
           const name = call.function.name;
+          if(stageLock)stageLock.assertActionAllowed(call.function.name);
           let path = String(call.function.arguments?.path ?? ".");
           if (["read_file","list_files","search_files","outline_solidity","read_solidity"].includes(name))
             path=await canonicalSourceReadPath(path);
@@ -2141,6 +2366,9 @@ export async function runLocalAudit(
             const page=JSON.parse(output);
             const sourcePath=relative(root,full).split(sep).join('/');
             sourceTotals.set(sourcePath,page.totalCharacters);
+            if(stageLock && /^source-[0-9]+\//.test(sourcePath))
+              stageLock.recordRead({path:sourcePath,start:page.start,end:page.end,
+                totalCharacters:page.totalCharacters});
             allowance.read(sourcePath,page.start,page.end,turn+1);
             activityCount=page.text.length;successfulReads++;
             workflow?.read(sourcePath);
@@ -2188,6 +2416,21 @@ export async function runLocalAudit(
               "Use list_files on a known directory or select an existing source hint. "+navigation.hint();
             if(count>=3)fatalToolError="AUDIT_STALLED: repeated missing source path after corrective feedback; inspection incomplete";
           }
+        }
+        if(stageLock && activeStageCandidate &&
+          ['verify_source','verify_python'].includes(call.function.name)){
+          let outcome:Outcome='incomplete';
+          try{
+            const status=String(JSON.parse(output).status||'');
+            outcome=status==='behavior_observed'?'observed':
+              status==='behavior_not_observed'?'not_observed':
+              status.startsWith('unsupported')||status.startsWith('blocked')?'unsupported':
+              status==='invalid_probe'?'rejected':'incomplete';
+          }catch{}
+          stageLock.finishExperiment(activeStageCandidate,outcome);
+          await appendFile(logFile,'[STAGED_EXPERIMENT_RESULT] '+
+            JSON.stringify({id:activeStageCandidate,outcome})+'\n');
+          activeStageCandidate=null;
         }
         if(['verify_source','verify_python'].includes(call.function.name) && !output.startsWith('Tool error:')) {
           const result=JSON.parse(output);
@@ -2356,10 +2599,11 @@ export async function runLocalAudit(
         // verdict before its mandatory pagination completed. If subsequent
         // reads now satisfy every validator, preserve that judgment instead
         // of forcing Qwen to regenerate identical JSON until timeout.
-        if(limits.recoverFinal) {
+        if(limits.recoverFinal && (!stageLock || stageLock.currentStage==='REPORT')) {
           const recovered=await limits.recoverFinal();
-          if(recovered) {
+          if(recovered && (!stageLock || stageLock.currentStage==='REPORT')) {
             controller.signal.throwIfAborted();
+            stageLock?.completeReport(true);
             finalAnswer=recovered;
             stoppingReason="Controller recovered validated final after evidence reads";
             await appendFile(logFile,'[CONTROLLER_FINAL_RECOVERED] '+JSON.stringify({turn:turn+1})+'\n');
@@ -2382,6 +2626,10 @@ export async function runLocalAudit(
       endedAt:new Date().toISOString(),model,adapter,profile:modelProfile().name,workflow:workflow?.snapshot(),turns:usedTurns,successfulReads,stoppingReason,finalAnswer,hypotheses,
       ...allowance.snapshot(),files:allowance.snapshot().files.map(file=>({...file,totalCharacters:sourceTotals.get(file.path),
         complete:sourceTotals.has(file.path)&&file.ranges.length===1&&file.ranges[0][0]===0&&file.ranges[0][1]===sourceTotals.get(file.path)}))},null,2),{mode:0o600}).catch(()=>{});
+    if(stageLock)await appendFile(logFile,'[STAGE_TERMINAL] '+JSON.stringify({
+      stage:stageLock.currentStage,indexed:stageLock.coverage.count,
+      read:stageLock.coverage.completedCount,
+      experiments:stageLock.candidateCount,resolved:stageLock.completedCount})+'\n').catch(()=>{});
     if (limits.checkpointPath && workflow) {
       const destination=limits.checkpointPath+'.memory.json';
       const temporary=destination+'.'+process.pid+'.tmp';
