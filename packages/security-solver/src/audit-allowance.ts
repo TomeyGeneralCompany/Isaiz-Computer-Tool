@@ -35,10 +35,10 @@ export class AuditAllowance {
     if(this.credits.at(-1)!==turn)this.credits.push(turn);
   }
   extend(turn:number,now:number) {
-    if(!this.dynamic || now>=this.deadline || (!this.unbounded && (now>=this.hardDeadline || turn>=this.hardTurns)))return null;
+    if(!this.dynamic || (!this.unbounded && (now>=this.deadline || now>=this.hardDeadline || turn>=this.hardTurns)))return null;
     this.credits=this.credits.filter(t=>t>=turn-20);
     if(this.credits.length<10 || this.credits.at(-1)!<turn-3)return null;
-    if(this.turns-turn>5 && this.deadline-now>Math.min(this.timeoutMs/5,15*60000))return null;
+    if(this.turns-turn>5 && (this.unbounded || this.deadline-now>Math.min(this.timeoutMs/5,15*60000)))return null;
     const oldTurns=this.turns,oldDeadline=this.deadline;
     this.turns=this.unbounded ? this.turns+40 : Math.min(this.hardTurns,this.turns+40);
     this.deadline=this.unbounded ? this.deadline+60*60000 : Math.min(this.hardDeadline,this.deadline+60*60000);

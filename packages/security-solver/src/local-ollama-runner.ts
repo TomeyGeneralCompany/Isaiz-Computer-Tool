@@ -164,7 +164,11 @@ export async function runLocalAudit(
     finally{checkingCancellation=false;}
   },250);
   const allowance=new AuditAllowance(settings.maxTurns,auditStartedAt,timeoutMs,limits.dynamicAllowance,640,limits.productionWorkflow === true && limits.dynamicAllowance === true);
-  let timer = setTimeout(() => controller.abort(), timeoutMs);
+  // A productive production hunt has no wall-clock deadline inside LOTUS.
+  // The one-bounty supervisor independently cancels genuine inactivity.
+  // Keep explicit timers for bounded test/interactive audit modes only.
+  let timer:ReturnType<typeof setTimeout>|undefined = allowance.unbounded
+    ? undefined : setTimeout(() => controller.abort(), timeoutMs);
   let usedTurns=0, finalAnswer:string|undefined, stoppingReason="Inspection interrupted";
   let emptyFinals=0;
   let emptyFinalRecoveryCycles=0;
@@ -191,7 +195,10 @@ export async function runLocalAudit(
   const renew=async(turn:number)=>{
     const extension=allowance.extend(turn,Date.now());
     if(extension) {
-      clearTimeout(timer);timer=setTimeout(()=>controller.abort(),Math.max(1,allowance.deadline-Date.now()));
+      if(!allowance.unbounded){
+        clearTimeout(timer);
+        timer=setTimeout(()=>controller.abort(),Math.max(1,allowance.deadline-Date.now()));
+      }
       await appendFile(logFile,"[ALLOWANCE_EXTENDED] "+JSON.stringify(extension)+"\n");
       await limits.onAllowance?.(allowance.deadline);
     }

@@ -48,9 +48,10 @@ class DependencyTests(unittest.TestCase):
             entries.update({f"node_modules/pkg{i}":item for i in range(4097)})
             lock.write_text(json.dumps({"lockfileVersion":3,"packages":entries}))
             with patch.object(deps,"download") as download:
-                with self.assertRaisesRegex(deps.DependencyError,"4096 package entries"):
-                    deps.prepare_dependencies(root)
+                deps.prepare_dependencies(root)
                 download.assert_not_called()
+                self.assertFalse((root/"node_modules/.tomey-lock.sha256").exists(),
+                                 "A deferred lockfile must not be marked fully installed")
 
     def test_solidity_imports_skip_unrelated_dev_packages(self):
         with tempfile.TemporaryDirectory() as directory:

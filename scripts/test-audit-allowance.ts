@@ -29,6 +29,13 @@ assert.ok(unbounded.extend(639,90000),'Productive work beyond turn 640 must exte
 assert.equal(unbounded.turns,680);
 assert.equal(unbounded.snapshot().hardTurns,null);
 assert.equal(unbounded.snapshot().unbounded,true);
+for(let i=661;i<=679;i++)unbounded.read('second-file',i*100,(i+1)*100,i);
+assert.ok(unbounded.extend(679,36_000_000),
+  'Real source progress must extend an unbounded hunt beyond the former ten-hour cutoff');
+assert.equal(unbounded.turns,720);
+const idleUnbounded=new AuditAllowance(80,0,100000,true,640,true);
+assert.equal(idleUnbounded.extend(79,36_000_000),null,
+  'No new source or probe evidence must never buy extra turns');
 assert.ok(sourcePriority('contracts/Vault.sol')>sourcePriority('.solcover.js'));
 assert.ok(sourcePriority('src/Vault.sol')>sourcePriority('vendors/foo/tests/x.js'));
 console.log('Progress extensions, repeated/overlapping reads, expiry and source priority PASSED');
