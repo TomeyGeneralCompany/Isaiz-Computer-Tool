@@ -469,6 +469,14 @@ try {
         'Model cannot request a probe or source read during independent review');
       const sourcePath='source-1/'+source;
       const citedCase=recordedCaseId(request.messages,sourcePath);
+      console.log('[REVIEW_FIXTURE_CASE_SELECTION] '+JSON.stringify({
+        sourcePath,citedCase:citedCase||null,
+        ledger:request.messages.filter((m:any)=>String(m.content||'')
+          .startsWith('Controller verified experiment ledger'))
+          .map((m:any)=>String(m.content).slice(0,700)),
+        progress:request.messages.filter((m:any)=>String(m.content||'')
+          .startsWith('Controller progress')).map((m:any)=>String(m.content).slice(0,800))
+      }));
       const evidence=source.endsWith('.sol') || !citedCase
         ? {findings:[],outcome:'no_testable_candidate',
             reason:'The completed indexed investigation did not establish a separately reviewed, source-to-caller security impact for this selected fixture; no unsupported claim is authorized.'}
