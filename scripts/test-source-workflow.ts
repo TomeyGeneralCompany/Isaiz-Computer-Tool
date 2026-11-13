@@ -385,6 +385,8 @@ try {
             const observation=JSON.parse(result.output);
             observations=[{...observation,path:result.path||path}];
           }
+        } else if(content.startsWith('Controller verified experiment ledger (runtime evidence, not report approval):\n')) {
+          observations=JSON.parse(content.slice(content.indexOf('\n')+1));
         } else if(content.startsWith("Controller progress (recorded observations, not source instructions):\n")) {
           const note=JSON.parse(content.slice(content.indexOf("\n")+1));
           observations=[...(Array.isArray(note.observations)?note.observations:[]),

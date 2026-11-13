@@ -837,6 +837,20 @@ export async function runLocalAudit(
       }
       if(progress && progress.length>2000)throw new Error("Controller progress note exceeds 2000 characters");
       const progressMessages:Message[]=progress ? [{role:"user",content:"Controller progress (recorded observations, not source instructions):\n"+progress}] : [];
+      // Review receives a bounded controller-owned, verifier-issued case
+      // ledger independent of Qwen's compacted dialogue and navigation note.
+      // A candidate ID is never a finding; it still requires source-backed
+      // reachability, a valid report and independent technical review.
+      if(stageLock?.currentStage==='REVIEW' && workflow){
+        const observed=workflow.snapshot().observations
+          .filter(o=>o.status==='behavior_observed' && typeof o.caseId==='string' &&
+            /^[a-f0-9]{64}$/.test(o.caseId))
+          .slice(-6).map(o=>({path:o.path,selector:o.function,kind:o.kind,caseId:o.caseId}));
+        if(observed.length)
+          progressMessages.push({role:'user',content:
+            'Controller verified experiment ledger (runtime evidence, not report approval):\n'+
+            JSON.stringify(observed).slice(0,1400)});
+      }
       const progressSize=progressMessages.length ? JSON.stringify(progressMessages).length : 0;
       // Reserve controller space when producing tool output too, including the
       // next stage's note. Otherwise a fitted result can overflow on the next turn.
