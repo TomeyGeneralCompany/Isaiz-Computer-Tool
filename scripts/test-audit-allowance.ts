@@ -36,6 +36,16 @@ assert.equal(unbounded.turns,720);
 const idleUnbounded=new AuditAllowance(80,0,100000,true,640,true);
 assert.equal(idleUnbounded.extend(79,36_000_000),null,
   'No new source or probe evidence must never buy extra turns');
+const slowUnbounded=new AuditAllowance(80,0,100000,true,640,true);
+slowUnbounded.read('one-genuine-file',0,100,79);
+assert.ok(slowUnbounded.extend(79,96*60*60*1000),
+  'A single novel, recent source read must extend productive work even after 96 hours');
+assert.equal(slowUnbounded.turns,120);
+const repetitive=new AuditAllowance(80,0,100000,true,640,true);
+repetitive.read('same-file',0,100,60);
+for(let turn=61;turn<=79;turn++)repetitive.read('same-file',0,100,turn);
+assert.equal(repetitive.extend(79,96*60*60*1000),null,
+  'Re-reading the same range is not progress and must not extend work');
 assert.ok(sourcePriority('contracts/Vault.sol')>sourcePriority('.solcover.js'));
 assert.ok(sourcePriority('src/Vault.sol')>sourcePriority('vendors/foo/tests/x.js'));
 console.log('Progress extensions, repeated/overlapping reads, expiry and source priority PASSED');

@@ -37,7 +37,11 @@ export class AuditAllowance {
   extend(turn:number,now:number) {
     if(!this.dynamic || (!this.unbounded && (now>=this.deadline || now>=this.hardDeadline || turn>=this.hardTurns)))return null;
     this.credits=this.credits.filter(t=>t>=turn-20);
-    if(this.credits.length<10 || this.credits.at(-1)!<turn-3)return null;
+    // A productive unbounded hunt may earn evidence slowly on a CPU-only model.
+    // Do not impose a 10-of-20 evidence-turn quota on genuine new source/probe
+    // progress. Still require recent novelty: repeated pages do not count.
+    const requiredCredits=this.unbounded?1:10;
+    if(this.credits.length<requiredCredits || this.credits.at(-1)!<turn-3)return null;
     if(this.turns-turn>5 && (this.unbounded || this.deadline-now>Math.min(this.timeoutMs/5,15*60000)))return null;
     const oldTurns=this.turns,oldDeadline=this.deadline;
     this.turns=this.unbounded ? this.turns+40 : Math.min(this.hardTurns,this.turns+40);
@@ -48,6 +52,6 @@ export class AuditAllowance {
     this.credits=[];
     return reason;
   }
-  snapshot() {return {dynamicEnabled:this.dynamic,extensionRule:{minimumEvidenceTurns:10,windowTurns:20,recentWithinTurns:3},creditedTurns:this.credits.slice(-20),hardTurns:this.unbounded?null:this.hardTurns,unbounded:this.unbounded,turnAllowance:this.turns,deadline:new Date(this.deadline).toISOString(),
+  snapshot() {return {dynamicEnabled:this.dynamic,extensionRule:{minimumEvidenceTurns:this.unbounded?1:10,windowTurns:20,recentWithinTurns:3},creditedTurns:this.credits.slice(-20),hardTurns:this.unbounded?null:this.hardTurns,unbounded:this.unbounded,turnAllowance:this.turns,deadline:new Date(this.deadline).toISOString(),
     files:[...this.spans].map(([path,ranges])=>({path,ranges})),completedDistinctProbes:this.probes.size};}
 }
