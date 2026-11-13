@@ -17,7 +17,10 @@ concurrency:
 jobs:
   laptop:
     runs-on: [self-hosted, linux, x64, lotus-laptop]
-    timeout-minutes: 1440
+    # Self-hosted GitHub Actions allows up to five days; this is the external
+    # platform ceiling, not a LOTUS investigation deadline. A truly stalled
+    # hunt is stopped by the existing progress/inactivity controller.
+    timeout-minutes: 7200
     env:
       LOCAL_OLLAMA_MODEL: qwen3:4b
       LOCAL_MODEL_ADAPTER: ollama

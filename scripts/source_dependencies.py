@@ -161,7 +161,12 @@ def prepare_dependencies(repository: Path, required_imports: list[str] | None = 
                 pending.append(resolved)
         entries = [(name, item) for name, item in entries if name in selected]
     elif len(entries) > 4096:
-        raise DependencyError("Target lockfile exceeds 4096 package entries")
+        # Large lockfiles are inventories, not a reason to reject the entire
+        # source repository. Defer materialization until the isolated compiler
+        # reports concrete missing imports. The required_imports path above
+        # then installs only the integrity-pinned transitive closure.
+        # Never run package lifecycle scripts or install the full lockfile.
+        return
     # Parent packages must be materialized before nested dependencies.
     entries.sort(key=lambda entry: (entry[0].count("/"), entry[0]))
     started = time.monotonic()
