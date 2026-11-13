@@ -628,8 +628,15 @@ export async function runLocalAudit(
                 stageLock.discover(id);stagedPlans.push({id,plan});
               }
             } else {
+              const candidates=controllerPolyglotPlans(path,source);
               const queuedSelectors=new Set<string>();
-              for(const candidate of controllerPolyglotPlans(path,source)){
+              // A source-derived readback method belongs to the mutation
+              // sequence that uses it as evidence; do not dispatch it as a
+              // second independent experiment when it is only an accessor.
+              const mutators=candidates.filter(candidate=>/\.(?:rotate|set|change|update|transfer|grant|assign|advance|increment|decrement|withdraw|deposit)[A-Za-z0-9_$]*$/.test(candidate.query));
+              for(const candidate of candidates){
+                if(path.endsWith('.java') && mutators.length &&
+                  /\.(?:get[A-Z]|is[A-Z]|current|count|balance|size|value|total|owner|operator)[A-Za-z0-9_$]*$/.test(candidate.query))continue;
                 // A declaration with several adapters represents one
                 // hypothesis at this stage, not permission to replay the
                 // same method with every available probe adapter.
@@ -854,8 +861,12 @@ export async function runLocalAudit(
         await appendFile(logFile,'[INDEXED_COMPLETED_REQUIREMENT_RELEASED] '+
           JSON.stringify({path:alreadyRead,turn:turn+1})+'\n');
       }
-      let controllerAction=structured && workflow && process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false' ?
-        controllerOwnedNextAction(constraints,workflow.snapshot().pending) : null;
+      // A mandatory stage transition must never depend on model compliance
+      // or the optional controller-owned-action acceleration setting.
+      let controllerAction=stageLock?.currentStage==='READ' && structured && workflow
+        ? controllerOwnedNextAction(constraints,workflow.snapshot().pending)
+        : structured && workflow && process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false'
+          ? controllerOwnedNextAction(constraints,workflow.snapshot().pending) : null;
       // Stage-authoritative experiment dispatcher: use only the queue frozen
       // after full reading and analysis. No other controller path may select.
       if(stageLock?.currentStage==='EXPERIMENT' && !controllerAction &&
