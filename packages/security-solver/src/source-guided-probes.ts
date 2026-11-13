@@ -34,6 +34,18 @@ export function guidedSourceProbes(path:string,code:string):GuidedProbe[] {
       /\bexports\.([A-Za-z_$][\w$]*)\s*=\s*function\s*(?:[A-Za-z_$][\w$]*)?\s*\(\s*([A-Za-z_$][\w$]*)\s*\)\s*\{/g,
       /\bexport\s+(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(\s*([A-Za-z_$][\w$]*)\s*\)\s*\{/g
     ];
+    // Source-owned CommonJS/ESM expression-bodied exports are common in
+    // production. Recognize only a literal paragraph construction that
+    // references its declared argument; the isolated verifier determines
+    // actual behavior and any independent reviewer determines security impact.
+    const arrow=/\b(?:exports\.|module\.exports\.|export\s+(?:const|let)\s+)([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:\(\s*([A-Za-z_$][\w$]*)\s*\)|([A-Za-z_$][\w$]*))\s*=>\s*([^;\n]{1,500});/g;
+    for(const match of code.matchAll(arrow)){
+      const argument=match[2]||match[3],expression=match[4];
+      if(!/<p>/i.test(expression)||!/<\/p>/i.test(expression)||
+         !new RegExp('\\b'+argument+'\\b').test(expression))continue;
+      found.push({path,functionName:match[1],kind:'html_reflection',
+        hypothesis:'Check whether the exported JavaScript paragraph renderer reflects user HTML; escaped output disproves the suspected reflection.'});
+    }
     for(const declaration of declarations)for(const match of code.matchAll(declaration)) {
       const end=code.indexOf('}',match.index!+match[0].length);
       if(end<0 || end-match.index!>6000)continue;

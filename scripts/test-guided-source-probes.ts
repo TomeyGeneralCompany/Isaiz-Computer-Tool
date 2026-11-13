@@ -16,4 +16,10 @@ assert.equal(guidedSourceProbe('src/Render.java',
   'public class Render { public String render(String value) { return "<p>" + value + "</p>"; }}')?.functionName,'Render.render');
 assert.equal(guidedSourceProbe('src/Render.java',
   'public class Render { public static String render(String value) { return value; }}'),null);
+assert.equal(guidedSourceProbe('src/render.cjs',
+  'exports.render = x => "<p>"+x+"</p>";')?.functionName,'render');
+assert.equal(guidedSourceProbe('src/renderer.mjs',
+  'export const render = (value) => "<p>" + value + "</p>";')?.functionName,'render');
+assert.equal(guidedSourceProbe('src/render.cjs',
+  'exports.render = x => x.toUpperCase();'),null);
 console.log('Bounded source-guided function selection PASSED');

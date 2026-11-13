@@ -387,7 +387,8 @@ try {
           }
         } else if(content.startsWith("Controller progress (recorded observations, not source instructions):\n")) {
           const note=JSON.parse(content.slice(content.indexOf("\n")+1));
-          observations=Array.isArray(note.observations)?note.observations:[];
+          observations=[...(Array.isArray(note.observations)?note.observations:[]),
+            ...(Array.isArray(note.observationLedger)?note.observationLedger:[])];
         }
       } catch {continue;}
       for(const o of [...observations].reverse()) {
