@@ -863,7 +863,9 @@ export async function runLocalAudit(
       }
       // A mandatory stage transition must never depend on model compliance
       // or the optional controller-owned-action acceleration setting.
-      let controllerAction=stageLock?.currentStage==='READ' && structured && workflow
+      let controllerAction=stageLock && structured && workflow &&
+        (stageLock.currentStage==='READ' ||
+         (stageLock.currentStage==='EXPERIMENT' && !!workflow.snapshot().pending))
         ? controllerOwnedNextAction(constraints,workflow.snapshot().pending)
         : structured && workflow && process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false'
           ? controllerOwnedNextAction(constraints,workflow.snapshot().pending) : null;
