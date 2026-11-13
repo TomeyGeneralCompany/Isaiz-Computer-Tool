@@ -845,7 +845,8 @@ export async function runLocalAudit(
         const observed=workflow.snapshot().observations
           .filter(o=>o.status==='behavior_observed' && typeof o.caseId==='string' &&
             /^[a-f0-9]{64}$/.test(o.caseId))
-          .slice(-6).map(o=>({path:o.path,selector:o.function,kind:o.kind,caseId:o.caseId}));
+          .slice(-6).map(o=>({path:o.path,selector:o.function,kind:o.kind,
+            status:'behavior_observed' as const,caseId:o.caseId}));
         if(observed.length)
           progressMessages.push({role:'user',content:
             'Controller verified experiment ledger (runtime evidence, not report approval):\n'+
