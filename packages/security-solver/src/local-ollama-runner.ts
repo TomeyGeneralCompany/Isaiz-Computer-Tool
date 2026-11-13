@@ -867,6 +867,13 @@ export async function runLocalAudit(
         ? controllerOwnedNextAction(constraints,workflow.snapshot().pending)
         : structured && workflow && process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false'
           ? controllerOwnedNextAction(constraints,workflow.snapshot().pending) : null;
+      if(stageLock?.currentStage==='READ' && controllerAction?.action==='read_file'){
+        const firstUnread=stageLock.coverage.firstUnreadOffset(controllerAction.path);
+        controllerAction={...controllerAction,offset:firstUnread};
+        await appendFile(logFile,'[STAGE_READ_CURSOR] '+JSON.stringify({
+          path:controllerAction.path,offset:firstUnread,
+          completed:stageLock.coverage.completedCount,total:stageLock.coverage.count})+'\n');
+      }
       // Stage-authoritative experiment dispatcher: use only the queue frozen
       // after full reading and analysis. No other controller path may select.
       if(stageLock?.currentStage==='EXPERIMENT' && !controllerAction &&

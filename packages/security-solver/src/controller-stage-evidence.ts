@@ -31,6 +31,20 @@ export class ControllerSourceCoverage {
     previous.push([page.start,page.end,hash(page.text)]);
     this.ranges.set(page.path,previous);
   }
+  /** Controller-owned cursor survives model context compaction. Return the
+   * first missing character of an indexed file, not the last Qwen offset. */
+  firstUnreadOffset(path:string):number {
+    const file=this.index.get(path);
+    if(!file)throw new Error('SOURCE_NOT_INDEXED');
+    const ranges=this.ranges.get(path)||[];
+    if(file.characters===0)return 0;
+    let cursor=0;
+    for(const [start,end] of [...ranges].sort((a,b)=>a[0]-b[0])){
+      if(start>cursor)break;
+      cursor=Math.max(cursor,end);
+    }
+    return cursor;
+  }
   complete(path:string){
     const file=this.index.get(path),ranges=this.ranges.get(path);
     if(!file||!ranges?.length)return false;

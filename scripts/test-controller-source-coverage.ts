@@ -14,6 +14,7 @@ async function testCoverage(){
  await assert.rejects(lock.completeReading(async()=> 'abcdef'),/READ_INCOMPLETE/);
  lock.recordRead({path:sources[90].path,start:0,end:2,totalCharacters:6,text:'ab'});
  lock.recordRead({path:sources[90].path,start:4,end:6,totalCharacters:6,text:'ef'});
+ assert.equal(lock.coverage.firstUnreadOffset(sources[90].path),2,'Continue at actual missing range');
  await assert.rejects(lock.completeReading(async()=> 'abcdef'),/READ_INCOMPLETE/);
  lock.recordRead({path:sources[90].path,start:2,end:4,totalCharacters:6,text:'cd'});
  await lock.completeReading(async()=> 'abcdef');
