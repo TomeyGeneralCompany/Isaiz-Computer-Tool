@@ -689,6 +689,23 @@ export async function runLocalAudit(
         await appendFile(logFile,'[STAGE_UNLOCK] EXPERIMENT -> REVIEW\n');
         // Every terminal experiment, including unsupported, requires a review disposition.
       }
+      // Empty queues have a valid, evidence-backed terminal disposition.
+      // This route is available only after INDEX, every READ (including policy),
+      // ANALYZE, and the empty EXPERIMENT queue have formally completed.
+      // A model cannot add candidates or claim a finding after this point.
+      if(stageLock?.currentStage==='REVIEW' && stageLock.candidateCount===0){
+        stageLock.completeReviews();
+        await appendFile(logFile,'[REVIEW_COMPLETE] '+JSON.stringify({eligible:0})+'\n');
+        await appendFile(logFile,'[STAGE_UNLOCK] REVIEW -> REPORT\n');
+        const disposition=JSON.stringify({findings:[],outcome:'no_testable_candidate',
+          reason:'No source-grounded executable security scenario qualified after complete indexed source reading and analysis.'});
+        const rejected=await limits.validateFinal?.(disposition);
+        if(rejected)throw new Error('CONTROLLER_EMPTY_EXPERIMENT_REPORT_REJECTED: '+String(rejected));
+        stageLock.completeReport(true);
+        await appendFile(logFile,'[REPORT_COMPLETE] '+JSON.stringify({outcome:'no_testable_candidate'})+'\n');
+        finalAnswer=disposition;stoppingReason='Validated controller empty-queue final';
+        return disposition;
+      }
       if(stageLock?.currentStage==='READ'){
         const ranked=[...new Set([...privilegedSolidityCandidates.keys(),
           ...projectErc1155CallerPaths,...tracedCandidates.map(c=>c.path),

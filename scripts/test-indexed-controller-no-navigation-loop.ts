@@ -34,18 +34,26 @@ try {
   process.env.LOCAL_CONTROLLER_OWNED_ACTIONS='false';
   process.env.LOCAL_CONTROLLER_FULL_SOURCE_INDEX='true';
   const log=join(root,'audit.log');
-  await assert.rejects(runLocalAudit('Inspect source',log,20000,root,'mock',undefined,{
+  const completedInventory=JSON.parse(await runLocalAudit('Inspect source',log,20000,root,'mock',undefined,{
     productionWorkflow:true,verifyPython:async()=>JSON.stringify({status:'behavior_not_observed'}),
     maxTurns:80,numCtx:8192,numPredict:256,initialSourcePaths:sourcePaths,
     onRead:(path)=>delivered.push(path)
-  }),/Local audit reached its 80-turn inspection limit/);
+  }));
+  assert.deepEqual(completedInventory.findings,[]);
+  assert.equal(completedInventory.outcome,'no_testable_candidate');
   const text=await readFile(log,'utf8');
   assert.equal((text.match(/\[CONTROLLER_READ_REDIRECT\]/g)||[]).length,0,
     'Full-index mode must never redirect a completed read to unrelated sources');
-  assert.ok(text.includes('[INDEXED_SOURCE_TO_EVIDENCE_HANDOFF]'), 'Exhausted index must offer an evidence/probe transition rather than fatal AUDIT_STALLED');
+  assert.ok(text.includes('[READ_COMPLETE]') &&
+    text.includes('[STAGE_UNLOCK] READ -> ANALYZE') &&
+    text.includes('[STAGE_UNLOCK] ANALYZE -> EXPERIMENT') &&
+    text.includes('[STAGE_UNLOCK] EXPERIMENT -> REVIEW') &&
+    text.includes('[REPORT_COMPLETE]'),
+    'No-candidate disposition requires every mandatory stage and full indexed read coverage');
   assert.ok(!text.includes('AUDIT_STALLED: indexed source'), 'Old fatal index stall must not recur');
-  assert.ok(generations<=80,'Fixed model cannot advance to probes, but run must respect turn allowance');
-  assert.ok(delivered.length<=2,'Only the actual source and optional context recovery may be read');
+  assert.equal(generations,0,'Controller must not ask an uncooperative model to redo known navigation or empty-queue transitions');
+  assert.deepEqual([...new Set(delivered)].sort(),[...sourcePaths].sort(),
+    'Controller must read all indexed sources before an empty-queue disposition');
   // Production controller authority: even when no executable probe exists,
   // Qwen must not be called to choose a new source or transition. The
   // controller reads exactly once and exposes an explicit diagnostic.
