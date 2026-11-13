@@ -852,7 +852,7 @@ export async function runLocalAudit(
       // The graph has already specified the exact next read/verification.
       // Execute it rather than spending a Qwen turn asking for known arguments.
       const fullIndexMode=!!workflow && (limits.controllerIndex ?? (process.env.LOCAL_CONTROLLER_FULL_SOURCE_INDEX==='true'));
-      if(fullIndexMode && constraints?.action?.length===1 &&
+      if(!stageLock && fullIndexMode && constraints?.action?.length===1 &&
          constraints.action[0]==='read_file' && constraints.path?.length===1 &&
          workflow.snapshot().readPaths.includes(constraints.path[0])) {
         const alreadyRead=constraints.path[0];
