@@ -33,6 +33,23 @@ async function run(){
  lock.review('A.suspect');lock.completeReviews();
  lock.completeReport(true);
  assert.equal(lock.currentStage,'COMPLETE');
- console.log('Controller stage lock and complete source coverage PASSED');
+ const policyLock=new ControllerStageLock(true);
+ policyLock.completeIndex([{path:'source-1/A.sol',characters:4,sha256:hash('abcd')}]);
+ policyLock.registerAuditPolicy('policy');
+ policyLock.recordRead({path:'source-1/A.sol',start:0,end:4,totalCharacters:4,text:'abcd'});
+ await assert.rejects(policyLock.completeReading(async path=>
+   path==='audit-policy.txt'?'policy':'abcd'),/POLICY_INCOMPLETE/);
+ policyLock.recordAuditPolicyPage({start:0,end:3,totalCharacters:6,text:'pol'});
+ assert.equal(policyLock.auditPolicyNextOffset,3);
+ await assert.rejects(policyLock.completeReading(async path=>
+   path==='audit-policy.txt'?'policy':'abcd'),/POLICY_INCOMPLETE/);
+ policyLock.recordAuditPolicyPage({start:3,end:6,totalCharacters:6,text:'icy'});
+ assert.equal(policyLock.auditPolicyComplete,true);
+ await assert.rejects(policyLock.completeReading(async path=>
+   path==='audit-policy.txt'?'altered':'abcd'),/POLICY_CHANGED/);
+ await policyLock.completeReading(async path=>
+   path==='audit-policy.txt'?'policy':'abcd');
+ assert.equal(policyLock.currentStage,'ANALYZE');
+  console.log('Controller stage lock and complete source coverage PASSED');
 }
 void run().catch(e=>{console.error(e);process.exitCode=1;});

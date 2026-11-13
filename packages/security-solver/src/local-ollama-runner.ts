@@ -374,7 +374,8 @@ export async function runLocalAudit(
     // before the first paginated source read. Indexing can inspect bytes to
     // fingerprint them, but does not mark them read or permit experimentation.
     if(workflow && (limits.controllerIndex ?? process.env.LOCAL_CONTROLLER_FULL_SOURCE_INDEX==='true')) {
-      stageLock=new ControllerStageLock();
+      stageLock=new ControllerStageLock(
+        !!limits.initialSourcePaths?.includes('audit-policy.txt'));
       workflow.bindStageLock(stageLock);
       const indexedPaths=[...new Set(limits.initialSourcePaths||[])].filter(path=>
         /^source-[0-9]+\/.+\.(?:sol|java|py|js|mjs|cjs)$/.test(path));
@@ -385,6 +386,8 @@ export async function runLocalAudit(
           sha256:createHash('sha256').update(content).digest('hex')});
       }
       stageLock.completeIndex(inventory);
+      if(stageLock.auditPolicyRequired)
+        stageLock.registerAuditPolicy(await readFile(await safePath('audit-policy.txt'),'utf8'));
       await appendFile(logFile,'[INDEX_COMPLETE] '+JSON.stringify({files:inventory.length})+'\n');
       await appendFile(logFile,'[STAGE_UNLOCK] INDEX -> READ\n');
     }
@@ -430,6 +433,8 @@ export async function runLocalAudit(
         for(let policyPage=0;policyPage<10000;policyPage++) {
           controller.signal.throwIfAborted();
           const page=await readSourcePage(policyPath,policyOffset,pageSize);
+          stageLock?.recordAuditPolicyPage({start:page.start,end:page.end,
+            totalCharacters:page.totalCharacters,text:page.text});
           if(page.end<=policyOffset && page.nextOffset!==null)
             throw new Error('Audit policy paging made no forward progress');
           limits.onRead?.('audit-policy.txt',{start:page.start,end:page.end});
@@ -607,7 +612,8 @@ export async function runLocalAudit(
       controller.signal.throwIfAborted();
       // Keep stable history; send fresh controller state only with this request.
       let constraints=workflow ? await workflow.constraints() : limits.actionConstraints?.();
-      if(stageLock?.currentStage==='READ' && stageLock.coverage.allComplete) {
+      if(stageLock?.currentStage==='READ' && stageLock.coverage.allComplete &&
+        stageLock.auditPolicyComplete) {
         await stageLock.completeReading(async path=>readFile(await safePath(path),'utf8'));
         await appendFile(logFile,'[READ_COMPLETE] '+JSON.stringify({
           indexed:stageLock.coverage.count,complete:stageLock.coverage.completedCount})+'\n');
@@ -687,8 +693,9 @@ export async function runLocalAudit(
         const ranked=[...new Set([...privilegedSolidityCandidates.keys(),
           ...projectErc1155CallerPaths,...tracedCandidates.map(c=>c.path),
           ...(limits.initialSourcePaths||[])])];
-        const next=ranked.find(path=>stageLock!.coverage.hasIndexed(path) &&
-          !stageLock!.coverage.complete(path));
+        const next=!stageLock.auditPolicyComplete?'audit-policy.txt':
+          ranked.find(path=>stageLock!.coverage.hasIndexed(path) &&
+            !stageLock!.coverage.complete(path));
         if(!next)throw new Error('READ_STAGE_NO_UNREAD_SOURCE_WITHOUT_CERTIFICATE');
         constraints={action:['read_file'],path:[next]};
       }
@@ -870,7 +877,9 @@ export async function runLocalAudit(
         : structured && workflow && process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false'
           ? controllerOwnedNextAction(constraints,workflow.snapshot().pending) : null;
       if(stageLock?.currentStage==='READ' && controllerAction?.action==='read_file'){
-        const firstUnread=stageLock.coverage.firstUnreadOffset(controllerAction.path);
+        const firstUnread=controllerAction.path==='audit-policy.txt'
+          ?stageLock.auditPolicyNextOffset
+          :stageLock.coverage.firstUnreadOffset(controllerAction.path);
         controllerAction={...controllerAction,offset:firstUnread};
         await appendFile(logFile,'[STAGE_READ_CURSOR] '+JSON.stringify({
           path:controllerAction.path,offset:firstUnread,
@@ -2414,6 +2423,9 @@ export async function runLocalAudit(
             sourceTotals.set(sourcePath,page.totalCharacters);
             if(stageLock && /^source-[0-9]+\//.test(sourcePath))
               stageLock.recordRead({path:sourcePath,start:page.start,end:page.end,
+                totalCharacters:page.totalCharacters,text:page.text});
+            if(stageLock && sourcePath==='audit-policy.txt')
+              stageLock.recordAuditPolicyPage({start:page.start,end:page.end,
                 totalCharacters:page.totalCharacters,text:page.text});
             allowance.read(sourcePath,page.start,page.end,turn+1);
             activityCount=page.text.length;successfulReads++;

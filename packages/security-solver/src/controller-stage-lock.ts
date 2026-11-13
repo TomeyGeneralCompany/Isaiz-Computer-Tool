@@ -1,4 +1,5 @@
 import {ControllerSourceCoverage,type IndexedSource,type SourceRead} from './controller-stage-evidence';
+import {createHash} from 'node:crypto';
 export type Stage='INDEX'|'READ'|'ANALYZE'|'EXPERIMENT'|'REVIEW'|'REPORT'|'COMPLETE';
 export type Outcome='observed'|'not_observed'|'unsupported'|'incomplete'|'rejected';
 const actions:Record<Stage,ReadonlySet<string>>={
@@ -17,6 +18,52 @@ export class ControllerStageLock {
  private reviews=new Map<string,boolean>();
  private finalized=false;
  private analyzed=new Map<string,'complete'|'unsupported'>();
+ private policy:{sha256:string;characters:number;pages:Array<[number,number,string]>}|null=null;
+ constructor(readonly auditPolicyRequired=false){}
+ registerAuditPolicy(content:string):void {
+   if(!this.auditPolicyRequired||this.stage!=='READ'||this.policy)
+     throw new Error('POLICY_REGISTRATION_FORBIDDEN');
+   this.policy={sha256:createHash('sha256').update(content).digest('hex'),
+     characters:content.length,pages:[]};
+ }
+ recordAuditPolicyPage(page:{start:number;end:number;totalCharacters:number;text:string}):void {
+   this.assertActionAllowed('read_file');
+   const record=this.policy;
+   if(!record||page.totalCharacters!==record.characters||
+     !Number.isSafeInteger(page.start)||!Number.isSafeInteger(page.end)||
+     page.start<0||page.end<page.start||page.end>record.characters||
+     page.text.length!==page.end-page.start)throw new Error('POLICY_INVALID_PAGE');
+   record.pages.push([page.start,page.end,createHash('sha256').update(page.text).digest('hex')]);
+ }
+ get auditPolicyComplete():boolean {
+   if(!this.auditPolicyRequired)return true;
+   const record=this.policy;
+   if(!record||!record.pages.length)return false;
+   if(record.characters===0)return record.pages.some(([a,b])=>a===0&&b===0);
+   return this.auditPolicyNextOffset===record.characters;
+ }
+ get auditPolicyNextOffset():number {
+   const record=this.policy;
+   if(!record)throw new Error('POLICY_NOT_REGISTERED');
+   let cursor=0;
+   for(const [start,end] of [...record.pages].sort((a,b)=>a[0]-b[0])){
+     if(start>cursor)break;
+     cursor=Math.max(cursor,end);
+   }
+   return cursor;
+ }
+ async assertAuditPolicyUnchanged(read:(path:string)=>Promise<string>):Promise<void>{
+   if(!this.auditPolicyComplete)throw new Error('POLICY_INCOMPLETE');
+   if(!this.auditPolicyRequired)return;
+   const record=this.policy!;
+   const content=await read('audit-policy.txt');
+   if(content.length!==record.characters||
+     createHash('sha256').update(content).digest('hex')!==record.sha256)
+     throw new Error('POLICY_CHANGED');
+   for(const [start,end,sha] of record.pages)
+     if(createHash('sha256').update(content.slice(start,end)).digest('hex')!==sha)
+       throw new Error('POLICY_PAGE_MISMATCH');
+ }
  get currentStage(){return this.stage;}
  get candidateCount(){return this.candidates.size;}
  get completedCount(){return [...this.candidates.values()].filter(x=>x!==null).length;}
@@ -36,7 +83,9 @@ export class ControllerStageLock {
  }
  async completeReading(read:(p:string)=>Promise<string>){
    if(this.stage!=='READ')throw new Error('READ_STAGE_REQUIRED');
-   await this.coverage.assertUnchanged(read);this.advance('READ','ANALYZE');
+   await this.coverage.assertUnchanged(read);
+   await this.assertAuditPolicyUnchanged(read);
+   this.advance('READ','ANALYZE');
  }
  discover(id:string){
    if(this.stage!=='READ'&&this.stage!=='ANALYZE')throw new Error('DISCOVERY_STAGE_LOCKED');
