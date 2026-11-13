@@ -1,3 +1,6 @@
+import './test-controller-stage-lock';
+import './test-controller-source-coverage';
+import './test-controller-staged-investigation';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {controllerGroundedSolidityOptions} from '../packages/security-solver/src/local-ollama-runner';
