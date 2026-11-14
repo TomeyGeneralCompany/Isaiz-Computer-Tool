@@ -14,3 +14,34 @@ rules:
     severity: INFO
     message: Inspect argument types, escaping and caller; the current string probe needs public static String.
     pattern: return "<p>" + $VALUE + "</p>";
+  - id: solidity-tx-origin-auth
+    languages: [solidity]
+    severity: WARNING
+    message: Inspect tx.origin authorization checks for phishing or intermediary caller bypass.
+    pattern-either:
+      - pattern: tx.origin == $ADDR
+      - pattern: $ADDR == tx.origin
+      - pattern: tx.origin != $ADDR
+      - pattern: $ADDR != tx.origin
+  - id: solidity-delegatecall
+    languages: [solidity]
+    severity: WARNING
+    message: Inspect delegatecall target, calldata validation and storage layout alignment.
+    pattern: $TARGET.delegatecall(...)
+  - id: solidity-selfdestruct
+    languages: [solidity]
+    severity: WARNING
+    message: Inspect access control and irreversible state impact around selfdestruct.
+    pattern-either:
+      - pattern: selfdestruct($ADDR)
+      - pattern: suicide($ADDR)
+  - id: solidity-abi-encode-packed-hash
+    languages: [solidity]
+    severity: INFO
+    message: Inspect abi.encodePacked hash preimages with dynamic types for collision risks.
+    pattern: keccak256(abi.encodePacked(...))
+  - id: solidity-ecrecover-malleability
+    languages: [solidity]
+    severity: INFO
+    message: Inspect ecrecover usage for zero-address signer return and signature malleability checks.
+    pattern: ecrecover($HASH, $V, $R, $S)

@@ -122,7 +122,7 @@ export class SoliditySourceIndex {
             if(variable?.visibility!=='public' || typeof variable.name!=='string')continue;
             let declaredType='';
             try {declaredType=unit.text.slice(...bounds(variable.typeName)).trim();}catch{}
-            if(!/^(?:address(?: payable)?|bool|u?int(?:\d{0,3})?|bytes(?:[1-9]|[12]\d|3[012])?)$/.test(declaredType))continue;
+            if(!/^(?:address(?: payable)?|bool|string|u?int(?:\d{0,3})?|bytes(?:[1-9]|[12]\d|3[012])?)$/.test(declaredType))continue;
             entries.push({selector:node.name+'.'+variable.name,signature:variable.name+'()',operation:'call',
               visibility:'public',inputs:[]});
             if(entries.length>=limit)return entries;

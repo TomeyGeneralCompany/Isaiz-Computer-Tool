@@ -43,6 +43,8 @@ jobs:
           npm ci
           npm install --prefix scripts/reproduction-runtime --ignore-scripts --no-audit --no-fund
           mkdir -p data/repair-feedback
+          bash scripts/install-static-analysis.sh
+          echo "Installed local static analyzers (semgrep, slither, solc-0.8.30)" | tee -a data/repair-feedback/setup.log
 
           # Preserve the actual setup failure instead of reporting a fabricated test exit code.
           # The runner is a systemd service: do not assume the interactive shell's

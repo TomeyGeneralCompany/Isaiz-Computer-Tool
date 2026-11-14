@@ -69,4 +69,176 @@ if(inheritedResult.ok) {
  assert.equal(inheritedResult.experiments[0].witnesses.length,6);
 }
 
+// Broadened ANALYZE regressions: OwnableUpgradeable, PausableUpgradeable,
+// AccessControlUpgradeable, ERC20/ERC721 minting, explicit view getters,
+// multi-hop local inheritance, and strict rejection of unsafe initializers.
+const nftSrc = `pragma solidity 0.8.4;
+import {ERC721URIStorageUpgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC721/extensions/ERC721URIStorageUpgradeable.sol";
+import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+contract NFT is ERC721URIStorageUpgradeable, OwnableUpgradeable {
+  string internal _contractURI;
+  function initialize(string calldata n, string calldata s) external initializer {
+    __Ownable_init();
+    __ERC721_init(n, s);
+  }
+  function contractURI() external view returns (string memory) { return _contractURI; }
+  function setContractURI(string calldata newURI) external onlyOwner { _contractURI = newURI; }
+  function mint(address to, uint256 tokenId) external onlyOwner { _safeMint(to, tokenId); }
+}`;
+const nftSha = createHash('sha256').update(nftSrc).digest('hex');
+const nftUriRes = constructSolidityExperiments({
+  repositoryCommit: 'f'.repeat(40),
+  targetPath: 'contracts/tokens/NFT.sol',
+  targetSelector: 'NFT.setContractURI',
+  sources: [{path: 'contracts/tokens/NFT.sol', sha256: nftSha, content: nftSrc}],
+  declarations: [{selector: 'NFT.setContractURI', operation: 'send', inputs: ['string calldata']}]
+});
+assert.equal(nftUriRes.ok, true, JSON.stringify(nftUriRes));
+if (nftUriRes.ok) {
+  assert.equal(nftUriRes.experiments[0].sequence.steps[0].function, 'initialize(string,string)');
+  assert.equal(nftUriRes.experiments[0].sequence.steps[3].function, 'setContractURI(string)');
+  assert.equal(nftUriRes.experiments[0].sequence.steps[3].expectRevert, true);
+}
+const nftMintRes = constructSolidityExperiments({
+  repositoryCommit: 'f'.repeat(40),
+  targetPath: 'contracts/tokens/NFT.sol',
+  targetSelector: 'NFT.mint',
+  sources: [{path: 'contracts/tokens/NFT.sol', sha256: nftSha, content: nftSrc}],
+  declarations: [{selector: 'NFT.mint', operation: 'send', inputs: ['address', 'uint256']}]
+});
+assert.equal(nftMintRes.ok, true, JSON.stringify(nftMintRes));
+if (nftMintRes.ok) {
+  assert.equal(nftMintRes.experiments[0].sequence.steps.at(-1)?.function, 'ownerOf(uint256)');
+}
+
+const converterSrc = `pragma solidity 0.8.4;
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/security/PausableUpgradeable.sol";
+import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+interface MPHMinter {}
+contract MPHConverter is PausableUpgradeable, OwnableUpgradeable {
+  MPHMinter public mphMinter;
+  mapping(address => bool) public isWhitelistedForeignToken;
+  function initialize(MPHMinter _mphMinter) external initializer {
+    __Pausable_init();
+    __Ownable_init();
+    mphMinter = _mphMinter;
+  }
+  function pause() external onlyOwner { _pause(); }
+  function unpause() external onlyOwner { _unpause(); }
+  function setForeignTokenWhitelist(IERC20 foreignToken, bool isWhitelisted) external onlyOwner {
+    isWhitelistedForeignToken[address(foreignToken)] = isWhitelisted;
+  }
+}`;
+const convSha = createHash('sha256').update(converterSrc).digest('hex');
+for (const sel of ['MPHConverter.pause', 'MPHConverter.unpause', 'MPHConverter.setForeignTokenWhitelist']) {
+  const res = constructSolidityExperiments({
+    repositoryCommit: 'f'.repeat(40),
+    targetPath: 'contracts/rewards/MPHConverter.sol',
+    targetSelector: sel,
+    sources: [{path: 'contracts/rewards/MPHConverter.sol', sha256: convSha, content: converterSrc}],
+    declarations: [{selector: sel, operation: 'send', inputs: []}]
+  });
+  assert.equal(res.ok, true, sel + ': ' + JSON.stringify(res));
+}
+
+const minterSrc = `pragma solidity 0.8.4;
+import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+contract MPHMinter is AccessControlUpgradeable {
+  uint256 internal constant PRECISION = 10**18;
+  address public govTreasury;
+  address public vesting02;
+  uint256 public devRewardMultiplier;
+  function __MPHMinter_init(address _govTreasury, address _vesting02, uint256 _dev) internal initializer {
+    __AccessControl_init();
+    __MPHMinter_init_unchained(_govTreasury, _vesting02, _dev);
+  }
+  function __MPHMinter_init_unchained(address _govTreasury, address _vesting02, uint256 _dev) internal initializer {
+    _setupRole(DEFAULT_ADMIN_ROLE, _govTreasury);
+    govTreasury = _govTreasury;
+    vesting02 = _vesting02;
+    devRewardMultiplier = _dev;
+  }
+  function initialize(address _govTreasury, address _vesting02, uint256 _dev) external initializer {
+    __MPHMinter_init(_govTreasury, _vesting02, _dev);
+  }
+  function setGovTreasury(address newValue) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    require(newValue != address(0), "0");
+    govTreasury = newValue;
+  }
+  function setDevRewardMultiplier(uint256 newMultiplier) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    require(newMultiplier <= PRECISION, "bad");
+    devRewardMultiplier = newMultiplier;
+  }
+  function setVesting02(address newValue) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    require(newValue.isContract(), "not contract");
+    vesting02 = newValue;
+  }
+}`;
+const minterSha = createHash('sha256').update(minterSrc).digest('hex');
+const govRes = constructSolidityExperiments({
+  repositoryCommit: 'f'.repeat(40),
+  targetPath: 'contracts/rewards/MPHMinter.sol',
+  targetSelector: 'MPHMinter.setGovTreasury',
+  sources: [{path: 'contracts/rewards/MPHMinter.sol', sha256: minterSha, content: minterSrc}],
+  declarations: [{selector: 'MPHMinter.setGovTreasury', operation: 'send', inputs: ['address']}]
+});
+assert.equal(govRes.ok, true, JSON.stringify(govRes));
+if (govRes.ok) {
+  assert.deepEqual(govRes.experiments[0].sequence.steps[0].args, ['$account0', '$account2', '0']);
+  assert.equal(govRes.experiments[0].sequence.steps[1].function, 'hasRole(bytes32,address)');
+}
+const vestSetRes = constructSolidityExperiments({
+  repositoryCommit: 'f'.repeat(40),
+  targetPath: 'contracts/rewards/MPHMinter.sol',
+  targetSelector: 'MPHMinter.setVesting02',
+  sources: [{path: 'contracts/rewards/MPHMinter.sol', sha256: minterSha, content: minterSrc}],
+  declarations: [{selector: 'MPHMinter.setVesting02', operation: 'send', inputs: ['address']}]
+});
+assert.equal(vestSetRes.ok, true, JSON.stringify(vestSetRes));
+if (vestSetRes.ok) {
+  assert.deepEqual(vestSetRes.experiments[0].sequence.steps[3].args, ['$contract']);
+}
+
+// Negative control: initializer calling external contract via helper must be rejected.
+const unsafeInitSrc = `pragma solidity 0.8.4;
+import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+interface IERC20 { function transferFrom(address,address,uint256) external; }
+contract UnsafeToken is OwnableUpgradeable {
+  IERC20 public token;
+  uint256 public fee;
+  function initialize(address _token) external initializer {
+    __Ownable_init();
+    token = IERC20(_token);
+    _pull();
+  }
+  function _pull() internal { token.transferFrom(msg.sender, address(this), 1); }
+  function setFee(uint256 v) external onlyOwner { fee = v; }
+}`;
+const unsafeSha = createHash('sha256').update(unsafeInitSrc).digest('hex');
+assert.equal(constructSolidityExperiments({
+  repositoryCommit: 'f'.repeat(40),
+  targetPath: 'contracts/UnsafeToken.sol',
+  targetSelector: 'UnsafeToken.setFee',
+  sources: [{path: 'contracts/UnsafeToken.sol', sha256: unsafeSha, content: unsafeInitSrc}],
+  declarations: [{selector: 'UnsafeToken.setFee', operation: 'send', inputs: ['uint256']}]
+}).ok, false, 'Initializer with unverified helper / external call must be rejected');
+
+// Negative control: untrusted external base import must be rejected.
+const untrustedBaseSrc = `pragma solidity 0.8.4;
+import {OwnableUpgradeable} from "@untrusted/FakeOwnable.sol";
+contract FakeVault is OwnableUpgradeable {
+  uint256 public fee;
+  function initialize() external initializer { __Ownable_init(); }
+  function setFee(uint256 v) external onlyOwner { fee = v; }
+}`;
+const untrustedSha = createHash('sha256').update(untrustedBaseSrc).digest('hex');
+assert.equal(constructSolidityExperiments({
+  repositoryCommit: 'f'.repeat(40),
+  targetPath: 'contracts/FakeVault.sol',
+  targetSelector: 'FakeVault.setFee',
+  sources: [{path: 'contracts/FakeVault.sol', sha256: untrustedSha, content: untrustedBaseSrc}],
+  declarations: [{selector: 'FakeVault.setFee', operation: 'send', inputs: ['uint256']}]
+}).ok, false, 'Untrusted external Ownable import must be rejected');
+
 console.log('Standalone experiment construction passed');

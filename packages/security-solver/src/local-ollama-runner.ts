@@ -109,7 +109,7 @@ export function controllerGroundedSolidityOptions(
     if(eligible.has(entry.selector))continue;
     const candidate=constructSolidityExperiments({
       repositoryCommit,targetPath:path,targetSelector:entry.selector,
-      sources:snapshots,declarations:menu
+      sources:snapshots,declarations:menu,skipLegacy:true
     });
     if(!candidate.ok)continue;
     const constructed=candidate.experiments[0];
@@ -667,7 +667,7 @@ export async function runLocalAudit(
           try {
             const full=await safePath(path),source=await readFile(full,'utf8');
             if(path.endsWith('.sol')){
-              const menu=await solidityIndex.probeMenu(full,64);
+              const menu=await solidityIndex.probeMenu(full,256);
               for(const {selector,probe} of await groundedControllerOptions(path,source,menu)){
                 const plan={action:'plan_probe' as const,path,query:selector,
                   answer:'solidity_sequence',hypothesis:probe.hypothesis,sequence:probe.sequence};
@@ -1012,7 +1012,7 @@ export async function runLocalAudit(
             let plan:{action:string;path:string;query:string;answer:string;hypothesis:string;sequence?:unknown}|null=null;
             if(path.endsWith('.sol')) {
               const source=await readFile(full,'utf8');
-              const menu=await solidityIndex.probeMenu(full,64);
+              const menu=await solidityIndex.probeMenu(full,256);
               // Source-grounded AST scenarios, not ABI mutability or guessed
               // role names, are the only eligible Solidity security probes.
               const groundedOptions=await groundedControllerOptions(path,source,menu);
@@ -1517,7 +1517,7 @@ export async function runLocalAudit(
           try {
             const full=await safePath(action.path);
             const source=await readFile(full,'utf8');
-            const menu=await solidityIndex.probeMenu(full,64);
+            const menu=await solidityIndex.probeMenu(full,256);
             grounded=(await groundedControllerOptions(action.path,source,menu))
               .find(item=>item.selector===action.query)?.probe||null;
           }catch{}
