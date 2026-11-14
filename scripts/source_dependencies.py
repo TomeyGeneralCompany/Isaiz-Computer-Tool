@@ -104,6 +104,15 @@ def prepare_dependencies(repository: Path, required_imports: list[str] | None = 
     if lock.get("lockfileVersion") not in (2, 3) or not isinstance(lock.get("packages"), dict):
         raise DependencyError("Target requires npm lockfile v2/v3")
     entries = [(name, item) for name, item in lock["packages"].items() if name]
+    def has_strong_integrity(item: dict) -> bool:
+        integrity = item.get("integrity", "")
+        if not isinstance(integrity, str):
+            return False
+        return any(v.startswith(("sha512-", "sha256-")) for v in integrity.split())
+
+    def is_js_toolchain_package(name: str, item: dict) -> bool:
+        return bool(item.get("dev") or item.get("bin") or name == "node_modules/hardhat")
+
     if required_imports is not None:
         # A large lockfile is an inventory, not an installation request. Limit
         # the *selected* dependency closure, not the entire repository lock.
@@ -111,6 +120,7 @@ def prepare_dependencies(repository: Path, required_imports: list[str] | None = 
         # longest locked package prefix (including scoped npm packages).
         locked = dict(entries)
         selected = set()
+        expanded = set()
         pending = []
         for request in required_imports:
             if not isinstance(request, str) or not request or len(request) > 4096:
@@ -119,20 +129,33 @@ def prepare_dependencies(repository: Path, required_imports: list[str] | None = 
                           and (request == name[13:] or request.startswith(name[13:] + "/"))]
             if not candidates:
                 raise DependencyError("No locked npm package supplies import: " + request)
-            pending.append(max(candidates, key=len))
+            pending.append((max(candidates, key=len), request.endswith(".sol"), True))
         # Include lockfile-declared runtime dependencies, respecting nested npm
         # resolution (nearest node_modules wins). Do not download unrelated
         # development dependencies from the rest of the lockfile.
+        # For Solidity (.sol) imports into JS CLI/dev toolchains (e.g. hardhat/console.sol),
+        # materialize the SHA-256/SHA-512-verified package itself without walking hundreds
+        # of JS runtime dependencies; if its .sol headers import another npm package,
+        # solc reports it via missingImports on the next round.
         while pending:
-            name = pending.pop()
-            if name in selected:
-                continue
-            selected.add(name)
-            if len(selected) > 4096:
-                raise DependencyError("Selected npm dependency closure exceeds 4096 package entries")
+            name, is_sol, is_direct = pending.pop()
             item = locked[name]
             if not isinstance(item, dict):
                 raise DependencyError("Malformed npm lockfile package entry")
+            if is_sol and not is_direct:
+                if is_js_toolchain_package(name, item) or (
+                    not item.get("link") and not has_strong_integrity(item)
+                ):
+                    continue
+            if name not in selected:
+                selected.add(name)
+                if len(selected) > 4096:
+                    raise DependencyError("Selected npm dependency closure exceeds 4096 package entries")
+            if name in expanded:
+                continue
+            if is_sol and is_js_toolchain_package(name, item):
+                continue
+            expanded.add(name)
             dependencies = item.get("dependencies", {})
             if not isinstance(dependencies, dict):
                 raise DependencyError("Malformed locked npm dependencies")
@@ -158,7 +181,7 @@ def prepare_dependencies(repository: Path, required_imports: list[str] | None = 
                         resolved = candidate
                 if resolved is None:
                     raise DependencyError("Locked npm dependency is missing: " + dependency)
-                pending.append(resolved)
+                pending.append((resolved, is_sol, False))
         entries = [(name, item) for name, item in entries if name in selected]
     elif len(entries) > 4096:
         # Large lockfiles are inventories, not a reason to reject the entire
