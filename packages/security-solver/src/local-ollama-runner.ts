@@ -173,6 +173,9 @@ export async function runLocalAudit(
   let emptyFinals=0;
   let emptyFinalRecoveryCycles=0;
   let requireInvestigationAfterEmpty=false;
+  let consecutiveNoProgressTurns=0;
+  let prevTurnFingerprint="";
+  let controllerLoopProgressCount=0;
   let invalidReviewFinals=0;
   // Preserve the verifier's facts independently of Qwen's compacted chat.
   let lastRejectedConclusion='';
@@ -617,6 +620,37 @@ export async function runLocalAudit(
     for (let turn = 0; allowance.unbounded || turn < allowance.turns; turn++) {
       usedTurns=turn+1;
       controller.signal.throwIfAborted();
+      const progressSnap=workflow?.snapshot();
+      const currentFingerprint=JSON.stringify([
+        successfulReads,
+        progressSnap?.sourceProgress ?? 0,
+        progressSnap?.observations.length ?? 0,
+        progressSnap?.pending?.path ?? "",
+        progressSnap?.pending?.query ?? "",
+        progressSnap?.verifiedEvidenceFocus ?? "",
+        stageLock?.currentStage ?? "",
+        stageLock?.coverage.completedCount ?? 0,
+        stageLock?.completedCount ?? 0,
+        stageLock?.auditPolicyRequired ? stageLock.auditPolicyNextOffset : 0,
+        controllerLoopProgressCount,
+      ]);
+      if(turn>0 && currentFingerprint===prevTurnFingerprint) {
+        consecutiveNoProgressTurns++;
+        if((allowance.unbounded || stageLock) && consecutiveNoProgressTurns>=24) {
+          await appendFile(logFile,"[AUDIT_NO_PROGRESS_TERMINATED] "+JSON.stringify({
+            turn:turn+1,consecutiveNoProgressTurns,
+            stage:stageLock?.currentStage||progressSnap?.stage||null})+"\n");
+          if(stageLock) {
+            await appendFile(logFile,"[STAGE_CONTROLLER_NO_PROGRESS] "+JSON.stringify({
+              turn:turn+1,stage:stageLock.currentStage,consecutiveNoProgressTurns})+"\n");
+            throw new Error(`STAGE_CONTROLLER_NO_PROGRESS: audit made no forward progress across ${consecutiveNoProgressTurns} consecutive turns in stage ${stageLock.currentStage}`);
+          }
+          throw new Error(`AUDIT_STALLED: audit made no forward progress across ${consecutiveNoProgressTurns} consecutive turns without new evidence`);
+        }
+      } else {
+        consecutiveNoProgressTurns=0;
+        prevTurnFingerprint=currentFingerprint;
+      }
       // Keep stable history; send fresh controller state only with this request.
       let constraints=workflow ? await workflow.constraints() : limits.actionConstraints?.();
       if(stageLock?.currentStage==='READ' && stageLock.coverage.allComplete &&
@@ -952,6 +986,8 @@ export async function runLocalAudit(
             stageLock.finishExperiment(id,'rejected');
           }
         }
+        if(!controllerAction && stageLock.completedCount===stageLock.candidateCount &&
+          !workflow?.snapshot().pending)continue;
       }
       // The controller has already inspected actual source and knows the
       // verifier's accepted formats. When a grounded probe is executable,
@@ -1096,7 +1132,7 @@ export async function runLocalAudit(
       // handed off another ranked file only AFTER wasting a model turn. When
       // controller-ranked source remains, perform that read directly instead.
       // Source progress and terminal pages are controller-owned, not model-owned.
-      if(!controllerAction && fullIndexMode && structured && workflow &&
+      if(!stageLock && !controllerAction && fullIndexMode && structured && workflow &&
          process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false' &&
          constraints?.action?.includes('read_file') &&
          !workflow.snapshot().verifiedEvidenceFocus) {
@@ -1171,7 +1207,7 @@ export async function runLocalAudit(
       }
       // Exhaustion is an explicit controller transition. Unsupported/negative
       // observations cannot authorize more source scheduling by the model.
-      if(fullIndexMode && workflow && !controllerAction &&
+      if(!stageLock && fullIndexMode && workflow && !controllerAction &&
          process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false' &&
          workflow.snapshot().observations.length && !workflow.snapshot().pending &&
          !workflow.snapshot().verifiedEvidenceFocus) {
@@ -1193,7 +1229,7 @@ export async function runLocalAudit(
             JSON.stringify({observations:workflow.snapshot().observations.length,completedFiles:eligible.length})+'\n');
         }
       }
-      if(fullIndexMode && !controllerAction && constraints?.action?.length===1 &&
+      if(!stageLock && fullIndexMode && !controllerAction && constraints?.action?.length===1 &&
          constraints.action[0]==='final' && unresolvedProbes().length &&
          !workflow.snapshot().pending)
         await settleOrphanedSelections('Orphaned probe cannot be reported as execution');
@@ -1201,7 +1237,7 @@ export async function runLocalAudit(
       // to Qwen in controller-owned indexed investigations. Only a semantic
       // final assessment may use the model, after deterministic work is done.
       // An unresolved action is a controller defect, not a model prompt.
-      if(fullIndexMode && workflow && !controllerAction &&
+      if(!stageLock && fullIndexMode && workflow && !controllerAction &&
          process.env.LOCAL_CONTROLLER_OWNED_ACTIONS!=='false') {
         const snapshot=workflow.snapshot();
         const permitted=constraints?.action||[];
@@ -1255,7 +1291,14 @@ export async function runLocalAudit(
         const snapshot=workflow.snapshot();
         const progressKey=JSON.stringify([snapshot.sourceProgress,
           snapshot.observations.length,snapshot.pending?.path||'',
-          snapshot.pending?.query||'',snapshot.verifiedEvidenceFocus||'']);
+          snapshot.pending?.query||'',snapshot.verifiedEvidenceFocus||'',
+          ...(stageLock ? [
+            stageLock.currentStage,
+            stageLock.coverage.completedCount,
+            stageLock.completedCount,
+            stageLock.auditPolicyRequired ? stageLock.auditPolicyNextOffset : 0,
+            controllerAction.action==='read_file' ? `${controllerAction.path}@${controllerAction.offset??0}` : '',
+          ] : [])]);
         indexedSyntheticStalls=progressKey===indexedLastProgressKey
           ? indexedSyntheticStalls+1:0;
         indexedLastProgressKey=progressKey;
@@ -1264,6 +1307,11 @@ export async function runLocalAudit(
           indexedSyntheticStalls=0;
           await appendFile(logFile,'[INDEXED_CONTROLLER_PROGRESS_STALL] '+
             JSON.stringify({turn:turn+1,action:stalled,progressKey})+'\n');
+          if(stageLock) {
+            await appendFile(logFile,'[STAGE_CONTROLLER_NO_PROGRESS] '+
+              JSON.stringify({turn:turn+1,stage:stageLock.currentStage,action:stalled,progressKey})+'\n');
+            throw new Error(`STAGE_CONTROLLER_NO_PROGRESS: controller synthetic action made no forward progress in stage ${stageLock.currentStage}`);
+          }
           // Release an actual stuck plan without inventing a successful probe.
           if(stalled.action==='verify_source') {
             const released=workflow.abortPending('Verifier made no progress after repeated controller actions');
@@ -1655,6 +1703,7 @@ export async function runLocalAudit(
         if(action.action==='continue_inspection') {
           if(!workflow)throw new Error('Inspection decisions require production workflow');
           workflow.continueInspection(action);
+          controllerLoopProgressCount++;
           await persistMemory();
           await appendFile(logFile,'[INSPECTION_DECISION] '+JSON.stringify(action)+'\n');
           continue;
@@ -2214,7 +2263,7 @@ export async function runLocalAudit(
           // compaction. The controller, not Qwen, chooses an unread in-scope
           // source when Qwen repeats that page; do not spend another model
           // turn on the same text or pretend this creates new evidence.
-          if(name==='read_file' && fullIndexMode &&
+          if(name==='read_file' && fullIndexMode && stageLock?.currentStage!=='READ' &&
              (terminalReadPages.has(path) || previous?.nextOffset===null)) {
             const complete=terminalReadPages.get(path);
             const prior=complete?.response;
@@ -2416,10 +2465,6 @@ export async function runLocalAudit(
             }
           } else if (name === "read_file") {
             const rawPage = await readSourcePage(full,offset,pageSize);
-            // A terminal page must never be scheduled again, even if formatting
-            // its optional probe menu fails. The source cursor is authoritative.
-            const readPath=relative(root,full).split(sep).join('/');
-            if(rawPage.nextOffset===null)terminalReadPages.set(readPath,{offset:rawPage.start});
             output = fitOutput(JSON.stringify(rawPage)).output;
             const page = JSON.parse(output) as typeof rawPage;
             // Present grounded choices as soon as a file's last page is read,
@@ -2479,6 +2524,7 @@ export async function runLocalAudit(
             if(id)workflow?.recordSourceEvidence(sourcePath,id);
           }
           try {navigation.observe(name,relative(root,full).split(sep).join("/") || ".",offset,String(call.function.arguments?.query || ""),JSON.parse(output));}catch{}
+          if(!output.startsWith("Tool error:"))controllerLoopProgressCount++;
           stalledActions=0;
           if(inspection) {
             let nextOffset:number|null|undefined;

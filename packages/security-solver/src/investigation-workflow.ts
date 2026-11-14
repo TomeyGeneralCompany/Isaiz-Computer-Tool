@@ -34,6 +34,8 @@ export class InvestigationWorkflow {
   bindStageLock(lock:ControllerStageLock){
     if(this.stageLock)throw new Error('STAGE_LOCK_ALREADY_BOUND');
     this.stageLock=lock;
+    this.requiredSource=null;
+    this.requiredSourceQueue=[];
   }
   readonly scenarios=new ControllerScenarioLedger();
   private scenarioMap=new Map<string,string>();
@@ -288,6 +290,7 @@ export class InvestigationWorkflow {
   }
   rejectedDuplicateProbe() {this.duplicateProbeRejections++;this.feedback('The already attempted probe cannot be repeated. Return outcome=no_testable_candidate with a specific reason and findings=[]; do not claim an unverified vulnerability.');}
   requireSource(path:string) {
+    if(this.stageLock)return;
     // A page already inspected by the workflow is not an outstanding
     // requirement. Requiring it again creates a forced-read feedback loop:
     // the controller asks for the completed page, navigation redirects it,
@@ -300,6 +303,7 @@ export class InvestigationWorkflow {
     this.requiredSource=path;this.feedback('Read '+path+' before planning its test.',true);
   }
   requireSources(paths:string[]) {
+    if(this.stageLock)return;
     const fresh=[...new Set(paths)].filter(path=>!this.readPaths.has(path));
     this.requiredSource=fresh.shift()||null;
     this.requiredSourceQueue=fresh;
@@ -317,7 +321,7 @@ export class InvestigationWorkflow {
   /** Recover from repeated unsupported model plans using already ranked source.
    * This requires a genuine next read; it never fabricates a probe or evidence. */
   requireNextUnreadSource(prioritized:string[]):string|null {
-    if(this.requiredSource)return null;
+    if(this.stageLock || this.requiredSource)return null;
     const next=prioritized.find(path=>
       path.startsWith('source-') &&
       /\.(?:sol|java|py|js|mjs|cjs|ts|tsx|jsx)$/.test(path) &&
@@ -336,7 +340,7 @@ export class InvestigationWorkflow {
         catch(error){return String(error);}
       }
     }
-    if(this.requiredSource && (action.action!=='read_file' || action.path!==this.requiredSource))return 'Read the required candidate source '+this.requiredSource+' before other actions.';
+    if(!this.stageLock && this.requiredSource && (action.action!=='read_file' || action.path!==this.requiredSource))return 'Read the required candidate source '+this.requiredSource+' before other actions.';
     if(action.action==='continue_inspection') {
       if(!action.hypothesis?.trim() || action.hypothesis.trim().length<20 || !action.path || action.path.length>512)
         return 'Name the next source path and explain the specific missing evidence in hypothesis (20–600 characters).';
