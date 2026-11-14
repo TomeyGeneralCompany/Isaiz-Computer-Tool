@@ -5,7 +5,7 @@
  */
 import 'dotenv/config';
 import {mkdirSync, writeFileSync, readdirSync, statSync, readFileSync, openSync, readSync, closeSync} from 'node:fs';
-import {advanceBountyProgress,idleBountyExpired,type BountyProgress} from './one-bounty-progress';
+import {advanceBountyProgress,consumeTelemetryChunk,idleBountyExpired,pickLatestProgressEvent,type BountyProgress} from './one-bounty-progress';
 import {join, resolve} from 'node:path';
 import {eq} from 'drizzle-orm';
 import {ensureOneBountyLocalModel} from './one-bounty-settings';
@@ -87,8 +87,69 @@ async function main() {
   let progress:BountyProgress={lastActivityAt:startedAt,logPath:null,logBytes:0,stage:'starting'};
   let lastProgressDisplay=startedAt;
   let lastProgressNote='';
-  const observe=()=>{
-    if(timedOut||cancelled)return;
+  let streamedLogPath:string|null=null;
+  let streamedLogBytes=0;
+  let pendingTelemetryRemainder='';
+  const drainTelemetry=(flushTail=false)=>{
+    if(!progress.logPath)return;
+    if(progress.logPath!==streamedLogPath){
+      streamedLogPath=progress.logPath;
+      streamedLogBytes=0;
+      pendingTelemetryRemainder='';
+    }
+    let currentSize=progress.logBytes;
+    try {currentSize=statSync(progress.logPath).size;}catch {}
+    if(currentSize<streamedLogBytes){
+      streamedLogBytes=0;
+      pendingTelemetryRemainder='';
+    }
+    if(currentSize>streamedLogBytes){
+      const MAX_DELTA=262_144;
+      let start=streamedLogBytes;
+      let skipPartialFirstLine=false;
+      if(currentSize-start>MAX_DELTA){
+        start=currentSize-MAX_DELTA;
+        pendingTelemetryRemainder='';
+        skipPartialFirstLine=true;
+      }
+      const length=currentSize-start;
+      let delta='';
+      try {
+        const fd=openSync(progress.logPath,'r');
+        try {
+          const buffer=Buffer.alloc(length);
+          const bytesRead=readSync(fd,buffer,0,length,start);
+          delta=buffer.subarray(0,bytesRead).toString('utf8');
+        } finally {closeSync(fd);}
+      }catch {}
+      streamedLogBytes=currentSize;
+      if(skipPartialFirstLine){
+        const nl=delta.indexOf('\n');
+        delta=nl>=0?delta.slice(nl+1):'';
+      }
+      if(delta){
+        const consumed=consumeTelemetryChunk(pendingTelemetryRemainder,delta,{maxLines:12});
+        pendingTelemetryRemainder=consumed.remainder;
+        if(consumed.omitted>0){
+          console.log('[one-bounty:action] ... ('+consumed.omitted+' earlier telemetry line(s) in local log)');
+        }
+        for(const line of consumed.lines){
+          console.log('[one-bounty:action] '+line);
+        }
+        const latest=pickLatestProgressEvent(delta);
+        if(latest)lastProgressNote=latest;
+      }
+    }
+    if(flushTail&&pendingTelemetryRemainder.trim()){
+      const consumed=consumeTelemetryChunk(pendingTelemetryRemainder,'\n',{maxLines:12});
+      pendingTelemetryRemainder='';
+      for(const line of consumed.lines){
+        console.log('[one-bounty:action] '+line);
+      }
+    }
+  };
+  const observe=(checkTimeout=true)=>{
+    if(checkTimeout&&(timedOut||cancelled))return;
     const now=Date.now();
     let stage=progress.stage;
     try {
@@ -113,45 +174,30 @@ async function main() {
     }catch {}
     const prior=progress;
     progress=advanceBountyProgress(progress,now,{logPath:file,logBytes:bytes,stage});
-    // Keep the useful current step visible, without echoing untrusted source.
-    let note='';
-    if(progress.logPath&&progress.logBytes!==prior.logBytes){
-      try {
-        const fd=openSync(progress.logPath,'r');
-        let text:string;
-        try {
-          const length=Math.min(5000,statSync(progress.logPath).size);
-          const buffer=Buffer.alloc(length);
-          readSync(fd,buffer,0,length,Math.max(0,progress.logBytes-length));
-          text=buffer.toString('utf8');
-        } finally {closeSync(fd);}
-        const events=text.split('\n').filter(line=>/^\[(?:ACQUISITION_[A-Z_]+|CAPABILITY_[A-Z_]+|STATIC_LEADS|SOURCE_MAP|MODEL_START|MODEL_PROGRESS|OLLAMA|READ_OK|GUIDED_SOURCE_PROBE|PROBE_[A-Z_]+|FINAL_[A-Z_]+|TOOL)/.test(line));
-        const last=events.at(-1)||'';
-        note=last.slice(0,220);
-      }catch {}
-    }
-    if(note)lastProgressNote=note;
-    if(now-lastProgressDisplay>=15000 || (prior.stage!==progress.stage)){
+    // Stream safe model/controller action lines live without echoing untrusted source.
+    drainTelemetry(!checkTimeout);
+    if(checkTimeout&&(now-lastProgressDisplay>=15000 || (prior.stage!==progress.stage))){
       const elapsed=Math.floor((now-startedAt)/60000);
       const quiet=Math.floor((now-progress.lastActivityAt)/1000);
       console.log('[one-bounty] elapsed='+elapsed+'m stage='+progress.stage+
         ' idle='+quiet+'s '+(lastProgressNote?'event='+lastProgressNote:'waiting for stage telemetry'));
       lastProgressDisplay=now;
     }
-    if(idleBountyExpired(progress,now,options.timeoutMin)){
+    if(checkTimeout&&idleBountyExpired(progress,now,options.timeoutMin)){
       timedOut=true;
       console.error('One-bounty investigation stalled: no new source/model/probe activity for '+
         options.timeoutMin+' minutes. Cancelling; see '+(progress.logPath||summaryPath));
       requestLocalJobCancellation();
     }
   };
-  const watcher=setInterval(observe,5000);
+  const watcher=setInterval(()=>observe(true),5000);
   console.log('Single-bounty investigation: '+program.name+' ('+program.id+')');
   console.log('Review enabled; automatic submission disabled. Inactivity watchdog: '+options.timeoutMin+' minutes. No fixed run deadline.');
   console.log('Summary: '+summaryPath);
   try {
     const outcome=await huntProgram(program,'manual');
     summary.findingsCreated=outcome.findingsCreated;
+    observe(false);
     if(timedOut||cancelled)throw new Error('Run cancelled before review could start');
     console.log('Hunt completed: '+outcome.findingsCreated+' new candidate finding(s). Starting independent review.');
     progress={...progress,stage:'reviewing',lastActivityAt:Date.now(),logPath:null,logBytes:0};
@@ -164,6 +210,7 @@ async function main() {
     throw error;
   }finally {
     clearInterval(watcher);
+    observe(false);
     process.off('SIGINT',onSignal);process.off('SIGTERM',onSignal);
     summary.finishedAt=new Date().toISOString();
     summary.elapsedSeconds=Math.round((Date.now()-startedAt)/1000);

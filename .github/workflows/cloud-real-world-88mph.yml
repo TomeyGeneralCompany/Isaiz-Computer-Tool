@@ -99,11 +99,10 @@ jobs:
           set -uo pipefail
           mkdir -p data/one-bounty data/repair-feedback
           set +e
-          bash scripts/run-one-bounty.sh --program immunefi-88mphv3 --timeout-min 60 > data/repair-feedback/terminal.log 2>&1
-          status=$?
+          bash scripts/run-one-bounty.sh --program immunefi-88mphv3 --timeout-min 60 2>&1 | tee data/repair-feedback/terminal.log
+          status=${PIPESTATUS[0]}
           set -e
           echo "$status" > data/repair-feedback/exit-code.txt
-          cat data/repair-feedback/terminal.log
           exit "$status"
 
       - name: Collect full controller and investigation evidence
