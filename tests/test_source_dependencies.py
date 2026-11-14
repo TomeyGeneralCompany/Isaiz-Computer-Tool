@@ -126,4 +126,69 @@ class DependencyTests(unittest.TestCase):
             with patch.object(deps,"download",return_value=b"corrupted"):
                 with self.assertRaises(deps.DependencyError): deps.prepare_dependencies(root)
 
+    def test_solidity_dev_toolchain_skips_js_runtime_deps_with_sha1(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            data=archive("package/console.sol",b"pragma solidity >=0.4.22 <0.9.0;")
+            integrity="sha512-"+base64.b64encode(hashlib.sha512(data).digest()).decode()
+            entries={
+                "node_modules/hardhat":{
+                    "resolved":"https://registry.npmjs.org/hardhat/-/hardhat-2.6.8.tgz",
+                    "integrity":integrity,
+                    "dev":True,
+                    "bin":{"hardhat":"internal/cli/cli.js"},
+                    "dependencies":{"tsort":"0.0.1"},
+                },
+                "node_modules/tsort":{
+                    "resolved":"https://registry.npmjs.org/tsort/-/tsort-0.0.1.tgz",
+                    "integrity":"sha1-4igPXoF/i/QnVlf9D5rr1E9aJ4Y=",
+                },
+            }
+            (root/"package.json").write_text(json.dumps({"devDependencies":{"hardhat":"^2.6.8"}}))
+            (root/"package-lock.json").write_text(json.dumps({"lockfileVersion":2,"packages":entries}))
+            with patch.object(deps,"download",return_value=data) as download:
+                deps.prepare_dependencies(root,["hardhat/console.sol"])
+                self.assertEqual(download.call_count,1)
+            self.assertTrue((root/"node_modules/hardhat/console.sol").is_file())
+            self.assertFalse((root/"node_modules/tsort").exists())
+
+    def test_solidity_direct_package_still_requires_strong_integrity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            data=archive("package/console.sol",b"pragma solidity >=0.4.22 <0.9.0;")
+            entries={
+                "node_modules/hardhat":{
+                    "resolved":"https://registry.npmjs.org/hardhat/-/hardhat-2.6.8.tgz",
+                    "integrity":"sha1-deadbeef",
+                    "dev":True,
+                },
+            }
+            (root/"package.json").write_text(json.dumps({"devDependencies":{"hardhat":"^2.6.8"}}))
+            (root/"package-lock.json").write_text(json.dumps({"lockfileVersion":2,"packages":entries}))
+            with patch.object(deps,"download",return_value=data):
+                with self.assertRaises(deps.DependencyError):
+                    deps.prepare_dependencies(root,["hardhat/console.sol"])
+
+    def test_js_request_still_requires_strong_integrity_in_closure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            data=archive()
+            integrity="sha512-"+base64.b64encode(hashlib.sha512(data).digest()).decode()
+            entries={
+                "node_modules/owned":{
+                    "resolved":"https://registry.npmjs.org/owned/-/owned-1.tgz",
+                    "integrity":integrity,
+                    "dependencies":{"legacy":"1.0.0"},
+                },
+                "node_modules/legacy":{
+                    "resolved":"https://registry.npmjs.org/legacy/-/legacy-1.0.0.tgz",
+                    "integrity":"sha1-deadbeef",
+                },
+            }
+            (root/"package.json").write_text(json.dumps({"dependencies":{"owned":"1.0.0"}}))
+            (root/"package-lock.json").write_text(json.dumps({"lockfileVersion":2,"packages":entries}))
+            with patch.object(deps,"download",return_value=data):
+                with self.assertRaises(deps.DependencyError):
+                    deps.prepare_dependencies(root,["owned/index.js"])
+
 if __name__ == "__main__": unittest.main()
