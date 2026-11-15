@@ -10,6 +10,15 @@ const attack = ['html_reflection', 'entry_html_reflection'].includes(spec.kind)
   : '../../TOMEY_ESCAPE_' + spec.nonce;
 const output = process.stdout.write.bind(process.stdout);
 process.stdout.write = () => true; // Target logging must not corrupt the protocol.
+function emitError(error) {
+  process.stderr.write('\nTOMEY_ERROR ' + JSON.stringify({
+    detail: String(error && error.stack ? error.stack : error).slice(0, 2000),
+    missingImports: (error && error.missingImports) || []
+  }));
+  process.exitCode = 1;
+}
+process.on('uncaughtException', (error) => { emitError(error); process.exit(1); });
+process.on('unhandledRejection', (error) => { emitError(error); process.exit(1); });
 function sourceFile(name) {
   const file = fs.realpathSync(path.resolve('/repo', name));
   if (!file.startsWith('/repo/')) throw new Error('Source outside repository');
@@ -103,8 +112,6 @@ async function solidity() {
   if (sequenceMode) require('./solidity-sequence.cjs').validateSequence(spec.sequence);
   const sourceText = fs.readFileSync(sourceFile(spec.file), 'utf8');
   const { solc, evmVersion } = resolveSolc(sourceText);
-  const ganache = require('ganache');
-  const { BrowserProvider, ContractFactory } = require('ethers');
   // ERC1155Upgradeable exposes internal minting only. Compile a bounded, local
   // derived harness so transfer probes can establish real balances on-chain.
   // Never modify the target source or use the harness as impact evidence.
@@ -172,6 +179,8 @@ contract TomeyERC1155ProbeHarness is ERC1155Upgradeable {
   if (candidates.length !== 1) throw new Error(sequenceMode ? 'Select one deployable contract and public/external function using Contract.function' : 'Select one deployable contract with a view/pure string -> string function using Contract.function');
   if (sequenceMode && (!contractName || !spec.sequence.steps.some(step=>step.function.split('(')[0]===functionName))) throw new Error('Sequence must exercise the selected Contract.function');
   const artifact = candidates[0][1];
+  const ganache = require('ganache');
+  const { BrowserProvider, ContractFactory } = require('ethers');
   const transport = ganache.provider({
     logging: {quiet: true}, wallet: {deterministic: true, totalAccounts: sequenceMode ? 3 : 1},
     chain: {hardfork: evmVersion, ...(sequenceMode ? {chainId:1337,time:new Date('2020-01-01T00:00:00Z')} : {})},
@@ -209,4 +218,4 @@ contract TomeyERC1155ProbeHarness is ERC1155Upgradeable {
     attack_input: attack, attack_output: observed,
     ...(spec.kind === 'entry_html_reflection' ? {entry_control_url:entryControlUrl,
        entry_attack_url:entryAttackUrl,entry_selector:spec.function,entry_parameter:entryParameter} : {})}));
-})().catch(error => { process.stderr.write('\nTOMEY_ERROR ' + JSON.stringify({detail:String(error).slice(0,2000),missingImports:error.missingImports || []})); process.exitCode = 1; });
+})().catch(emitError);

@@ -48,6 +48,15 @@ const confidenceSchema = z.number().min(0).max(1);
 const candidateSchema=z.object({caseId:sha,severity:severitySchema,confidence:confidenceSchema,ratingReason:z.string().min(40).max(2000),title:z.string().min(10).max(200),
   impact:z.string().min(20).max(2000),callerFile:z.string().min(1).max(4096),callerLine:z.number().int().positive(),
   reachability:z.enum(["caller","direct_transaction"]).optional(),falsification:z.string().min(40).max(2000)}).strict();
+export function normalizeNegativeHuntProse(text: unknown): { findings: []; outcome: "no_testable_candidate"; reason: string } | null {
+  if (typeof text !== "string") return null;
+  const trimmed = text.trim();
+  if (trimmed.length < 20) return null;
+  if (!/(?:no[_ ]testable[_ ]candidate|no (?:concrete |verified |confirmed )?vulnerabilit(?:y|ies)|no reproducible|no verifiable finding|no candidate exists|no reportable)/i.test(trimmed)) {
+    return null;
+  }
+  return { findings: [], outcome: "no_testable_candidate", reason: trimmed.slice(0, 1000) };
+}
 export const huntSchema=z.object({findings:z.array(candidateSchema).max(8),
   outcome:z.enum(["inspected","no_testable_candidate"]).optional(),
   reason:z.string().min(20).max(1000).optional()
@@ -894,13 +903,9 @@ Do not claim production testing, JavaScript execution, file access or other effe
             try {
               proposed = JSON.parse(text);
             } catch (parseError) {
-              if (typeof text === "string" && text.trim().length >= 20 &&
-                  /(?:no testable candidate|no concrete vulnerability|no vulnerability|no reproducible|no verifiable finding|no candidate exists|no reportable)/i.test(text)) {
-                proposed = {
-                  findings: [],
-                  outcome: "no_testable_candidate",
-                  reason: text.trim().slice(0, 1000)
-                };
+              const normalized = normalizeNegativeHuntProse(text);
+              if (normalized) {
+                proposed = normalized;
               } else {
                 throw parseError;
               }
@@ -909,13 +914,8 @@ Do not claim production testing, JavaScript execution, file access or other effe
               if(proposed.action==="final") {
                 if(typeof proposed.answer==="string" && proposed.answer.trim().startsWith("{")) {
                   try { const inner=JSON.parse(proposed.answer); if(inner && typeof inner==="object") proposed=inner; } catch {}
-                } else if(typeof proposed.answer==="string" && proposed.answer.trim().length >= 20 &&
-                          /(?:no testable candidate|no concrete vulnerability|no vulnerability|no reproducible|no verifiable finding|no candidate exists|no reportable)/i.test(proposed.answer)) {
-                  proposed = {
-                    findings: [],
-                    outcome: "no_testable_candidate",
-                    reason: proposed.answer.trim().slice(0, 1000)
-                  };
+                } else if(normalizeNegativeHuntProse(proposed.answer)) {
+                  proposed = normalizeNegativeHuntProse(proposed.answer)!;
                 } else if(proposed.result && typeof proposed.result==="object") {
                   proposed=proposed.result;
                 }
@@ -1233,6 +1233,9 @@ Do not claim production testing, JavaScript execution, file access or other effe
               return "Your final JSON does not match the required evidence schema: "+JSON.stringify(issues).slice(0,900)+
                 ". Valid observed case IDs from the current hunt: "+JSON.stringify(available)+
                 ". Copy only an exact recorded case ID; callerFile/callerLine must refer to inspected calling code, not the function declaration. Do not invent evidence.";
+            }
+            if(error instanceof SyntaxError) {
+              return 'Your final answer was not valid JSON ('+error.message+'). Return valid JSON (double-quoted keys and strings wrapped in {...}) in result or JSON-encoded in answer, e.g. {"findings":[],"outcome":"no_testable_candidate","reason":"..."} or {"findings":[...],"outcome":"inspected"}.';
             }
             return "Return only valid findings JSON. Use actual probe case IDs, inspected caller lines, and recorded evidence; omit unsupported findings.";
           }

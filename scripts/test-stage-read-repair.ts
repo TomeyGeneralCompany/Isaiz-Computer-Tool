@@ -5,6 +5,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { mkdirSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { normalizeNegativeHuntProse } from '../packages/security-solver/src/local-program-flow';
 import { runLocalAudit } from '../packages/security-solver/src/local-ollama-runner';
 import { InvestigationWorkflow } from '../packages/security-solver/src/investigation-workflow';
 import { ControllerStageLock } from '../packages/security-solver/src/controller-stage-lock';
@@ -102,6 +103,7 @@ async function testTruncatedTerminalPageAndStagePriority() {
       // shrinks inside fitAuditToolOutput on the final chunk while earlier chunks fit cleanly.
       const out = await runLocalAudit('Inspect contracts', log, 30000, root, 'mock', undefined, {
         productionWorkflow: true,
+        controllerIndex: true,
         dynamicAllowance: true,
         verifyPython: async () => JSON.stringify({ status: 'behavior_not_observed', behavior_observed: false }),
         maxTurns: 200,
@@ -225,6 +227,7 @@ async function testRequiredSourceConflictAndLegacyPreservation() {
     }, async () => {
       const out = await runLocalAudit('Inspect JS routes', log, 30000, root, 'mock', undefined, {
         productionWorkflow: true,
+        controllerIndex: true,
         dynamicAllowance: true,
         maxTurns: 40,
         numCtx: 8192,
@@ -298,6 +301,7 @@ async function testBoundedNoProgressStallAndProductiveUnbounded() {
       await assert.rejects(
         runLocalAudit('Inspect JS', logA, 30000, rootA, 'mock', undefined, {
           productionWorkflow: true,
+          controllerIndex: true,
           dynamicAllowance: true,
           maxTurns: 20,
           numCtx: 8192,
@@ -422,6 +426,7 @@ async function testFull91FileInventoryAndStageOrder() {
       // proving allowance.unbounded lets genuine productive READ coverage run to completion.
       const out = await runLocalAudit('Inspect 91 contracts', log, 30000, root, 'mock', undefined, {
         productionWorkflow: true,
+        controllerIndex: true,
         dynamicAllowance: true,
         verifyPython: async () => JSON.stringify({ status: 'behavior_not_observed' }),
         maxTurns: 15,
@@ -465,8 +470,156 @@ async function testFull91FileInventoryAndStageOrder() {
   }
 }
 
+async function testReviewStageStrictResultAndLoopRecovery() {
+  // 6. Malformed final in REVIEW triggers strictResult (maxItems=0 when 0 behavior_observed)
+  //    and repeated identical rejections recover cleanly within 3 turns instead of 24.
+  const root = await mkdtemp(join(tmpdir(), 'lotus-review-recovery-'));
+  let reviewCalls = 0;
+  let sawStrictResult = false;
+  let strictMaxItems: number | undefined;
+  const server = createServer(async (req, res) => {
+    let raw = '';
+    for await (const chunk of req) raw += chunk;
+    const body = JSON.parse(raw);
+    reviewCalls++;
+    if (body.format?.properties?.result) {
+      sawStrictResult = true;
+      strictMaxItems = body.format.properties.result.properties?.findings?.maxItems;
+    }
+    if (reviewCalls === 1) {
+      res.end(JSON.stringify({
+        message: { role: 'assistant', content: JSON.stringify({ action: 'final', path: '', query: '', answer: 'Not valid JSON findings summary' }) },
+      }));
+      return;
+    }
+    res.end(JSON.stringify({
+      message: {
+        role: 'assistant',
+        content: JSON.stringify({
+          action: 'final',
+          path: '',
+          query: '',
+          answer: '',
+          result: { findings: [], outcome: 'no_testable_candidate', reason: 'Observed administrative functions require owner; zero exploitable behaviors.' },
+        }),
+      },
+    }));
+  });
+  try {
+    await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
+    const port = (server.address() as any).port;
+    const solPath = 'source-1/src/render.py';
+    await mkdir(dirname(join(root, solPath)), { recursive: true });
+    await writeFile(join(root, solPath), 'def render(value):\n    return "<p>" + value + "</p>"\n');
+    const log1 = join(root, 'strict-recovery.log');
+    await withEnv({
+      AUTOHACK_OLLAMA_URL: `http://127.0.0.1:${port}/api/chat`,
+      LOCAL_OLLAMA_TOOL_PROTOCOL: 'json',
+      AUTOHACK_AUTO_SOURCE_PREFETCH: 'false',
+      LOCAL_CONTROLLER_OWNED_ACTIONS: 'true',
+      LOCAL_CONTROLLER_FULL_SOURCE_INDEX: 'true',
+    }, async () => {
+      const out = await runLocalAudit('Inspect Admin.sol', log1, 30000, root, 'mock', undefined, {
+        productionWorkflow: true,
+        controllerIndex: true,
+        dynamicAllowance: true,
+        finalSchema: {
+          type: 'object',
+          properties: {
+            findings: { type: 'array', items: { type: 'object', properties: { caseId: { type: 'string' } } } },
+            outcome: { type: 'string', enum: ['inspected', 'no_testable_candidate'] },
+            reason: { type: 'string' },
+          },
+          required: ['findings'],
+        },
+        verifyPython: async () => JSON.stringify({ status: 'observation_only', behavior_observed: false, caseId: 'c'.repeat(64) }),
+        validateFinal: async (answer) => {
+          try {
+            const parsed = JSON.parse(answer);
+            return Array.isArray(parsed.findings) && parsed.outcome === 'no_testable_candidate' ? null : 'Return valid findings JSON';
+          } catch {
+            return 'Your final answer was not valid JSON (SyntaxError). Return only valid findings JSON.';
+          }
+        },
+        maxTurns: 20,
+        numCtx: 8192,
+        numPredict: 256,
+        initialSourcePaths: [solPath],
+      });
+      assert.equal(JSON.parse(out).outcome, 'no_testable_candidate');
+    });
+    assert.equal(reviewCalls, 2, `Expected strictResult recovery in 2 REVIEW turns, got ${reviewCalls}`);
+    assert.ok(sawStrictResult, 'Second REVIEW turn must enforce typed result schema (strictResult)');
+    assert.equal(strictMaxItems, 0, 'With 0 behavior_observed probes, strictResult must set findings.maxItems = 0');
+    const log1Text = await readFile(log1, 'utf8');
+    assert.ok(log1Text.includes('[FINAL_RESULT_REQUIRED]'));
+    assert.ok(log1Text.includes('[REPORT_COMPLETE]'));
+
+    // 6b. Stubborn model repeating identical unparseable answer recovers cleanly at 3 turns instead of 24.
+    let stubbornCalls = 0;
+    const stubbornServer = createServer(async (req, res) => {
+      for await (const _ of req) {}
+      stubbornCalls++;
+      res.end(JSON.stringify({
+        message: { role: 'assistant', content: JSON.stringify({ action: 'final', path: '', query: '', answer: 'repeated non-json final output' }) },
+      }));
+    });
+    await new Promise<void>(r => stubbornServer.listen(0, '127.0.0.1', r));
+    const stubbornPort = (stubbornServer.address() as any).port;
+    const log2 = join(root, 'stubborn-recovery.log');
+    try {
+      await withEnv({
+        AUTOHACK_OLLAMA_URL: `http://127.0.0.1:${stubbornPort}/api/chat`,
+        LOCAL_OLLAMA_TOOL_PROTOCOL: 'json',
+        AUTOHACK_AUTO_SOURCE_PREFETCH: 'false',
+        LOCAL_CONTROLLER_OWNED_ACTIONS: 'true',
+        LOCAL_CONTROLLER_FULL_SOURCE_INDEX: 'true',
+      }, async () => {
+        const out = await runLocalAudit('Inspect Admin.sol', log2, 30000, root, 'mock', undefined, {
+          productionWorkflow: true,
+          controllerIndex: true,
+          dynamicAllowance: true,
+          verifyPython: async () => JSON.stringify({ status: 'observation_only', behavior_observed: false, caseId: 'd'.repeat(64) }),
+          validateFinal: async (answer) => {
+            try {
+              const parsed = JSON.parse(answer);
+              return parsed.outcome === 'no_testable_candidate' ? null : 'Return valid findings JSON';
+            } catch {
+              return 'Your final answer was not valid JSON (SyntaxError).';
+            }
+          },
+          maxTurns: 20,
+          numCtx: 8192,
+          numPredict: 256,
+          initialSourcePaths: [solPath],
+        });
+        assert.equal(JSON.parse(out).outcome, 'no_testable_candidate');
+      });
+      assert.equal(stubbornCalls, 3, `Expected REVIEW loop breaker recovery after 3 identical turns, got ${stubbornCalls}`);
+    } finally {
+      stubbornServer.closeAllConnections();
+      stubbornServer.close();
+    }
+        assert.deepEqual(
+      normalizeNegativeHuntProse('No verified vulnerability found in the provided evidence across inspected contracts.')?.outcome,
+      'no_testable_candidate',
+    );
+    assert.deepEqual(
+      normalizeNegativeHuntProse('no_testable_candidate: all entry points require owner privileges')?.outcome,
+      'no_testable_candidate',
+    );
+    assert.equal(normalizeNegativeHuntProse('Not valid JSON findings summary'), null);
+console.log('6. REVIEW strictResult recovery & identical-rejection fast recovery PASSED');
+  } finally {
+    server.closeAllConnections();
+    server.close();
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
 await testTruncatedTerminalPageAndStagePriority();
 await testRequiredSourceConflictAndLegacyPreservation();
 await testBoundedNoProgressStallAndProductiveUnbounded();
 await testFull91FileInventoryAndStageOrder();
+await testReviewStageStrictResultAndLoopRecovery();
 console.log('ALL stage READ repair acceptance tests PASSED');
