@@ -6,7 +6,7 @@ import {z} from "zod";
 import {javaSequenceSchema, type JavaSequence} from "./java-sequence";
 import {polyglotSequenceSchema,type PolyglotSequence} from "./polyglot-sequence";
 import {sourceGroundedSolidityProbe,sourceGroundedSolidityProbes,traceProjectErc1155Callers,type GroundedSolidityProbe} from './controller-solidity-security-probes';
-import {constructSolidityExperiments,type SourceSnapshot} from './controller-solidity-experiment-planner';
+import {constructSolidityExperiments,type SourceSnapshot,type StaticLeadHint} from './controller-solidity-experiment-planner';
 import type {SolidityProbeDeclaration} from './solidity-probe-inputs';
 import {privilegedRoleMutationCandidate} from './solidity-security-candidates';
 import {rankTracedSourceCandidates} from './controller-source-candidates';
@@ -85,6 +85,7 @@ export interface LocalAuditLimits {
    * No model text can create or change this routing decision. */
   onVerifiedCase?: (caseId:string,path:string,selector:string,kind:string) =>
     Promise<{callers:string[];promoted?:{caseId:string;path:string;selector:string;kind:string}}|null>;
+  staticLeads?: readonly StaticLeadHint[];
   verifyPython?: (path:string,functionName:string,kind:string,sequence?:SoliditySequence | JavaSequence | PolyglotSequence) => Promise<string>;
 }
 
@@ -96,7 +97,8 @@ export interface LocalAuditLimits {
  */
 export function controllerGroundedSolidityOptions(
   path:string,source:string,menu:SolidityProbeDeclaration[],
-  snapshots:readonly SourceSnapshot[],repositoryCommit:string|null
+  snapshots:readonly SourceSnapshot[],repositoryCommit:string|null,
+  staticLeads?:readonly StaticLeadHint[]
 ):Array<{selector:string;probe:GroundedSolidityProbe}> {
   const peers=snapshots.map(s=>({path:s.path,source:s.content}));
   const legacy=sourceGroundedSolidityProbes(source,menu,{path,peers});
@@ -109,7 +111,7 @@ export function controllerGroundedSolidityOptions(
     if(eligible.has(entry.selector))continue;
     const candidate=constructSolidityExperiments({
       repositoryCommit,targetPath:path,targetSelector:entry.selector,
-      sources:snapshots,declarations:menu,skipLegacy:true
+      sources:snapshots,declarations:menu,skipLegacy:true,staticLeads
     });
     if(!candidate.ok)continue;
     const constructed=candidate.experiments[0];
@@ -379,7 +381,8 @@ export async function runLocalAudit(
       const revision=sourceRevision(path);
       if(!revision)await appendFile(logFile,'[CONTROLLER_SCENARIO_REVISION_UNAVAILABLE] '+
         JSON.stringify({path})+'\n');
-      return controllerGroundedSolidityOptions(path,source,menu,snapshots,revision);
+      const pathLeads=(limits.staticLeads||[]).filter(l=>l.path===path);
+      return controllerGroundedSolidityOptions(path,source,menu,snapshots,revision,pathLeads);
     };
     // Production controller: freeze the entire authorized source inventory
     // before the first paginated source read. Indexing can inspect bytes to
@@ -911,6 +914,13 @@ export async function runLocalAudit(
           progressMessages.push({role:'user',content:
             'Controller verified experiment ledger (runtime evidence, not report approval):\n'+
             JSON.stringify(observed).slice(0,1400)});
+        const leadsSummary=(limits.staticLeads||[]).slice(0,8).map(l=>({
+          path:l.path,line:l.line,rule:l.rule,severity:l.severity,message:l.message.slice(0,120)
+        }));
+        if(leadsSummary.length)
+          progressMessages.push({role:'user',content:
+            'Controller static scanner leads (advisory triage candidates, not verified findings):\n'+
+            JSON.stringify(leadsSummary).slice(0,800)});
       }
       const progressSize=progressMessages.length ? JSON.stringify(progressMessages).length : 0;
       // Reserve controller space when producing tool output too, including the
@@ -2593,6 +2603,7 @@ export async function runLocalAudit(
           try{
             const status=String(JSON.parse(output).status||'');
             outcome=status==='behavior_observed'?'observed':
+              status==='observation_only'?'observation_only':
               status==='behavior_not_observed'?'not_observed':
               status.startsWith('unsupported')||status.startsWith('blocked')?'unsupported':
               status==='invalid_probe'?'rejected':'incomplete';

@@ -107,6 +107,11 @@ async function huntProgramImpl(
   let coverageDetail = "Hunt did not complete";
   let auditRecord:string|undefined;
   let capabilityBlock:string | undefined;
+  let completedProbes: number | undefined;
+  let unsupportedProbes: number | undefined;
+  let failedProbes: number | undefined;
+  let eligibleFiles: number | undefined;
+  let inspectedFiles: number | undefined;
   let acquisitionChecks: import("./claude-runner").SecuritySolveResult["acquisitionChecks"];
   let capabilityChecks: Array<{repository:string;blocked:boolean;reason:string|null;checkedAt:number}> | undefined;
   let localJob: ReturnType<typeof beginLocalJob> | undefined;
@@ -139,6 +144,11 @@ async function huntProgramImpl(
     coverage = result.coverage ?? (result.success ? "completed" : "failed");
     capabilityBlock = result.capabilityBlock;
     capabilityChecks = result.capabilityChecks;
+    completedProbes = result.completedProbes;
+    unsupportedProbes = result.unsupportedProbes;
+    failedProbes = result.failedProbes;
+    eligibleFiles = result.eligibleFiles;
+    inspectedFiles = result.inspectedFiles;
     coverageDetail = result.error || result.coverageDetail || "Supported inspection completed";
 
     if (!result.success) {
@@ -317,7 +327,17 @@ async function huntProgramImpl(
       if(capabilityBlock)tracking.capabilityBlock={version:LOCAL_REPRODUCTION_CAPABILITY_VERSION,
         scopes:JSON.stringify(tracking.scopes || []),reason:capabilityBlock,refreshAfter:new Date(Date.now()+24*3600000).toISOString()};
       else delete tracking.capabilityBlock;
-      tracking.huntCoverage = {capabilityVersion:LOCAL_REPRODUCTION_CAPABILITY_VERSION,status:coverage,detail:coverageDetail,recordedAt:new Date().toISOString()};
+      tracking.huntCoverage = {
+        capabilityVersion:LOCAL_REPRODUCTION_CAPABILITY_VERSION,
+        status:coverage,
+        detail:coverageDetail,
+        recordedAt:new Date().toISOString(),
+        ...(typeof completedProbes === "number" ? {completedProbes} : {}),
+        ...(typeof unsupportedProbes === "number" ? {unsupportedProbes} : {}),
+        ...(typeof failedProbes === "number" ? {failedProbes} : {}),
+        ...(typeof eligibleFiles === "number" ? {eligibleFiles} : {}),
+        ...(typeof inspectedFiles === "number" ? {inspectedFiles} : {}),
+      };
       db.update(schema.securityPrograms)
         .set({
           // Preserve the last completed hunt on acquisition/model failures.

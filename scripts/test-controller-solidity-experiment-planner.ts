@@ -241,4 +241,172 @@ assert.equal(constructSolidityExperiments({
   declarations: [{selector: 'FakeVault.setFee', operation: 'send', inputs: ['uint256']}]
 }).ok, false, 'Untrusted external Ownable import must be rejected');
 
+// Non-setter A1: initialize() re-initialization guard (initializer present)
+const reinitSrc = `pragma solidity 0.8.4;
+import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+contract ReinitVault is OwnableUpgradeable {
+  function initialize() external initializer { __Ownable_init(); }
+  function transferOwnership(address newOwner) public override onlyOwner {}
+}`;
+const reinitSha = createHash('sha256').update(reinitSrc).digest('hex');
+const reinitRes = constructSolidityExperiments({
+  repositoryCommit: 'f'.repeat(40),
+  targetPath: 'contracts/ReinitVault.sol',
+  targetSelector: 'ReinitVault.initialize',
+  sources: [{path: 'contracts/ReinitVault.sol', sha256: reinitSha, content: reinitSrc}],
+  declarations: [
+    {selector: 'ReinitVault.initialize', operation: 'send', inputs: []},
+    {selector: 'ReinitVault.owner', operation: 'call', inputs: []},
+    {selector: 'ReinitVault.transferOwnership', operation: 'send', inputs: ['address']},
+  ]
+});
+assert.equal(reinitRes.ok, true, 'initialize() re-init guard must construct');
+if (reinitRes.ok) {
+  assert.equal(reinitRes.experiments[0].sequence.steps[0].function, 'initialize()');
+  assert.equal(reinitRes.experiments[0].sequence.steps[2].sender, 1);
+  assert.equal(reinitRes.experiments[0].sequence.steps[2].expectRevert, true);
+}
+
+// Non-setter A2: initialize() missing initializer modifier still constructs bounded check
+const missingInitModSrc = `pragma solidity 0.8.4;
+import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+contract OpenInit is AccessControlUpgradeable {
+  function initialize(address admin) external { _setupRole(DEFAULT_ADMIN_ROLE, admin); }
+}`;
+const missingInitSha = createHash('sha256').update(missingInitModSrc).digest('hex');
+const missingInitRes = constructSolidityExperiments({
+  repositoryCommit: 'f'.repeat(40),
+  targetPath: 'contracts/OpenInit.sol',
+  targetSelector: 'OpenInit.initialize',
+  sources: [{path: 'contracts/OpenInit.sol', sha256: missingInitSha, content: missingInitModSrc}],
+  declarations: [
+    {selector: 'OpenInit.initialize', operation: 'send', inputs: ['address']},
+    {selector: 'OpenInit.hasRole', operation: 'call', inputs: ['bytes32', 'address']},
+  ]
+});
+assert.equal(missingInitRes.ok, true, 'missing-initializer initialize(address) must construct');
+if (missingInitRes.ok) {
+  assert.deepEqual(missingInitRes.experiments[0].sequence.steps[0].args, ['$account0']);
+  assert.deepEqual(missingInitRes.experiments[0].sequence.steps[2].args, ['$account1']);
+  assert.equal(missingInitRes.experiments[0].sequence.steps[2].expectRevert, true);
+}
+
+// Non-setter B: authority transfer (BoringOwnable.transferOwnership, OZ transferOwnership, renounceOwnership, grantRole)
+const boringTransferLib = ownable.replace(
+  'modifier onlyOwner',
+  'function transferOwnership(address newOwner, bool direct, bool renounce) public onlyOwner {} modifier onlyOwner'
+);
+const transferBoringRes = constructSolidityExperiments({
+  repositoryCommit: 'f'.repeat(40),
+  targetPath: vestingInput.targetPath,
+  targetSelector: 'Vesting02.transferOwnership',
+  sources: [
+    vestingInput.sources[0],
+    {path: 'contracts/libs/BoringOwnable.sol', sha256: createHash('sha256').update(boringTransferLib).digest('hex'), content: boringTransferLib},
+  ],
+  declarations: [
+    {selector: 'Vesting02.initialize', operation: 'send', inputs: ['address', 'string', 'string']},
+    {selector: 'Vesting02.transferOwnership', operation: 'send', inputs: ['address', 'bool', 'bool']},
+    {selector: 'Vesting02.owner', operation: 'call', inputs: []},
+  ]
+});
+assert.equal(transferBoringRes.ok, true, 'BoringOwnable transferOwnership must construct');
+if (transferBoringRes.ok) {
+  const sends = transferBoringRes.experiments[0].sequence.steps.filter(s => s.operation === 'send');
+  assert.equal(sends.length, 3);
+  assert.equal(sends[1].sender, 1);
+  assert.equal(sends[1].expectRevert, true);
+}
+
+const ozOwnableSrc = `pragma solidity 0.8.4;
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+contract OwnableVault is Ownable {
+  function ping() external onlyOwner {}
+}`;
+const ozOwnableSha = createHash('sha256').update(ozOwnableSrc).digest('hex');
+const ozRenounceRes = constructSolidityExperiments({
+  repositoryCommit: 'f'.repeat(40),
+  targetPath: 'contracts/OwnableVault.sol',
+  targetSelector: 'OwnableVault.renounceOwnership',
+  sources: [{path: 'contracts/OwnableVault.sol', sha256: ozOwnableSha, content: ozOwnableSrc}],
+  declarations: [
+    {selector: 'OwnableVault.renounceOwnership', operation: 'send', inputs: []},
+    {selector: 'OwnableVault.transferOwnership', operation: 'send', inputs: ['address']},
+    {selector: 'OwnableVault.owner', operation: 'call', inputs: []},
+  ]
+});
+assert.equal(ozRenounceRes.ok, true, 'OZ renounceOwnership must construct');
+const ozGrantRes = constructSolidityExperiments({
+  repositoryCommit: 'f'.repeat(40),
+  targetPath: 'contracts/rewards/MPHMinter.sol',
+  targetSelector: 'MPHMinter.grantRole',
+  sources: [{path: 'contracts/rewards/MPHMinter.sol', sha256: minterSha, content: minterSrc}],
+  declarations: [
+    {selector: 'MPHMinter.initialize', operation: 'send', inputs: ['address', 'address', 'uint256']},
+    {selector: 'MPHMinter.grantRole', operation: 'send', inputs: ['bytes32', 'address']},
+    {selector: 'MPHMinter.hasRole', operation: 'call', inputs: ['bytes32', 'address']},
+  ]
+});
+assert.equal(ozGrantRes.ok, true, 'AccessControl grantRole must construct');
+
+// Non-setter C: dangerous primitive (tx.origin / selfdestruct / delegatecall) + staticLeads hint
+const dangerSrc = `pragma solidity 0.8.4;
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+contract DangerVault is Ownable {
+  function destroy(address payable to) external onlyOwner {
+    selfdestruct(to);
+  }
+  function txOriginAction() external {
+    require(tx.origin == owner(), "not origin");
+  }
+  function hashOnly(bytes memory b) external pure returns (bytes32) {
+    return keccak256(abi.encodePacked(b));
+  }
+}`;
+const dangerSha = createHash('sha256').update(dangerSrc).digest('hex');
+const dangerDecls = [
+  {selector: 'DangerVault.destroy', operation: 'send' as const, inputs: ['address']},
+  {selector: 'DangerVault.txOriginAction', operation: 'send' as const, inputs: []},
+  {selector: 'DangerVault.hashOnly', operation: 'call' as const, inputs: ['bytes']},
+  {selector: 'DangerVault.owner', operation: 'call' as const, inputs: []},
+];
+const destroyRes = constructSolidityExperiments({
+  repositoryCommit: 'f'.repeat(40),
+  targetPath: 'contracts/DangerVault.sol',
+  targetSelector: 'DangerVault.destroy',
+  sources: [{path: 'contracts/DangerVault.sol', sha256: dangerSha, content: dangerSrc}],
+  declarations: dangerDecls,
+  staticLeads: [{path: 'contracts/DangerVault.sol', line: 5, rule: 'solidity-selfdestruct', message: 'Inspect selfdestruct'}]
+});
+assert.equal(destroyRes.ok, true, 'Guarded selfdestruct must construct bounded auth test');
+const txOriginRes = constructSolidityExperiments({
+  repositoryCommit: 'f'.repeat(40),
+  targetPath: 'contracts/DangerVault.sol',
+  targetSelector: 'DangerVault.txOriginAction',
+  sources: [{path: 'contracts/DangerVault.sol', sha256: dangerSha, content: dangerSrc}],
+  declarations: dangerDecls,
+  staticLeads: [{path: 'contracts/DangerVault.sol', line: 8, rule: 'solidity-tx-origin-auth', message: 'Inspect tx.origin'}]
+});
+assert.equal(txOriginRes.ok, true, 'tx.origin check must construct bounded auth test');
+
+// Negative control: unguarded ABI-packed helper with static lead must still return ok=false
+const unguardedHashSrc = `pragma solidity 0.8.4;
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+contract SafePack is Ownable {
+  uint256 public nonce;
+  function bump(bytes memory b) external { nonce = uint256(keccak256(abi.encodePacked(b))); }
+}`;
+const unguardedHashSha = createHash('sha256').update(unguardedHashSrc).digest('hex');
+assert.equal(constructSolidityExperiments({
+  repositoryCommit: 'f'.repeat(40),
+  targetPath: 'contracts/SafePack.sol',
+  targetSelector: 'SafePack.bump',
+  sources: [{path: 'contracts/SafePack.sol', sha256: unguardedHashSha, content: unguardedHashSrc}],
+  declarations: [
+    {selector: 'SafePack.bump', operation: 'send', inputs: ['bytes']},
+    {selector: 'SafePack.owner', operation: 'call', inputs: []},
+  ],
+  staticLeads: [{path: 'contracts/SafePack.sol', line: 5, rule: 'solidity-abi-encode-packed-hash', message: 'Inspect abi.encodePacked'}]
+}).ok, false, 'Non-dangerous static lead on unguarded function must not fabricate auth experiment');
+
 console.log('Standalone experiment construction passed');

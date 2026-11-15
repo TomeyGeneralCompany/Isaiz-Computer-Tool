@@ -15,7 +15,8 @@ const model = createServer(async (req,res) => {
   let raw="";for await(const part of req) raw+=part.toString();
   const request=JSON.parse(raw);modelCalls++;
   const hasRead=request.messages.some((message:{content:string}) => message.content.includes("TOOL_RESULT") && message.content.includes("ownedFixture"));
-  res.end(JSON.stringify({message:{role:"assistant",content:JSON.stringify(hasRead
+  const finalOnly=Array.isArray(request.format?.properties?.action?.enum) && request.format.properties.action.enum.length===1 && request.format.properties.action.enum[0]==="final";
+  res.end(JSON.stringify({message:{role:"assistant",content:JSON.stringify((hasRead || finalOnly)
     ? {action:"final",path:"",query:"",answer}
     : {action:"read_file",path:"source-1/sample.cjs",query:"",answer:""})}}));
 });
@@ -123,7 +124,60 @@ else:
   assert.deepEqual(preserved.lastHuntedAt, completed.lastHuntedAt);
   assert.equal(preserved.huntCount, 1);
   assert.equal(preserved.huntMissStreak, 1);
-  console.log("Acquisition failure, incomplete coverage and preserved history: PASSED");
+  // Complete full-index + probed hunt with no findings records completed coverage & miss streak.
+  const pyShim = join(root, "bin", "python3");
+  writeFileSync(pyShim, `#!/usr/bin/python3
+import hashlib, json, os, pathlib, sys
+if len(sys.argv) > 1 and sys.argv[1].endswith("source-reproduction.py"):
+    repo = pathlib.Path(sys.argv[sys.argv.index("--repository") + 1])
+    spec = json.loads(pathlib.Path(sys.argv[sys.argv.index("--spec") + 1]).read_text())
+    src_bytes = (repo / spec["file"]).read_bytes()
+    print(json.dumps({
+        "status": "behavior_not_observed",
+        "behavior_observed": False,
+        "source_sha256": hashlib.sha256(src_bytes).hexdigest(),
+        "kind": spec["kind"],
+        "observations": {
+            "control_input": "TOMEY_CONTROL_" + spec["nonce"],
+            "control_output": "<p>safe</p>",
+            "attack_input": "TOMEY_PROBE",
+            "attack_output": "<p>safe</p>",
+        },
+        "limitation": "Owned fixture negative control",
+    }))
+    sys.exit(0)
+os.execv("/usr/bin/python3", [sys.argv[0], *sys.argv[1:]])
+`);
+  chmodSync(pyShim, 0o700);
+  writeFileSync(git, `#!/usr/bin/env python3
+import pathlib, sys
+if "ls-files" in sys.argv:
+    sys.stdout.write("safe.cjs" + chr(0))
+elif "rev-parse" in sys.argv:
+    print("b" * 40)
+else:
+    root = pathlib.Path(sys.argv[-1])
+    root.mkdir(parents=True)
+    (root / "safe.cjs").write_text("exports.greet = function(name) { return '<p>safe</p>'; };")
+`);
+  db.insert(schema.securityPrograms).values({id:"owned-complete",provider:"fixture",
+    name:"Owned complete zero-finding hunt",status:"active",discoveredAt:now,updatedAt:now,
+    scopeSummary:JSON.stringify({scopes:[{assetType:"SOURCE_CODE",eligibleForBounty:true,
+      assetIdentifier:"https://github.com/fixture/owned-complete"}]})}).run();
+  const completeProg = db.select().from(schema.securityPrograms).where(eq(schema.securityPrograms.id,"owned-complete")).get()!;
+  answer=JSON.stringify({findings:[],outcome:"no_testable_candidate",reason:"Inspected safe.cjs and completed supported probe; no reflected XSS observed."});
+  const completeRes = await huntProgram(completeProg);
+  assert.equal(completeRes.findingsCreated,0);
+  const afterComplete = db.select().from(schema.securityPrograms).where(eq(schema.securityPrograms.id,"owned-complete")).get()!;
+  const cov = JSON.parse(afterComplete.scopeSummary!).huntCoverage;
+  assert.equal(cov.status,"completed","Full-index + probed hunt must record completed coverage");
+  assert.ok(typeof cov.completedProbes === "number" && cov.completedProbes >= 1,"completedProbes telemetry must be persisted");
+  assert.equal(cov.eligibleFiles,1);
+  assert.equal(cov.inspectedFiles,1);
+  assert.ok(afterComplete.lastHuntedAt !== null,"Completed coverage must advance lastHuntedAt");
+  assert.equal(afterComplete.huntCount,1);
+  assert.equal(afterComplete.huntMissStreak,1);
+  console.log("Acquisition failure, incomplete coverage, completed coverage and preserved history: PASSED");
 } finally {
   model.closeAllConnections();model.close();
   if(originalUrl === undefined) delete process.env.AUTOHACK_OLLAMA_URL;

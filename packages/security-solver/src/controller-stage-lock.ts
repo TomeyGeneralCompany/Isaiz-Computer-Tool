@@ -1,7 +1,7 @@
 import {ControllerSourceCoverage,type IndexedSource,type SourceRead} from './controller-stage-evidence';
 import {createHash} from 'node:crypto';
 export type Stage='INDEX'|'READ'|'ANALYZE'|'EXPERIMENT'|'REVIEW'|'REPORT'|'COMPLETE';
-export type Outcome='observed'|'not_observed'|'unsupported'|'incomplete'|'rejected';
+export type Outcome='observed'|'observation_only'|'not_observed'|'unsupported'|'incomplete'|'rejected';
 const actions:Record<Stage,ReadonlySet<string>>={
  INDEX:new Set(['index_source']),
  READ:new Set(['read_file','read_solidity','outline_solidity','search_files','list_files','continue_inspection']),

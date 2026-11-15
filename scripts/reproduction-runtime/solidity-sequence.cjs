@@ -157,8 +157,12 @@ async function runSequence(artifact, sequence, transport, preparationArtifacts={
           throw new Error('Preparation check failed: '+check.id);
       }
     }
+    const latestBlock=await provider.getBlock('latest');
+    const deployGasLimit=latestBlock?.gasLimit && latestBlock.gasLimit > 12000000n
+      ? (latestBlock.gasLimit * 9n) / 10n
+      : 10000000n;
     const contract=await new ContractFactory(artifact.abi,artifact.evm.bytecode.object,signers[0])
-      .deploy(...sequence.constructorArgs.map(resolve),{value:sequence.constructorValueWei||'0',gasLimit:10000000});
+      .deploy(...sequence.constructorArgs.map(resolve),{value:sequence.constructorValueWei||'0',gasLimit:deployGasLimit});
     const deployment=await contract.deploymentTransaction().wait();
     if(!deployment || deployment.status!==1)throw new Error('Constructor deployment failed');
     address=await contract.getAddress();

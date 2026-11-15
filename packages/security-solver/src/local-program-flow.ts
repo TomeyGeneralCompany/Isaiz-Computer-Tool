@@ -113,6 +113,7 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
   let preparationFailure="Source preparation did not reach model inspection";
   const acquisitionChecks:NonNullable<SecuritySolveResult["acquisitionChecks"]>=[];
   let capabilityChecks:SecuritySolveResult["capabilityChecks"];
+  let captureStats:(() => {completedProbes:number;unsupportedProbes:number;failedProbes:number;eligibleFiles:number;inspectedFiles:number}) | undefined;
   try {
     signal.throwIfAborted();
     const root=await workspace("local-hunt-");
@@ -172,6 +173,8 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
     capabilityChecks=capabilities.map(c=>({repository:c.repository,blocked:c.blocked,reason:c.reason,checkedAt:Date.now()}));
     if(capabilities.every(c=>c.blocked))preparationFailure="Source capability preflight: "+capabilities.map(c=>c.reason).join("; ");
     if(capabilities.every(c=>c.blocked))return {auditRecord,success:false,coverage:"unsupported",acquisitionChecks,findings:[],rawOutput:"",
+      completedProbes:0,unsupportedProbes:0,failedProbes:0,
+      eligibleFiles:capabilities.reduce((n,c)=>n+c.sourcePaths.length,0),inspectedFiles:0,
       error:"Source capability preflight: "+capabilities.map(c=>c.reason).join("; "),capabilityChecks,
       capabilityBlock:!focus && repos.length===allowedUrls.length ? capabilities.map(c=>c.reason).join("; ") : undefined};
     for(let i=repos.length-1;i>=0;i--)if(capabilities[i].blocked)repos.splice(i,1);
@@ -194,6 +197,13 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
     const eligiblePaths=capabilities.filter(c=>!c.blocked).flatMap(c=>{
       const repo=repos.find(r=>r.url===c.repository);
       return repo?c.sourcePaths.map(p=>relative(root,join(repo.directory,p)).split(sep).join('/')):[];
+    });
+    captureStats=()=>({
+      completedProbes:session.completedProbes,
+      unsupportedProbes:session.unsupportedProbes,
+      failedProbes:session.failedProbes,
+      eligibleFiles:eligiblePaths.length,
+      inspectedFiles:reads.inspectedPaths(eligiblePaths).length,
     });
     await note('STATIC_SCAN_START',{eligibleFiles:eligiblePaths.length});
     const staticLeads=await collectStaticLeads(root,repos,eligiblePaths,join(checkpointDirectory,checkpointKey+'.static-v2.json'),signal);
@@ -599,9 +609,12 @@ Do not claim production testing, JavaScript execution, file access or other effe
         onAllowance:async deadline=>writeSecuritySolverStatus({active:true,programId:program.id,programName:program.name,
           stage:"hunting",startedAt:statusStartedAt,timeoutMinutes:(deadline-Date.parse(statusStartedAt))/60000,pid:process.pid}),
         signal,maxTurns,controllerIndex,finalSchema:z.toJSONSchema(huntSchema),productionWorkflow:true,dynamicAllowance:process.env.LOCAL_HUNT_DYNAMIC_ALLOWANCE !== "false",initialSourcePaths:["audit-policy.txt",...new Set([...sourceHints,...(fullSourceIndex?.rankedPaths||[]),...eligiblePaths])],initialSourceLocations:selection.locations,checkpointPath:join(checkpointDirectory,checkpointKey+".json"),numCtx:8192,numThreads:4,numPredict:getConfig().LOCAL_HUNT_NUM_PREDICT,onRead:(path,span)=>reads.add(path,span),
-        progressNote:()=>(controllerPromotedCaseId?
+        staticLeads:staticLeads.leads,
+        progressNote:()=>((controllerPromotedCaseId?
           'CONTROLLER VERIFIED ENTRY CASE: '+controllerPromotedCaseId+' (prioritize this observed caller; do not substitute helper case).\n':'')+
-          (verifiedProbeSummary(session.cases,2).slice(0,340)+'\n'+controllerTraceSummary.slice(0,340)).slice(0,730),
+          (staticLeads.leads.length?
+            'Static leads ('+staticLeads.leads.length+'): '+staticLeads.leads.slice(0,3).map((l:{path:string;line:number;rule:string})=>`${l.path}:${l.line}[${l.rule}]`).join(', ').slice(0,180)+'\n':'')+
+          (verifiedProbeSummary(session.cases,2).slice(0,260)+'\n'+controllerTraceSummary.slice(0,260))).slice(0,700),
         onVerifiedCase:async(caseId,path,selector,kind)=>{
           // This callback is invoked only after the trusted verifier returns
           // behavior_observed. The model cannot nominate the caller.
@@ -1272,8 +1285,29 @@ Do not claim production testing, JavaScript execution, file access or other effe
           autoApproval:false})+'\n');
       }
     }
-    if(parsed?.outcome === "no_testable_candidate")return {auditRecord,success:true,coverage:"partial",acquisitionChecks,capabilityChecks,
-      coverageDetail:"Inspection incomplete: "+parsed.reason,findings:[],rawOutput:answer};
+    const inspectedFileCount=reads.inspectedPaths(eligiblePaths).length;
+    const fullIndexCoverageComplete=!focus && !session.blockedReason &&
+      !!fullSourceIndex?.complete &&
+      allowedUrls.length>0 &&
+      repos.length===allowedUrls.length &&
+      !capabilities.some(c=>c.blocked) &&
+      eligiblePaths.length>0 &&
+      inspectedFileCount===eligiblePaths.length &&
+      session.completedProbes>0;
+    const probeStats={
+      completedProbes:session.completedProbes,
+      unsupportedProbes:session.unsupportedProbes,
+      failedProbes:session.failedProbes,
+      eligibleFiles:eligiblePaths.length,
+      inspectedFiles:inspectedFileCount,
+    };
+    if(parsed?.outcome === "no_testable_candidate")return {auditRecord,success:true,
+      coverage:fullIndexCoverageComplete?"completed":"partial",
+      acquisitionChecks,capabilityChecks,...probeStats,
+      coverageDetail:fullIndexCoverageComplete
+        ? `${session.completedProbes} supported probes completed; ${session.unsupportedProbes} unsupported probes; ${session.failedProbes} failed probes; ${inspectedFileCount}/${eligiblePaths.length} files inspected`+(parsed.reason?`; ${parsed.reason}`:"")
+        : "Inspection incomplete: "+parsed.reason,
+      findings:[],rawOutput:answer};
     if (session.blockedReason) throw new Error("Reproduction unavailable: " + session.blockedReason);
     if (!session.completedProbes) {
       coverage = incompleteProbeCoverage(session);
@@ -1305,8 +1339,8 @@ Do not claim production testing, JavaScript execution, file access or other effe
             entryProof:entryEvidenceFor(candidate.caseId)
           }))});
     }
-    return {auditRecord,success:true,coverage:"partial",acquisitionChecks,capabilityChecks,coverageDetail:`${session.completedProbes} supported probes completed; ${session.unsupportedProbes} unsupported probes; ${session.failedProbes} failed probes`,findings,rawOutput:answer};
-  }catch(error:any){preparationFailure=error.message || String(error);return {auditRecord,success:false,coverage,acquisitionChecks,capabilityChecks,findings:[],rawOutput:"",error:signal.aborted ? "Local hunt cancelled by operator" : error.message || "Local hunt failed"};}
+    return {auditRecord,success:true,coverage:fullIndexCoverageComplete?"completed":"partial",acquisitionChecks,capabilityChecks,...probeStats,coverageDetail:`${session.completedProbes} supported probes completed; ${session.unsupportedProbes} unsupported probes; ${session.failedProbes} failed probes`,findings,rawOutput:answer};
+  }catch(error:any){preparationFailure=error.message || String(error);return {auditRecord,success:false,coverage,acquisitionChecks,capabilityChecks,...(captureStats?captureStats():{}),findings:[],rawOutput:"",error:signal.aborted ? "Local hunt cancelled by operator" : error.message || "Local hunt failed"};}
   finally {
     if(investigationLog) {
       try {

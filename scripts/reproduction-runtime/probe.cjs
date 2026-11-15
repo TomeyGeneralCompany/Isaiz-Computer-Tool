@@ -154,11 +154,13 @@ contract TomeyERC1155ProbeHarness is ERC1155Upgradeable {
       preparationSources[item.file]={content:fs.readFileSync(sourceFile(item.file),'utf8')};
     }
   }
-  const compiled = JSON.parse(solc.compile(JSON.stringify({
+  const compileSources = {[spec.file]: {content: harnessSource}, ...(deployment ? {[deployment.file]:{content:derivedText}} : {}), ...preparationSources};
+  const compileWith = (compilerSettings) => JSON.parse(solc.compile(JSON.stringify({
     language: 'Solidity',
-    sources: {[spec.file]: {content: harnessSource}, ...(deployment ? {[deployment.file]:{content:derivedText}} : {}), ...preparationSources},
-    settings: {...spec.compilerSettings, evmVersion, outputSelection: {'*': {'*': ['abi', 'evm.bytecode.object']}}}
+    sources: compileSources,
+    settings: {...compilerSettings, evmVersion, outputSelection: {'*': {'*': ['abi', 'evm.bytecode.object']}}}
   }), {import: solidityImport}));
+  let compiled = compileWith(spec.compilerSettings);
   const errors = (compiled.errors || []).filter(e => e.severity === 'error');
   if (errors.length) {
     const error = new Error(errors.map(e => e.formattedMessage).join('\n').slice(0, 2000));
@@ -178,13 +180,22 @@ contract TomeyERC1155ProbeHarness is ERC1155Upgradeable {
       a.outputs.length === 1 && a.outputs[0].type === 'string')));
   if (candidates.length !== 1) throw new Error(sequenceMode ? 'Select one deployable contract and public/external function using Contract.function' : 'Select one deployable contract with a view/pure string -> string function using Contract.function');
   if (sequenceMode && (!contractName || !spec.sequence.steps.some(step=>step.function.split('(')[0]===functionName))) throw new Error('Sequence must exercise the selected Contract.function');
-  const artifact = candidates[0][1];
+  let artifact = candidates[0][1];
+  if (sequenceMode && !spec.compilerSettings?.optimizer && artifact.evm.bytecode.object.length > 49152) {
+    const optimized = compileWith({...(spec.compilerSettings || {}), optimizer: {enabled: true, runs: 200}});
+    const optErrors = (optimized.errors || []).filter(e => e.severity === 'error');
+    const optCandidate = !optErrors.length ? optimized.contracts?.[selectedFile]?.[candidates[0][0]] : null;
+    if (optCandidate?.evm?.bytecode?.object && optCandidate.evm.bytecode.object.length < artifact.evm.bytecode.object.length) {
+      compiled = optimized;
+      artifact = optCandidate;
+    }
+  }
   const ganache = require('ganache');
   const { BrowserProvider, ContractFactory } = require('ethers');
   const transport = ganache.provider({
     logging: {quiet: true}, wallet: {deterministic: true, totalAccounts: sequenceMode ? 3 : 1},
-    chain: {hardfork: evmVersion, ...(sequenceMode ? {chainId:1337,time:new Date('2020-01-01T00:00:00Z')} : {})},
-    miner: {blockGasLimit: 12000000, ...(sequenceMode ? {timestampIncrement:1} : {})}
+    chain: {hardfork: evmVersion, ...(sequenceMode ? {chainId:1337,time:new Date('2020-01-01T00:00:00Z'),allowUnlimitedContractSize:true} : {})},
+    miner: {blockGasLimit: sequenceMode ? 30000000 : 12000000, ...(sequenceMode ? {timestampIncrement:1} : {})}
   });
   await transport.request({method: 'eth_chainId', params: []});
   try {

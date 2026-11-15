@@ -477,6 +477,7 @@ async function testReviewStageStrictResultAndLoopRecovery() {
   let reviewCalls = 0;
   let sawStrictResult = false;
   let strictMaxItems: number | undefined;
+  let sawStaticLeadsInReview = false;
   const server = createServer(async (req, res) => {
     let raw = '';
     for await (const chunk of req) raw += chunk;
@@ -485,6 +486,11 @@ async function testReviewStageStrictResultAndLoopRecovery() {
     if (body.format?.properties?.result) {
       sawStrictResult = true;
       strictMaxItems = body.format.properties.result.properties?.findings?.maxItems;
+    }
+    if (Array.isArray(body.messages) && body.messages.some((m: { content?: string }) =>
+      typeof m.content === 'string' && m.content.includes('Controller static scanner leads') && m.content.includes('paragraph-interpolation-python')
+    )) {
+      sawStaticLeadsInReview = true;
     }
     if (reviewCalls === 1) {
       res.end(JSON.stringify({
@@ -532,6 +538,7 @@ async function testReviewStageStrictResultAndLoopRecovery() {
           },
           required: ['findings'],
         },
+        staticLeads: [{ path: solPath, line: 2, rule: 'paragraph-interpolation-python', message: 'Inspect escaping before testing markup handling.', severity: 'INFO', engine: 'semgrep' }],
         verifyPython: async () => JSON.stringify({ status: 'observation_only', behavior_observed: false, caseId: 'c'.repeat(64) }),
         validateFinal: async (answer) => {
           try {
@@ -554,6 +561,9 @@ async function testReviewStageStrictResultAndLoopRecovery() {
     const log1Text = await readFile(log1, 'utf8');
     assert.ok(log1Text.includes('[FINAL_RESULT_REQUIRED]'));
     assert.ok(log1Text.includes('[REPORT_COMPLETE]'));
+    assert.ok(log1Text.includes('"outcome":"observation_only"'), 'observation_only must map cleanly instead of incomplete');
+    assert.ok(!log1Text.includes('"outcome":"incomplete"'), 'observation_only probe must not emit outcome=incomplete');
+    assert.ok(sawStaticLeadsInReview, 'REVIEW turn must receive bounded controller static scanner leads');
 
     // 6b. Stubborn model repeating identical unparseable answer recovers cleanly at 3 turns instead of 24.
     let stubbornCalls = 0;
