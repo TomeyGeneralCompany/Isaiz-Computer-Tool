@@ -246,8 +246,18 @@ def observed_nonincumbent_role_transition(data):
     return False
 
 
+def clean_probe_diagnostic(diagnostic: str, code: int) -> str:
+    cleaned = re.sub(
+        r'This version of µWS is not compatible with your Node\.js build:[\s\S]*?Falling back to a NodeJS implementation; performance may be degraded\.\s*',
+        '',
+        diagnostic,
+    ).strip() or diagnostic
+    return f'exit_code={code}: {cleaned[-1200:]}'
+
+
 def limits(node=False, java=False):
-    resource.setrlimit(resource.RLIMIT_CPU,(15,15))
+    cpu_seconds = 25 if node else 15
+    resource.setrlimit(resource.RLIMIT_CPU,(cpu_seconds,cpu_seconds))
     resource.setrlimit(resource.RLIMIT_AS,((32 if node else 4 if java else 1)*1024**3,)*2)
     resource.setrlimit(resource.RLIMIT_FSIZE,(1024**2,1024**2))
     resource.setrlimit(resource.RLIMIT_NOFILE,(64,64))
@@ -462,7 +472,7 @@ def run_probe(repository: Path, specification: dict, _dependency_round: int = 0)
             '--ro-bind',str(Path(node).resolve()),'/probe-node',
             '--ro-bind',str(runtime),'/runtime']
         invocation = ['/usr/bin/python3','-I','/probe.py'] if language in ('python','java') else [
-            '/probe-node','--disable-wasm-trap-handler','--max-old-space-size=256','/runtime/probe.cjs']
+            '/probe-node','--disable-wasm-trap-handler','--max-old-space-size=512','/runtime/probe.cjs']
         command=[sandbox,'--unshare-all','--die-with-parent','--new-session','--cap-drop','ALL','--clearenv',
                  '--ro-bind','/usr','/usr','--ro-bind','/lib','/lib','--ro-bind-try','/lib64','/lib64',
                  '--proc','/proc','--dev','/dev','--tmpfs','/tmp','--ro-bind',str(repository),'/repo',
@@ -473,7 +483,7 @@ def run_probe(repository: Path, specification: dict, _dependency_round: int = 0)
         with (work/'stdout').open('wb') as output,(work/'stderr').open('wb') as error:
             process=subprocess.Popen(command,stdout=output,stderr=error,env={'PATH':'/usr/bin:/bin'},
                                      start_new_session=True,preexec_fn=lambda: limits(language in ('javascript','solidity'),language == 'java'))
-            try: code=process.wait(timeout=25)
+            try: code=process.wait(timeout=35 if language == 'solidity' else 25)
             except subprocess.TimeoutExpired:
                 os.killpg(process.pid,signal.SIGKILL);process.wait()
                 return {'status':'timeout','behavior_observed':False}
@@ -528,9 +538,9 @@ def run_probe(repository: Path, specification: dict, _dependency_round: int = 0)
                     if isinstance(cause.get('missingImports'),list) and cause['missingImports']:
                         detail+='; missing imports: '+repr(cause['missingImports'][:8])[:350]
                 except (ValueError,TypeError,AttributeError):
-                    detail=diagnostic[-1200:]
+                    detail=clean_probe_diagnostic(diagnostic, code)
             else:
-                detail=diagnostic[-1200:]
+                detail=clean_probe_diagnostic(diagnostic, code)
             return {'status':'probe_failed','behavior_observed':False,'exit_code':code,'detail':detail}
         if hashlib.sha256(target.read_bytes()).hexdigest()!=source_hash: raise ValueError('Source changed during probe')
         data=json.loads((work/'stdout').read_text())

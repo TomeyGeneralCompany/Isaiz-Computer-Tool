@@ -150,6 +150,20 @@ class ValidationTests(unittest.TestCase):
                         "kind":"html_reflection", "nonce":"a"*32})
 
 
+    def test_clean_probe_diagnostic_strips_uws_banner(self):
+        banner = (
+            "This version of µWS is not compatible with your Node.js build:\n\n"
+            "Error: Cannot find module './uws_linux_x64_127.node'\n"
+            "Falling back to a NodeJS implementation; performance may be degraded.\n\n"
+        )
+        detail = driver.clean_probe_diagnostic(banner + "FATAL ERROR: Reached heap limit Allocation failed", -6)
+        self.assertTrue(detail.startswith("exit_code=-6: "))
+        self.assertNotIn("µWS is not compatible", detail)
+        self.assertIn("FATAL ERROR: Reached heap limit", detail)
+        fallback = driver.clean_probe_diagnostic(banner, 1)
+        self.assertTrue(fallback.startswith("exit_code=1: "))
+
+
 @unittest.skipUnless(os.getenv("TOMEY_REPRODUCTION_INTEGRATION") == "1", "requires installed sandbox/runtime")
 class LanguageTests(unittest.TestCase):
     def probe(self, name, source, function="render", observed=True, kind="html_reflection", extra=None):

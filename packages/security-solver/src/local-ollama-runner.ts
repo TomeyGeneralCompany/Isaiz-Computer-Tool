@@ -177,6 +177,7 @@ export async function runLocalAudit(
   let prevTurnFingerprint="";
   let controllerLoopProgressCount=0;
   let invalidReviewFinals=0;
+  let invalidFinalFormats=0;
   // Preserve the verifier's facts independently of Qwen's compacted chat.
   let lastRejectedConclusion='';
   let repeatedRejectedConclusions=0;
@@ -818,17 +819,18 @@ export async function runLocalAudit(
       if(constraints?.action?.some(action=>!actionSchema.properties.action.enum.includes(action)))throw new Error("Task requested an unavailable action");
       let requestSchema:Record<string,any>=constraints ? {...actionSchema,properties:{...actionSchema.properties,
         ...Object.fromEntries(Object.entries(constraints).map(([key,values])=>[key,{type:"string",enum:values}]))}} : actionSchema;
-      if(structured && !requireInvestigationAfterEmpty && limits.finalSchema && (emptyFinals>=1 || invalidReviewFinals>=2 || !!workflow?.snapshot().verifiedEvidenceFocus) &&
+      if(structured && !requireInvestigationAfterEmpty && limits.finalSchema && (emptyFinals>=1 || invalidReviewFinals>=2 || invalidFinalFormats>=1 || !!workflow?.snapshot().verifiedEvidenceFocus) &&
          (!constraints?.action || constraints.action.includes('final'))) {
         // Qwen3:4b sometimes returns a valid "final" action with both answer=""
-        // and result omitted. Once that is observed, require the typed final
-        // result in the NEXT model response rather than repeating an identical
-        // unconstrained prompt. The semantic validator still checks every claim.
+        // and result omitted, or malformed JSON in answer. Once observed, require
+        // the typed final result in the NEXT model response rather than repeating
+        // an identical unconstrained prompt. The semantic validator still checks every claim.
         const strictResult=JSON.parse(JSON.stringify(limits.finalSchema)) as Record<string,any>;
         // Give the tiny model exact recorded observation IDs in the schema,
         // rather than asking it to reproduce a 64-character digest unaided.
         // This only narrows options to real probes; it does not validate impact.
         const recordedIds=[...new Set((workflow?.snapshot().observations || [])
+          .filter(o=>o.status==='behavior_observed')
           .map(o=>o.caseId).filter((id):id is string=>typeof id==='string'&&/^[a-f0-9]{64}$/.test(id)))];
         const item=strictResult.properties?.findings?.items;
         if(!recordedIds.length && strictResult.properties?.findings) {
@@ -1996,12 +1998,12 @@ export async function runLocalAudit(
               }
             }
           }
+          const normalizedConclusion=message.content.replace(/\s+/g,' ').trim().slice(0,1000);
+          repeatedRejectedConclusions=normalizedConclusion===lastRejectedConclusion
+            ? repeatedRejectedConclusions+1 : 1;
+          lastRejectedConclusion=normalizedConclusion;
           const observations=workflow?.snapshot().observations.filter(o=>o.status==='behavior_observed')||[];
           if(observations.length) {
-            const normalizedConclusion=message.content.replace(/\s+/g,' ').trim().slice(0,1000);
-            repeatedRejectedConclusions=normalizedConclusion===lastRejectedConclusion
-              ? repeatedRejectedConclusions+1 : 1;
-            lastRejectedConclusion=normalizedConclusion;
             const observed=observations.at(-1)!;
             const known=(limits.initialSourcePaths||[]).filter(p=>
               p.startsWith('source-') && /\.(?:py|js|mjs|cjs|java|sol)$/.test(p) && p!==observed.path);
@@ -2054,14 +2056,35 @@ export async function runLocalAudit(
               'Allowed conclusions must cite actual recorded caseId/evidenceFile and caller evidence; otherwise explicitly state which requirement remains unverified. Never claim there was no testable candidate.';
             workflow!.feedback(guidance,true);
             await appendFile(logFile,'[POST_PROBE_EVIDENCE_GUIDANCE] '+guidance+'\n');
-          } else {
-            repeatedRejectedConclusions=0;
-            lastRejectedConclusion='';
+          } else if(stageLock?.currentStage==='REVIEW' && repeatedRejectedConclusions>=3) {
+            const observedTotal=(workflow?.snapshot().observations || []).length;
+            const disposition=JSON.stringify({
+              findings:[],outcome:'no_testable_candidate',
+              reason:`Completed indexed source reading and ${stagedPlans.length} staged experiment(s) (${observedTotal} recorded observation(s)); zero probes observed exploitable security behavior and repeated model final formatting retries were rejected.`
+            });
+            const dispositionRejected=await limits.validateFinal?.(disposition);
+            if(!dispositionRejected) {
+              for(const id of new Set(stagedPlans.map(p=>p.id)))stageLock.review(id);
+              stageLock.completeReviews();
+              await appendFile(logFile,'[REVIEW_COMPLETE] '+JSON.stringify({eligible:0,recovered:true,attempts:repeatedRejectedConclusions})+'\n');
+              await appendFile(logFile,'[STAGE_UNLOCK] REVIEW -> REPORT\n');
+              stageLock.completeReport(true);
+              await appendFile(logFile,'[REPORT_COMPLETE] '+JSON.stringify({outcome:'no_testable_candidate',recovered:true})+'\n');
+              finalAnswer=disposition;stoppingReason='Validated controller recovery after repeated REVIEW rejections';
+              return disposition;
+            }
+            await appendFile(logFile,'[AUDIT_INCOMPLETE_REVIEW] '+JSON.stringify({
+              reason:'Repeated identical rejected final conclusions in REVIEW',
+              attempts:repeatedRejectedConclusions
+            })+'\n');
+            throw new Error(`AUDIT_INCOMPLETE_REVIEW: model repeated the same rejected final conclusion across ${repeatedRejectedConclusions} turns in stage REVIEW`);
           }
           // Escalate only repeated output-format failures; evidence-coverage failures
           // must remain free to request more source pages.
           invalidReviewFinals = !workflow && feedback.startsWith('Return the requested review JSON')
             ? invalidReviewFinals + 1 : 0;
+          invalidFinalFormats = /^(?:Your final (?:answer was not valid JSON|JSON does not match)|Return (?:only valid findings|the requested review) JSON)/.test(feedback)
+            ? invalidFinalFormats + 1 : 0;
           // Fresh evidence may be needed, but a rejected final must not reset
           // the inspection checkpoint and reopen an unconditional read loop.
           // Retain read-action history: rejecting a final answer does not make prior pages new evidence.
@@ -2166,6 +2189,7 @@ export async function runLocalAudit(
         }
         controller.signal.throwIfAborted();
         invalidReviewFinals=0;
+        invalidFinalFormats=0;
         unsupportedFinalRejections=0;
         // Only a final accepted by the independent validator can resolve
         // a reproduced case as verified. Reject unsupported model claims.
@@ -2185,7 +2209,7 @@ export async function runLocalAudit(
         if(stageLock){
           if(!limits.validateFinal)throw new Error('REVIEW_VALIDATOR_REQUIRED');
           if(stageLock.currentStage==='REVIEW'){
-            for(const {id} of stagedPlans)stageLock.review(id);
+            for(const id of new Set(stagedPlans.map(p=>p.id)))stageLock.review(id);
             stageLock.completeReviews();
             await appendFile(logFile,'[REVIEW_COMPLETE] All eligible observations reviewed\n');
             await appendFile(logFile,'[STAGE_UNLOCK] REVIEW -> REPORT\n');
@@ -2196,9 +2220,12 @@ export async function runLocalAudit(
         finalAnswer=message.content;stoppingReason="Validated final answer";
         return message.content;
       }
-      if(requireInvestigationAfterEmpty && message.tool_calls?.length) {
-        requireInvestigationAfterEmpty=false;
-        emptyFinals=0;
+      if(message.tool_calls?.length) {
+        invalidFinalFormats=0;
+        if(requireInvestigationAfterEmpty) {
+          requireInvestigationAfterEmpty=false;
+          emptyFinals=0;
+        }
       }
       for (const call of message.tool_calls.slice(0, 8)) {
         controller.signal.throwIfAborted();
@@ -2597,7 +2624,8 @@ export async function runLocalAudit(
           try {
             const result=JSON.parse(output);
             disposition=String(result.status||'unknown');
-            dispositionReason=String(result.detail||result.limitation||result.error||'verifier_completed').slice(0,240);
+            const rawReason=String(result.detail||result.limitation||result.error||'verifier_completed');
+            dispositionReason=rawReason.length>240 ? rawReason.slice(0,95)+' ... '+rawReason.slice(-140) : rawReason;
           }catch{}
           await recordProbeDisposition(probePath,probeSelector,probeKind,disposition,dispositionReason);
           try {
