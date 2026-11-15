@@ -1203,6 +1203,11 @@ export interface SecuritySolveResult {
   capabilityChecks?: Array<{repository:string;blocked:boolean;reason:string|null;checkedAt:number}>;
   coverage?: "completed" | "partial" | "unsupported" | "failed";
   coverageDetail?: string;
+  completedProbes?: number;
+  unsupportedProbes?: number;
+  failedProbes?: number;
+  eligibleFiles?: number;
+  inspectedFiles?: number;
   success: boolean;
   findings: ParsedFinding[];
   rawOutput: string;

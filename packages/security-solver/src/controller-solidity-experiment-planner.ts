@@ -12,11 +12,15 @@ import {sourceGroundedSolidityProbes} from './controller-solidity-security-probe
 import {orderPreparation, type PreparationPrerequisite, type SourceWitness} from './controller-solidity-prerequisites';
 
 export interface SourceSnapshot {path:string;sha256:string;content:string}
+export interface StaticLeadHint {
+  path:string;line:number;rule:string;message:string;severity?:string;engine?:string;
+}
 export interface ConstructionInput {
   repositoryCommit:string;targetPath:string;targetSelector:string;
   sources:readonly SourceSnapshot[];
   declarations:readonly SolidityProbeDeclaration[];
   skipLegacy?:boolean;
+  staticLeads?:readonly StaticLeadHint[];
 }
 export interface PreparedSecurityExperiment {
   version:1;id:string;language:'solidity';status:'constructed';
@@ -37,7 +41,7 @@ const astCache=new Map<string,any>();
 function parseAstCached(snapshot:SourceSnapshot):any {
   const cached=astCache.get(snapshot.sha256);
   if(cached)return cached;
-  const parsed=parse(snapshot.content,{range:true});
+  const parsed=parse(snapshot.content,{range:true,loc:true});
   if(astCache.size>=256)astCache.delete(astCache.keys().next().value!);
   astCache.set(snapshot.sha256,parsed);
   return parsed;
@@ -494,6 +498,7 @@ interface VerifiedSetup {
   constructorArgs:Array<string|boolean>;
   initSignature:string|null;
   initArgs:Array<string|boolean>;
+  initAdminParamIndex:number;
   initialValues:Map<string,string|boolean>;
   setupWitnesses:SourceWitness[];
 }
@@ -630,7 +635,10 @@ function resolveVerifiedSetup(
   if(initializer)setupWitnesses.push(witness(snapshot,initializer,contract.name+'.initialize'));
   for(const lo of localOwnables)setupWitnesses.push(witness(lo.snapshot,lo.contract,lo.contract.name));
 
-  return {kind,constructorArgs,initSignature,initArgs,initialValues,setupWitnesses};
+  const initAdminParamIndex=authority.adminTargetParam?.startsWith('init:')
+    ? initParamNames.indexOf(authority.adminTargetParam.slice(5))
+    : -1;
+  return {kind,constructorArgs,initSignature,initArgs,initAdminParamIndex,initialValues,setupWitnesses};
 }
 
 function hasAuthorizationGuard(fn:any,kind:'owner'|'admin',chain:ContractEntry[]):boolean {
@@ -969,6 +977,348 @@ function broadenedAuthorizationExperiment(
   return null;
 }
 
+function hasAstPrimitive(node:any):{selfdestruct:boolean;delegatecall:boolean;txOrigin:boolean} {
+  const result={selfdestruct:false,delegatecall:false,txOrigin:false};
+  const walk=(n:any,depth:number)=>{
+    if(!n||typeof n!=='object'||depth>40)return;
+    if(Array.isArray(n)){for(const x of n)walk(x,depth+1);return;}
+    if(n.type==='MemberAccess'&&n.memberName==='origin'&&
+      n.expression?.type==='Identifier'&&n.expression.name==='tx'){
+      result.txOrigin=true;
+    }
+    if(n.type==='FunctionCall'){
+      const id=exprIdentifier(n.expression);
+      if(id==='selfdestruct'||id==='suicide')result.selfdestruct=true;
+      if(n.expression?.type==='MemberAccess'&&n.expression.memberName==='delegatecall'){
+        result.delegatecall=true;
+      }
+    }
+    for(const [k,v] of Object.entries(n))if(k!=='range'&&k!=='loc')walk(v,depth+1);
+  };
+  walk(node,0);
+  return result;
+}
+
+type SolidityArgValue = SoliditySequence['steps'][number]['args'][number];
+function defaultArgsForTypes(abiTypes:string[]):SolidityArgValue[]|null {
+  const values:SolidityArgValue[]=[];
+  for(const t of abiTypes){
+    const fixed=t.match(/^(.*)\[(\d+)\]$/);
+    if(fixed){
+      const count=Number(fixed[2]);if(count>8)return null;
+      const one=defaultArgsForTypes([fixed[1]]);
+      const elem=one?.[0];
+      if(typeof elem!=='string'&&typeof elem!=='boolean')return null;
+      values.push(Array.from({length:count},()=>elem));continue;
+    }
+    if(/\[\]$/.test(t)){values.push([]);continue;}
+    if(/^u?int(?:[0-9]{1,3})?$/.test(t)){values.push('7');continue;}
+    if(t==='bool'){values.push(true);continue;}
+    if(t==='address'||t==='address payable'){values.push('$account2');continue;}
+    if(t==='string'){values.push('LOTUS-Test');continue;}
+    if(t==='bytes'){values.push('0x4142');continue;}
+    const sized=t.match(/^bytes([1-9]|[12][0-9]|3[012])$/);
+    if(sized){values.push('0x'+'41'.repeat(Number(sized[1])));continue;}
+    return null;
+  }
+  return values;
+}
+
+function initializeGuardExperiment(
+  snapshot:SourceSnapshot,contract:any,method:string,
+  sources:ReadonlyMap<string,SourceSnapshot>,menu:readonly SolidityProbeDeclaration[]
+):{hypothesis:string;property:string;sequence:SoliditySequence;witnesses:SourceWitness[]}|null {
+  if(method!=='initialize')return null;
+  if(contract.kind&&contract.kind!=='contract')return null;
+  const members:any[]=contract.subNodes||[];
+  const functions=members.filter(n=>n.type==='FunctionDefinition');
+  if(functions.some(fn=>!fn.body))return null;
+  const initFn=functions.find(n=>n.name==='initialize'&&
+    ['public','external'].includes(n.visibility)&&
+    !['view','pure'].includes(n.stateMutability||'')&&n.body);
+  if(!initFn)return null;
+  const {chain,oz,localOwnables}=resolveInheritance(snapshot,contract,sources);
+  const setup=resolveVerifiedSetup(snapshot,contract,chain,oz,localOwnables,menu);
+  let kind:'owner'|'admin'|null=setup?.kind||null;
+  let constructorArgs=setup?.constructorArgs||[];
+  let initSignature=setup?.initSignature||null;
+  let initArgs=setup?.initArgs||[];
+  let initAdminParamIndex=setup?.initAdminParamIndex??-1;
+  let setupWitnesses=setup?.setupWitnesses||[];
+
+  // Also support initialize() missing the `initializer` modifier when authority setup is source-proven.
+  if(!setup){
+    const ctor=functions.find(n=>n.isConstructor);
+    const otherInit=functions.some(n=>n!==initFn&&(n.modifiers||[]).some((m:any)=>m.name==='initializer'));
+    if(otherInit)return null;
+    const assignedState=new Map<string,string>();
+    const constraints=new Map<string,Set<'nonzero'|'gt_zero'|'contract'>>();
+    const authority={
+      owner:oz.has('ownable'),
+      adminRole:false,
+      adminTargetParam:null as string|null,
+      ownableInitCalled:false,
+      accessControlInitCalled:false
+    };
+    const ctorParamNames:string[]=[];
+    const ctorParamTypes:AbiScalarType[]=[];
+    if(ctor){
+      const cParams:any[]=ctor.parameters||[];
+      const binding=new Map<string,string>();
+      for(const p of cParams){
+        const abi=canonicalAbiType(p.typeName);
+        const scalar=classifyScalarType(abi);
+        if(!scalar||!identifier.test(p.name||''))return null;
+        ctorParamNames.push(p.name);ctorParamTypes.push(scalar);
+        binding.set(p.name,'ctor:'+p.name);
+      }
+      if(!verifySafeSetupStatements(ctor,chain,binding,assignedState,authority,constraints))return null;
+      for(const p of cParams){
+        if(constraints.get('ctor:'+p.name)?.has('contract'))return null;
+      }
+    }
+    const iParams:any[]=initFn.parameters||[];
+    const abiTypes:string[]=[];
+    const initParamNames:string[]=[];
+    const initParamTypes:AbiScalarType[]=[];
+    const binding=new Map<string,string>();
+    for(const p of iParams){
+      const abi=canonicalAbiType(p.typeName);
+      const scalar=classifyScalarType(abi);
+      if(!abi||!scalar||!identifier.test(p.name||''))return null;
+      abiTypes.push(abi);
+      initParamNames.push(p.name);initParamTypes.push(scalar);
+      binding.set(p.name,'init:'+p.name);
+    }
+    if(!verifySafeSetupStatements(initFn,chain,binding,assignedState,authority,constraints))return null;
+    if(authority.ownableInitCalled&&(oz.has('ownable_upgradeable')||localOwnables.length>0)){
+      authority.owner=true;
+    }
+    const hasOwnerGetter=!!menu.find(m=>m.selector===contract.name+'.owner'&&m.operation==='call'&&m.inputs.length===0);
+    const provenOwner=authority.owner&&(oz.has('ownable')||oz.has('ownable_upgradeable')||localOwnables.length>0||hasOwnerGetter);
+    const provenAdmin=authority.adminRole&&oz.has('access_control');
+    kind=provenOwner?'owner':provenAdmin?'admin':null;
+    if(!kind)return null;
+    if(authority.adminTargetParam&&constraints.get(authority.adminTargetParam)?.has('contract'))return null;
+    const pickArg=(key:string,scalar:AbiScalarType):string|boolean=>{
+      if(authority.adminTargetParam===key)return '$account0';
+      if(scalar==='address')return constraints.get(key)?.has('contract')?'$contract':'$account2';
+      if(scalar==='bool')return false;
+      if(scalar==='string')return 'LOTUS-Test';
+      return constraints.get(key)?.has('gt_zero')?'1':'0';
+    };
+    constructorArgs=ctorParamNames.map((n,i)=>pickArg('ctor:'+n,ctorParamTypes[i]));
+    initArgs=initParamNames.map((n,i)=>pickArg('init:'+n,initParamTypes[i]));
+    initSignature=`initialize(${abiTypes.join(',')})`;
+    initAdminParamIndex=authority.adminTargetParam?.startsWith('init:')
+      ? initParamNames.indexOf(authority.adminTargetParam.slice(5))
+      : -1;
+    setupWitnesses=[
+      ...(ctor?[witness(snapshot,ctor,contract.name+'.constructor')]:[]),
+      witness(snapshot,initFn,contract.name+'.initialize'),
+      ...localOwnables.map(lo=>witness(lo.snapshot,lo.contract,lo.contract.name))
+    ];
+  }
+  if(!kind||!initSignature)return null;
+  const attackerArgs=[...initArgs];
+  if(initAdminParamIndex>=0)attackerArgs[initAdminParamIndex]='$account1';
+  const checkCall:SoliditySequence['steps'][number]=kind==='owner'
+    ? {operation:'call',function:'owner()',args:[],expect:'$account0'}
+    : {operation:'call',function:'hasRole(bytes32,address)',args:[ZERO_BYTES32,'$account0'],expect:true};
+  return {
+    hypothesis:`Unauthorized caller must not re-initialize ${contract.name}.initialize once initialized; initial ${kind} authority must remain bound to deployer.`,
+    property:'source-proven re-initialization guard',
+    sequence:{constructorArgs,steps:[
+      {operation:'send',function:initSignature,args:initArgs,sender:0},
+      checkCall,
+      {operation:'send',function:initSignature,args:attackerArgs,sender:1,expectRevert:true},
+      checkCall
+    ]},
+    witnesses:[...setupWitnesses,witness(snapshot,initFn,contract.name+'.initialize')]
+  };
+}
+
+function authorityTransferExperiment(
+  snapshot:SourceSnapshot,contract:any,method:string,
+  sources:ReadonlyMap<string,SourceSnapshot>,menu:readonly SolidityProbeDeclaration[]
+):{hypothesis:string;property:string;sequence:SoliditySequence;witnesses:SourceWitness[]}|null {
+  if(!['transferOwnership','renounceOwnership','grantRole'].includes(method))return null;
+  const {chain,oz,localOwnables}=resolveInheritance(snapshot,contract,sources);
+  const setup=resolveVerifiedSetup(snapshot,contract,chain,oz,localOwnables,menu);
+  if(!setup)return null;
+  const abiEntry=menu.find(m=>m.selector===`${contract.name}.${method}`&&m.operation==='send');
+  if(!abiEntry)return null;
+
+  let declaredFn:{snapshot:SourceSnapshot;node:any}|null=null;
+  for(const entry of chain){
+    const fn=(entry.contract.subNodes||[]).find((n:any)=>
+      n.type==='FunctionDefinition'&&n.name===method&&
+      ['public','external'].includes(n.visibility)&&
+      !['view','pure'].includes(n.stateMutability||'')&&n.body&&
+      JSON.stringify((n.parameters||[]).map((p:any)=>canonicalAbiType(p.typeName)))===JSON.stringify(abiEntry.inputs));
+    if(fn){declaredFn={snapshot:entry.snapshot,node:fn};break;}
+  }
+
+  if(declaredFn){
+    if(!hasAuthorizationGuard(declaredFn.node,setup.kind,chain))return null;
+  } else {
+    const ozOwnerProven=setup.kind==='owner'&&(oz.has('ownable')||oz.has('ownable_upgradeable'))&&
+      (method==='transferOwnership'||method==='renounceOwnership');
+    const ozAdminProven=setup.kind==='admin'&&oz.has('access_control')&&method==='grantRole';
+    if(!ozOwnerProven&&!ozAdminProven)return null;
+  }
+
+  const baseSteps:SoliditySequence['steps']=[];
+  if(setup.initSignature)baseSteps.push({operation:'send',function:setup.initSignature,args:setup.initArgs,sender:0});
+  if(setup.kind==='owner')baseSteps.push({operation:'call',function:'owner()',args:[],expect:'$account0'});
+  else baseSteps.push({operation:'call',function:'hasRole(bytes32,address)',args:[ZERO_BYTES32,'$account0'],expect:true});
+
+  const witnesses=[...setup.setupWitnesses];
+  if(declaredFn)witnesses.push(witness(declaredFn.snapshot,declaredFn.node,contract.name+'.'+method));
+
+  const hasPendingOwner=menu.some(m=>m.selector===`${contract.name}.pendingOwner`&&m.operation==='call'&&m.inputs.length===0);
+
+  if(setup.kind==='owner'&&method==='transferOwnership'&&
+    JSON.stringify(abiEntry.inputs)===JSON.stringify(['address'])){
+    return {
+      hypothesis:`Unauthorized caller must not transfer ${contract.name} ownership; current owner may.`,
+      property:'source-proven owner authority transfer',
+      sequence:{constructorArgs:setup.constructorArgs,steps:[
+        ...baseSteps,
+        {operation:'send',function:'transferOwnership(address)',args:['$account1'],sender:1,expectRevert:true},
+        {operation:'call',function:'owner()',args:[],expect:'$account0'},
+        {operation:'send',function:'transferOwnership(address)',args:['$account2'],sender:0},
+        ...(hasPendingOwner
+          ? [{operation:'call' as const,function:'pendingOwner()',args:[],expect:'$account2'}]
+          : [{operation:'call' as const,function:'owner()',args:[],expect:'$account2'}])
+      ]},
+      witnesses
+    };
+  }
+  if(setup.kind==='owner'&&method==='transferOwnership'&&
+    JSON.stringify(abiEntry.inputs)===JSON.stringify(['address','bool','bool'])){
+    return {
+      hypothesis:`Unauthorized caller must not transfer ${contract.name} ownership (BoringOwnable); current owner may.`,
+      property:'source-proven BoringOwnable authority transfer',
+      sequence:{constructorArgs:setup.constructorArgs,steps:[
+        ...baseSteps,
+        {operation:'send',function:'transferOwnership(address,bool,bool)',args:['$account1',true,false],sender:1,expectRevert:true},
+        {operation:'call',function:'owner()',args:[],expect:'$account0'},
+        {operation:'send',function:'transferOwnership(address,bool,bool)',args:['$account2',true,false],sender:0},
+        {operation:'call',function:'owner()',args:[],expect:'$account2'}
+      ]},
+      witnesses
+    };
+  }
+  if(setup.kind==='owner'&&method==='renounceOwnership'&&abiEntry.inputs.length===0){
+    return {
+      hypothesis:`Unauthorized caller must not renounce ${contract.name} ownership; current owner may.`,
+      property:'source-proven owner authority renunciation',
+      sequence:{constructorArgs:setup.constructorArgs,steps:[
+        ...baseSteps,
+        {operation:'send',function:'renounceOwnership()',args:[],sender:1,expectRevert:true},
+        {operation:'call',function:'owner()',args:[],expect:'$account0'},
+        {operation:'send',function:'renounceOwnership()',args:[],sender:0},
+        {operation:'call',function:'owner()',args:[],expect:ZERO_ADDRESS}
+      ]},
+      witnesses
+    };
+  }
+  if(setup.kind==='admin'&&method==='grantRole'&&
+    JSON.stringify(abiEntry.inputs)===JSON.stringify(['bytes32','address'])){
+    return {
+      hypothesis:`Unauthorized caller must not grant ${contract.name} admin role; default admin may.`,
+      property:'source-proven AccessControl role grant',
+      sequence:{constructorArgs:setup.constructorArgs,steps:[
+        ...baseSteps,
+        {operation:'call',function:'hasRole(bytes32,address)',args:[ZERO_BYTES32,'$account2'],expect:false},
+        {operation:'send',function:'grantRole(bytes32,address)',args:[ZERO_BYTES32,'$account2'],sender:1,expectRevert:true},
+        {operation:'call',function:'hasRole(bytes32,address)',args:[ZERO_BYTES32,'$account2'],expect:false},
+        {operation:'send',function:'grantRole(bytes32,address)',args:[ZERO_BYTES32,'$account2'],sender:0},
+        {operation:'call',function:'hasRole(bytes32,address)',args:[ZERO_BYTES32,'$account2'],expect:true}
+      ]},
+      witnesses
+    };
+  }
+  return null;
+}
+
+function privilegedPrimitiveGuardExperiment(
+  snapshot:SourceSnapshot,contract:any,method:string,
+  sources:ReadonlyMap<string,SourceSnapshot>,menu:readonly SolidityProbeDeclaration[],
+  staticLeads?:readonly StaticLeadHint[]
+):{hypothesis:string;property:string;sequence:SoliditySequence;witnesses:SourceWitness[]}|null {
+  const members:any[]=contract.subNodes||[];
+  const functions=members.filter(n=>n.type==='FunctionDefinition'&&n.name===method&&
+    ['public','external'].includes(n.visibility)&&!['view','pure'].includes(n.stateMutability||'')&&n.body);
+  if(!functions.length)return null;
+  const {chain,oz,localOwnables}=resolveInheritance(snapshot,contract,sources);
+  const setup=resolveVerifiedSetup(snapshot,contract,chain,oz,localOwnables,menu);
+  if(!setup)return null;
+
+  const baseSteps:SoliditySequence['steps']=[];
+  if(setup.initSignature)baseSteps.push({operation:'send',function:setup.initSignature,args:setup.initArgs,sender:0});
+  const authorityCheck:SoliditySequence['steps'][number]=setup.kind==='owner'
+    ? {operation:'call',function:'owner()',args:[],expect:'$account0'}
+    : {operation:'call',function:'hasRole(bytes32,address)',args:[ZERO_BYTES32,'$account0'],expect:true};
+  baseSteps.push(authorityCheck);
+
+  for(const fn of functions){
+    const params:any[]=fn.parameters||[];
+    if(params.length>3)continue;
+    const abiTypes:string[]=[];
+    const paramNames=new Set<string>();
+    let badParam=false;
+    for(const p of params){
+      const abi=canonicalAbiType(p.typeName);
+      if(!abi||!identifier.test(p.name||'')){badParam=true;break;}
+      abiTypes.push(abi);
+      paramNames.add(p.name);
+    }
+    if(badParam)continue;
+    const callArgs=defaultArgsForTypes(abiTypes);
+    if(!callArgs)continue;
+
+    const primitives=hasAstPrimitive(fn.body);
+    const matchingLeads=(staticLeads||[]).filter(lead=>{
+      if(lead.path!==snapshot.path||!fn.loc)return false;
+      return lead.line>=fn.loc.start.line&&lead.line<=fn.loc.end.line;
+    });
+    const hasGuard=hasAuthorizationGuard(fn,setup.kind,chain);
+    const hasDangerPrimitive=primitives.selfdestruct||primitives.delegatecall||primitives.txOrigin;
+    if(!hasDangerPrimitive&&!(hasGuard&&matchingLeads.length))continue;
+    if(!hasGuard&&!hasDangerPrimitive)continue;
+
+    const constraints=collectParamConstraints(fn.body,paramNames);
+    const args=params.map((p:any,i:number)=>{
+      const c=constraints.get(p.name);
+      if(abiTypes[i]==='address'&&c?.has('contract'))return '$contract';
+      return callArgs[i];
+    });
+
+    const tags=[
+      ...(primitives.selfdestruct?['selfdestruct']:[]),
+      ...(primitives.delegatecall?['delegatecall']:[]),
+      ...(primitives.txOrigin?['tx.origin']:[]),
+      ...matchingLeads.map(l=>l.rule)
+    ];
+    const uniqueTags=[...new Set(tags)].slice(0,3).join(', ');
+    const fnSig=`${method}(${abiTypes.join(',')})`;
+    const preservePostCheck=hasGuard||!primitives.selfdestruct;
+    return {
+      hypothesis:`Unauthorized caller ($account1) must not trigger privileged primitive (${uniqueTags}) via ${contract.name}.${method}; contract authority must hold.`,
+      property:`source-proven privileged primitive authorization (${uniqueTags})`,
+      sequence:{constructorArgs:setup.constructorArgs,steps:[
+        ...baseSteps,
+        {operation:'send',function:fnSig,args,sender:1,expectRevert:true},
+        ...(preservePostCheck?[authorityCheck]:[])
+      ]},
+      witnesses:[...setup.setupWitnesses,witness(snapshot,fn,contract.name+'.'+method)]
+    };
+  }
+  return null;
+}
+
 export function constructSolidityExperiments(input:ConstructionInput):ConstructionResult {
   if(!/^[a-f0-9]{40}$/.test(input.repositoryCommit))
     return {ok:false,code:'INVALID_COMMIT',detail:'Expected a source commit SHA'};
@@ -1008,6 +1358,18 @@ export function constructSolidityExperiments(input:ConstructionInput):Constructi
   if(!choices.length) {
     const broadened=broadenedAuthorizationExperiment(target,contract,method,indexed,input.declarations);
     if(broadened)choices.push(broadened);
+  }
+  if(!choices.length) {
+    const initExp=initializeGuardExperiment(target,contract,method,indexed,input.declarations);
+    if(initExp)choices.push(initExp);
+  }
+  if(!choices.length) {
+    const authExp=authorityTransferExperiment(target,contract,method,indexed,input.declarations);
+    if(authExp)choices.push(authExp);
+  }
+  if(!choices.length) {
+    const privExp=privilegedPrimitiveGuardExperiment(target,contract,method,indexed,input.declarations,input.staticLeads);
+    if(privExp)choices.push(privExp);
   }
   if(!choices.length)return {ok:false,code:'UNKNOWN_ASSERTION',
     detail:'No source-grounded security setup and falsifiable assertion for '+input.targetSelector};
