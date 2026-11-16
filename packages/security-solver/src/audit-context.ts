@@ -12,6 +12,15 @@ export function allocateAuditContext(pinned:AuditMessage[],schema:unknown,numCtx
   const contextBudget=(numCtx-generationBudget-512)*3;
   return {generationBudget,contextBudget,messageBudget:contextBudget-schemaSize};
 }
+export function latestAuditExchangeStart(messages:AuditMessage[]):number {
+  let latestStart=messages.length;
+  for(let i=2;i<messages.length;i++) {
+    const message=messages[i];
+    if(message.role==="assistant" || latestStart===messages.length ||
+      (message.role==="user" && !message.content.startsWith("TOOL_RESULT ")))latestStart=i;
+  }
+  return latestStart;
+}
 /** Keep pinned instructions and whole recent exchanges. Estimates reserve room for output. */
 export function compactAuditContext(messages:AuditMessage[],budget:number,progress:string[]=[]):AuditMessage[] {
   const pinned=messages.slice(0,2);

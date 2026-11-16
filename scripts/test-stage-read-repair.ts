@@ -631,5 +631,134 @@ await testTruncatedTerminalPageAndStagePriority();
 await testRequiredSourceConflictAndLegacyPreservation();
 await testBoundedNoProgressStallAndProductiveUnbounded();
 await testFull91FileInventoryAndStageOrder();
+async function testReviewContextBudgetAndTruncationRetry() {
+  // 7. Large pinned prompt (~5.3KB) + 3.2KB EXPERIMENT verify_source exchange +
+  //    REVIEW truncation retry (done_reason="length") must NOT overflow
+  //    compactAuditContext ("Latest audit exchange exceeds the context budget"),
+  //    and REVIEW Turn 1 must immediately constrain strictResult + answer="".
+  const root = await mkdtemp(join(tmpdir(), 'lotus-review-budget-'));
+  let reviewCalls = 0;
+  let firstTurnHadStrictResult = false;
+  let firstTurnAnswerEnum: unknown;
+  let firstTurnNumPredict: number | undefined;
+  const server = createServer(async (req, res) => {
+    let raw = '';
+    for await (const chunk of req) raw += chunk;
+    const body = JSON.parse(raw);
+    reviewCalls++;
+    if (reviewCalls === 1) {
+      firstTurnHadStrictResult = Boolean(body.format?.properties?.result);
+      firstTurnAnswerEnum = body.format?.properties?.answer?.enum;
+      firstTurnNumPredict = body.options?.num_predict;
+      res.end(JSON.stringify({
+        done_reason: 'length',
+        eval_count: body.options?.num_predict || 512,
+        message: { role: 'assistant', content: '{"action":"final","path":"","query":"","answer":"truncated' },
+      }));
+      return;
+    }
+    res.end(JSON.stringify({
+      message: {
+        role: 'assistant',
+        content: JSON.stringify({
+          action: 'final',
+          path: '',
+          query: '',
+          answer: '',
+          result: {
+            findings: [],
+            outcome: 'no_testable_candidate',
+            reason: 'All 64 experiments completed with zero exploitable behaviors observed.',
+          },
+        }),
+      },
+    }));
+  });
+  try {
+    await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
+    const port = (server.address() as any).port;
+    const pyPath = 'source-1/src/render.py';
+    await mkdir(dirname(join(root, pyPath)), { recursive: true });
+    await writeFile(join(root, pyPath), 'def render(value):\n    return "<p>" + value + "</p>"\n');
+    const logPath = join(root, 'review-budget.log');
+    const largePrompt = 'Inspect the repository. ' + 'Context inventory: ' + 'A'.repeat(3600);
+    const bigProbeDetail = 'D'.repeat(2600);
+    await withEnv({
+      AUTOHACK_OLLAMA_URL: `http://127.0.0.1:${port}/api/chat`,
+      LOCAL_OLLAMA_TOOL_PROTOCOL: 'json',
+      AUTOHACK_AUTO_SOURCE_PREFETCH: 'false',
+      LOCAL_CONTROLLER_OWNED_ACTIONS: 'true',
+      LOCAL_CONTROLLER_FULL_SOURCE_INDEX: 'true',
+    }, async () => {
+      const out = await runLocalAudit(largePrompt, logPath, 30000, root, 'mock', undefined, {
+        productionWorkflow: true,
+        controllerIndex: true,
+        dynamicAllowance: true,
+        finalSchema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            findings: {
+              type: 'array',
+              maxItems: 8,
+              items: {
+                type: 'object',
+                properties: {
+                  caseId: { type: 'string' },
+                  severity: { type: 'string' },
+                  ratingReason: { type: 'string' },
+                  impact: { type: 'string' },
+                  callerFile: { type: 'string' },
+                  callerLine: { type: 'integer' },
+                  falsification: { type: 'string' },
+                },
+              },
+            },
+            outcome: { type: 'string', enum: ['inspected', 'no_testable_candidate'] },
+            reason: { type: 'string', minLength: 20, maxLength: 1000 },
+          },
+          required: ['findings'],
+        },
+        staticLeads: Array.from({ length: 6 }, (_, i) => ({
+          path: pyPath,
+          line: 2,
+          rule: `lead-rule-${i}`,
+          message: 'Advisory static scanner lead detail for review context testing.',
+          severity: 'INFO',
+          engine: 'semgrep',
+        })),
+        verifyPython: async () => JSON.stringify({
+          status: 'observation_only',
+          behavior_observed: false,
+          caseId: 'e'.repeat(64),
+          detail: bigProbeDetail,
+        }),
+        validateFinal: async (answer) => {
+          const parsed = JSON.parse(answer);
+          return Array.isArray(parsed.findings) && parsed.outcome === 'no_testable_candidate' ? null : 'Invalid final';
+        },
+        maxTurns: 20,
+        numCtx: 8192,
+        numPredict: 2048,
+        initialSourcePaths: [pyPath],
+      });
+      assert.equal(JSON.parse(out).outcome, 'no_testable_candidate');
+    });
+    assert.equal(reviewCalls, 2);
+    assert.equal(firstTurnHadStrictResult, true, 'REVIEW Turn 1 must immediately enforce strictResult');
+    assert.deepEqual(firstTurnAnswerEnum, [''], 'REVIEW Turn 1 must constrain answer to empty string when result is required');
+    assert.ok((firstTurnNumPredict ?? 9999) <= 512, `Expected bounded num_predict in zero-observed REVIEW, got ${firstTurnNumPredict}`);
+    const logText = await readFile(logPath, 'utf8');
+    assert.ok(logText.includes('truncated JSON action; retrying with generation_limit='));
+    assert.ok(logText.includes('[REPORT_COMPLETE]'));
+    console.log('7. REVIEW context budget + truncation retry survival PASSED');
+  } finally {
+    server.closeAllConnections();
+    server.close();
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
 await testReviewStageStrictResultAndLoopRecovery();
+await testReviewContextBudgetAndTruncationRetry();
 console.log('ALL stage READ repair acceptance tests PASSED');
