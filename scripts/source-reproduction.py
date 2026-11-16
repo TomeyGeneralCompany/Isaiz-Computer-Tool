@@ -255,8 +255,8 @@ def clean_probe_diagnostic(diagnostic: str, code: int) -> str:
     return f'exit_code={code}: {cleaned[-1200:]}'
 
 
-def limits(node=False, java=False):
-    cpu_seconds = 25 if node else 15
+def limits(node=False, java=False, solidity=False):
+    cpu_seconds = 60 if solidity else 25 if node else 15
     resource.setrlimit(resource.RLIMIT_CPU,(cpu_seconds,cpu_seconds))
     resource.setrlimit(resource.RLIMIT_AS,((32 if node else 4 if java else 1)*1024**3,)*2)
     resource.setrlimit(resource.RLIMIT_FSIZE,(1024**2,1024**2))
@@ -472,7 +472,7 @@ def run_probe(repository: Path, specification: dict, _dependency_round: int = 0)
             '--ro-bind',str(Path(node).resolve()),'/probe-node',
             '--ro-bind',str(runtime),'/runtime']
         invocation = ['/usr/bin/python3','-I','/probe.py'] if language in ('python','java') else [
-            '/probe-node','--disable-wasm-trap-handler','--max-old-space-size=512','/runtime/probe.cjs']
+            '/probe-node','--disable-wasm-trap-handler','--max-old-space-size=768','/runtime/probe.cjs']
         command=[sandbox,'--unshare-all','--die-with-parent','--new-session','--cap-drop','ALL','--clearenv',
                  '--ro-bind','/usr','/usr','--ro-bind','/lib','/lib','--ro-bind-try','/lib64','/lib64',
                  '--proc','/proc','--dev','/dev','--tmpfs','/tmp','--ro-bind',str(repository),'/repo',
@@ -482,8 +482,8 @@ def run_probe(repository: Path, specification: dict, _dependency_round: int = 0)
                  *runtime_binds,'--',*invocation]
         with (work/'stdout').open('wb') as output,(work/'stderr').open('wb') as error:
             process=subprocess.Popen(command,stdout=output,stderr=error,env={'PATH':'/usr/bin:/bin'},
-                                     start_new_session=True,preexec_fn=lambda: limits(language in ('javascript','solidity'),language == 'java'))
-            try: code=process.wait(timeout=35 if language == 'solidity' else 25)
+                                     start_new_session=True,preexec_fn=lambda: limits(language in ('javascript','solidity'),language == 'java',language == 'solidity'))
+            try: code=process.wait(timeout=55 if language == 'solidity' else 25)
             except subprocess.TimeoutExpired:
                 os.killpg(process.pid,signal.SIGKILL);process.wait()
                 return {'status':'timeout','behavior_observed':False}

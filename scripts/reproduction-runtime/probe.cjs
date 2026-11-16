@@ -160,7 +160,11 @@ contract TomeyERC1155ProbeHarness is ERC1155Upgradeable {
     sources: compileSources,
     settings: {...compilerSettings, evmVersion, outputSelection: {'*': {'*': ['abi', 'evm.bytecode.object']}}}
   }), {import: solidityImport}));
-  let compiled = compileWith(spec.compilerSettings);
+  const totalCompileChars = Object.values(compileSources).reduce((sum, entry) => sum + (entry?.content?.length || 0), 0);
+  const initialCompilerSettings = (sequenceMode && !spec.compilerSettings?.optimizer && totalCompileChars > 60000)
+    ? { ...(spec.compilerSettings || {}), optimizer: { enabled: true, runs: 200 } }
+    : spec.compilerSettings;
+  let compiled = compileWith(initialCompilerSettings);
   const errors = (compiled.errors || []).filter(e => e.severity === 'error');
   if (errors.length) {
     const error = new Error(errors.map(e => e.formattedMessage).join('\n').slice(0, 2000));
@@ -181,7 +185,7 @@ contract TomeyERC1155ProbeHarness is ERC1155Upgradeable {
   if (candidates.length !== 1) throw new Error(sequenceMode ? 'Select one deployable contract and public/external function using Contract.function' : 'Select one deployable contract with a view/pure string -> string function using Contract.function');
   if (sequenceMode && (!contractName || !spec.sequence.steps.some(step=>step.function.split('(')[0]===functionName))) throw new Error('Sequence must exercise the selected Contract.function');
   let artifact = candidates[0][1];
-  if (sequenceMode && !spec.compilerSettings?.optimizer && artifact.evm.bytecode.object.length > 49152) {
+  if (sequenceMode && !initialCompilerSettings?.optimizer && artifact.evm.bytecode.object.length > 49152) {
     const optimized = compileWith({...(spec.compilerSettings || {}), optimizer: {enabled: true, runs: 200}});
     const optErrors = (optimized.errors || []).filter(e => e.severity === 'error');
     const optCandidate = !optErrors.length ? optimized.contracts?.[selectedFile]?.[candidates[0][0]] : null;

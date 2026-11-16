@@ -19,7 +19,7 @@ import { AuditAllowance } from "./audit-allowance";
 import { AuditNavigation } from "./audit-navigation";
 import {controllerOwnedNextAction,canonicalSourceNavigationAction} from "./controller-next-action";
 import { SoliditySourceIndex } from "./solidity-source-index";
-import { allocateAuditContext, compactAuditContext, auditCheckpoint, fitAuditToolOutput } from "./audit-context";
+import { allocateAuditContext, compactAuditContext, auditCheckpoint, fitAuditToolOutput, latestAuditExchangeStart } from "./audit-context";
 import { soliditySequenceSchema, soliditySequenceJsonSchema, type SoliditySequence } from "./solidity-sequence";
 import { readSourcePage, searchSourcePage, listSourcePage, pageOffset, type ReadSpan } from "./source-inspection";
 import { postOllamaChat } from "../../core/src/ollama-chat";
@@ -822,12 +822,12 @@ export async function runLocalAudit(
       if(constraints?.action?.some(action=>!actionSchema.properties.action.enum.includes(action)))throw new Error("Task requested an unavailable action");
       let requestSchema:Record<string,any>=constraints ? {...actionSchema,properties:{...actionSchema.properties,
         ...Object.fromEntries(Object.entries(constraints).map(([key,values])=>[key,{type:"string",enum:values}]))}} : actionSchema;
-      if(structured && !requireInvestigationAfterEmpty && limits.finalSchema && (emptyFinals>=1 || invalidReviewFinals>=2 || invalidFinalFormats>=1 || !!workflow?.snapshot().verifiedEvidenceFocus) &&
+      if(structured && !requireInvestigationAfterEmpty && limits.finalSchema && (emptyFinals>=1 || invalidReviewFinals>=2 || invalidFinalFormats>=1 || !!workflow?.snapshot().verifiedEvidenceFocus || stageLock?.currentStage==='REVIEW' || stageLock?.currentStage==='REPORT') &&
          (!constraints?.action || constraints.action.includes('final'))) {
         // Qwen3:4b sometimes returns a valid "final" action with both answer=""
-        // and result omitted, or malformed JSON in answer. Once observed, require
-        // the typed final result in the NEXT model response rather than repeating
-        // an identical unconstrained prompt. The semantic validator still checks every claim.
+        // and result omitted, or malformed JSON in answer. Require the typed final
+        // result immediately in REVIEW/REPORT (or after recovery) so GBNF decoding
+        // never lets Qwen stream 2048 tokens of unstructured prose into answer.
         const strictResult=JSON.parse(JSON.stringify(limits.finalSchema)) as Record<string,any>;
         // Give the tiny model exact recorded observation IDs in the schema,
         // rather than asking it to reproduce a 64-character digest unaided.
@@ -839,15 +839,33 @@ export async function runLocalAudit(
         if(!recordedIds.length && strictResult.properties?.findings) {
           // A model cannot cite a reproduction before the controller has
           // registered one. Keep a legitimate scoped negative result possible.
-          strictResult.properties.findings={...strictResult.properties.findings,maxItems:0};
+          strictResult.properties.findings={type:'array',maxItems:0};
+          if(strictResult.properties?.reason && typeof strictResult.properties.reason==='object') {
+            strictResult.properties.reason={...strictResult.properties.reason,maxLength:Math.min(strictResult.properties.reason.maxLength ?? 1000,600)};
+          }
+          if(Array.isArray(strictResult.required) && strictResult.properties?.outcome && strictResult.properties?.reason) {
+            strictResult.required=[...new Set([...strictResult.required,'outcome','reason'])];
+          }
           await appendFile(logFile,'[FINAL_UNVERIFIED_FINDINGS_BLOCKED] No recorded reproduction case\n');
         } else if(item?.properties?.caseId) {
           item.properties.caseId={...item.properties.caseId,enum:recordedIds};
         }
+        const finalOnly=constraints?.action?.length===1 && constraints.action[0]==='final';
+        const nextProps:Record<string,any>={...requestSchema.properties,
+          action:{type:'string',enum:['final']},
+          ...(finalOnly ? {
+            path:{type:'string',enum:['']},
+            query:{type:'string',enum:['']},
+            answer:{type:'string',enum:['']},
+          } : {}),
+          result:strictResult};
+        if(finalOnly) {
+          delete nextProps.sequence;
+          delete nextProps.offset;
+          delete nextProps.hypothesis;
+        }
         requestSchema={...requestSchema,
-          properties:{...requestSchema.properties,
-            action:{type:'string',enum:['final']},
-            result:strictResult},
+          properties:nextProps,
           required:[...new Set([...actionSchema.required,'result'])]};
         await appendFile(logFile,'[FINAL_RESULT_REQUIRED] Recovery from empty final; evidence validation still required\n');
       }
@@ -922,6 +940,42 @@ export async function runLocalAudit(
             'Controller static scanner leads (advisory triage candidates, not verified findings):\n'+
             JSON.stringify(leadsSummary).slice(0,800)});
       }
+      // In REVIEW/REPORT the controller supplies bounded progress, experiment ledger,
+      // and static leads directly. Never let stale EXPERIMENT/READ tool exchanges or
+      // oversized advisory progress push compactAuditContext over exchangeBudget.
+      const isFinalReviewStage=stageLock?.currentStage==='REVIEW' || stageLock?.currentStage==='REPORT';
+      if(isFinalReviewStage && messages.length>2) {
+        const candidateReserve=Math.max((progressMessages.length ? JSON.stringify(progressMessages).length : 0)+schemaExtra,workflow?3000:0);
+        const candidateExchangeBudget=messageBudget-candidateReserve;
+        const hasReviewExchange=messages.slice(2).some(m=>
+          m.content.includes('TOOL_RESULT {"name":"final_validation"') ||
+          m.content.includes('Final rejected;') ||
+          m.content.includes('Empty final answer rejected.'));
+        const latestStart=latestAuditExchangeStart(messages);
+        const latestExchangeSize=latestStart<messages.length
+          ? JSON.stringify([...messages.slice(0,2),...messages.slice(latestStart)]).length : 0;
+        if(!hasReviewExchange && latestExchangeSize>candidateExchangeBudget) {
+          const archived=messages.slice(0,2);
+          await archiveEvictedExchanges(messages,archived);
+          messages=archived;
+          await appendFile(logFile,'[REVIEW_PRE_EXCHANGE_ARCHIVED] '+JSON.stringify({latestExchangeSize,candidateExchangeBudget})+'\n');
+        }
+      }
+      {
+        const latestStart=latestAuditExchangeStart(messages);
+        const floorMessages=latestStart<messages.length ? [...messages.slice(0,2),...messages.slice(latestStart)] : messages.slice(0,2);
+        const floorSize=JSON.stringify(floorMessages).length;
+        const maxControllerSpace=Math.max(0,messageBudget-floorSize);
+        while(progressMessages.length>1 && JSON.stringify(progressMessages).length+schemaExtra>maxControllerSpace) {
+          progressMessages.pop();
+        }
+        if(progressMessages.length===1 && JSON.stringify(progressMessages).length+schemaExtra>maxControllerSpace) {
+          const allowedMsgChars=Math.max(0,maxControllerSpace-schemaExtra-80);
+          if(allowedMsgChars<200)progressMessages.length=0;
+          else if(progressMessages[0].content.length>allowedMsgChars)
+            progressMessages[0]={...progressMessages[0],content:progressMessages[0].content.slice(0,allowedMsgChars)};
+        }
+      }
       const progressSize=progressMessages.length ? JSON.stringify(progressMessages).length : 0;
       // Reserve controller space when producing tool output too, including the
       // next stage's note. Otherwise a fitted result can overflow on the next turn.
@@ -931,14 +985,18 @@ export async function runLocalAudit(
       await archiveEvictedExchanges(beforeCompaction,compacted);
       messages=compacted;
       const started = Date.now();
-      await appendFile(logFile, `[OLLAMA] turn ${turn+1}/${allowance.turns}: request started; model=${model}; context=${limits.numCtx ?? "server-default"}; generation_limit=${generationBudget}; protocol=${protocol}\n`);
+      const profile=modelProfile(workflow?.snapshot().stage);
+      const hasObservedBehavior=!!workflow?.snapshot().observations.some(o=>o.status==='behavior_observed');
+      const turnGenerationLimit=(stageLock?.currentStage==='REVIEW' && !profile.think && structured && workflow && !!limits.finalSchema && !hasObservedBehavior && !invalidFinalFormats)
+        ? Math.min(generationBudget,512)
+        : generationBudget;
+      await appendFile(logFile, `[OLLAMA] turn ${turn+1}/${allowance.turns}: request started; model=${model}; context=${limits.numCtx ?? "server-default"}; generation_limit=${turnGenerationLimit}; protocol=${protocol}\n`);
       let lastProgressLog=0;
       const onProgress=(progress:{contentCharacters:number;thinkingCharacters:number;toolCalls:number})=>{
         if(Date.now()-lastProgressLog<15000)return;
         lastProgressLog=Date.now();
         void appendFile(logFile,"[MODEL_PROGRESS] "+JSON.stringify({turn:turn+1,elapsedMs:Date.now()-started,...progress})+"\n").catch(()=>{});
       };
-      const profile=modelProfile(workflow?.snapshot().stage);
       const turnMessages=progressMessages.length ? [...messages,...progressMessages] : messages;
       const requestMessages=profile.think ? turnMessages.map(m=>({...m,content:m.content.replaceAll('/no_think','')})) : turnMessages;
       // The graph has already specified the exact next read/verification.
@@ -1380,7 +1438,7 @@ export async function runLocalAudit(
           const request={ model, stream: false, think: profile.think, messages:requestMessages,
           ...(structured ? {format:requestSchema} : {tools:availableTools}),
           keep_alive:"10m",
-          options: { num_predict:generationBudget,
+          options: { num_predict:turnGenerationLimit,
             ...(limits.numCtx === undefined ? {} : {num_ctx:settings.numCtx}),
             ...(limits.numThreads === undefined ? {} : {num_thread:settings.numThreads}), ...profile.options } };
           for(let attempt=1;attempt<=5;attempt++) {
@@ -1432,13 +1490,26 @@ export async function runLocalAudit(
         try {action = decodeAuditAction(message.content,!!limits.verifyPython);}
         catch {
           if (result.done_reason === "length" && generationBudget < 4096) {
-            const nextBudget = allocateAuditContext(messages.slice(0,2),structured?actionSchema:availableTools,settings.numCtx,Math.min(generationBudget*2,4096),workflow?3000:0).generationBudget;
+            if(constraints?.action?.length===1 && constraints.action[0]==='final')invalidFinalFormats++;
+            if((stageLock?.currentStage==='REVIEW' || stageLock?.currentStage==='REPORT') && messages.length>2 &&
+               !messages.slice(2).some(m=>m.content.includes('TOOL_RESULT {"name":"final_validation"') || m.content.includes('Final rejected;'))) {
+              const archived=messages.slice(0,2);
+              await archiveEvictedExchanges(messages,archived);
+              messages=archived;
+            }
+            const allocatedNextBudget = allocateAuditContext(messages.slice(0,2),structured?actionSchema:availableTools,settings.numCtx,Math.min(generationBudget*2,4096),workflow?3000:0).generationBudget;
+            const latestStart = latestAuditExchangeStart(messages);
+            const activeFloor = JSON.stringify(latestStart < messages.length ? [...messages.slice(0,2),...messages.slice(latestStart)] : messages.slice(0,2)).length;
+            const schemaChars = JSON.stringify(structured ? actionSchema : availableTools).length;
+            const reserveFloor = Math.max(progressSize + schemaExtra, workflow ? 3000 : 0);
+            const maxGenForExisting = Math.floor(settings.numCtx - 512 - (activeFloor + schemaChars + reserveFloor) / 3);
+            const nextBudget = Math.min(allocatedNextBudget, maxGenForExisting);
             if(nextBudget<=generationBudget)throw new Error("Truncated action exceeds available output space; use a smaller action or sequence");
             const nextContext = Math.max(2000,(settings.numCtx-nextBudget-512)*3);
             if (fixedSize > nextContext) throw new Error("Truncated action needs more context for a larger output budget; increase numCtx");
             generationBudget = nextBudget;
             contextBudget = nextContext;
-            messageBudget = contextBudget-JSON.stringify(structured ? actionSchema : availableTools).length;
+            messageBudget = contextBudget-schemaChars;
             pageSize = Math.max(128,Math.min(2000,messageBudget-JSON.stringify(messages.slice(0,2)).length-800));
             await appendFile(logFile, `[OLLAMA] truncated JSON action; retrying with generation_limit=${generationBudget}\n`);
             continue;
