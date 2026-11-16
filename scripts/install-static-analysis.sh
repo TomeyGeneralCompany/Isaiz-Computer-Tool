@@ -3,6 +3,11 @@ set -Eeuo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 python3 -m venv "$ROOT/.venv-static"
 "$ROOT/.venv-static/bin/python" -m pip install -r "$ROOT/scripts/static-analysis-requirements.txt"
+# Ensure the Solidity reproduction runtime is present so older pragma binaries are
+# available to static scanning without mutating the operator's global toolchain.
+if [[ ! -d "$ROOT/scripts/reproduction-runtime/node_modules" ]]; then
+  npm install --prefix "$ROOT/scripts/reproduction-runtime" --ignore-scripts --no-audit --no-fund
+fi
 # Fetch a pinned compiler from Solidity's official binary mirror. Do not change
 # the user's global solc-select version or depend on its latest-release endpoint.
 python3 - "$ROOT/.venv-static/solc-0.8.30" <<'PYTHON'
@@ -25,7 +30,6 @@ if not destination.is_file() or hashlib.sha256(destination.read_bytes()).hexdige
         try:
             with urllib.request.urlopen(url, timeout=120) as response:
                 candidate = response.read(32 * 1024 * 1024)
-            # No retry may bypass the pinned checksum gate.
             if hashlib.sha256(candidate).hexdigest() != expected:
                 raise SystemExit('Solidity compiler checksum mismatch; installation stopped')
             data = candidate
