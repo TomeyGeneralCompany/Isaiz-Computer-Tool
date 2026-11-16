@@ -8,6 +8,20 @@ import {fileURLToPath} from 'node:url';
 const exec=promisify(execFile);
 const MAX_SLITHER_TARGETS=6;
 const excludedSolidityPath=/(?:^|\/)(?:mocks?|test|tests|__tests__|fixtures)(?:\/|$)/i;
+const coreContractTerms=/(?:^|\/)(?:vaults?|pools?|markets?|lending|staking|bridge|router|exchange|vesting|minter|treasury|strategy|controller|settlement|liquidation|oracle|escrow|rewards?)(?:\/|[-_.])/i;
+
+/**
+ * Select a bounded, deterministic set of production Solidity files for Slither.
+ * Acquisition order is retained within the same rank, while obvious core
+ * protocol contracts are scanned before generic libraries and helpers.
+ */
+export function rankSolidityStaticTargets(paths:string[],repoPrefix:string,limit=MAX_SLITHER_TARGETS):string[] {
+  const candidates=[...new Set(paths.filter(p=>p.startsWith(repoPrefix+'/')&&p.endsWith('.sol')))]
+    .map((path,index)=>({path:path.slice(repoPrefix.length+1),index}))
+    .filter(({path})=>!excludedSolidityPath.test(path));
+  candidates.sort((a,b)=>Number(coreContractTerms.test(b.path))-Number(coreContractTerms.test(a.path))||a.index-b.index);
+  return candidates.slice(0,Math.max(0,limit)).map(item=>item.path);
+}
 
 export async function collectStaticLeads(root:string,repositories:Array<{directory:string;url:string}>,paths:string[],cache:string,signal:AbortSignal,
   testAssetsRoot?:string) {
@@ -27,20 +41,14 @@ export async function collectStaticLeads(root:string,repositories:Array<{directo
   const rulesRevision=revision.digest('hex');
   try {
     const saved=JSON.parse(await readFile(cache,'utf8'));
-    if(saved.version===3&&saved.rulesRevision===rulesRevision&&Array.isArray(saved.leads)&&
+    if(saved.version===4&&saved.rulesRevision===rulesRevision&&Array.isArray(saved.leads)&&
       Array.isArray(saved.runs)&&saved.runs.length>0&&saved.runs.every((r:any)=>r.status==='completed'))return saved;
   }catch{}
 
   const runs:any[]=[],leads:any[]=[];
   for(const repo of repositories) {
     const prefix=relative(root,repo.directory).split(sep).join('/');
-    // `paths` is already project-ranked by acquisition. Scan a bounded set of
-    // project-owned contracts rather than whichever Solidity file appears first
-    // (often a mock or dependency). The scanner output remains advisory only.
-    const solidityTargets=[...new Set(paths.filter(p=>p.startsWith(prefix+'/')&&p.endsWith('.sol')))]
-      .map(p=>p.slice(prefix.length+1))
-      .filter(p=>!excludedSolidityPath.test(p))
-      .slice(0,MAX_SLITHER_TARGETS);
+    const solidityTargets=rankSolidityStaticTargets(paths,prefix);
     for(const engine of ['semgrep',...(solidityTargets.length?['slither']:[])]) {
       const targets=engine==='slither'?solidityTargets:[undefined];
       for(const target of targets) {
@@ -68,7 +76,7 @@ export async function collectStaticLeads(root:string,repositories:Array<{directo
       }
     }
   }
-  const result={version:3,rulesRevision,status:'navigation_only',leads:leads.slice(0,128),runs,
+  const result={version:4,rulesRevision,status:'navigation_only',leads:leads.slice(0,128),runs,
     limitation:'Detectors produce advisory candidates, not verified findings. Inspect and independently reproduce before reporting.'};
   const temporary=cache+'.'+process.pid+'.tmp';
   await writeFile(temporary,JSON.stringify(result),{mode:0o600});

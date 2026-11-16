@@ -3,11 +3,23 @@ set -Eeuo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 python3 -m venv "$ROOT/.venv-static"
 "$ROOT/.venv-static/bin/python" -m pip install -r "$ROOT/scripts/static-analysis-requirements.txt"
-# Ensure the Solidity reproduction runtime is present so older pragma binaries are
-# available to static scanning without mutating the operator's global toolchain.
-if [[ ! -d "$ROOT/scripts/reproduction-runtime/node_modules" ]]; then
+# Ensure the Solidity reproduction runtime and every pinned compiler alias are
+# installed. A partial node_modules directory is not sufficient for pragma-based
+# Slither selection. Install only package contents; never execute install scripts.
+if ! node - "$ROOT/scripts/reproduction-runtime" <<'NODE'
+const root=process.argv[2];
+for(const name of ['solc_0_5','solc_0_6','solc_0_7','solc_0_8_4']) {
+  try { require.resolve(name,{paths:[root]}); }
+  catch { process.exit(1); }
+}
+NODE
+then
   npm install --prefix "$ROOT/scripts/reproduction-runtime" --ignore-scripts --no-audit --no-fund
 fi
+node - "$ROOT/scripts/reproduction-runtime" <<'NODE'
+const root=process.argv[2];
+for(const name of ['solc_0_5','solc_0_6','solc_0_7','solc_0_8_4']) require.resolve(name,{paths:[root]);
+NODE
 # Fetch a pinned compiler from Solidity's official binary mirror. Do not change
 # the user's global solc-select version or depend on its latest-release endpoint.
 python3 - "$ROOT/.venv-static/solc-0.8.30" <<'PYTHON'
