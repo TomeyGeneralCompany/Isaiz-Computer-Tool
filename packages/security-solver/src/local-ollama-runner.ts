@@ -854,10 +854,11 @@ export async function runLocalAudit(
         // Every terminal experiment, including unsupported, requires a review disposition.
       }
       // A completed queue with no positive security reproduction has a truthful
-      // controller-owned negative/inconclusive report. Do not force the small
+      // controller-owned negative/inconclusive report after an invalid model final. Do not force the small
       // model through repeated empty-final retries merely to restate stored data.
       if(stageLock?.currentStage==='REVIEW' && stageLock.candidateCount>0 &&
-         stageLock.outcomeCounts.observed===0){
+         stageLock.outcomeCounts.observed===0 &&
+         (emptyFinals>=1 || invalidReviewFinals>=2 || invalidFinalFormats>=1)){
         const counts=stageLock.outcomeCounts;
         const disposition=JSON.stringify({findings:[],outcome:'no_testable_candidate',
           reason:'Completed '+stageLock.completedCount+' source-grounded experiments. '+
