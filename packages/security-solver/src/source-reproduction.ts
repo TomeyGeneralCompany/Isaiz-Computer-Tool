@@ -53,7 +53,7 @@ const polyglotSequenceObservations=z.object({factory:z.string().nullable(),steps
   operation:z.literal("call"),function:z.string(),actual:z.unknown(),
   expected:z.unknown().optional(),passed:z.boolean()
 })).min(2).max(12)});
-const resultSchema = z.object({status:z.string(),behavior_observed:z.boolean(),classification:z.string().optional(),source_sha256:digest.optional(),
+const resultSchema = z.object({status:z.string(),behavior_observed:z.boolean(),classification:z.string().nullish(),source_sha256:digest.optional(),
   kind:z.string().optional(),observations:z.union([z.object({control_input:z.string(),control_output:z.string(),attack_input:z.string(),attack_output:z.string(),
     entry_control_url:z.string().optional(),entry_attack_url:z.string().optional(),
     entry_selector:z.string().optional(),entry_parameter:z.string().optional()}),sequenceObservations,javaSequenceObservations,polyglotSequenceObservations]).optional(),
