@@ -34,6 +34,41 @@ const sequence={preparation:{
  {operation:'call',function:'recorded()',args:[],expect:'5'}
 ]};
 assert.doesNotThrow(()=>validateSequence(sequence));
+
+ // Regression: valid preparation deployments and signatures survive validation.
+ for(const file of ['Token.sol','contracts/Token.sol','contracts/mocks/ERC20Mock.sol']){
+  const candidate=structuredClone(sequence);
+  candidate.preparation.deployments[0].file=file;
+  assert.doesNotThrow(()=>validateSequence(candidate),'valid preparation path: '+file);
+ }
+ for(const contract of ['Token','TokenV2']){
+  const candidate=structuredClone(sequence);
+  candidate.preparation.deployments[0].contract=contract;
+  assert.doesNotThrow(()=>validateSequence(candidate),'valid contract name: '+contract);
+ }
+ for(const file of ['../Token.sol','/tmp/Token.sol','contracts/../Token.sol',
+                     'contracts/./Token.sol','Token.sol/../../outside.sol']){
+  const candidate=structuredClone(sequence);
+  candidate.preparation.deployments[0].file=file;
+  assert.throws(()=>validateSequence(candidate),/Invalid preparation deployment/,
+    'invalid preparation path: '+file);
+ }
+ const duplicateDeployment=structuredClone(sequence);
+ duplicateDeployment.preparation.deployments.push({...duplicateDeployment.preparation.deployments[0]});
+ assert.throws(()=>validateSequence(duplicateDeployment),/Invalid preparation deployment/);
+ const unknownDeployment=structuredClone(sequence);
+ unknownDeployment.preparation.operations[0].deploymentId='missing';
+ assert.throws(()=>validateSequence(unknownDeployment),/Invalid preparation operation/);
+ const invalidConstructor=structuredClone(sequence);
+ invalidConstructor.preparation.deployments[0].constructorArgs=[123];
+ assert.throws(()=>validateSequence(invalidConstructor),/ABI values/);
+ const invalidMethod=structuredClone(sequence);
+ invalidMethod.preparation.operations[0].function='mint(address);evil()';
+ assert.throws(()=>validateSequence(invalidMethod),/Invalid preparation operation/);
+ const unknownSequenceDeployment=structuredClone(sequence);
+ unknownSequenceDeployment.steps[0].deploymentId='missing';
+ assert.throws(()=>validateSequence(unknownSequenceDeployment),/Unknown step deploymentId/);
+
 const transport=()=>ganache.provider({logging:{quiet:true},wallet:{deterministic:true,totalAccounts:3},
  chain:{hardfork:'shanghai',chainId:1337,time:new Date('2020-01-01T00:00:00Z')},
  miner:{blockGasLimit:12000000,timestampIncrement:1}});
