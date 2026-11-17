@@ -115,7 +115,9 @@ export class InvestigationWorkflow {
     if(status==='behavior_observed')
       this.scenarios.transition(id,'reviewing','Independent reviewer must assess security relevance');
     else this.scenarios.finish(id,status==='behavior_not_observed'?'rejected':'incomplete',
-      'Isolated experiment disposition: '+status);
+      status==='behavior_not_observed'
+        ? 'Source-backed hypothesis falsified by a completed negative EVM experiment'
+        : 'Inconclusive isolated experiment disposition: '+status);
   }
   acceptedReview(path:string,query:string,kind:string,reference:string,positive:boolean){
     const id=this.scenarioMap.get(this.scenarioKey(path,query,kind));
