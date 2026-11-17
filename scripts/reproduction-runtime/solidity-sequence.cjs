@@ -36,9 +36,9 @@ function validateSequence(s) {
     for(const d of p.deployments) {
       object(d,['id','file','contract','constructorArgs'],['id','file','contract','constructorArgs','valueWei']);
       if(!id(d.id)||ids.has(d.id)||typeof d.file!=='string' ||
-         !/^[A-Za-z0-9_.\\/-]+\\.sol$/.test(d.file) || d.file.startsWith('/') ||
+         !/^[A-Za-z0-9_.\/-]+\.sol$/.test(d.file) || d.file.startsWith('/') ||
          d.file.split('/').some(x=>x==='..'||x==='.') ||
-         typeof d.contract!=='string'||!/^[A-Za-z_]\\w*$/.test(d.contract))
+         typeof d.contract!=='string'||!/^[A-Za-z_]\w*$/.test(d.contract))
         throw new Error('Invalid preparation deployment');
       ids.add(d.id);deployments.add(d.id);args(d.constructorArgs);wei(d.valueWei);
     }
