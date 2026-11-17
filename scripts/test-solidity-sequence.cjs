@@ -157,6 +157,38 @@ async function execute(s) {
    assert.equal(h.steps[2].reverted,false);
    assert.equal(h.steps[3].passed,true);
  }finally{await ht.disconnect();}
+
+ // Regression: non-function-bearing eth_balance steps must remain executable.
+ const withBalanceBefore={constructorArgs:['0','$account0'],steps:[
+  {operation:'eth_balance',account:'$contract'},
+  {operation:'send',function:'set(uint256)',args:['3'],sender:1,expectRevert:true},
+  {operation:'eth_balance',account:'$contract'},
+  {operation:'call',function:'value()',args:[],expect:'0'}
+ ]};
+ const balanceResult=await execute(withBalanceBefore);
+ assert.equal(balanceResult.steps[0].operation,'eth_balance');
+ assert.equal(balanceResult.steps[1].reverted,true);
+ assert.equal(balanceResult.steps[2].operation,'eth_balance');
+ assert.equal(balanceResult.steps[3].passed,true);
+ assert.deepEqual(await execute(withBalanceBefore),balanceResult);
+ const withBalanceAfter={constructorArgs:['0','$account0'],steps:[
+  {operation:'send',function:'set(uint256)',args:['7'],sender:0},
+  {operation:'eth_balance',account:'$contract'},
+  {operation:'call',function:'value()',args:[],expect:'7'}
+ ]};
+ const afterBalanceResult=await execute(withBalanceAfter);
+ assert.equal(afterBalanceResult.steps[0].reverted,false);
+ assert.equal(afterBalanceResult.steps[1].operation,'eth_balance');
+ assert.equal(afterBalanceResult.steps[2].passed,true);
+ // Selected-function guard must tolerate balance-only steps but still
+ // require a concrete function match.
+ const selectedFunction='set';
+ const exercisesSelected=steps=>steps.some(step=>
+  typeof step.function==='string' && step.function.split('(')[0]===selectedFunction);
+ assert.equal(exercisesSelected(withBalanceBefore.steps),true);
+ assert.equal(exercisesSelected([{operation:'eth_balance',account:'$contract'}]),false);
+ assert.equal(exercisesSelected([{operation:'eth_balance',account:'$contract'},
+  {operation:'send',function:'deposit()',args:[]}]),false);
  const wrongArgs=structuredClone(sequence);wrongArgs.steps[2].args=['not an integer'];
  await assert.rejects(execute(wrongArgs),/invalid|argument/i,'Invalid ABI input cannot masquerade as an expected revert');
  const readAsSend={constructorArgs:['0','$account0'],steps:[{operation:'send',function:'value()',args:[]},sequence.steps[0]]};
