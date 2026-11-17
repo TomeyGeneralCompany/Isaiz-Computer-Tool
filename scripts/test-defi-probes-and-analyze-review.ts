@@ -123,7 +123,25 @@ contract RealMinter {
   );
   assert.ok(minterOpts.some(o => o.selector === "RealMinter.mint"), "Non-mock unguarded mint must be queued");
   assert.ok(minterOpts.some(o => o.selector === "RealMinter.deposit"), "Core DeFi deposit entrypoint must be queued");
-  const exploratoryDeposit = minterOpts.find(o => o.selector === "RealMinter.deposit")!;
+  const selectedDeposit = minterOpts.find(o => o.selector === "RealMinter.deposit")!;
+  assert.match(selectedDeposit.probe.hypothesis, /Unauthorized caller/,
+    "A source-backed unauthorized-mint hypothesis must outrank an exploratory fallback");
+
+  // A plain entrypoint with no grounded security assertion must remain exploratory.
+  const plainSource = `pragma solidity 0.8.4;
+contract PlainVault {
+  function deposit(uint256 amount) external {}
+}`;
+  const plainPath = "source-1/contracts/PlainVault.sol";
+  const plainOpts = controllerGroundedSolidityOptions(
+    plainPath,
+    plainSource,
+    [{ selector: "PlainVault.deposit", operation: "send", inputs: ["uint256"] }],
+    [{ path: plainPath, content: plainSource, sha256: sha(plainSource) }],
+    "a".repeat(40),
+  );
+  const exploratoryDeposit = plainOpts.find(o => o.selector === "PlainVault.deposit");
+  assert.ok(exploratoryDeposit, "Plain deposit must be eligible for bounded exploration");
   assert.match(exploratoryDeposit.probe.hypothesis, /Exploratory core DeFi entrypoint/);
   assert.match(exploratoryDeposit.probe.hypothesis, /no verified accounting or authorization invariant/);
   assert.ok(exploratoryDeposit.probe.sequence.steps.some(step => step.operation === "send"),
