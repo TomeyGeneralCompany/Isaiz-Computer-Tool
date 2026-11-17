@@ -347,20 +347,26 @@ def security_experiment_disposition(
             continue
         before = actual_steps[:i]
         after = actual_steps[i + 1:]
-        for preceding in before:
+        for before_index, preceding in enumerate(before):
             if (preceding.get("operation") != "call" or
                     preceding.get("deploymentId") or
                     preceding.get("passed") is not True):
                 continue
-            for following in after:
+            requested_before = requested_steps[before_index]
+            for after_index, following in enumerate(after, start=i + 1):
+                requested_after = requested_steps[after_index]
                 if (following.get("operation") != "call" or
                         following.get("deploymentId") or
                         following.get("passed") is not True or
-                        following.get("function") != preceding.get("function")):
+                        following.get("function") != preceding.get("function") or
+                        requested_before.get("operation") != "call" or
+                        requested_after.get("operation") != "call" or
+                        requested_before.get("function") != requested_after.get("function") or
+                        requested_before.get("args") != requested_after.get("args")):
                     continue
                 if preceding.get("actual") == following.get("actual"):
                     return ("behavior_not_observed", "guarded_negative",
-                            "Unauthorized selected transaction reverted and a source-declared state readback remained unchanged; all recorded assertions passed.")
+                            "Unauthorized selected transaction reverted and an identical source-declared state readback remained unchanged; all recorded assertions passed.")
     return "observation_only", None, explanation
 
 
