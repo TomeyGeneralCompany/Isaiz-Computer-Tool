@@ -18,7 +18,7 @@ then
 fi
 node - "$ROOT/scripts/reproduction-runtime" <<'NODE'
 const root=process.argv[2];
-for(const name of ['solc_0_5','solc_0_6','solc_0_7','solc_0_8_4']) require.resolve(name,{paths:[root]);
+for(const name of ['solc_0_5','solc_0_6','solc_0_7','solc_0_8_4']) require.resolve(name,{paths:[root]});
 NODE
 # Fetch a pinned compiler from Solidity's official binary mirror. Do not change
 # the user's global solc-select version or depend on its latest-release endpoint.

@@ -522,7 +522,7 @@ def run_probe(repository: Path, specification: dict, _dependency_round: int = 0)
                     pass
             compile_cache_out.write_bytes(b'')
             compile_cache_binds += ['--bind', str(compile_cache_out), '/compile-cache-out.json']
-        java_dependency_bind = ['--ro-bind',str(work/'java-deps'),'/java-deps'] if language == 'java' else []
+        java_dependency_bind = ['--ro-bind',str(work/'java-deps'),'/java-deps'] if language == 'java' and (work/'java-deps').is_dir() else []
         runtime_binds = ['--ro-bind',str(java_home),'/jdk',*java_config_binds,'--ro-bind',str(runtime),'/runtime'] if language == 'java' else [] if language == 'python' else [
             '--ro-bind',str(Path(node).resolve()),'/probe-node',
             '--ro-bind',str(runtime),'/runtime']
