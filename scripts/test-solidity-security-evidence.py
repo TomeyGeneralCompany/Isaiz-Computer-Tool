@@ -10,7 +10,7 @@ from pathlib import Path
 SCRIPTS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS_DIR))
 
-from solidity_security_evidence import security_behavior_observed  # noqa: E402
+from solidity_security_evidence import security_behavior_observed, security_experiment_disposition  # noqa: E402
 
 repro_spec = importlib.util.spec_from_file_location('source_repro', SCRIPTS_DIR / 'source-reproduction.py')
 repro_mod = importlib.util.module_from_spec(repro_spec)
@@ -69,6 +69,45 @@ class SoliditySecurityEvidenceTests(unittest.TestCase):
             )
             self.assertFalse(ok2)
             self.assertIsNone(cls2)
+            # An explicit, fully asserted denied unauthorized transition is a
+            # genuine negative outcome, not an unclassified observation.
+            guarded_spec = {"sequence": {"steps": [
+                {"operation": "send", "function": "initialize(address,uint256)", "sender": 0},
+                {"operation": "call", "function": "owner()"},
+                {"operation": "send", "function": "initialize(address,uint256)",
+                 "sender": 1, "expectRevert": True},
+                {"operation": "call", "function": "owner()"},
+            ]}}
+            status, category, reason = security_experiment_disposition(
+                root, vault, "Vault.initialize",
+                {"accounts": ACCOUNTS, "contract": CONTRACT_ADDR, "steps": steps_guarded},
+                guarded_spec,
+            )
+            self.assertEqual(status, "behavior_not_observed")
+            self.assertEqual(category, "guarded_negative")
+            self.assertIn("unchanged", reason)
+
+            # No explicit falsification or a failed assertion remains inconclusive.
+            status_unproven, _, _ = security_experiment_disposition(
+                root, vault, "Vault.initialize",
+                {"accounts": ACCOUNTS, "contract": CONTRACT_ADDR, "steps": steps_guarded},
+            )
+            self.assertEqual(status_unproven, "observation_only")
+            failing = [dict(step) for step in steps_guarded]
+            failing[-1]["passed"] = False
+            status_failed, _, _ = security_experiment_disposition(
+                root, vault, "Vault.initialize",
+                {"accounts": ACCOUNTS, "contract": CONTRACT_ADDR, "steps": failing},
+                guarded_spec,
+            )
+            self.assertEqual(status_failed, "observation_only")
+            status_positive, classification_positive, _ = security_experiment_disposition(
+                root, vault, "Vault.initialize",
+                {"accounts": ACCOUNTS, "contract": CONTRACT_ADDR, "steps": steps_takeover},
+                guarded_spec,
+            )
+            self.assertEqual(status_positive, "behavior_observed")
+            self.assertEqual(classification_positive, "reinit_or_constructor_takeover")
 
     def test_eth_and_erc20_extraction_and_guard_rejection(self):
         with tempfile.TemporaryDirectory() as tmp:
