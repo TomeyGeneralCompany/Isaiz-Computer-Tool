@@ -204,7 +204,7 @@ contract TomeyERC1155ProbeHarness is ERC1155Upgradeable {
       a.inputs.length === 1 && a.inputs[0].type === 'string' &&
       a.outputs.length === 1 && a.outputs[0].type === 'string')));
   if (candidates.length !== 1) throw new Error(sequenceMode ? 'Select one deployable contract and public/external function using Contract.function' : 'Select one deployable contract with a view/pure string -> string function using Contract.function');
-  if (sequenceMode && (!contractName || !spec.sequence.steps.some(step=>step.function.split('(')[0]===functionName))) throw new Error('Sequence must exercise the selected Contract.function');
+  if (sequenceMode && (!contractName || !spec.sequence.steps.some(step=>typeof step.function==='string' && step.function.split('(')[0]===functionName))) throw new Error('Sequence must exercise the selected Contract.function');
   let artifact = candidates[0][1];
   if (!cacheHit && sequenceMode && !spec.compilerSettings?.optimizer && artifact.evm.bytecode.object.length > 49152) {
     const totalCompileChars = Object.values(compileSources).reduce((sum, entry) => sum + (entry?.content?.length || 0), 0);
