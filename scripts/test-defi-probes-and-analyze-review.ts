@@ -123,6 +123,11 @@ contract RealMinter {
   );
   assert.ok(minterOpts.some(o => o.selector === "RealMinter.mint"), "Non-mock unguarded mint must be queued");
   assert.ok(minterOpts.some(o => o.selector === "RealMinter.deposit"), "Core DeFi deposit entrypoint must be queued");
+  const exploratoryDeposit = minterOpts.find(o => o.selector === "RealMinter.deposit")!;
+  assert.match(exploratoryDeposit.probe.hypothesis, /Exploratory core DeFi entrypoint/);
+  assert.match(exploratoryDeposit.probe.hypothesis, /no verified accounting or authorization invariant/);
+  assert.ok(exploratoryDeposit.probe.sequence.steps.some(step => step.operation === "send"),
+    "Exploratory probe retains actual state-changing transaction execution");
 }
 
 // 3. Queue prioritization & Tier-4 setter cap (>16 items, max 3 Tier-4 per path)
