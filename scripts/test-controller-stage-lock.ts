@@ -28,6 +28,8 @@ async function run(){
  lock.requireCandidate('A.suspect');
  assert.throws(()=>lock.completeExperiments(),/INCOMPLETE/);
  lock.finishExperiment('A.suspect','observed');
+ assert.deepEqual(lock.outcomeCounts,{observed:1,observation_only:0,
+  not_observed:0,unsupported:0,incomplete:0,rejected:0,pending:0});
  lock.completeExperiments();
  assert.throws(()=>lock.completeReviews(),/INCOMPLETE/);
  lock.review('A.suspect');lock.completeReviews();

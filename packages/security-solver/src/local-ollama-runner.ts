@@ -849,9 +849,33 @@ export async function runLocalAudit(
         !workflow?.snapshot().pending){
         stageLock.completeExperiments();
         await appendFile(logFile,'[EXPERIMENT_COMPLETE] '+
-          JSON.stringify({resolved:stageLock.completedCount})+'\n');
+          JSON.stringify({resolved:stageLock.completedCount,outcomes:stageLock.outcomeCounts})+'\n');
         await appendFile(logFile,'[STAGE_UNLOCK] EXPERIMENT -> REVIEW\n');
         // Every terminal experiment, including unsupported, requires a review disposition.
+      }
+      // A completed queue with no positive security reproduction has a truthful
+      // controller-owned negative/inconclusive report after an invalid model final. Do not force the small
+      // model through repeated empty-final retries merely to restate stored data.
+      if(stageLock?.currentStage==='REVIEW' && stageLock.candidateCount>0 &&
+         stageLock.outcomeCounts.observed===0 &&
+         (emptyFinals>=1 || invalidReviewFinals>=2 || invalidFinalFormats>=1)){
+        const counts=stageLock.outcomeCounts;
+        const disposition=JSON.stringify({findings:[],outcome:'no_testable_candidate',
+          reason:'Completed '+stageLock.completedCount+' source-grounded experiments. '+
+            'Negative='+counts.not_observed+', observation_only='+counts.observation_only+
+            ', unsupported='+counts.unsupported+', incomplete='+counts.incomplete+
+            ', rejected='+counts.rejected+
+            '. None demonstrated a verified security-impact reproduction; inconclusive experiments do not disprove their hypotheses.'});
+        const rejected=await limits.validateFinal?.(disposition);
+        if(rejected)throw new Error('CONTROLLER_NEGATIVE_EXPERIMENT_REPORT_REJECTED: '+String(rejected));
+        for(const {id} of stagedPlans)stageLock.review(id);
+        stageLock.completeReviews();
+        await appendFile(logFile,'[REVIEW_COMPLETE] '+JSON.stringify({eligible:0,outcomes:counts})+'\n');
+        await appendFile(logFile,'[STAGE_UNLOCK] REVIEW -> REPORT\n');
+        stageLock.completeReport(true);
+        await appendFile(logFile,'[REPORT_COMPLETE] '+JSON.stringify({outcome:'no_testable_candidate',outcomes:counts})+'\n');
+        finalAnswer=disposition;stoppingReason='Validated controller no-positive-evidence final';
+        return disposition;
       }
       // Empty queues have a valid, evidence-backed terminal disposition.
       // This route is available only after INDEX, every READ (including policy),
@@ -967,7 +991,7 @@ export async function runLocalAudit(
           if(Array.isArray(strictResult.required) && strictResult.properties?.outcome && strictResult.properties?.reason) {
             strictResult.required=[...new Set([...strictResult.required,'outcome','reason'])];
           }
-          await appendFile(logFile,'[FINAL_UNVERIFIED_FINDINGS_BLOCKED] No recorded reproduction case\n');
+          await appendFile(logFile,'[FINAL_UNVERIFIED_FINDINGS_BLOCKED] No behavior_observed security reproduction; recorded negative or inconclusive executions may exist\n');
         } else if(item?.properties?.caseId) {
           item.properties.caseId={...item.properties.caseId,enum:recordedIds};
         }

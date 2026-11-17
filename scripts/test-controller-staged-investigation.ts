@@ -16,6 +16,8 @@ async function test(){
  stages.finishExperiment('first','unsupported');
  assert.throws(()=>stages.completeExperiments(),/EXPERIMENTS_INCOMPLETE/);
  stages.finishExperiment('second','observed');
+ assert.deepEqual(stages.outcomeCounts,{observed:1,observation_only:0,
+  not_observed:0,unsupported:1,incomplete:0,rejected:0,pending:0});
  stages.completeExperiments();
  assert.throws(()=>stages.assertActionAllowed('final'),/STAGE_LOCKED/);
  stages.review('second');

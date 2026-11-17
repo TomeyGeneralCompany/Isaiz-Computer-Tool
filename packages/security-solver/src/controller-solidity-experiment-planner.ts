@@ -1772,8 +1772,8 @@ function coreProtocolEntrypointExperiment(
     operations:[],checks:[]
   }:undefined;
   return {
-    hypothesis:`Core protocol entrypoint ${contract.name}.${method} should execute with bounded setup and preserve accounting/authorization invariants.`,
-    property:'core DeFi entrypoint state and token invariant check',
+    hypothesis:`Exploratory core DeFi entrypoint ${contract.name}.${method}: record bounded before/after state; no verified accounting or authorization invariant is asserted by this plan.`,
+    property:'exploratory core DeFi entrypoint state observation (inconclusive without a source-backed invariant)',
     sequence:{
       constructorArgs:setup.constructorArgs,
       ...(setup.constructorValueWei?{constructorValueWei:setup.constructorValueWei}:{}),

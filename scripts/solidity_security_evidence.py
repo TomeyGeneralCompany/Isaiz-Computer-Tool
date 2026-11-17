@@ -305,6 +305,71 @@ def _unguarded_dangerous_primitive_observed(file: Path, selector: str, data: dic
     )
 
 
+def security_experiment_disposition(
+    repository: Path,
+    file: Path,
+    selector: str,
+    data: dict,
+    specification: dict | None = None,
+) -> Tuple[str, str | None, str]:
+    """Classify a completed local-EVM experiment without inventing negative proof.
+
+    A negative outcome requires an explicit denied unauthorized transaction,
+    successful sequence assertions, and matching before/after state evidence.
+    Mere absence of a recognized positive result is always inconclusive.
+    """
+    positive, classification, explanation = security_behavior_observed(
+        repository, file, selector, data, specification
+    )
+    if positive:
+        return "behavior_observed", classification, explanation
+
+    requested = (specification or {}).get("sequence") or {}
+    requested_steps = requested.get("steps") or []
+    actual_steps = [step for step in (data.get("steps") or [])
+                    if step.get("operation") != "setup"]
+    if len(requested_steps) != len(actual_steps) or not requested_steps:
+        return "observation_only", None, explanation
+    if any(step.get("passed") is not True for step in actual_steps
+           if step.get("operation") not in ("observe",)):
+        return "observation_only", None, explanation
+
+    target_name = selector.rsplit(".", 1)[-1]
+    for i, (requested_step, actual_step) in enumerate(zip(requested_steps, actual_steps)):
+        if (requested_step.get("operation") != "send" or
+                requested_step.get("sender") != 1 or
+                requested_step.get("expectRevert") is not True or
+                requested_step.get("deploymentId") or
+                str(requested_step.get("function", "")).split("(", 1)[0] != target_name or
+                actual_step.get("operation") != "send" or
+                actual_step.get("sender") != 1 or
+                actual_step.get("reverted") is not True):
+            continue
+        before = actual_steps[:i]
+        after = actual_steps[i + 1:]
+        for before_index, preceding in enumerate(before):
+            if (preceding.get("operation") != "call" or
+                    preceding.get("deploymentId") or
+                    preceding.get("passed") is not True):
+                continue
+            requested_before = requested_steps[before_index]
+            for after_index, following in enumerate(after, start=i + 1):
+                requested_after = requested_steps[after_index]
+                if (following.get("operation") != "call" or
+                        following.get("deploymentId") or
+                        following.get("passed") is not True or
+                        following.get("function") != preceding.get("function") or
+                        requested_before.get("operation") != "call" or
+                        requested_after.get("operation") != "call" or
+                        requested_before.get("function") != requested_after.get("function") or
+                        requested_before.get("args") != requested_after.get("args")):
+                    continue
+                if preceding.get("actual") == following.get("actual"):
+                    return ("behavior_not_observed", "guarded_negative",
+                            "Unauthorized selected transaction reverted and an identical source-declared state readback remained unchanged; all recorded assertions passed.")
+    return "observation_only", None, explanation
+
+
 def security_behavior_observed(
     repository: Path,
     file: Path,

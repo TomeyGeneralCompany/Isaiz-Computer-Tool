@@ -67,6 +67,14 @@ export class ControllerStageLock {
  get currentStage(){return this.stage;}
  get candidateCount(){return this.candidates.size;}
  get completedCount(){return [...this.candidates.values()].filter(x=>x!==null).length;}
+ get outcomeCounts(){
+   const counts={observed:0,observation_only:0,not_observed:0,unsupported:0,incomplete:0,rejected:0,pending:0};
+   for(const outcome of this.candidates.values()) {
+     if(outcome===null)counts.pending++;
+     else counts[outcome]++;
+   }
+   return counts;
+ }
  assertActionAllowed(action:string){
    if(!actions[this.stage].has(action))throw new Error('STAGE_LOCKED: '+this.stage+' forbids '+action);
  }

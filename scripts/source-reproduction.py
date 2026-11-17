@@ -22,7 +22,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from source_dependencies import prepare_dependencies, prepare_pinned_foundry_submodules, prepare_locked_python_wheels, DependencyError
 from solidity_access_evidence import authorization_transition_observed
-from solidity_security_evidence import security_behavior_observed
+from solidity_security_evidence import security_experiment_disposition
 
 SUPPORTED_EXECUTION_STATUS = {
     'behavior_observed',
@@ -619,10 +619,10 @@ def run_probe(repository: Path, specification: dict, _dependency_round: int = 0)
             # takeover, unauthorized value/token extraction, or unguarded
             # dangerous primitive) established by before/after EVM receipts is
             # a reproducible security behavior.
-            source_proven, classification, limitation = security_behavior_observed(
+            status, classification, limitation = security_experiment_disposition(
                 repository,target,specification['function'],data,specification)
-            return {'status':'behavior_observed' if source_proven else 'observation_only',
-                    'behavior_observed':source_proven,
+            return {'status':status,
+                    'behavior_observed':status == 'behavior_observed',
                     'classification':classification,
                     'source_sha256':source_hash,'kind':kind,'observations':data,
                     'limitation':limitation}
