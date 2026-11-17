@@ -60,18 +60,29 @@ function validateSequence(s) {
   }
   args(s.constructorArgs);wei(s.constructorValueWei);
   if(JSON.stringify(s).length>16000 || !Array.isArray(s.steps) || !s.steps.length || s.steps.length>16)throw new Error('Invalid sequence length');
+  const prepDeployments=new Set((s.preparation?.deployments||[]).map(d=>d.id));
   for(const step of s.steps) {
-    if(step?.operation==='call')object(step,['operation','function','args','expect'],['operation','function','args','expect','sender']);
-    else if(step?.operation==='observe')object(step,['operation','function','args'],['operation','function','args','sender']);
-    else if(step?.operation==='send')object(step,['operation','function','args'],['operation','function','args','sender','valueWei','expectRevert']);
+    if(step?.operation==='eth_balance'){
+      object(step,['operation','account']);
+      if(typeof step.account!=='string'||!/^(?:\$account[012]|\$contract|\$deployment:[A-Za-z][A-Za-z0-9_-]{0,63})$/.test(step.account))
+        throw new Error('Invalid eth_balance account reference');
+      if(step.account.startsWith('$deployment:')&&!prepDeployments.has(step.account.slice('$deployment:'.length)))
+        throw new Error('Unknown deployment reference '+step.account);
+      continue;
+    }
+    if(step?.operation==='call')object(step,['operation','function','args','expect'],['operation','deploymentId','function','args','expect','sender']);
+    else if(step?.operation==='observe')object(step,['operation','function','args'],['operation','deploymentId','function','args','sender']);
+    else if(step?.operation==='send')object(step,['operation','function','args'],['operation','deploymentId','function','args','sender','valueWei','expectRevert']);
     else throw new Error('Unknown sequence operation');
+    if(step.deploymentId!==undefined && (typeof step.deploymentId!=='string' || !prepDeployments.has(step.deploymentId)))
+      throw new Error('Unknown step deploymentId '+String(step.deploymentId));
     if(typeof step.function!=='string'||step.function.length>200||!/^[A-Za-z_][A-Za-z0-9_]*(?:\([A-Za-z0-9_,()[\]]*\))?$/.test(step.function))throw new Error('Invalid ABI function selector');
     args(step.args);
     if(step.sender!==undefined && (!Number.isInteger(step.sender)||step.sender<0||step.sender>2))throw new Error('Invalid local sender');
     if(step.operation==='call')value(step.expect);
     else {wei(step.valueWei);if(step.expectRevert!==undefined&&typeof step.expectRevert!=='boolean')throw new Error('Invalid revert expectation');}
   }
-  if(!s.steps.some(step=>step.operation==='call'||step.operation==='observe'))throw new Error('Include a read observation');
+  if(!s.steps.some(step=>step.operation==='call'||step.operation==='observe'||step.operation==='eth_balance'))throw new Error('Include a read observation');
   return s;
 }
 function normalize(v) {
@@ -213,21 +224,30 @@ async function runSequence(artifact, sequence, transport, preparationArtifacts={
       }
     }
     for(const step of sequence.steps) {
-      await prepareTransfer(step);
-      const fn=contract.connect(signers[step.sender??0]).getFunction(step.function);
+      if(step.operation==='eth_balance') {
+        const targetAddr=resolve(step.account);
+        const bal=await provider.getBalance(targetAddr);
+        steps.push({operation:'eth_balance',target:step.account,address:String(targetAddr).toLowerCase(),
+          balanceWei:bal.toString(),passed:true});
+        continue;
+      }
+      if(!step.deploymentId)await prepareTransfer(step);
+      const targetContract=step.deploymentId ? deployed.get(step.deploymentId).contract : contract;
+      const depMeta=step.deploymentId ? {deploymentId:step.deploymentId} : {};
+      const fn=targetContract.connect(signers[step.sender??0]).getFunction(step.function);
       const fragment=fn.fragment;
       const args=step.args.map(resolve);
       // Encode first: ABI/selector/setup failures must not count as expected reverts.
-      contract.interface.encodeFunctionData(fragment,args);
+      targetContract.interface.encodeFunctionData(fragment,args);
       if(step.operation==='call' || step.operation==='observe') {
         if(!['view','pure'].includes(fragment.stateMutability))throw new Error('call requires a view/pure function');
         const result=await fn.staticCallResult(...args,{gasLimit:1000000});
         const actual=normalize(fragment.outputs.length===1?result[0]:result);
         if(step.operation==='call') {
           const expected=normalize(resolve(step.expect));
-          steps.push({operation:'call',function:fragment.format('sighash'),sender:step.sender??0,
+          steps.push({operation:'call',...depMeta,function:fragment.format('sighash'),sender:step.sender??0,
             actual,expected,passed:JSON.stringify(actual)===JSON.stringify(expected)});
-        } else steps.push({operation:'observe',function:fragment.format('sighash'),sender:step.sender??0,actual});
+        } else steps.push({operation:'observe',...depMeta,function:fragment.format('sighash'),sender:step.sender??0,actual});
       } else {
         if(!['nonpayable','payable'].includes(fragment.stateMutability))throw new Error('send requires a state-changing function');
         if(fragment.stateMutability!=='payable' && BigInt(step.valueWei||'0')!==0n)throw new Error('Nonpayable function cannot receive value');
@@ -241,8 +261,10 @@ async function runSequence(artifact, sequence, transport, preparationArtifacts={
         if(!receipt || ![0,1].includes(receipt.status))throw new Error('No transaction receipt');
         if(receipt.status===0 && receipt.gasUsed>=2000000n)throw new Error('Transaction exhausted its gas limit');
         const reverted=receipt.status===0;
-        // A mined revert is evidence, even when the hypothesis expected success.\n        // Record the mismatch rather than aborting and losing the receipt and\n        // subsequent read observations. A revert never proves a vulnerability.
-        steps.push({operation:'send',function:fragment.format('sighash'),sender:step.sender??0,
+        // A mined revert is evidence, even when the hypothesis expected success.
+        // Record the mismatch rather than aborting and losing the receipt and
+        // subsequent read observations. A revert never proves a vulnerability.
+        steps.push({operation:'send',...depMeta,function:fragment.format('sighash'),sender:step.sender??0,
           valueWei:step.valueWei||'0',reverted,gasUsed:receipt.gasUsed.toString(),
           passed:reverted===!!step.expectRevert});
       }

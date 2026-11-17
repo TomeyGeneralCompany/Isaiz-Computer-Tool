@@ -44,7 +44,7 @@ export async function runEvidenceOnlyReview(input:{
     // This reviewer needs a JSON verdict, not Qwen3's hidden thinking output.
     // Under a bounded generation budget reasoning-only responses have empty content.
     const payload={model:input.model,stream:false,think:false,format:input.schema,
-      keep_alive:'10m',messages:messages.map(message=>({...message})),
+      keep_alive:process.env.LOCAL_OLLAMA_KEEP_ALIVE||'30m',messages:messages.map(message=>({...message})),
       options:{num_ctx:input.numCtx,num_predict:input.numPredict,num_thread:4,
         // A deterministic rejected verdict can recur forever with temperature 0.
         // Diversify only on a repeated rejected verdict; evidence stays immutable.

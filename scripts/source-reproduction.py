@@ -22,6 +22,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from source_dependencies import prepare_dependencies, prepare_pinned_foundry_submodules, prepare_locked_python_wheels, DependencyError
 from solidity_access_evidence import authorization_transition_observed
+from solidity_security_evidence import security_behavior_observed
 
 SUPPORTED_EXECUTION_STATUS = {
     'behavior_observed',
@@ -356,6 +357,47 @@ def prepare_java_classpath(repository: Path, target: Path, destination: Path) ->
     return copied
 
 
+
+
+def solidity_compile_cache_path(repository: Path, specification: dict) -> Path | None:
+    """Return a deterministic compile-cache path for offline Solidity probes, or None if disabled."""
+    env_cache = os.environ.get('TOMEY_SOLC_CACHE', '').strip()
+    if env_cache.lower() in ('0', 'false', 'off', 'disable', 'disabled'):
+        return None
+    cache_root = Path(env_cache) if env_cache else Path(tempfile.gettempdir()) / 'tomey-solc-cache'
+    hasher = hashlib.sha256()
+    cache_inputs = {
+        'file': specification.get('file', ''),
+        'function': specification.get('function', ''),
+        'compilerSettings': specification.get('compilerSettings', {}),
+        'remappings': specification.get('remappings', []),
+        'deployment': (specification.get('sequence') or {}).get('deployment'),
+        'preparationDeployments': ((specification.get('sequence') or {}).get('preparation') or {}).get('deployments'),
+    }
+    hasher.update(json.dumps(cache_inputs, sort_keys=True).encode('utf8'))
+    try:
+        for rel_extra in ('foundry.toml', 'remappings.txt'):
+            extra_path = (repository / rel_extra)
+            if extra_path.is_file() and not extra_path.is_symlink() and extra_path.stat().st_size <= 256000:
+                hasher.update(rel_extra.encode('utf8'))
+                hasher.update(extra_path.read_bytes())
+        sol_files = []
+        for dirpath, dirnames, filenames in os.walk(repository):
+            dirnames[:] = sorted(d for d in dirnames if d != '.git')
+            for fn in sorted(filenames):
+                if fn.endswith('.sol'):
+                    p = Path(dirpath) / fn
+                    if not p.is_symlink() and p.is_file():
+                        sol_files.append(p)
+        for sol_path in sorted(sol_files)[:4000]:
+            rel = sol_path.relative_to(repository).as_posix()
+            if sol_path.stat().st_size <= 512000:
+                hasher.update(rel.encode('utf8'))
+                hasher.update(sol_path.read_bytes())
+    except OSError:
+        return None
+    return cache_root / f'{hasher.hexdigest()}.json'
+
 def run_probe(repository: Path, specification: dict, _dependency_round: int = 0) -> dict:
     repository=repository.resolve(strict=True)
     if not repository.is_dir(): raise ValueError('Repository directory required')
@@ -467,6 +509,19 @@ def run_probe(repository: Path, specification: dict, _dependency_round: int = 0)
         # Controller-owned only: never accept a model-supplied classpath.
         specification = {**specification, 'javaClasspath': java_jars}
         (work/'spec.json').write_text(json.dumps(specification))
+        compile_cache_file = solidity_compile_cache_path(repository, specification) if language == 'solidity' else None
+        compile_cache_binds = []
+        compile_cache_out = work / 'compile-cache-out.json'
+        if language == 'solidity' and compile_cache_file is not None:
+            if compile_cache_file.is_file() and compile_cache_file.stat().st_size <= 16 * 1024 * 1024:
+                try:
+                    cached_obj = json.loads(compile_cache_file.read_text(encoding='utf8'))
+                    if isinstance(cached_obj, dict) and isinstance(cached_obj.get('contracts'), dict):
+                        compile_cache_binds += ['--ro-bind', str(compile_cache_file), '/compile-cache.json']
+                except (OSError, ValueError):
+                    pass
+            compile_cache_out.write_bytes(b'')
+            compile_cache_binds += ['--bind', str(compile_cache_out), '/compile-cache-out.json']
         java_dependency_bind = ['--ro-bind',str(work/'java-deps'),'/java-deps'] if language == 'java' else []
         runtime_binds = ['--ro-bind',str(java_home),'/jdk',*java_config_binds,'--ro-bind',str(runtime),'/runtime'] if language == 'java' else [] if language == 'python' else [
             '--ro-bind',str(Path(node).resolve()),'/probe-node',
@@ -479,7 +534,7 @@ def run_probe(repository: Path, specification: dict, _dependency_round: int = 0)
                  '--ro-bind',str(work/'probe.py'),'/probe.py','--ro-bind',str(work/'spec.json'),'/spec.json',
                  '--chdir','/repo','--setenv','PATH','/usr/bin:/bin','--setenv','HOME','/tmp',
                  '--setenv','PYTHONNOUSERSITE','1','--setenv','PYTHONDONTWRITEBYTECODE','1',
-                 *runtime_binds,'--',*invocation]
+                 *runtime_binds,*java_dependency_bind,*compile_cache_binds,'--',*invocation]
         with (work/'stdout').open('wb') as output,(work/'stderr').open('wb') as error:
             process=subprocess.Popen(command,stdout=output,stderr=error,env={'PATH':'/usr/bin:/bin'},
                                      start_new_session=True,preexec_fn=lambda: limits(language in ('javascript','solidity'),language == 'java',language == 'solidity'))
@@ -543,23 +598,34 @@ def run_probe(repository: Path, specification: dict, _dependency_round: int = 0)
                 detail=clean_probe_diagnostic(diagnostic, code)
             return {'status':'probe_failed','behavior_observed':False,'exit_code':code,'detail':detail}
         if hashlib.sha256(target.read_bytes()).hexdigest()!=source_hash: raise ValueError('Source changed during probe')
+        if language == 'solidity' and compile_cache_file is not None and compile_cache_out.is_file():
+            try:
+                raw_cache = compile_cache_out.read_bytes()
+                if 2 < len(raw_cache) <= 16 * 1024 * 1024:
+                    parsed_cache = json.loads(raw_cache.decode('utf8'))
+                    if isinstance(parsed_cache, dict) and isinstance(parsed_cache.get('contracts'), dict) and isinstance(parsed_cache.get('evmVersion'), str):
+                        compile_cache_file.parent.mkdir(parents=True, exist_ok=True)
+                        tmp_cache = compile_cache_file.with_suffix(f'.{os.getpid()}.tmp')
+                        tmp_cache.write_bytes(raw_cache)
+                        os.replace(tmp_cache, compile_cache_file)
+            except (OSError, ValueError):
+                pass
         data=json.loads((work/'stdout').read_text())
         if kind == 'solidity_sequence':
             if not isinstance(data.get('steps'),list) or not data['steps'] or any(type(step.get('passed')) is not bool for step in data['steps'] if step.get('operation') != 'observe'):
                 raise ValueError('Invalid transaction observations')
-            # An arbitrary expected-value mismatch is NOT evidence. A
-            # nonadministrator mutation of a source-proven privileged role,
-            # established by before/after EVM receipts and an independently
-            # inspected role-gated consumer, IS a reproducible security
-            # behavior. Reporting impact still requires separate review.
-            source_proven = authorization_transition_observed(
-                repository,target,specification['function'],data)
+            # An arbitrary expected-value mismatch is NOT evidence. Only a
+            # source-correlated security transition (role mutation, re-init
+            # takeover, unauthorized value/token extraction, or unguarded
+            # dangerous primitive) established by before/after EVM receipts is
+            # a reproducible security behavior.
+            source_proven, classification, limitation = security_behavior_observed(
+                repository,target,specification['function'],data,specification)
             return {'status':'behavior_observed' if source_proven else 'observation_only',
                     'behavior_observed':source_proven,
+                    'classification':classification,
                     'source_sha256':source_hash,'kind':kind,'observations':data,
-                    'limitation':('Verified nonadministrator role mutation with before/after EVM observations and a source-declared privileged role consumer; reachability and exploit impact still require independent review.'
-                      if source_proven else
-                      'Only bounded Solidity transactions and assertions were observed. An expected-value mismatch is not independent security proof.')}
+                    'limitation':limitation}
         if kind in ('python_sequence','javascript_sequence'):
             steps=data.get('steps')
             if not isinstance(steps,list) or len(steps)<2 or not all(

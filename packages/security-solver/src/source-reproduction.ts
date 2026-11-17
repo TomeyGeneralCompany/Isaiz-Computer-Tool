@@ -19,7 +19,7 @@ export const sourceProbeSpecSchema = z.object({file:z.string().min(1).max(4096),
     if(spec.kind === "solidity_sequence") {
       if(!spec.file.endsWith(".sol") || !spec.function.includes(".") || !spec.sequence ||
          !soliditySequenceSchema.safeParse(spec.sequence).success ||
-         !(spec.sequence as SoliditySequence)?.steps?.some(step=>step.function.split("(")[0]===spec.function.split(".")[1]))
+         !(spec.sequence as SoliditySequence)?.steps?.some(step=>"function" in step && typeof step.function==="string" && !("deploymentId" in step && step.deploymentId) && step.function.split("(")[0]===spec.function.split(".")[1]))
         ctx.addIssue({code:z.ZodIssueCode.custom,message:"Solidity sequence must exercise the selected Contract.function"});
     } else if(spec.kind === "java_sequence") {
       if(!spec.file.endsWith(".java") || !spec.function.includes(".") || !javaSequenceSchema.safeParse(spec.sequence).success ||
@@ -42,17 +42,18 @@ export const sourceProbeSpecSchema = z.object({file:z.string().min(1).max(4096),
 // before a requested send. They are recorded as setup, never as vulnerability evidence.
 export const sequenceObservations = z.object({contract:z.string(),accounts:z.array(z.string()).length(3),deploymentGasUsed:z.string(),
   steps:z.array(z.discriminatedUnion("operation",[
-    z.object({operation:z.literal("call"),function:z.string(),sender:z.number(),actual:z.unknown(),expected:z.unknown(),passed:z.boolean()}),
-    z.object({operation:z.literal("observe"),function:z.string(),sender:z.number(),actual:z.unknown()}),
-    z.object({operation:z.literal("send"),function:z.string(),sender:z.number(),valueWei:z.string(),reverted:z.boolean(),gasUsed:z.string(),passed:z.boolean()}),
-    z.object({operation:z.literal("setup"),function:z.string(),sender:z.number(),gasUsed:z.string(),passed:z.literal(true),purpose:z.string()}),
+    z.object({operation:z.literal("call"),deploymentId:z.string().optional(),function:z.string(),sender:z.number(),actual:z.unknown(),expected:z.unknown(),passed:z.boolean()}),
+    z.object({operation:z.literal("observe"),deploymentId:z.string().optional(),function:z.string(),sender:z.number(),actual:z.unknown()}),
+    z.object({operation:z.literal("send"),deploymentId:z.string().optional(),function:z.string(),sender:z.number(),valueWei:z.string(),reverted:z.boolean(),gasUsed:z.string(),passed:z.boolean()}),
+    z.object({operation:z.literal("setup"),deploymentId:z.string().optional(),function:z.string(),sender:z.number(),gasUsed:z.string(),passed:z.literal(true),purpose:z.string()}),
+    z.object({operation:z.literal("eth_balance"),target:z.string(),address:z.string(),balanceWei:z.string(),passed:z.boolean()}),
   ])).min(1).max(48)});
 const javaSequenceObservations=z.object({constructor:z.array(z.unknown()),steps:z.array(z.object({operation:z.literal("call"),function:z.string(),actual:z.string(),expected:z.unknown().optional(),passed:z.boolean()})).min(1).max(12)});
 const polyglotSequenceObservations=z.object({factory:z.string().nullable(),steps:z.array(z.object({
   operation:z.literal("call"),function:z.string(),actual:z.unknown(),
   expected:z.unknown().optional(),passed:z.boolean()
 })).min(2).max(12)});
-const resultSchema = z.object({status:z.string(),behavior_observed:z.boolean(),source_sha256:digest.optional(),
+const resultSchema = z.object({status:z.string(),behavior_observed:z.boolean(),classification:z.string().optional(),source_sha256:digest.optional(),
   kind:z.string().optional(),observations:z.union([z.object({control_input:z.string(),control_output:z.string(),attack_input:z.string(),attack_output:z.string(),
     entry_control_url:z.string().optional(),entry_attack_url:z.string().optional(),
     entry_selector:z.string().optional(),entry_parameter:z.string().optional()}),sequenceObservations,javaSequenceObservations,polyglotSequenceObservations]).optional(),

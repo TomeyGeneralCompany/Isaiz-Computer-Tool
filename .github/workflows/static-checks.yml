@@ -27,6 +27,8 @@ jobs:
         run: bash -n scripts/run-one-bounty.sh run-local-autohack.sh run-complete-autohack.sh setup-and-run.sh scripts/install-user-service.sh scripts/control-user-service.sh scripts/node-runtime.sh scripts/verify-host.sh scripts/configure-hackerone.sh scripts/verify-model.sh scripts/verify-assessment.sh
       - name: Test offline ingestion
         run: python3 -m unittest discover -s tests -p "test_*.py" -v
+      - name: Verify Solidity security evidence and pragma helpers
+        run: python3 scripts/test-solidity-security-evidence.py
   typescript:
     runs-on: ubuntu-latest
     steps:
@@ -54,6 +56,8 @@ jobs:
         run: npx tsx scripts/test-mock-agent.ts
       - name: Preserve offline scanner failure diagnostics
         run: npx tsx scripts/test-static-scanner-diagnostics.ts
+      - name: Verify DeFi probes, ANALYZE hypothesis window, and REVIEW anti-bias
+        run: npx tsx scripts/test-defi-probes-and-analyze-review.ts
       - name: Verify hunt capability, reachability and context management
         run: |
           npx tsx scripts/test-missing-source-loop.ts

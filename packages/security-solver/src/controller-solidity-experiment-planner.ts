@@ -999,7 +999,7 @@ function hasAstPrimitive(node:any):{selfdestruct:boolean;delegatecall:boolean;tx
   return result;
 }
 
-type SolidityArgValue = SoliditySequence['steps'][number]['args'][number];
+type SolidityArgValue = Extract<SoliditySequence['steps'][number], { operation: 'send' }>['args'][number];
 function defaultArgsForTypes(abiTypes:string[]):SolidityArgValue[]|null {
   const values:SolidityArgValue[]=[];
   for(const t of abiTypes){
@@ -1319,6 +1319,471 @@ function privilegedPrimitiveGuardExperiment(
   return null;
 }
 
+
+function isTestOrMockPath(path:string):boolean {
+  return /(?:^|\/)?(?:mocks?|tests?|__tests__|fixtures|interfaces)(?:\/|$)/i.test(path) || /Mock\.sol$/i.test(path);
+}
+
+function isAbstractContractNode(contract:any,chain:readonly ContractEntry[]=[]):boolean {
+  if(!contract||(contract.kind&&contract.kind!=='contract'))return true;
+  if((contract.subNodes||[]).some((n:any)=>n.type==='FunctionDefinition'&&!n.body))return true;
+  if(chain.length>1){
+    const implemented=new Set<string>();
+    for(const e of chain){
+      for(const n of e.contract.subNodes||[]){
+        if(n.type==='FunctionDefinition'&&n.body&&n.name)implemented.add(n.name);
+      }
+    }
+    for(const e of chain){
+      for(const n of e.contract.subNodes||[]){
+        if(n.type==='FunctionDefinition'&&!n.body&&n.name&&!implemented.has(n.name))return true;
+      }
+    }
+  }
+  return false;
+}
+
+function hasAnySourceAuthGuard(fn:any,fnBody:string):boolean {
+  const mods:string[]=(fn.modifiers||[]).map((m:any)=>String(m.name||''));
+  if(mods.some(m=>/^(?:only|auth|require|initializer|nonReentrantGuard)/i.test(m)&&!/^nonReentrant$/i.test(m)))return true;
+  if(mods.some(m=>/owner|admin|role|minter|operator|govern|guardian|controller|whitelist/i.test(m)))return true;
+  if(/\b(?:msg\s*\.\s*sender|_msgSender\s*\(\s*\))\s*[!=]=|\bhasRole\s*\(|\b_checkRole\s*\(|\brequire\s*\([^;]*\bonlyOwner|\bowner\s*\(\s*\)\s*==\s*msg\s*\.\s*sender/i.test(fnBody))
+    return true;
+  return false;
+}
+
+function pickFlexibleArg(abiType:string,paramName:string,options:{ownerAccount?:string;tokenRef?:string;amount?:string}={}):SolidityArgValue|null {
+  const t=abiType.trim();
+  const name=paramName||'';
+  if(t==='address'||t==='address payable'){
+    if(options.tokenRef && /(?:token|mph|asset|underlying|stake|currency|erc20|want|collateral|reward|base|quote)/i.test(name))
+      return options.tokenRef;
+    if(options.ownerAccount && /(?:owner|admin|gov|controller|guardian|minter|operator|distributor|beneficiary|treasury|manager|authority|feeTo|recipient|to|user|account|spender)/i.test(name))
+      return options.ownerAccount;
+    return '$account2';
+  }
+  if(t==='bool')return false;
+  if(t==='string')return 'LOTUS-Test';
+  if(/^u?int(?:[0-9]{1,3})?$/.test(t)){
+    if(/(?:period|duration|epoch|lock|interval|delay|window|time)/i.test(name))return '86400';
+    if(/(?:fee|bps|rate|ratio|percent)/i.test(name))return '100';
+    return options.amount ?? '1000';
+  }
+  if(t==='bytes32')return ZERO_BYTES32;
+  if(t==='bytes')return '0x4142';
+  const sized=t.match(/^bytes([1-9]|[12][0-9]|3[012])$/);
+  if(sized)return '0x'+'41'.repeat(Number(sized[1]));
+  if(/\[\]$/.test(t))return [];
+  return null;
+}
+
+interface MockTokenInfo {
+  snapshot:SourceSnapshot;
+  contractName:string;
+  constructorArgs:Array<string|boolean>;
+  mintSig:string;
+  mintHasRecipient:boolean;
+  hasApprove:boolean;
+  hasBalanceOf:boolean;
+}
+
+function findRepositoryMockToken(sources:ReadonlyMap<string,SourceSnapshot>):MockTokenInfo|null {
+  const candidates=[...sources.values()].filter(s=>
+    s.path.endsWith('.sol') && /(?:ERC20Mock|MockERC20|MockToken|TestToken)/i.test(s.path)
+  );
+  const pool=candidates.length ? candidates : [...sources.values()].filter(s=>s.path.endsWith('.sol'));
+  for(const s of pool){
+    let ast:any;
+    try{ast=parseAstCached(s);}catch{continue;}
+    for(const c of (ast.children||[]).filter((n:any)=>n.type==='ContractDefinition')){
+      if(isAbstractContractNode(c))continue;
+      const members:any[]=c.subNodes||[];
+      const fns=members.filter(n=>n.type==='FunctionDefinition');
+      const ctor=fns.find(n=>n.isConstructor);
+      const ctorArgs:Array<string|boolean>=[];
+      let badCtor=false;
+      if(ctor){
+        const cParams:any[]=ctor.parameters||[];
+        if(cParams.length>4)continue;
+        for(const cp of cParams){
+          const abi=canonicalAbiType(cp.typeName);
+          if(!abi){badCtor=true;break;}
+          const v=pickFlexibleArg(abi,cp.name||'');
+          if(typeof v!=='string'&&typeof v!=='boolean'){badCtor=true;break;}
+          ctorArgs.push(v);
+        }
+      }
+      if(badCtor)continue;
+      const mintFn=fns.find(n=>
+        ['public','external'].includes(n.visibility)&&
+        !['view','pure'].includes(n.stateMutability||'')&&n.body&&
+        /^(?:mint|faucet)$/i.test(n.name||'')&&
+        ((n.parameters||[]).length===2 || (n.parameters||[]).length===1)
+      );
+      if(!mintFn)continue;
+      const mParams:any[]=mintFn.parameters||[];
+      const mTypes=mParams.map((p:any)=>canonicalAbiType(p.typeName));
+      if(mTypes.some(x=>!x))continue;
+      const mintHasRecipient=mTypes.length===2&&mTypes[0]==='address'&&/^uint/.test(mTypes[1]!);
+      const mintSingleAmount=mTypes.length===1&&/^uint/.test(mTypes[0]!);
+      if(!mintHasRecipient&&!mintSingleAmount)continue;
+      const hasBalanceOfFn=fns.some(n=>n.name==='balanceOf'&&['public','external'].includes(n.visibility)&&(n.parameters||[]).length===1);
+      const hasBalanceOfState=members.some(n=>n.type==='StateVariableDeclaration'&&
+        (n.variables||[]).some((v:any)=>v.name==='balanceOf'&&v.visibility==='public'&&v.typeName?.type==='Mapping'));
+      if(!hasBalanceOfFn&&!hasBalanceOfState&&!/ERC20/.test((c.baseContracts||[]).map((b:any)=>b.baseName?.namePath||'').join(',')))continue;
+      return {
+        snapshot:s,contractName:c.name,constructorArgs:ctorArgs,
+        mintSig:`${mintFn.name}(${mTypes.join(',')})`,
+        mintHasRecipient,hasApprove:true,hasBalanceOf:true
+      };
+    }
+  }
+  return null;
+}
+
+function findAuthorityGetter(contract:any,chain:readonly ContractEntry[],menu:readonly SolidityProbeDeclaration[]):string|null {
+  const names=['owner','admin','governance','governor','controller','guardian','authority'];
+  for(const g of names){
+    if(menu.some(m=>m.selector===`${contract.name}.${g}`&&m.operation==='call'&&m.inputs.length===0))
+      return g+'()';
+  }
+  for(const e of chain){
+    for(const n of e.contract.subNodes||[]){
+      if(n.type==='StateVariableDeclaration'){
+        for(const v of n.variables||[]){
+          if(v.visibility==='public'&&names.includes(v.name)&&v.typeName?.name==='address')return v.name+'()';
+        }
+      }
+      if(n.type==='FunctionDefinition'&&names.includes(n.name)&&['public','external'].includes(n.visibility)&&
+         ['view','pure'].includes(n.stateMutability||'')&&(n.parameters||[]).length===0)
+        return n.name+'()';
+    }
+  }
+  return null;
+}
+
+function resolveFlexibleSetup(
+  snapshot:SourceSnapshot,contract:any,chain:readonly ContractEntry[],
+  sources:ReadonlyMap<string,SourceSnapshot>,menu:readonly SolidityProbeDeclaration[],
+  mockToken:MockTokenInfo|null,ownerAccount='$account0'
+):{constructorArgs:SolidityArgValue[];constructorValueWei?:string;initSignature:string|null;initArgs:SolidityArgValue[];usesToken:boolean;tokenInitNeeded:boolean}|null {
+  if(isAbstractContractNode(contract,chain))return null;
+  const members:any[]=contract.subNodes||[];
+  const fns=members.filter(n=>n.type==='FunctionDefinition');
+  const ctor=fns.find(n=>n.isConstructor);
+  const constructorArgs:SolidityArgValue[]=[];
+  let usesToken=false;
+  if(ctor){
+    const cParams:any[]=ctor.parameters||[];
+    if(cParams.length>6)return null;
+    for(const cp of cParams){
+      const abi=canonicalAbiType(cp.typeName);
+      if(!abi)return null;
+      const tokenRef=mockToken?'$deployment:token':undefined;
+      const arg=pickFlexibleArg(abi,cp.name||'',{ownerAccount,tokenRef});
+      if(arg===null)return null;
+      if(arg==='$deployment:token')usesToken=true;
+      constructorArgs.push(arg);
+    }
+  }
+  const initFn=fns.find(n=>/^(?:initialize|init)$/i.test(n.name||'')&&
+    ['public','external'].includes(n.visibility)&&!['view','pure'].includes(n.stateMutability||'')&&n.body);
+  let initSignature:string|null=null;
+  const initArgs:SolidityArgValue[]=[];
+  let tokenInitNeeded=false;
+  if(initFn){
+    const iParams:any[]=initFn.parameters||[];
+    if(iParams.length<=6){
+      const abiTypes:string[]=[];
+      let ok=true;
+      for(const ip of iParams){
+        const abi=canonicalAbiType(ip.typeName);
+        if(!abi){ok=false;break;}
+        const tokenRef=mockToken?'$deployment:token':undefined;
+        const arg=pickFlexibleArg(abi,ip.name||'',{ownerAccount,tokenRef});
+        if(arg===null){ok=false;break;}
+        if(arg==='$deployment:token'){usesToken=true;tokenInitNeeded=true;}
+        abiTypes.push(abi);
+        initArgs.push(arg);
+      }
+      if(ok)initSignature=`${initFn.name}(${abiTypes.join(',')})`;
+    }
+  }
+  return {
+    constructorArgs,
+    ...(ctor?.stateMutability==='payable'?{constructorValueWei:'1000000000000000'}:{}),
+    initSignature,initArgs,usesToken,tokenInitNeeded
+  };
+}
+
+function reinitOrConstructorTakeoverExperiment(
+  snapshot:SourceSnapshot,contract:any,method:string,
+  sources:ReadonlyMap<string,SourceSnapshot>,menu:readonly SolidityProbeDeclaration[]
+):{hypothesis:string;property:string;sequence:SoliditySequence;witnesses:SourceWitness[]}|null {
+  if(isTestOrMockPath(snapshot.path))return null;
+  if(!/^(?:initialize|init|__[A-Za-z0-9_]*init)$/i.test(method))return null;
+  const {chain}=resolveInheritance(snapshot,contract,sources);
+  if(isAbstractContractNode(contract,chain))return null;
+  const members:any[]=contract.subNodes||[];
+  const initFn=members.find(n=>n.type==='FunctionDefinition'&&n.name===method&&
+    ['public','external'].includes(n.visibility)&&!['view','pure'].includes(n.stateMutability||'')&&n.body);
+  if(!initFn)return null;
+  const authGetter=findAuthorityGetter(contract,chain,menu);
+  if(!authGetter)return null;
+  const mockToken=findRepositoryMockToken(sources);
+  const setup0=resolveFlexibleSetup(snapshot,contract,chain,sources,menu,mockToken,'$account0');
+  if(!setup0||!setup0.initSignature)return null;
+  const setup1=resolveFlexibleSetup(snapshot,contract,chain,sources,menu,mockToken,'$account1');
+  if(!setup1||!setup1.initSignature)return null;
+  const preparation=setup0.usesToken&&mockToken?{
+    deployments:[{id:'token',file:mockToken.snapshot.path,contract:mockToken.contractName,constructorArgs:mockToken.constructorArgs}],
+    operations:[],checks:[]
+  }:undefined;
+  const steps:SoliditySequence['steps']=[
+    {operation:'send',function:setup0.initSignature,args:setup0.initArgs,sender:0},
+    {operation:'call',function:authGetter,args:[],expect:'$account0'},
+    {operation:'send',function:setup1.initSignature,args:setup1.initArgs,sender:1,expectRevert:true},
+    {operation:'call',function:authGetter,args:[],expect:'$account0'}
+  ];
+  return {
+    hypothesis:`Unauthorized caller ($account1) must not re-initialize or hijack ${contract.name}.${method}; ${authGetter} must remain $account0.`,
+    property:'source-proven initializer takeover and re-initialization guard',
+    sequence:{constructorArgs:setup0.constructorArgs,...(preparation?{preparation}:{}),steps},
+    witnesses:[witness(snapshot,initFn,contract.name+'.'+method)]
+  };
+}
+
+function unprotectedFundDrainOrMintExperiment(
+  snapshot:SourceSnapshot,contract:any,method:string,
+  sources:ReadonlyMap<string,SourceSnapshot>,menu:readonly SolidityProbeDeclaration[]
+):{hypothesis:string;property:string;sequence:SoliditySequence;witnesses:SourceWitness[]}|null {
+  if(isTestOrMockPath(snapshot.path))return null;
+  const {chain}=resolveInheritance(snapshot,contract,sources);
+  if(isAbstractContractNode(contract,chain))return null;
+  const members:any[]=contract.subNodes||[];
+  const fn=members.find(n=>n.type==='FunctionDefinition'&&n.name===method&&
+    ['public','external'].includes(n.visibility)&&!['view','pure'].includes(n.stateMutability||'')&&n.body);
+  if(!fn)return null;
+  const fnBody=body(snapshot.content,fn);
+  if(hasAnySourceAuthGuard(fn,fnBody))return null;
+  const params:any[]=fn.parameters||[];
+  if(params.length>4)return null;
+  const abiTypes:string[]=[];
+  for(const p of params){
+    const abi=canonicalAbiType(p.typeName);
+    if(!abi)return null;
+    abiTypes.push(abi);
+  }
+  const fnSig=`${method}(${abiTypes.join(',')})`;
+  const mockToken=findRepositoryMockToken(sources);
+
+  // 1. Unguarded non-mock token minting
+  const hasMintCall=/\b_?(?:safeM|m)int\s*\(|\btotalSupply\s*\+=|\b(?:balanceOf|_balances)\s*\[[^\]]+\]\s*\+=/.test(fnBody);
+  const hasBalanceOf=menu.some(m=>m.selector===`${contract.name}.balanceOf`&&m.operation==='call'&&m.inputs.length===1);
+  const hasTotalSupply=menu.some(m=>m.selector===`${contract.name}.totalSupply`&&m.operation==='call'&&m.inputs.length===0);
+  if(hasMintCall && !/Mock/i.test(contract.name) && (hasBalanceOf||hasTotalSupply)){
+    const setup=resolveFlexibleSetup(snapshot,contract,chain,sources,menu,mockToken,'$account0');
+    if(setup){
+      const args:SolidityArgValue[]=[];
+      let ok=true;
+      for(let i=0;i<params.length;i++){
+        const a=pickFlexibleArg(abiTypes[i],params[i].name||'',{ownerAccount:'$account2',amount:'100'});
+        if(a===null){ok=false;break;}
+        args.push(a);
+      }
+      if(ok){
+        const preparation=setup.usesToken&&mockToken?{
+          deployments:[{id:'token',file:mockToken.snapshot.path,contract:mockToken.contractName,constructorArgs:mockToken.constructorArgs}],
+          operations:[],checks:[]
+        }:undefined;
+        const steps:SoliditySequence['steps']=[];
+        if(setup.initSignature)steps.push({operation:'send',function:setup.initSignature,args:setup.initArgs,sender:0});
+        if(hasBalanceOf)steps.push({operation:'observe',function:'balanceOf(address)',args:['$account2']});
+        if(hasTotalSupply)steps.push({operation:'observe',function:'totalSupply()',args:[]});
+        steps.push({operation:'send',function:fnSig,args,sender:1,expectRevert:true});
+        if(hasBalanceOf)steps.push({operation:'call',function:'balanceOf(address)',args:['$account2'],expect:'0'});
+        if(hasTotalSupply)steps.push({operation:'observe',function:'totalSupply()',args:[]});
+        return {
+          hypothesis:`Unauthorized caller ($account1) must not mint unguarded tokens via ${contract.name}.${method}.`,
+          property:'unguarded token minting guard',
+          sequence:{constructorArgs:setup.constructorArgs,...(preparation?{preparation}:{}),steps},
+          witnesses:[witness(snapshot,fn,contract.name+'.'+method)]
+        };
+      }
+    }
+  }
+
+  // 2. Unguarded ETH withdrawal / drain
+  const hasEthOut=/\.\s*(?:transfer|send)\s*\(|\.\s*call\s*\{[^}]*\bvalue\b/i.test(fnBody);
+  if(hasEthOut && !/^(?:deposit|stake|mint)$/i.test(method)){
+    const ctor=members.find(n=>n.type==='FunctionDefinition'&&n.isConstructor);
+    const payableFundFn=members.find(n=>n.type==='FunctionDefinition'&&['public','external'].includes(n.visibility)&&
+      n.stateMutability==='payable'&&(n.parameters||[]).length===0&&n.name!==method&&n.body);
+    const canFund=(ctor&&ctor.stateMutability==='payable')||!!payableFundFn;
+    if(canFund){
+      const setup=resolveFlexibleSetup(snapshot,contract,chain,sources,menu,mockToken,'$account0');
+      if(setup){
+        const args:SolidityArgValue[]=[];
+        let ok=true;
+        for(let i=0;i<params.length;i++){
+          const a=pickFlexibleArg(abiTypes[i],params[i].name||'',{ownerAccount:'$account2',amount:'500000000000000'});
+          if(a===null){ok=false;break;}
+          args.push(a);
+        }
+        if(ok){
+          const preparation=setup.usesToken&&mockToken?{
+            deployments:[{id:'token',file:mockToken.snapshot.path,contract:mockToken.contractName,constructorArgs:mockToken.constructorArgs}],
+            operations:[],checks:[]
+          }:undefined;
+          const steps:SoliditySequence['steps']=[];
+          if(setup.initSignature)steps.push({operation:'send',function:setup.initSignature,args:setup.initArgs,sender:0});
+          if(!setup.constructorValueWei&&payableFundFn){
+            steps.push({operation:'send',function:`${payableFundFn.name}()`,args:[],sender:0,valueWei:'1000000000000000'});
+          }
+          steps.push({operation:'eth_balance',account:'$contract'});
+          steps.push({operation:'eth_balance',account:'$account2'});
+          steps.push({operation:'send',function:fnSig,args,sender:1,expectRevert:true});
+          steps.push({operation:'eth_balance',account:'$contract'});
+          steps.push({operation:'eth_balance',account:'$account2'});
+          return {
+            hypothesis:`Unauthorized caller ($account1) must not extract ETH from ${contract.name} via ${method}.`,
+            property:'unauthorized ETH extraction guard',
+            sequence:{
+              constructorArgs:setup.constructorArgs,
+              ...(setup.constructorValueWei?{constructorValueWei:setup.constructorValueWei}:{}),
+              ...(preparation?{preparation}:{}),
+              steps
+            },
+            witnesses:[witness(snapshot,fn,contract.name+'.'+method)]
+          };
+        }
+      }
+    }
+  }
+
+  // 3. Unguarded ERC20 rescue / drain
+  const hasErc20Out=/\.\s*(?:safeTransfer|transfer)\s*\(/i.test(fnBody);
+  if(hasErc20Out && mockToken && /^(?:rescue|skim|sweep|withdraw|drain|emergency|transferToken)/i.test(method)){
+    const setup=resolveFlexibleSetup(snapshot,contract,chain,sources,menu,mockToken,'$account0');
+    if(setup){
+      const args:SolidityArgValue[]=[];
+      let ok=true;
+      for(let i=0;i<params.length;i++){
+        const a=pickFlexibleArg(abiTypes[i],params[i].name||'',{ownerAccount:'$account2',tokenRef:'$deployment:token',amount:'500'});
+        if(a===null){ok=false;break;}
+        args.push(a);
+      }
+      if(ok){
+        const steps:SoliditySequence['steps']=[];
+        if(setup.initSignature)steps.push({operation:'send',function:setup.initSignature,args:setup.initArgs,sender:0});
+        if(mockToken.mintHasRecipient){
+          steps.push({operation:'send',deploymentId:'token',function:mockToken.mintSig,args:['$contract','1000'],sender:0});
+        } else {
+          steps.push({operation:'send',deploymentId:'token',function:mockToken.mintSig,args:['1000'],sender:0});
+          steps.push({operation:'send',deploymentId:'token',function:'transfer(address,uint256)',args:['$contract','1000'],sender:0});
+        }
+        steps.push({operation:'call',deploymentId:'token',function:'balanceOf(address)',args:['$contract'],expect:'1000'});
+        steps.push({operation:'call',deploymentId:'token',function:'balanceOf(address)',args:['$account2'],expect:'0'});
+        steps.push({operation:'send',function:fnSig,args,sender:1,expectRevert:true});
+        steps.push({operation:'call',deploymentId:'token',function:'balanceOf(address)',args:['$contract'],expect:'1000'});
+        steps.push({operation:'call',deploymentId:'token',function:'balanceOf(address)',args:['$account2'],expect:'0'});
+        return {
+          hypothesis:`Unauthorized caller ($account1) must not extract held ERC20 tokens from ${contract.name} via ${method}.`,
+          property:'unauthorized ERC20 extraction guard',
+          sequence:{
+            constructorArgs:setup.constructorArgs,
+            preparation:{
+              deployments:[{id:'token',file:mockToken.snapshot.path,contract:mockToken.contractName,constructorArgs:mockToken.constructorArgs}],
+              operations:[],checks:[]
+            },
+            steps
+          },
+          witnesses:[witness(snapshot,fn,contract.name+'.'+method)]
+        };
+      }
+    }
+  }
+  return null;
+}
+
+function coreProtocolEntrypointExperiment(
+  snapshot:SourceSnapshot,contract:any,method:string,
+  sources:ReadonlyMap<string,SourceSnapshot>,menu:readonly SolidityProbeDeclaration[]
+):{hypothesis:string;property:string;sequence:SoliditySequence;witnesses:SourceWitness[]}|null {
+  if(isTestOrMockPath(snapshot.path))return null;
+  if(!/^(?:deposit|withdraw|earlyWithdraw|topupDeposit|rolloverDeposit|mintVested|fund|claim|redeem|stake|unstake|borrow|repay|liquidate|swap|zap|rescue|skim)$/i.test(method))
+    return null;
+  const {chain}=resolveInheritance(snapshot,contract,sources);
+  if(isAbstractContractNode(contract,chain))return null;
+  const members:any[]=contract.subNodes||[];
+  const fn=members.find(n=>n.type==='FunctionDefinition'&&n.name===method&&
+    ['public','external'].includes(n.visibility)&&!['view','pure'].includes(n.stateMutability||'')&&n.body);
+  if(!fn)return null;
+  const params:any[]=fn.parameters||[];
+  if(params.length>4)return null;
+  const abiTypes:string[]=[];
+  for(const p of params){
+    const abi=canonicalAbiType(p.typeName);
+    if(!abi)return null;
+    abiTypes.push(abi);
+  }
+  const mockToken=findRepositoryMockToken(sources);
+  const setup=resolveFlexibleSetup(snapshot,contract,chain,sources,menu,mockToken,'$account0');
+  if(!setup)return null;
+  const fnSig=`${method}(${abiTypes.join(',')})`;
+  const callArgs:SolidityArgValue[]=[];
+  for(let i=0;i<params.length;i++){
+    const a=pickFlexibleArg(abiTypes[i],params[i].name||'',{ownerAccount:'$account1',tokenRef:mockToken?'$deployment:token':undefined,amount:'100'});
+    if(a===null)return null;
+    callArgs.push(a);
+  }
+  const hasBalanceOf=menu.some(m=>m.selector===`${contract.name}.balanceOf`&&m.operation==='call'&&m.inputs.length===1);
+  const hasTotalSupply=menu.some(m=>m.selector===`${contract.name}.totalSupply`&&m.operation==='call'&&m.inputs.length===0);
+  const authGetter=findAuthorityGetter(contract,chain,menu);
+  const steps:SoliditySequence['steps']=[];
+  if(setup.initSignature)steps.push({operation:'send',function:setup.initSignature,args:setup.initArgs,sender:0});
+  if(setup.usesToken && mockToken){
+    if(mockToken.mintHasRecipient){
+      steps.push({operation:'send',deploymentId:'token',function:mockToken.mintSig,args:['$account1','10000'],sender:0});
+    } else {
+      steps.push({operation:'send',deploymentId:'token',function:mockToken.mintSig,args:['10000'],sender:1});
+    }
+    steps.push({operation:'send',deploymentId:'token',function:'approve(address,uint256)',args:['$contract','10000'],sender:1});
+    steps.push({operation:'observe',deploymentId:'token',function:'balanceOf(address)',args:['$contract']});
+  }
+  if(hasBalanceOf)steps.push({operation:'observe',function:'balanceOf(address)',args:['$account1']});
+  else if(hasTotalSupply)steps.push({operation:'observe',function:'totalSupply()',args:[]});
+  else if(authGetter)steps.push({operation:'observe',function:authGetter,args:[]});
+  else steps.push({operation:'eth_balance',account:'$contract'});
+
+  const sendValue=fn.stateMutability==='payable'?'1000000000000000':undefined;
+  steps.push({operation:'send',function:fnSig,args:callArgs,sender:1,...(sendValue?{valueWei:sendValue}:{})});
+
+  if(setup.usesToken && mockToken){
+    steps.push({operation:'observe',deploymentId:'token',function:'balanceOf(address)',args:['$contract']});
+  }
+  if(hasBalanceOf)steps.push({operation:'observe',function:'balanceOf(address)',args:['$account1']});
+  else if(hasTotalSupply)steps.push({operation:'observe',function:'totalSupply()',args:[]});
+  else if(authGetter)steps.push({operation:'observe',function:authGetter,args:[]});
+  else steps.push({operation:'eth_balance',account:'$contract'});
+
+  const preparation=setup.usesToken&&mockToken?{
+    deployments:[{id:'token',file:mockToken.snapshot.path,contract:mockToken.contractName,constructorArgs:mockToken.constructorArgs}],
+    operations:[],checks:[]
+  }:undefined;
+  return {
+    hypothesis:`Core protocol entrypoint ${contract.name}.${method} should execute with bounded setup and preserve accounting/authorization invariants.`,
+    property:'core DeFi entrypoint state and token invariant check',
+    sequence:{
+      constructorArgs:setup.constructorArgs,
+      ...(setup.constructorValueWei?{constructorValueWei:setup.constructorValueWei}:{}),
+      ...(preparation?{preparation}:{}),
+      steps
+    },
+    witnesses:[witness(snapshot,fn,contract.name+'.'+method)]
+  };
+}
+
 export function constructSolidityExperiments(input:ConstructionInput):ConstructionResult {
   if(!/^[a-f0-9]{40}$/.test(input.repositoryCommit))
     return {ok:false,code:'INVALID_COMMIT',detail:'Expected a source commit SHA'};
@@ -1370,6 +1835,18 @@ export function constructSolidityExperiments(input:ConstructionInput):Constructi
   if(!choices.length) {
     const privExp=privilegedPrimitiveGuardExperiment(target,contract,method,indexed,input.declarations,input.staticLeads);
     if(privExp)choices.push(privExp);
+  }
+  if(!choices.length) {
+    const reinitExp=reinitOrConstructorTakeoverExperiment(target,contract,method,indexed,input.declarations);
+    if(reinitExp)choices.push(reinitExp);
+  }
+  if(!choices.length) {
+    const drainOrMintExp=unprotectedFundDrainOrMintExperiment(target,contract,method,indexed,input.declarations);
+    if(drainOrMintExp)choices.push(drainOrMintExp);
+  }
+  if(!choices.length) {
+    const defiExp=coreProtocolEntrypointExperiment(target,contract,method,indexed,input.declarations);
+    if(defiExp)choices.push(defiExp);
   }
   if(!choices.length)return {ok:false,code:'UNKNOWN_ASSERTION',
     detail:'No source-grounded security setup and falsifiable assertion for '+input.targetSelector};

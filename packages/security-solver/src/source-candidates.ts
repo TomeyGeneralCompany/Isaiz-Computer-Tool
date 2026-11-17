@@ -8,16 +8,25 @@ import {sourcePriority} from './source-capability';
 export function controllerSourceRiskSignal(path:string,source:string):number {
   let score=0;
   if(path.endsWith('.sol')) {
+    if(/(?:^|\/)(?:mocks?|tests?|__tests__|fixtures)(?:\/|$)|Mock\.sol$/i.test(path))return 0;
     // Authorization must guard the SAME state-changing function. A check
     // on setNext() cannot bless an unrelated unrestricted rotateOperator().
     // This scanner only ranks source for review; it never proves exploitation.
-    const method=/\bfunction\s+\w+\s*\([^)]*\)\s*(?:external|public)[^{]*\{[^{}]*\}/g;
+    const method=/\bfunction\s+(\w+)\s*\([^)]*\)\s*(?:external|public)[^{]*\{[^{}]*\}/g;
     for(const match of source.matchAll(method)){
+      const fnName=match[1]||'';
       const body=match[0];
-      const stateChange=/\b(?:operator|administrator|owner|guardian)\s*=\s*[A-Za-z_]\w*\s*;/i.test(body);
-      if(!stateChange)continue;
-      const guarded=/\brequire\s*\(\s*(?:msg\.sender\s*==|hasRole\s*\(|_msgSender\s*\(\s*\)\s*==)|\bonly(?:Owner|Role|Admin|Operator)\b/i.test(body);
-      score=Math.max(score,guarded?2:40);
+      const guarded=/\brequire\s*\(\s*(?:msg\.sender\s*==|hasRole\s*\(|_msgSender\s*\(\s*\)\s*==)|\bonly(?:Owner|Role|Admin|Operator|Governance|Minter|Controller|Guardian)\b|\binitializer\b/i.test(body);
+      const stateChange=/\b(?:operator|administrator|owner|guardian|governance|admin)\s*=\s*[A-Za-z_]\w*\s*;/i.test(body);
+      if(stateChange)score=Math.max(score,guarded?2:40);
+      if(/^(?:initialize|init|__[A-Za-z0-9_]*init)$/i.test(fnName)&&!guarded)
+        score=Math.max(score,28);
+      if(/(?:\.\s*delegatecall\s*\(|\b(?:selfdestruct|suicide)\s*\()/i.test(body)&&!guarded)
+        score=Math.max(score,24);
+      if(/(?:\.\s*(?:safeTransfer|transfer|send)\s*\(|\.\s*call\s*\{[^}]*\bvalue\b|\b_?mint\s*\(|\btotalSupply\s*\+=)/i.test(body)&&!guarded)
+        score=Math.max(score,22);
+      if(/^(?:deposit|withdraw|earlyWithdraw|topupDeposit|rolloverDeposit|mintVested|fund|claim|redeem|stake|unstake|borrow|repay|liquidate|swap|zap|rescue|skim)$/i.test(fnName))
+        score=Math.max(score,12);
     }
   }else if(/\.(?:py|js|mjs|cjs|java)$/.test(path)) {
     const output=/(?:<p\b|<div\b|<span\b|<html\b|innerHTML|document\.write)/i.test(source);
@@ -137,6 +146,12 @@ export async function prioritizeSourceCandidates(root:string,eligible:string[],f
       !/^(?:Generated|Mock)[A-Z][^/]*[.](?:java|sol|py|js|mjs|cjs)$/.test(base);
   });
   const navigationPool=nonGenerated.length>=8 ? nonGenerated : rankedPool;
+  const leadScores=new Map<string,number>();
+  for(const lead of selected){
+    const sev=(lead as {severity?:string}).severity;
+    const weight=sev==='ERROR'?4:sev==='WARNING'?2:1;
+    leadScores.set(lead.path,Math.min(12,(leadScores.get(lead.path)||0)+weight));
+  }
   const promoted=[...securityScores].filter(([p,s])=>s>=20&&allowed.has(p))
     .map(([p])=>p);
   const wideNavigation=[...new Set([...promoted,...navigationPool])];
@@ -146,6 +161,7 @@ export async function prioritizeSourceCandidates(root:string,eligible:string[],f
     // 88mph run paginated a supporting ERC1155 library before application code.
     .sort((a,b)=>(securityScores.get(b)||0)-(securityScores.get(a)||0) ||
       sourcePriority(b)-sourcePriority(a) ||
+      (leadScores.get(b)||0)-(leadScores.get(a)||0) ||
       (referenceScores.get(b)||0)-(referenceScores.get(a)||0) ||
       pathDepth(a)-pathDepth(b) ||
       (signatureScores.get(b)||0)-(signatureScores.get(a)||0))

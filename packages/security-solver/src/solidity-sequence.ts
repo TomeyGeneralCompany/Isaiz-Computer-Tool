@@ -11,11 +11,13 @@ const deployment = z.object({
   contract:z.string().regex(/^[A-Za-z_]\w*$/)
 }).strict();
 const signature = z.string().min(1).max(200).regex(/^[A-Za-z_][A-Za-z0-9_]*(?:\([A-Za-z0-9_,()[\]]*\))?$/);
-const send = z.object({operation:z.literal("send"),function:signature,args,sender:sender.optional(),
-  valueWei:wei.optional(),expectRevert:z.boolean().optional()}).strict();
-const observe = z.object({operation:z.literal('observe'),function:signature,args,sender:sender.optional()}).strict();
-const call = z.object({operation:z.literal("call"),function:signature,args,sender:sender.optional(),expect:abiValue}).strict();
 const prepId=z.string().regex(/^[A-Za-z][A-Za-z0-9_-]{0,63}$/);
+const send = z.object({operation:z.literal("send"),deploymentId:prepId.optional(),function:signature,args,sender:sender.optional(),
+  valueWei:wei.optional(),expectRevert:z.boolean().optional()}).strict();
+const observe = z.object({operation:z.literal('observe'),deploymentId:prepId.optional(),function:signature,args,sender:sender.optional()}).strict();
+const call = z.object({operation:z.literal("call"),deploymentId:prepId.optional(),function:signature,args,sender:sender.optional(),expect:abiValue}).strict();
+const ethBalance = z.object({operation:z.literal("eth_balance"),
+  account:z.string().regex(/^(?:\$account[012]|\$contract|\$deployment:[A-Za-z][A-Za-z0-9_-]{0,63})$/)}).strict();
 const prepDeployment=z.object({id:prepId,file:deployment.shape.file,contract:deployment.shape.contract,
   constructorArgs:args,valueWei:wei.optional()}).strict();
 const prepSend=z.object({id:prepId,deploymentId:prepId,function:signature,args,
@@ -42,8 +44,18 @@ export const solidityPreparationSchema=z.object({
 });
 export type SolidityPreparation=z.infer<typeof solidityPreparationSchema>;
 export const soliditySequenceSchema = z.object({constructorArgs:args,constructorValueWei:wei.optional(),deployment:deployment.optional(),preparation:solidityPreparationSchema.optional(),
-  steps:z.array(z.discriminatedUnion("operation",[send,call,observe])).min(1).max(16)}).strict()
-  .refine(s=>s.steps.some(step=>step.operation === "call" || step.operation === "observe"),"Include at least one read observation")
+  steps:z.array(z.discriminatedUnion("operation",[send,call,observe,ethBalance])).min(1).max(16)}).strict()
+  .superRefine((s,ctx)=>{
+    const deployed=new Set((s.preparation?.deployments||[]).map(d=>d.id));
+    for(const step of s.steps){
+      if("deploymentId" in step && step.deploymentId && !deployed.has(step.deploymentId))
+        ctx.addIssue({code:z.ZodIssueCode.custom,message:"Unknown step deploymentId "+step.deploymentId});
+      if(step.operation==="eth_balance" && step.account.startsWith("$deployment:") &&
+         !deployed.has(step.account.slice("$deployment:".length)))
+        ctx.addIssue({code:z.ZodIssueCode.custom,message:"Unknown eth_balance deployment "+step.account});
+    }
+  })
+  .refine(s=>s.steps.some(step=>step.operation === "call" || step.operation === "observe" || step.operation === "eth_balance"),"Include at least one read observation")
   .refine(s=>JSON.stringify(s).length<=16000,"Sequence exceeds 16KB");
 export type SoliditySequence = z.infer<typeof soliditySequenceSchema>;
 export const soliditySequencePrompt = `For Solidity constructor arguments and state changes, use verify_source with kind/answer=solidity_sequence and a sequence object.
@@ -56,7 +68,7 @@ Use operation=observe with a source-declared view/pure method to record actual s
 const scalarJson = {anyOf:[{type:"string",maxLength:2048},{type:"boolean"}]};
 const valueJson = {anyOf:[...scalarJson.anyOf,{type:"array",maxItems:32,items:{anyOf:[...scalarJson.anyOf,{type:"array",maxItems:32,items:scalarJson}]}}]};
 const argsJson = {type:"array",maxItems:32,items:valueJson};
-const stepBase = {function:{type:"string",maxLength:200},args:argsJson,sender:{type:"integer",minimum:0,maximum:2}};
+const stepBase = {deploymentId:{type:"string",maxLength:64},function:{type:"string",maxLength:200},args:argsJson,sender:{type:"integer",minimum:0,maximum:2}};
 const weiJson = {type:"string",pattern:"^(0|[1-9][0-9]{0,29})$"};
 export const soliditySequenceJsonSchema = {type:"object",additionalProperties:false,
   properties:{constructorArgs:argsJson,constructorValueWei:weiJson,
@@ -64,4 +76,5 @@ export const soliditySequenceJsonSchema = {type:"object",additionalProperties:fa
     {type:"object",additionalProperties:false,properties:{operation:{const:"send"},...stepBase,valueWei:weiJson,expectRevert:{type:"boolean"}},required:["operation","function","args"]},
     {type:"object",additionalProperties:false,properties:{operation:{const:"call"},...stepBase,expect:valueJson},required:["operation","function","args","expect"]},
     {type:"object",additionalProperties:false,properties:{operation:{const:"observe"},...stepBase},required:["operation","function","args"]},
+    {type:"object",additionalProperties:false,properties:{operation:{const:"eth_balance"},account:{type:"string",maxLength:80}},required:["operation","account"]},
   ]}}},required:["constructorArgs","steps"]};
