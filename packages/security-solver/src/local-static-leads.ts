@@ -2,13 +2,15 @@ import {createHash} from 'node:crypto';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {readFile,writeFile,rename} from 'node:fs/promises';
-import {join,relative,resolve,sep,dirname} from 'node:path';
+import {relative,resolve,sep,dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 
 const exec=promisify(execFile);
 const MAX_SLITHER_TARGETS=6;
-const excludedSolidityPath=/(?:^|\/)(?:mocks?|test|tests|__tests__|fixtures)(?:\/|$)/i;
-const coreContractTerms=/(?:^|\/)(?:vaults?|pools?|markets?|lending|staking|bridge|router|exchange|vesting|minter|treasury|strategy|controller|settlement|liquidation|oracle|escrow|rewards?)(?:\/|[-_.])/i;
+const COLLECT_SLITHER_LIMIT=24;
+const SLITHER_BATCH_SIZE=8;
+const excludedSolidityPath=/(?:^|\/)(?:mocks?|test|tests|__tests__|fixtures|vendor|node_modules)(?:\/|$)|Mock\.sol$/i;
+const coreContractTerms=/(?:core|vaults?|pools?|markets?|lending|staking|bridge|router|exchange|vesting|minter|treasury|strategy|controller|settlement|liquidation|oracle|escrow|rewards?|deposit|interest|zap)/i;
 
 /**
  * Select a bounded, deterministic set of production Solidity files for Slither.
@@ -48,21 +50,27 @@ export async function collectStaticLeads(root:string,repositories:Array<{directo
   const runs:any[]=[],leads:any[]=[];
   for(const repo of repositories) {
     const prefix=relative(root,repo.directory).split(sep).join('/');
-    const solidityTargets=rankSolidityStaticTargets(paths,prefix);
-    for(const engine of ['semgrep',...(solidityTargets.length?['slither']:[])]) {
-      const targets=engine==='slither'?solidityTargets:[undefined];
-      for(const target of targets) {
+    const solidityTargets=rankSolidityStaticTargets(paths,prefix,COLLECT_SLITHER_LIMIT);
+    const slitherBatches:Array<string[]|undefined>=[];
+    for(let i=0;i<solidityTargets.length;i+=SLITHER_BATCH_SIZE)
+      slitherBatches.push(solidityTargets.slice(i,i+SLITHER_BATCH_SIZE));
+    for(const engine of ['semgrep',...(slitherBatches.length?['slither']:[])]) {
+      const batches=engine==='slither'?slitherBatches:[undefined];
+      for(const batch of batches) {
         signal.throwIfAborted();
         try {
           const {stdout}=await exec('python3',[resolve(app,'scripts/source-static.py'),'--repository',repo.directory,'--engine',engine,
-            ...(target?['--target',target]:[])],{signal,timeout:110000,maxBuffer:128000,cwd:app});
+            ...(batch?['--targets',JSON.stringify(batch)]:[])],{signal,timeout:110000,maxBuffer:256000,cwd:app});
           const value=JSON.parse(stdout);
           const failureDetail=value.status==='failed' ? {
             exitCode:Number.isInteger(value.exitCode)?value.exitCode:undefined,
             diagnostic:typeof value.diagnostic==='string'?value.diagnostic.replace(/[\r\n\t]+/g,' ').slice(0,512):undefined,
           } : {};
-          runs.push({repository:repo.url,engine,...(target?{target}:{}),status:value.status,reason:value.reason,coverage:value.coverage,...failureDetail});
-          for(const lead of (Array.isArray(value.leads)?value.leads:[]).slice(0,64)) {
+          const rawLeads=Array.isArray(value.leads)?value.leads:[];
+          runs.push({repository:repo.url,engine,...(batch?{targets:batch,target:batch[0]}:{}),status:value.status,reason:value.reason,
+            detectedLeads:Number.isInteger(value.detectedLeads)?value.detectedLeads:rawLeads.length,
+            coverage:value.coverage,...failureDetail});
+          for(const lead of rawLeads.slice(0,64)) {
             if(typeof lead.path!=='string'||!Number.isSafeInteger(lead.line)||lead.line<1)continue;
             const full=resolve(repo.directory,lead.path),local=relative(repo.directory,full);
             if(local==='..'||local.startsWith('..'+sep)||local.startsWith('/'))continue;
@@ -71,7 +79,7 @@ export async function collectStaticLeads(root:string,repositories:Array<{directo
           }
         }catch(error:any) {
           signal.throwIfAborted();
-          runs.push({repository:repo.url,engine,...(target?{target}:{}),status:'failed',reason:error.code||error.name});
+          runs.push({repository:repo.url,engine,...(batch?{targets:batch,target:batch[0]}:{}),status:'failed',reason:error.code||error.name});
         }
       }
     }

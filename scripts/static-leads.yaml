@@ -45,3 +45,40 @@ rules:
     severity: INFO
     message: Inspect ecrecover usage for zero-address signer return and signature malleability checks.
     pattern: ecrecover($HASH, $V, $R, $S)
+  - id: solidity-unchecked-lowlevel-call
+    languages: [solidity]
+    severity: WARNING
+    message: Inspect low-level external call value/return handling and access/reentrancy guards.
+    pattern-either:
+      - pattern: $TARGET.call(...)
+      - pattern: $TARGET.call{...}(...)
+  - id: solidity-eth-transfer
+    languages: [solidity]
+    severity: WARNING
+    message: Inspect value extraction, authorization, and reentrancy protections around external ETH transfer.
+    pattern-either:
+      - pattern: $TARGET.transfer($AMT)
+      - pattern: $TARGET.send($AMT)
+  - id: solidity-msg-value-loop
+    languages: [solidity]
+    severity: WARNING
+    message: Inspect msg.value reads inside loops for double-spend or accounting inflation risks.
+    patterns:
+      - pattern-inside: |
+          for (...) {
+            ...
+          }
+      - pattern: msg.value
+  - id: solidity-unguarded-initializer
+    languages: [solidity]
+    severity: WARNING
+    message: Inspect initialize/init functions for missing initializer modifier or caller restrictions.
+    pattern-either:
+      - pattern: |
+          function initialize(...) external {
+            ...
+          }
+      - pattern: |
+          function initialize(...) public {
+            ...
+          }

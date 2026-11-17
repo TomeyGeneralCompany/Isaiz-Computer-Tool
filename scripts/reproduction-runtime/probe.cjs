@@ -160,21 +160,42 @@ contract TomeyERC1155ProbeHarness is ERC1155Upgradeable {
     sources: compileSources,
     settings: {...compilerSettings, evmVersion, outputSelection: {'*': {'*': ['abi', 'evm.bytecode.object']}}}
   }), {import: solidityImport}));
-  const totalCompileChars = Object.values(compileSources).reduce((sum, entry) => sum + (entry?.content?.length || 0), 0);
-  const initialCompilerSettings = (sequenceMode && !spec.compilerSettings?.optimizer && totalCompileChars > 60000)
-    ? { ...(spec.compilerSettings || {}), optimizer: { enabled: true, runs: 200 } }
-    : spec.compilerSettings;
-  let compiled = compileWith(initialCompilerSettings);
-  const errors = (compiled.errors || []).filter(e => e.severity === 'error');
-  if (errors.length) {
-    const error = new Error(errors.map(e => e.formattedMessage).join('\n').slice(0, 2000));
-    error.missingImports = [...missingImports];
-    throw error;
-  }
   const parts = effectiveSpec.function.split('.');
   const functionName = parts.pop();
   const contractName = deployment ? deployment.contract : parts.pop();
   const selectedFile = deployment ? deployment.file : spec.file;
+  let compiled = null;
+  let cacheHit = false;
+  try {
+    if (fs.existsSync('/compile-cache.json')) {
+      const cached = JSON.parse(fs.readFileSync('/compile-cache.json', 'utf8'));
+      const prepDeploys = (sequenceMode && spec.sequence.preparation && Array.isArray(spec.sequence.preparation.deployments))
+        ? spec.sequence.preparation.deployments : [];
+      const targetCached = cached?.contracts?.[selectedFile]?.[contractName];
+      const hasTarget = Boolean(targetCached?.evm?.bytecode?.object && Array.isArray(targetCached?.abi));
+      const hasPrep = prepDeploys.every(item => Boolean(
+        cached?.contracts?.[item.file]?.[item.contract]?.evm?.bytecode?.object &&
+        Array.isArray(cached?.contracts?.[item.file]?.[item.contract]?.abi)
+      ));
+      if (cached && cached.evmVersion === evmVersion && hasTarget && hasPrep) {
+        compiled = { contracts: cached.contracts, errors: [] };
+        cacheHit = true;
+      }
+    }
+  } catch {}
+  if (!compiled) {
+    const totalCompileChars = Object.values(compileSources).reduce((sum, entry) => sum + (entry?.content?.length || 0), 0);
+    const initialCompilerSettings = (sequenceMode && !spec.compilerSettings?.optimizer && totalCompileChars > 60000)
+      ? { ...(spec.compilerSettings || {}), optimizer: { enabled: true, runs: 200 } }
+      : spec.compilerSettings;
+    compiled = compileWith(initialCompilerSettings);
+    const errors = (compiled.errors || []).filter(e => e.severity === 'error');
+    if (errors.length) {
+      const error = new Error(errors.map(e => e.formattedMessage).join('\n').slice(0, 2000));
+      error.missingImports = [...missingImports];
+      throw error;
+    }
+  }
   const candidates = Object.entries(compiled.contracts?.[selectedFile] || {}).filter(([name, artifact]) =>
     (!contractName || name === contractName) && artifact.evm.bytecode.object &&
     (sequenceMode || !artifact.abi.some(a => a.type === 'constructor' && a.inputs.length)) &&
@@ -185,14 +206,34 @@ contract TomeyERC1155ProbeHarness is ERC1155Upgradeable {
   if (candidates.length !== 1) throw new Error(sequenceMode ? 'Select one deployable contract and public/external function using Contract.function' : 'Select one deployable contract with a view/pure string -> string function using Contract.function');
   if (sequenceMode && (!contractName || !spec.sequence.steps.some(step=>step.function.split('(')[0]===functionName))) throw new Error('Sequence must exercise the selected Contract.function');
   let artifact = candidates[0][1];
-  if (sequenceMode && !initialCompilerSettings?.optimizer && artifact.evm.bytecode.object.length > 49152) {
-    const optimized = compileWith({...(spec.compilerSettings || {}), optimizer: {enabled: true, runs: 200}});
-    const optErrors = (optimized.errors || []).filter(e => e.severity === 'error');
-    const optCandidate = !optErrors.length ? optimized.contracts?.[selectedFile]?.[candidates[0][0]] : null;
-    if (optCandidate?.evm?.bytecode?.object && optCandidate.evm.bytecode.object.length < artifact.evm.bytecode.object.length) {
-      compiled = optimized;
-      artifact = optCandidate;
+  if (!cacheHit && sequenceMode && !spec.compilerSettings?.optimizer && artifact.evm.bytecode.object.length > 49152) {
+    const totalCompileChars = Object.values(compileSources).reduce((sum, entry) => sum + (entry?.content?.length || 0), 0);
+    if (totalCompileChars <= 60000) {
+      const optimized = compileWith({...(spec.compilerSettings || {}), optimizer: {enabled: true, runs: 200}});
+      const optErrors = (optimized.errors || []).filter(e => e.severity === 'error');
+      const optCandidate = !optErrors.length ? optimized.contracts?.[selectedFile]?.[candidates[0][0]] : null;
+      if (optCandidate?.evm?.bytecode?.object && optCandidate.evm.bytecode.object.length < artifact.evm.bytecode.object.length) {
+        compiled = optimized;
+        artifact = optCandidate;
+      }
     }
+  }
+  if (!cacheHit) {
+    try {
+      if (fs.existsSync('/compile-cache-out.json')) {
+        const minimalContracts = {};
+        for (const [fName, fileEntry] of Object.entries(compiled.contracts || {})) {
+          const outFile = {};
+          for (const [cName, cEntry] of Object.entries(fileEntry || {})) {
+            if (cEntry?.evm?.bytecode?.object && Array.isArray(cEntry?.abi)) {
+              outFile[cName] = { abi: cEntry.abi, evm: { bytecode: { object: cEntry.evm.bytecode.object } } };
+            }
+          }
+          if (Object.keys(outFile).length) minimalContracts[fName] = outFile;
+        }
+        fs.writeFileSync('/compile-cache-out.json', JSON.stringify({ evmVersion, contracts: minimalContracts }));
+      }
+    } catch {}
   }
   const ganache = require('ganache');
   const { BrowserProvider, ContractFactory } = require('ethers');
