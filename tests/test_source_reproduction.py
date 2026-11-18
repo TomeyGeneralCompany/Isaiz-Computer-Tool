@@ -608,6 +608,17 @@ contract Vault is Authority {
         self.assertTrue(any(step.get('reverted') is True and step.get('passed') is False
                             for step in result['observations']['steps']))
 
+    def test_required_initialization_failure_is_not_a_negative_security_test(self):
+        sequence=self.sequence()
+        sequence['steps'].insert(1,{
+            'operation':'send','function':'set(uint256)','args':['2'],
+            'sender':1,'requiredSetup':True
+        })
+        result=self.run_sequence(sequence)
+        self.assertEqual(result['status'],'probe_failed',result)
+        self.assertIn('PREPARATION_INITIALIZATION_FAILED',result.get('detail',''))
+        self.assertFalse(result['behavior_observed'])
+
     def test_invalid_setup_does_not_become_a_finding(self):
         sequence=self.sequence();sequence['constructorArgs']=[]
         result=self.run_sequence(sequence)
