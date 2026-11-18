@@ -19,7 +19,7 @@ async function run(){
  await assert.rejects(lock.completeReading(async()=> 'altered'),/SOURCE_CHANGED/);
  await lock.completeReading(async p=>p.endsWith('A.sol')?'abcd':'ef');
  assert.equal(lock.currentStage,'ANALYZE');
- assert.throws(()=>lock.completeAnalysis(),/ANALYSIS_INCOMPLETE/);
+ assert.throws(()=>lock.completeAnalysis(),/ANALYSIS_PRECLASSIFICATION_INCOMPLETE/);
  lock.noteSourcePreclassified('source-1/A.sol','indexed-options-built');
  lock.noteSourcePreclassified('source-1/B.sol','indexed-options-built');
  assert.throws(()=>lock.assertActionAllowed('verify_source'),/STAGE_LOCKED/);
