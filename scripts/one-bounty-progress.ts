@@ -8,7 +8,7 @@ export interface BountyProgress {
   stage:string;
 }
 
-const ACTION_EVENT_RE=/^\[(?:ACQUISITION_[A-Z0-9_]+|CAPABILITY_[A-Z0-9_]+|STATIC_LEADS|SOURCE_MAP|INDEX_COMPLETE|STAGE_UNLOCK|STAGE_READ_CURSOR|STAGE_TERMINAL|INDEXED_[A-Z0-9_]+|READ_COMPLETE|ANALYSIS_COMPLETE|STAGED_EXPERIMENT_RESULT|EXPERIMENT_COMPLETE|REVIEW_COMPLETE|REPORT_COMPLETE|MODEL_START|MODEL_ACTION|CONTROLLER_[A-Z0-9_]+|ACTION|READ_OK|GUIDED_SOURCE_PROBE|PROBE_[A-Z0-9_]+|EVIDENCE_ONLY_REVIEW_[A-Z0-9_]+|ACTION_REJECTED|WORKFLOW_REJECTED|STAGE_ACTION_REJECTED|FINAL_[A-Z0-9_]+|REPEATED_READ_BLOCKED|STAGE_CONTROLLER_NO_PROGRESS|AUDIT_NO_PROGRESS_TERMINATED|INITIAL_SOURCE_[A-Z0-9_]+|ALLOWANCE_EXTENDED|TOOL)\]/;
+const ACTION_EVENT_RE=/^\[(?:ACQUISITION_[A-Z0-9_]+|CAPABILITY_[A-Z0-9_]+|STATIC_LEADS|SOURCE_MAP|INDEX_COMPLETE|STAGE_UNLOCK|STAGE_READ_CURSOR|STAGE_TERMINAL|ANALYSIS_[A-Z0-9_]+|INDEXED_[A-Z0-9_]+|READ_COMPLETE|ANALYSIS_COMPLETE|STAGED_EXPERIMENT_RESULT|EXPERIMENT_COMPLETE|REVIEW_COMPLETE|REPORT_COMPLETE|MODEL_START|MODEL_ACTION|CONTROLLER_[A-Z0-9_]+|ACTION|READ_OK|GUIDED_SOURCE_PROBE|PROBE_[A-Z0-9_]+|EVIDENCE_ONLY_REVIEW_[A-Z0-9_]+|ACTION_REJECTED|WORKFLOW_REJECTED|STAGE_ACTION_REJECTED|FINAL_[A-Z0-9_]+|REPEATED_READ_BLOCKED|STAGE_CONTROLLER_NO_PROGRESS|AUDIT_NO_PROGRESS_TERMINATED|INITIAL_SOURCE_[A-Z0-9_]+|ALLOWANCE_EXTENDED|TOOL)\]/;
 const HEARTBEAT_FALLBACK_RE=/^\[(?:OLLAMA|MODEL_PROGRESS)\]/;
 
 function sanitizeTelemetryLine(line:string,maxLength=240):string {
@@ -24,6 +24,17 @@ function sanitizeTelemetryLine(line:string,maxLength=240):string {
 export function isLiveTelemetryLine(line:string):boolean {
   const trimmed=line.trimStart();
   return ACTION_EVENT_RE.test(trimmed)||HEARTBEAT_FALLBACK_RE.test(trimmed);
+}
+
+/** Choose the newest Ollama request lifecycle event in a streamed log chunk.
+ * A chunk may contain the previous turn's completion and the next turn's start.
+ */
+export function latestModelLifecycleEvent(text:string):'started'|'received'|null {
+  let latest:'started'|'received'|null=null;
+  const pattern=/\\[OLLAMA\\] turn \\d+(?:\\/\\d+)?: (request started|response received)/g;
+  for(const match of text.matchAll(pattern))
+    latest=match[1]==='request started'?'started':'received';
+  return latest;
 }
 
 export function pickLatestProgressEvent(text:string):string {
