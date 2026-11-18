@@ -2075,7 +2075,8 @@ export async function runLocalAudit(
           analyzeTurnsRemaining--;
           let acceptError='';
           let acceptedId='';
-          const proposedLead=(action as typeof action & {leadId?:string}).leadId?analysisPackets.get((action as typeof action & {leadId?:string}).leadId):undefined;
+          const proposedLeadId=(action as typeof action & {leadId?:string}).leadId;
+          const proposedLead=proposedLeadId?analysisPackets.get(proposedLeadId):undefined;
           if(!proposedLead||proposedLead.path!==action.path||proposedLead.selector!==action.query||
              stageLock.analysisLeads.find(x=>x.id===proposedLead.id)?.state.kind!=='pending')
             acceptError='Model experiment requires a pending, source-verified immutable leadId matching path and selector.';
