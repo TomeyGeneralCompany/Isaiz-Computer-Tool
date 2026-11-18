@@ -1302,7 +1302,7 @@ export async function runLocalAudit(
           sourceEvidence:activeAnalysisPacket?.sourceEvidence||null,
           activeInstructionChars:activeAnalyzeInstruction.content.length,
           requestChars,messageBudget,context:settings.numCtx,
-          pending:stageLock?.analysisProgress.pendingIds.length})+'\\n');
+          pending:stageLock?.analysisProgress.pendingIds.length})+'\n');
       }
       // The graph has already specified the exact next read/verification.
       // Execute it rather than spending a Qwen turn asking for known arguments.
