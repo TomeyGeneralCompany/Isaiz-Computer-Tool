@@ -6,6 +6,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { soliditySequenceSchema } from "../packages/security-solver/src/solidity-sequence";
+import { normalizeSolidityPreparationPaths } from "../packages/security-solver/src/source-reproduction";
 import {
   controllerGroundedSolidityOptions,
   prioritizeSolidityStagedPlans,
@@ -35,6 +36,20 @@ const sha = (s: string) => createHash("sha256").update(s).digest("hex");
     ],
   });
   assert.ok(valid.success, "Valid eth_balance + deploymentId sequence should parse");
+  const requiredSetup = soliditySequenceSchema.safeParse({
+    constructorArgs: [],steps:[
+      {operation:"send",function:"initialize()",args:[],sender:0,requiredSetup:true},
+      {operation:"observe",function:"owner()",args:[]}
+    ]
+  });
+  assert.ok(requiredSetup.success, "A required successful initializer must be accepted");
+  const contradictorySetup = soliditySequenceSchema.safeParse({
+    constructorArgs: [],steps:[
+      {operation:"send",function:"initialize()",args:[],sender:0,requiredSetup:true,expectRevert:true},
+      {operation:"observe",function:"owner()",args:[]}
+    ]
+  });
+  assert.ok(!contradictorySetup.success, "Setup cannot require both success and revert");
 
   const invalidRef = soliditySequenceSchema.safeParse({
     constructorArgs: [],
@@ -43,6 +58,37 @@ const sha = (s: string) => createHash("sha256").update(s).digest("hex");
     ],
   });
   assert.ok(!invalidRef.success, "Undeclared $deployment: reference must be rejected");
+}
+
+// Regression: workspace source-1/... paths must become /repo-relative sources
+// without making any neighboring repository or host path accessible.
+{
+  const tmp=await mkdtemp(join(tmpdir(),"lotus-fixture-path-"));
+  try {
+    const workspace=join(tmp,"workspace");
+    const repository=join(workspace,"source-1");
+    await mkdir(join(repository,"contracts"),{recursive:true});
+    await writeFile(join(repository,"contracts","MockToken.sol"),"contract MockToken {}");
+    await mkdir(join(workspace,"source-2"),{recursive:true});
+    await writeFile(join(workspace,"source-2","Secret.sol"),"contract Secret {}");
+    const sequence=soliditySequenceSchema.parse({
+      constructorArgs:[],
+      preparation:{deployments:[{
+        id:"token",file:"source-1/contracts/MockToken.sol",
+        contract:"MockToken",constructorArgs:[]
+      }],operations:[],checks:[]},
+      steps:[{operation:"send",function:"deposit()",args:[]},
+        {operation:"observe",function:"owner()",args:[]}]
+    });
+    const normalized=await normalizeSolidityPreparationPaths(workspace,repository,sequence);
+    assert.equal(normalized.preparation?.deployments[0].file,"contracts/MockToken.sol");
+    assert.equal(sequence.preparation?.deployments[0].file,"source-1/contracts/MockToken.sol",
+      "Preflight must not mutate the controller's original evidence");
+    await assert.rejects(normalizeSolidityPreparationPaths(workspace,repository,{
+      ...sequence,preparation:{...sequence.preparation!,
+        deployments:[{...sequence.preparation!.deployments[0],file:"source-2/Secret.sol"}]}
+    }),/outside selected Solidity repository/);
+  } finally {await rm(tmp,{recursive:true,force:true});}
 }
 
 // 2. Test DeFi planner patterns & null commit compatibility

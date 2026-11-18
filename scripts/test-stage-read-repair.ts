@@ -559,7 +559,7 @@ async function testReviewStageStrictResultAndLoopRecovery() {
     assert.ok(sawStrictResult, 'Second REVIEW turn must enforce typed result schema (strictResult)');
     assert.equal(strictMaxItems, 0, 'With 0 behavior_observed probes, strictResult must set findings.maxItems = 0');
     const log1Text = await readFile(log1, 'utf8');
-    assert.ok(log1Text.includes('[FINAL_RESULT_REQUIRED]'));
+    assert.ok(log1Text.includes('[FINAL_SCHEMA_ACTIVATED]'));
     assert.ok(log1Text.includes('[REPORT_COMPLETE]'));
     assert.ok(log1Text.includes('"outcome":"observation_only"'), 'observation_only must map cleanly instead of incomplete');
     assert.ok(!log1Text.includes('"outcome":"incomplete"'), 'observation_only probe must not emit outcome=incomplete');

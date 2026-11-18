@@ -87,6 +87,8 @@ async function main() {
   let progress:BountyProgress={lastActivityAt:startedAt,logPath:null,logBytes:0,stage:'starting'};
   let lastProgressDisplay=startedAt;
   let lastProgressNote='';
+  let lastProgressEventAt=0;
+  let modelRequestAt=0;
   let streamedLogPath:string|null=null;
   let streamedLogBytes=0;
   let pendingTelemetryRemainder='';
@@ -137,7 +139,9 @@ async function main() {
           console.log('[one-bounty:action] '+line);
         }
         const latest=pickLatestProgressEvent(delta);
-        if(latest)lastProgressNote=latest;
+        if(latest){lastProgressNote=latest;lastProgressEventAt=Date.now();}
+        if(/\[OLLAMA\][^\n]*request started/.test(delta))modelRequestAt=Date.now();
+        if(/\[OLLAMA\][^\n]*response received/.test(delta))modelRequestAt=0;
       }
     }
     if(flushTail&&pendingTelemetryRemainder.trim()){
@@ -179,8 +183,14 @@ async function main() {
     if(checkTimeout&&(now-lastProgressDisplay>=15000 || (prior.stage!==progress.stage))){
       const elapsed=Math.floor((now-startedAt)/60000);
       const quiet=Math.floor((now-progress.lastActivityAt)/1000);
+      // Do not present an old controller event as a fresh failure every
+      // 15 seconds while a long local Qwen inference is still running.
+      const currentActivity=lastProgressEventAt && now-lastProgressEventAt<=30000
+        ? 'event='+lastProgressNote
+        : modelRequestAt ? 'model inference in progress '+Math.floor((now-modelRequestAt)/1000)+'s'
+        : 'awaiting fresh controller/model telemetry';
       console.log('[one-bounty] elapsed='+elapsed+'m stage='+progress.stage+
-        ' idle='+quiet+'s '+(lastProgressNote?'event='+lastProgressNote:'waiting for stage telemetry'));
+        ' idle='+quiet+'s '+currentActivity);
       lastProgressDisplay=now;
     }
     if(checkTimeout&&idleBountyExpired(progress,now,options.timeoutMin)){

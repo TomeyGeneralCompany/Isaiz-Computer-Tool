@@ -72,7 +72,7 @@ function validateSequence(s) {
     }
     if(step?.operation==='call')object(step,['operation','function','args','expect'],['operation','deploymentId','function','args','expect','sender']);
     else if(step?.operation==='observe')object(step,['operation','function','args'],['operation','deploymentId','function','args','sender']);
-    else if(step?.operation==='send')object(step,['operation','function','args'],['operation','deploymentId','function','args','sender','valueWei','expectRevert']);
+    else if(step?.operation==='send')object(step,['operation','function','args'],['operation','deploymentId','function','args','sender','valueWei','expectRevert','requiredSetup']);
     else throw new Error('Unknown sequence operation');
     if(step.deploymentId!==undefined && (typeof step.deploymentId!=='string' || !prepDeployments.has(step.deploymentId)))
       throw new Error('Unknown step deploymentId '+String(step.deploymentId));
@@ -80,7 +80,9 @@ function validateSequence(s) {
     args(step.args);
     if(step.sender!==undefined && (!Number.isInteger(step.sender)||step.sender<0||step.sender>2))throw new Error('Invalid local sender');
     if(step.operation==='call')value(step.expect);
-    else {wei(step.valueWei);if(step.expectRevert!==undefined&&typeof step.expectRevert!=='boolean')throw new Error('Invalid revert expectation');}
+    else {wei(step.valueWei);if(step.expectRevert!==undefined&&typeof step.expectRevert!=='boolean')throw new Error('Invalid revert expectation');
+      if(step.requiredSetup!==undefined && (step.operation!=='send' || typeof step.requiredSetup!=='boolean' ||
+         (step.requiredSetup && step.expectRevert===true)))throw new Error('Invalid required setup flag');}
   }
   if(!s.steps.some(step=>step.operation==='call'||step.operation==='observe'||step.operation==='eth_balance'))throw new Error('Include a read observation');
   return s;
@@ -267,6 +269,8 @@ async function runSequence(artifact, sequence, transport, preparationArtifacts={
         steps.push({operation:'send',...depMeta,function:fragment.format('sighash'),sender:step.sender??0,
           valueWei:step.valueWei||'0',reverted,gasUsed:receipt.gasUsed.toString(),
           passed:reverted===!!step.expectRevert});
+        if(step.requiredSetup && reverted)
+          throw new Error('PREPARATION_INITIALIZATION_FAILED: required successful setup '+fragment.format('sighash')+' reverted; security experiment not executed');
       }
     }
     const observations={contract:address.toLowerCase(),accounts:accounts.map(a=>a.toLowerCase()),

@@ -41,8 +41,56 @@ export function compactAuditContext(messages:AuditMessage[],budget:number,progre
   while(groups.length>1 && JSON.stringify([...pinned,...notes,...groups.flat()]).length>budget)groups.shift();
   // Progress summaries are optional; never evict actual latest evidence for them.
   if(JSON.stringify([...pinned,...notes,...groups.flat()]).length>budget)notes.length=0;
-  const result=[...pinned,...notes,...groups.flat()];
-  if(JSON.stringify(result).length>budget)throw new Error("Latest audit exchange exceeds the context budget; narrow the probe output (budget="+budget+", pinned="+JSON.stringify(pinned).length+", latest="+JSON.stringify(groups.at(-1)).length+")");
+  let result=[...pinned,...notes,...groups.flat()];
+  // A correctly fitted result can become too large when a subsequent
+  // controller correction joins the latest exchange. Preserve the assistant
+  // action, source references and audit archive; evict only the oversized
+  // previous TOOL_RESULT payload from active model context. Never fabricate
+  // an abbreviated source page or claim those bytes remain in context.
+  if(JSON.stringify(result).length>budget){
+    const latest=groups.at(-1);
+    if(latest){
+      for(let i=latest.length-1;i>=0 && JSON.stringify(result).length>budget;i--){
+        const message=latest[i];
+        if(message.role!=='user'||!message.content.startsWith('TOOL_RESULT '))continue;
+        const firstLine=message.content.split('\n')[0].slice('TOOL_RESULT '.length);
+        let toolName='unknown',caseId:string|undefined;
+        try {
+          const packet=JSON.parse(firstLine);
+          if(typeof packet?.name==='string')toolName=packet.name;
+          const output=typeof packet?.output==='string' ? JSON.parse(packet.output) : packet?.output;
+          if(typeof output?.caseId==='string'&&/^[a-f0-9]{64}$/.test(output.caseId))caseId=output.caseId;
+        }catch{}
+        latest[i]={role:'user',content:'TOOL_RESULT '+JSON.stringify({
+          name:toolName,contextEvicted:true,...(caseId?{caseId}:{}),
+          message:'Previous tool payload archived outside the active context; do not infer its contents. Re-read the indexed source or recorded evidence if needed.'
+        })+' /no_think'};
+        result=[...pinned,...notes,...groups.flat()];
+      }
+    }
+  }
+  if(JSON.stringify(result).length>budget){
+    // A standalone model action or controller correction can itself be larger
+    // than the remaining window, even after old exchanges and TOOL_RESULT
+    // payloads have been evicted. The caller records *all* replaced messages
+    // in its append-only exchange archive before inference proceeds. Do not
+    // silently truncate source or imply that omitted evidence was examined.
+    const latest=groups.at(-1);
+    if(latest){
+      latest.splice(0,latest.length,{role:'user',content:
+        'CONTEXT_EXCHANGE_EVICTED: The most recent oversized exchange is unavailable in active model context. '+
+        'Its original is preserved by the controller audit archive. Do not assume its evidence or instructions are still in context. '+
+        'Follow the current controller constraints and re-read indexed source or recorded evidence before relying on it. /no_think'});
+      result=[...pinned,...notes,...groups.flat()];
+      if(JSON.stringify(result).length>budget) {
+        // The note is optional; pinned instructions still govern any retry.
+        groups.pop();
+        result=[...pinned,...notes,{role:'user',content:
+          'CONTEXT_EXCHANGE_EVICTED: Previous oversized exchange archived. Re-read required evidence and follow current stage constraints. /no_think'}];
+      }
+    }
+  }
+  if(JSON.stringify(result).length>budget)throw new Error("Audit pinned instructions and controller reserve exceed context budget (budget="+budget+")");
   return result;
 }
 export function auditCheckpoint(events:string[]):string {

@@ -81,6 +81,42 @@ for(const [extension,language,kind] of [
   wf.acceptedReview(source,selector,kind,'review:case:'+caseId,false);
   assert.equal(wf.snapshot().scenarioLedger.scenarios[0].outcome,'rejected');
 }
+// Same Contract.function can legitimately have two different experiments.
+// They must not overwrite each other's scenario or case-linked review evidence.
+const multi=new InvestigationWorkflow();
+const multiPath='source-1/contracts/Multiple.sol';
+multi.read(multiPath);
+const firstPlan={action:'plan_probe',path:multiPath,query:'Multiple.withdraw',
+  answer:'solidity_sequence',hypothesis:'First source-backed accounting property',
+  sequence:{constructorArgs:[],steps:[
+    {operation:'send',function:'withdraw(uint256)',args:['1'],sender:1},
+    {operation:'observe',function:'balance()',args:[]}
+  ]}};
+const secondPlan={...firstPlan,hypothesis:'Second independent source-backed authorization property',
+  sequence:{constructorArgs:[],steps:[
+    {operation:'send',function:'withdraw(uint256)',args:['2'],sender:2},
+    {operation:'observe',function:'balance()',args:[]}
+  ]}};
+multi.registerControllerPlan(firstPlan,'source:one','accounting','first property falsified');
+multi.plan(firstPlan);
+multi.observe({...firstPlan,action:'verify_source'},JSON.stringify({
+  status:'observation_only',behavior_observed:false,caseId:'1'.repeat(64),
+  observations:{steps:[{operation:'observe',actual:'0'}]}
+}));
+assert.equal(multi.validate(secondPlan),null,'A different sequence must not be blocked as an already-tested probe');
+multi.registerControllerPlan(secondPlan,'source:two','authorization','second property falsified');
+multi.plan(secondPlan);
+multi.observe({...secondPlan,action:'verify_source'},JSON.stringify({
+  status:'behavior_observed',behavior_observed:true,caseId:'2'.repeat(64),
+  observations:{steps:[{operation:'send',passed:true}]}
+}));
+assert.equal(multi.snapshot().scenarioLedger.scenarios.length,2);
+multi.acceptedReview(multiPath,'Multiple.withdraw','solidity_sequence',
+  'review:case:'+'2'.repeat(64),false);
+const multiOutcomes=multi.snapshot().scenarioLedger.scenarios.map(s=>s.outcome);
+assert.deepEqual(multiOutcomes,['incomplete','rejected'],
+  'Independent case review must settle only the matching observed experiment');
+
 const dependencies=new InvestigationWorkflow();
 dependencies.read('source-1/contracts/Dependencies.sol');
 const broken={action:'plan_probe',path:'source-1/contracts/Dependencies.sol',

@@ -355,8 +355,6 @@ async function huntProgramImpl(
           { programId: program.id, missStreak: newMissStreak, nextCooldownHours: getConfig().SECURITY_HUNT_COOLDOWN_HOURS * Math.pow(2, Math.min(newMissStreak, 6)) },
           "Program miss streak updated — next cooldown extended",
         );
-      } else if (!huntSucceeded) {
-        log.warn({ programId: program.id }, "Hunt did not complete successfully — miss streak unchanged");
       }
     } catch (finallyErr) {
       log.error({ err: finallyErr, programId: program.id }, "Failed to update hunt tracking in finally block");

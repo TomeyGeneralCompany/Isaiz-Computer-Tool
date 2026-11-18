@@ -800,8 +800,26 @@ export async function runLocalAudit(
           })+'\n');
         }
         const solLeads=(limits.staticLeads||[]).filter(l=>l.path.endsWith('.sol'));
-        const envAnalyzeTurns=Number(process.env.LOCAL_ANALYZE_MODEL_TURNS??4);
-        const maxAnalyzeTurns=Number.isSafeInteger(envAnalyzeTurns)&&envAnalyzeTurns>=0?Math.min(envAnalyzeTurns,12):4;
+        // Supply an exact source excerpt for a candidate instead of asking the
+        // model to construct a fixture from six function names alone. The full
+        // verified source is already in the controller archive; excerpts are
+        // intentionally bounded for CPU-only Qwen context.
+        const analysisSourcePackets=nonMockSolSummaries.slice(0,4).flatMap(item=>{
+          const content=accessibleSoliditySources.get(item.path);
+          const selector=item.unqueuedNonSetters[0];
+          const method=selector?.split('.').at(-1);
+          if(!content||!method)return [];
+          const match=new RegExp('\\bfunction\\s+'+method.replace(/[^a-zA-Z0-9_]/g,'')+'\\s*\\(').exec(content);
+          if(!match)return [];
+          const start=Math.max(0,match.index-160);
+          return [{path:item.path,selector,sourceExcerpt:content.slice(start,Math.min(content.length,match.index+1100)),
+            excerptStart:start,truncated:match.index+1100<content.length}];
+        });
+        // Four Qwen turns were insufficient to correct even one rejected
+        // sequence. Preserve a configurable bounded window without treating
+        // an invalid schema attempt as a successful experiment.
+        const envAnalyzeTurns=Number(process.env.LOCAL_ANALYZE_MODEL_TURNS??24);
+        const maxAnalyzeTurns=Number.isSafeInteger(envAnalyzeTurns)&&envAnalyzeTurns>=0?Math.min(envAnalyzeTurns,200):24;
         const enableAnalyzeModel=structured && !!workflow &&
           process.env.LOCAL_MODEL_SOLIDITY_ANALYZE!=='false' && maxAnalyzeTurns>0 &&
           (process.env.LOCAL_MODEL_SOLIDITY_ANALYZE==='true' || solLeads.length>0 ||
@@ -817,7 +835,8 @@ export async function runLocalAudit(
             JSON.stringify(stagedPlans.slice(0,6).map(s=>({path:s.plan.path,query:s.plan.query})))+
             (solLeads.length?'. Static leads on Solidity files: '+JSON.stringify(solLeads.slice(0,8).map(l=>({path:l.path,line:l.line,rule:l.rule,severity:l.severity,msg:l.message.slice(0,100)}))):'')+
             (nonMockSolSummaries.length?'. Non-mock Solidity functions not yet queued: '+JSON.stringify(nonMockSolSummaries.slice(0,6)):'')+
-            '. Propose ONE targeted DeFi/static-lead experiment using {"action":"discover_experiment","path":"source-...sol","query":"Contract.function","answer":"solidity_sequence","hypothesis":"...","sequence":{"constructorArgs":[...],"steps":[...]}} OR respond with {"action":"finalize_analysis","path":"","query":"","answer":""} to start EXPERIMENT immediately. /no_think'});
+            (analysisSourcePackets.length?'. Exact source evidence for targeted planning: '+JSON.stringify(analysisSourcePackets).slice(0,5500):'')+
+            '. Propose ONE source-backed targeted experiment. Return exactly {"action":"discover_experiment","path":"source-...sol","query":"Contract.function","answer":"solidity_sequence","hypothesis":"A falsifiable claim tied to inspected source","sequence":{"constructorArgs":[],"steps":[{"operation":"send","function":"method()","args":[],"sender":1},{"operation":"observe","function":"getter()","args":[]}]}}. Replace method/getter with real source-declared signatures. Allowed step operations: send, call (requires expect), observe, eth_balance (requires account). Each send/call/observe requires function and args; constructorArgs is always an array, even when empty. Include relevant preparation deployments and initial-state checks where needed. A generic state read is exploratory, not a tested security invariant. Do not guess function signatures or assertions. OR send {"action":"finalize_analysis","path":"","query":"","answer":""} only after assessing all relevant unqueued leads. /no_think'});
         } else {
           stageLock.completeAnalysis();
           await appendFile(logFile,'[ANALYSIS_COMPLETE] '+
@@ -1012,7 +1031,7 @@ export async function runLocalAudit(
         requestSchema={...requestSchema,
           properties:nextProps,
           required:[...new Set([...actionSchema.required,'result'])]};
-        await appendFile(logFile,'[FINAL_RESULT_REQUIRED] Recovery from empty final; evidence validation still required\n');
+        await appendFile(logFile,'[FINAL_SCHEMA_ACTIVATED] Typed result required for '+(stageLock?.currentStage||'recovery')+'; this is not a rejected model response\n');
       }
       const schemaExtra=Math.max(0,JSON.stringify(requestSchema).length-JSON.stringify(actionSchema).length);
       const controllerFacts=limits.progressNote?.() || '';
@@ -1661,10 +1680,20 @@ export async function runLocalAudit(
         try {action = decodeAuditAction(message.content,!!limits.verifyPython,stageLock?.currentStage==='ANALYZE');}
         catch {
           if(stageLock?.currentStage==='ANALYZE' && analyzeModelPending){
+            analyzeTurnsRemaining--;
+            await appendFile(logFile,'[ANALYSIS_EXPERIMENT_REJECTED] '+
+              JSON.stringify({reason:'invalid_json_action',remainingTurns:analyzeTurnsRemaining})+'\n');
+            if(analyzeTurnsRemaining>0) {
+              messages.push({role:'user',content:
+                'Your ANALYZE action was invalid JSON or did not satisfy the action schema. '+
+                'Use discover_experiment with a real Contract.function, constructorArgs array, '+
+                'and steps using operation=send/call/observe/eth_balance, or finalize_analysis after examining all candidates. '+
+                'Do not repeat malformed output. /no_think'});
+              continue;
+            }
             analyzeModelPending=false;
-            analyzeTurnsRemaining=0;
             stageLock.completeAnalysis();
-            await appendFile(logFile,'[ANALYSIS_MODEL_FALLBACK] '+JSON.stringify({reason:'invalid_json_action'})+'\n');
+            await appendFile(logFile,'[ANALYSIS_MODEL_FALLBACK] '+JSON.stringify({reason:'invalid_json_budget_exhausted'})+'\n');
             await appendFile(logFile,'[ANALYSIS_COMPLETE] '+JSON.stringify({candidates:stageLock.candidateCount,modelAdded:analyzeApprovedIds.size})+'\n');
             await appendFile(logFile,'[STAGE_UNLOCK] ANALYZE -> EXPERIMENT\n');
             continue;
@@ -1776,9 +1805,15 @@ export async function runLocalAudit(
         // The source controller owns the scenario; model assertions are ignored.
         if(workflow && action.path.endsWith('.sol') &&
            ['plan_probe','probe_intent'].includes(action.action)) {
-          const stagedId=JSON.stringify([action.path,action.query,'solidity_sequence']);
-          const approvedStaged=controllerAction && analyzeApprovedIds.has(stagedId)
-            ? stagedPlans.find(x=>x.id===stagedId)?.plan : null;
+          // The stage dispatcher already selected the exact experiment ID.
+          // Model-added plans include their hypothesis fingerprint, so
+          // reconstructing [path,selector,kind] loses their identity.
+          const activePlan=activeStageCandidate
+            ? stagedPlans.find(entry=>entry.id===activeStageCandidate) : undefined;
+          const approvedStaged=controllerAction && activePlan &&
+            analyzeApprovedIds.has(activePlan.id) &&
+            activePlan.plan.path===action.path && activePlan.plan.query===action.query
+            ? activePlan.plan : null;
           let grounded:ReturnType<typeof sourceGroundedSolidityProbe>=approvedStaged ? {
             hypothesis:approvedStaged.hypothesis,
             sequence:approvedStaged.sequence as any,
@@ -1934,8 +1969,19 @@ export async function runLocalAudit(
                   answer:'solidity_sequence',
                   hypothesis:(action.hypothesis||'Model-proposed DeFi / static-lead security hypothesis.').slice(0,600),
                   sequence:parsedSeq.data};
-                acceptedId=JSON.stringify([action.path,action.query,'solidity_sequence']);
-                if(!stagedPlans.some(x=>x.id===acceptedId)){
+                // Distinct property/sequence pairs are separate experiments,
+                // even when they exercise the same source-declared function.
+                const modelFingerprint=createHash('sha256').update(
+                  JSON.stringify([plan.hypothesis,parsedSeq.data])).digest('hex');
+                acceptedId=JSON.stringify([action.path,action.query,'solidity_sequence',modelFingerprint]);
+                const duplicate=stagedPlans.some(entry=>entry.id===acceptedId ||
+                  (entry.plan.path===action.path && entry.plan.query===action.query &&
+                   entry.plan.answer==='solidity_sequence' &&
+                   entry.plan.hypothesis===plan.hypothesis &&
+                   JSON.stringify(entry.plan.sequence)===JSON.stringify(parsedSeq.data)));
+                if(duplicate) {
+                  acceptError='Identical experiment already queued; propose a distinct source-backed hypothesis/sequence. No new experiment was registered.';
+                } else {
                   stageLock.discover(acceptedId);
                   stagedPlans.push({id:acceptedId,plan});
                   analyzeApprovedIds.add(acceptedId);
@@ -1947,6 +1993,9 @@ export async function runLocalAudit(
               acceptError=String(error).slice(0,200);
             }
           }
+          if(acceptError)await appendFile(logFile,'[ANALYSIS_EXPERIMENT_REJECTED] '+
+            JSON.stringify({path:action.path,selector:action.query,error:acceptError,
+              remainingTurns:analyzeTurnsRemaining})+'\n');
           messages.push({role:'user',content:acceptError
             ? 'discover_experiment rejected: '+acceptError+(analyzeTurnsRemaining>0?' Revise or send finalize_analysis. /no_think':' Budget exhausted; starting EXPERIMENT.')
             : 'Accepted discover_experiment ('+action.query+'). Remaining ANALYZE turns: '+analyzeTurnsRemaining+'. Propose another or send finalize_analysis. /no_think'});
