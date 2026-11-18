@@ -262,6 +262,36 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
         JSON.stringify({eligible:fullSourceIndex.eligibleFiles,indexed:fullSourceIndex.indexedFiles,
           skipped:fullSourceIndex.skipped.length,complete:fullSourceIndex.complete})+'\n');
     }
+    const coverageLedger=():HuntCoverageLedger=>{
+      const read=reads.inspectedPaths(eligiblePaths).length;
+      const counts=experimentLedger?.outcomes;
+      const cases=[...session.cases.values()];
+      const countStatus=(value:string)=>cases.filter(item=>item.result.status===value).length;
+      const supportedNegative=counts?.not_observed ?? countStatus('behavior_not_observed');
+      const observationOnly=counts?.observation_only ?? countStatus('observation_only');
+      const fixtureFailed=counts?.incomplete ?? session.failedProbes;
+      const unsupported=counts?.unsupported ?? session.unsupportedProbes;
+      const positiveObserved=counts?.observed ?? countStatus('behavior_observed');
+      const unresolved=counts?.pending??0;
+      const experimentsSelected=experimentLedger?.selected ??
+        (supportedNegative+observationOnly+fixtureFailed+unsupported+positiveObserved+unresolved);
+      const actualTotal=counts?Object.values(counts).reduce((a,b)=>a+b,0):experimentsSelected;
+      const consistent=actualTotal===experimentsSelected;
+      const sourceComplete=!!fullSourceIndex?.complete&&read===eligiblePaths.length;
+      const experimentComplete=sourceComplete&&consistent&&fixtureFailed===0&&unsupported===0&&
+        observationOnly===0&&unresolved===0;
+      return {sourceIndexed:eligiblePaths.length,sourceRead:read,
+        leadsSelected:analysisCertificate?.selected??0,
+        leadsAssessedByModel:analysisCertificate?.modelAssessed??0,
+        leadsDeferred:analysisCertificate?.deferred??0,
+        leadsBlocked:analysisCertificate?.blocked??0,
+        experimentsSelected,experimentsExecuted:supportedNegative+observationOnly+positiveObserved,
+        supportedNegative,observationOnly,fixtureFailed,unsupported,positiveObserved,
+        verifiedFindings:0,unresolved:unresolved+(consistent?0:Math.abs(actualTotal-experimentsSelected)),
+        sourceCoverage:sourceComplete?'complete':'partial',
+        analysisCoverage:analysisCertificate?.status==='complete'?'complete':'partial',
+        experimentCoverage:experimentComplete?'complete':'partial'};
+    };
     const controllerRankedPaths=fullSourceIndex?.rankedPaths||[];
     const selection=await prioritizeSourceCandidates(root,eligiblePaths,
       fullSourceIndex ? [...controllerRankedPaths.slice(0,96),...fallbackHints] : fallbackHints,
