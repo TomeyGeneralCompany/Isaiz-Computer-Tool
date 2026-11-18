@@ -8,13 +8,14 @@ on:
       - .github/workflows/real-qwen-smoke.yml
       - packages/security-solver/src/**
       - scripts/source-reproduction.py
+      - scripts/test-analysis-real-qwen.ts
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
   real-qwen-cpu:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 65
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -39,7 +40,7 @@ jobs:
           curl -fsS http://127.0.0.1:11434/api/tags >/dev/null
           ollama pull qwen3:4b
       - name: Run real Qwen3 agent and real isolated Python reproduction
-        timeout-minutes: 31
+        timeout-minutes: 55
         env:
           LOCAL_OLLAMA_MODEL: qwen3:4b
           LOCAL_MODEL_PROFILE: qwen
@@ -47,6 +48,7 @@ jobs:
           AUTOHACK_OLLAMA_URL: http://127.0.0.1:11434/api/chat
           LOCAL_HUNT_DYNAMIC_ALLOWANCE: 'false'
         run: |
+          node --import tsx scripts/test-analysis-real-qwen.ts
           node --import tsx scripts/test-production-workflow.ts --real-model --prefetch --variant=0
           node --import tsx scripts/test-production-workflow.ts --real-model --prefetch --variant=1
           node --import tsx scripts/test-production-workflow.ts --real-model --prefetch --variant=2
