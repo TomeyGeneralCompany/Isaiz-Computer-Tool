@@ -59,4 +59,19 @@ assert.match(over[3].content,/contextEvicted/);
 assert.doesNotMatch(over[3].content,/a{100}/,'Evicted source must not appear as fabricated evidence');
 assert.match(over[3].content,/Re-read the indexed source/);
 
+// The four-language gauntlet can produce a latest exchange larger than the
+// available 11663-byte budget even when it contains no TOOL_RESULT message.
+// The controller must retain durable evidence externally and recover its
+// active model context instead of aborting before hypothesis planning.
+const latestOversized=[
+  {role:'assistant',content:'{"action":"read_file","path":"source-1/Vault.sol"}'},
+  {role:'user',content:'Required stage feedback: '+'x'.repeat(6800)}
+];
+const rec=compactAuditContext([...overPinned,...latestOversized],11663);
+assert.ok(JSON.stringify(rec).length<=11663);
+assert.match(rec.at(-1)!.content,/CONTEXT_EXCHANGE_EVICTED/);
+assert.doesNotMatch(JSON.stringify(rec),/x{100}/);
+assert.match(rec.at(-1)!.content,/re-read indexed source or recorded evidence/);
+
+
 console.log('Production input/schema/controller/output allocation and repeated correction compaction PASSED');
