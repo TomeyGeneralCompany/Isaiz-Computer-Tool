@@ -64,6 +64,42 @@ export const huntSchema=z.object({findings:z.array(candidateSchema).max(8),
   if(value.outcome === "no_testable_candidate" && (value.findings.length || !value.reason))
     ctx.addIssue({code:z.ZodIssueCode.custom,message:"No-testable-candidate outcome requires a reason and zero findings"});
 });
+export type HuntCoverageLedger={
+  sourceIndexed:number;sourceRead:number;leadsSelected:number;leadsAssessedByModel:number;
+  leadsDeferred:number;leadsBlocked:number;experimentsSelected:number;experimentsExecuted:number;
+  supportedNegative:number;observationOnly:number;fixtureFailed:number;unsupported:number;
+  positiveObserved:number;verifiedFindings:number;unresolved:number;
+  sourceCoverage:'complete'|'partial';analysisCoverage:'complete'|'partial';
+  experimentCoverage:'complete'|'partial';
+};
+export function reconcileHuntReason(reason:string,ledger:HuntCoverageLedger):{
+  reason:string;contradictions:string[]
+}{
+  const contradictions:string[]=[];
+  const incomplete=ledger.observationOnly+ledger.fixtureFailed+ledger.unsupported+ledger.unresolved>0;
+  if(incomplete && (
+    /\ball\b[^.]{0,180}\b(?:behavior_not_observed|negative|falsified)\b/i.test(reason)||
+    /\b(?:behavior_not_observed|negative|falsified)\b[^.]{0,180}\b(?:all|every)\b/i.test(reason)||
+    /\b(?:every|all)\s+(?:candidate|function|hypothesis|experiment|probe)s?\b[^.]{0,150}\b(?:not observed|passed|failed to reproduce)\b/i.test(reason)||
+    /\b(?:no failed experiments|everything passed|all functions tested|none of the contracts vulnerable)\b/i.test(reason)
+  ))contradictions.push('blanket_negative_contradicts_partial_experiment_ledger');
+  if(ledger.experimentCoverage==='partial' &&
+    /\b(?:full|complete|exhaustive)\s+(?:experimental |experiment |hypothesis )?coverage\b/i.test(reason))
+    contradictions.push('complete_coverage_claim_contradicts_ledger');
+  if(!contradictions.length)return {reason,contradictions};
+  return {contradictions,reason:
+    ledger.sourceRead+'/'+ledger.sourceIndexed+' source files inspected; '+
+    ledger.experimentsSelected+' experiments selected; '+
+    ledger.supportedNegative+' source-supported negative experiments, '+
+    ledger.observationOnly+' observation-only, '+
+    ledger.fixtureFailed+' failed/incomplete fixtures, '+
+    ledger.unsupported+' unsupported, '+
+    ledger.positiveObserved+' observed behaviors, '+
+    ledger.verifiedFindings+' independently verified findings. '+
+    'Source inspection '+ledger.sourceCoverage+'; model analysis '+ledger.analysisCoverage+
+    '; experiment evidence '+ledger.experimentCoverage+
+    '. No vulnerability absence claim is supported by incomplete experiments.'};
+}
 const score=z.number().int().min(0).max(3);
 const reviewSchema=z.object({verdict:z.enum(["approve","reject"]),recommendation:z.enum(["submit","submit_cautiously","dont_submit"]),
   severity:severitySchema,confidence:confidenceSchema,ratingReason:z.string().min(40).max(2000),
@@ -111,6 +147,10 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
   let auditRecord:string|undefined;
   const investigationStartedAt=new Date().toISOString();
   let preparationFailure="Source preparation did not reach model inspection";
+  let analysisCertificate:import('./controller-stage-lock').AnalysisCertificate|null=null;
+  let experimentLedger:{selected:number;resolved:number;outcomes:{
+    observed:number;observation_only:number;not_observed:number;unsupported:number;incomplete:number;rejected:number;pending:number
+  }}|null=null;
   const acquisitionChecks:NonNullable<SecuritySolveResult["acquisitionChecks"]>=[];
   let capabilityChecks:SecuritySolveResult["capabilityChecks"];
   let captureStats:(() => {completedProbes:number;unsupportedProbes:number;failedProbes:number;eligibleFiles:number;inspectedFiles:number}) | undefined;
@@ -608,7 +648,10 @@ Do not claim production testing, JavaScript execution, file access or other effe
       process.env.LOCAL_OLLAMA_MODEL || "qwen3:4b",undefined,{
         onAllowance:async deadline=>writeSecuritySolverStatus({active:true,programId:program.id,programName:program.name,
           stage:"hunting",startedAt:statusStartedAt,timeoutMinutes:(deadline-Date.parse(statusStartedAt))/60000,pid:process.pid}),
-        signal,maxTurns,controllerIndex,finalSchema:z.toJSONSchema(huntSchema),productionWorkflow:true,dynamicAllowance:process.env.LOCAL_HUNT_DYNAMIC_ALLOWANCE !== "false",initialSourcePaths:["audit-policy.txt",...new Set([...sourceHints,...(fullSourceIndex?.rankedPaths||[]),...eligiblePaths])],initialSourceLocations:selection.locations,checkpointPath:join(checkpointDirectory,checkpointKey+".json"),numCtx:8192,numThreads:4,numPredict:getConfig().LOCAL_HUNT_NUM_PREDICT,onRead:(path,span)=>reads.add(path,span),
+        signal,maxTurns,controllerIndex,
+         onAnalysisCertificate:certificate=>{analysisCertificate=certificate;},
+         onExperimentLedger:ledger=>{experimentLedger=ledger;},
+         finalSchema:z.toJSONSchema(huntSchema),productionWorkflow:true,dynamicAllowance:process.env.LOCAL_HUNT_DYNAMIC_ALLOWANCE !== "false",initialSourcePaths:["audit-policy.txt",...new Set([...sourceHints,...(fullSourceIndex?.rankedPaths||[]),...eligiblePaths])],initialSourceLocations:selection.locations,checkpointPath:join(checkpointDirectory,checkpointKey+".json"),numCtx:8192,numThreads:4,numPredict:getConfig().LOCAL_HUNT_NUM_PREDICT,onRead:(path,span)=>reads.add(path,span),
         staticLeads:staticLeads.leads,
         progressNote:()=>((controllerPromotedCaseId?
           'CONTROLLER VERIFIED ENTRY CASE: '+controllerPromotedCaseId+' (prioritize this observed caller; do not substitute helper case).\n':'')+
