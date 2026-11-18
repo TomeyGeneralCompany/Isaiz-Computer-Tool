@@ -246,6 +246,13 @@ export async function runLocalAudit(
   const stagedPlans:Array<{id:string;plan:{action:'plan_probe';path:string;query:string;answer:string;hypothesis:string;sequence?:unknown}}>=[];
   const stagedAttempted=new Set<string>();
   let activeStageCandidate:string|null=null;
+  const activeStagedPlanMatches=(path:string,query:string,kind:string,sequence?:unknown)=>{
+    if(!activeStageCandidate)return false;
+    const selected=stagedPlans.find(item=>item.id===activeStageCandidate);
+    return !!selected&&selected.plan.path===path&&selected.plan.query===query&&
+      selected.plan.answer===kind&&
+      JSON.stringify(selected.plan.sequence??null)===JSON.stringify(sequence??null);
+  };
   let analyzeModelPending=false;
   let analyzeTurnsRemaining=0;
   const analyzeApprovedIds=new Set<string>();
@@ -1905,7 +1912,7 @@ export async function runLocalAudit(
           continue;
         }
         if(stageLock && action.action==='verify_source' &&
-          activeStageCandidate!==JSON.stringify([action.path,action.query,action.answer])){
+          !activeStagedPlanMatches(action.path,action.query,action.answer,action.sequence)){
           await appendFile(logFile,'[STAGE_ACTION_REJECTED] '+JSON.stringify({
             stage:stageLock.currentStage,reason:'verifier_not_for_active_candidate'})+'\n');
           messages.push({role:'user',content:'The controller has not scheduled this verifier request. /no_think'});
@@ -1916,7 +1923,7 @@ export async function runLocalAudit(
           try {
             stageLock.assertActionAllowed(action.action);
             if(['plan_probe','probe_intent'].includes(action.action))
-              stageLock.requireCandidate(JSON.stringify([action.path,action.query,action.answer]));
+              stageLock.requireCandidate(activeStageCandidate||'');
           }catch(error){
             await appendFile(logFile,'[STAGE_ACTION_REJECTED] '+
               JSON.stringify({stage:stageLock.currentStage,action:action.action,error:String(error)})+'\n');
@@ -2636,10 +2643,11 @@ export async function runLocalAudit(
           if(stageLock){
             stageLock.assertActionAllowed(call.function.name);
             if(['verify_source','verify_python'].includes(call.function.name) &&
-              activeStageCandidate!==JSON.stringify([
+              !activeStagedPlanMatches(
                 String(call.function.arguments?.path||''),
                 String(call.function.arguments?.query||''),
-                String(call.function.arguments?.kind||'')]))
+                String(call.function.arguments?.kind||''),
+                call.function.arguments?.sequence))
               throw new Error('STAGE_LOCKED: VERIFIER_CANDIDATE_MISMATCH');
           }
           let path = String(call.function.arguments?.path ?? ".");
