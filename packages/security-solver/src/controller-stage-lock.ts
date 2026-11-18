@@ -18,7 +18,7 @@ export type AnalysisCertificate={
 const actions:Record<Stage,ReadonlySet<string>>={
  INDEX:new Set(['index_source']),
  READ:new Set(['read_file','read_solidity','outline_solidity','search_files','list_files','continue_inspection']),
- ANALYZE:new Set(['assess_lead','defer_lead','request_source_context','discover_experiment','finalize_analysis']),
+ ANALYZE:new Set(['assess_lead','defer_lead','request_source_context','discover_experiment','finalize_analysis','analysis_unavailable']),
  EXPERIMENT:new Set(['plan_probe','probe_intent','verify_source','verify_python']),
  REVIEW:new Set(['independent_review']),
  REPORT:new Set(['final']),
