@@ -2068,7 +2068,13 @@ export async function runLocalAudit(
           analyzeTurnsRemaining--;
           let acceptError='';
           let acceptedId='';
-          if(!action.path.endsWith('.sol') || !(limits.initialSourcePaths||[]).includes(action.path)){
+          const proposedLead=action.leadId?analysisPackets.get(action.leadId):undefined;
+          if(!proposedLead||proposedLead.path!==action.path||proposedLead.selector!==action.query||
+             stageLock.analysisLeads.find(x=>x.id===proposedLead.id)?.state.kind!=='pending')
+            acceptError='Model experiment requires a pending, source-verified immutable leadId matching path and selector.';
+          else if(!action.hypothesis?.trim() || action.hypothesis.trim().length<12)
+            acceptError='Model experiment requires a falsifiable source-backed hypothesis.';
+          else if(!action.path.endsWith('.sol') || !(limits.initialSourcePaths||[]).includes(action.path)){
             acceptError='discover_experiment requires an indexed workspace .sol path.';
           } else {
             try {
@@ -2080,10 +2086,12 @@ export async function runLocalAudit(
               if(!declared)acceptError='Undeclared Solidity Contract.function selector: '+action.query;
               else if(!parsedSeq.success)acceptError='Invalid solidity_sequence: '+parsedSeq.error.issues.map(i=>i.path.join('.')+': '+i.message).slice(0,4).join('; ');
               else if(!parsedSeq.data.steps.some(s=>s.operation!=='eth_balance'&&s.function.split('(')[0]===fnName))acceptError='Sequence steps must invoke '+fnName;
+              else if(!parsedSeq.data.steps.some(step=>step.operation==='call'||(step.operation==='send'&&step.expectRevert===true)))
+                acceptError='Security experiment requires a source-derived call assertion or expected revert, not only exploratory observations.';
               else {
                 const plan={action:'plan_probe' as const,path:action.path,query:action.query,
                   answer:'solidity_sequence',
-                  hypothesis:(action.hypothesis||'Model-proposed DeFi / static-lead security hypothesis.').slice(0,600),
+                  hypothesis:action.hypothesis!.slice(0,600),
                   sequence:parsedSeq.data};
                 // Distinct property/sequence pairs are separate experiments,
                 // even when they exercise the same source-declared function.
@@ -2101,8 +2109,13 @@ export async function runLocalAudit(
                   stageLock.discover(acceptedId);
                   stagedPlans.push({id:acceptedId,plan});
                   analyzeApprovedIds.add(acceptedId);
+                  stageLock.recordLeadAssessment(proposedLead!.id,{kind:'assessed',
+                    sourceEvidence:[proposedLead!.sourceEvidence],
+                    hypothesis:plan.hypothesis,disposition:'test',
+                    reason:'Accepted distinct source-derived assertion and schema-valid local experiment'},'model');
                   await appendFile(logFile,'[ANALYSIS_MODEL_EXPERIMENT_ADDED] '+JSON.stringify({
-                    path:action.path,selector:action.query,remainingTurns:analyzeTurnsRemaining})+'\n');
+                    leadId:proposedLead!.id,experimentId:acceptedId,path:action.path,
+                     selector:action.query,remainingTurns:analyzeTurnsRemaining})+'\n');
                 }
               }
             } catch(error) {
@@ -2113,14 +2126,11 @@ export async function runLocalAudit(
             JSON.stringify({path:action.path,selector:action.query,error:acceptError,
               remainingTurns:analyzeTurnsRemaining})+'\n');
           messages.push({role:'user',content:acceptError
-            ? 'discover_experiment rejected: '+acceptError+(analyzeTurnsRemaining>0?' Revise or send finalize_analysis. /no_think':' Budget exhausted; starting EXPERIMENT.')
-            : 'Accepted discover_experiment ('+action.query+'). Remaining ANALYZE turns: '+analyzeTurnsRemaining+'. Propose another or send finalize_analysis. /no_think'});
-          if(analyzeTurnsRemaining<=0){
-            analyzeModelPending=false;
-            stageLock.completeAnalysis();
-            await appendFile(logFile,'[ANALYSIS_COMPLETE] '+JSON.stringify({candidates:stageLock.candidateCount,modelAdded:analyzeApprovedIds.size})+'\n');
-            await appendFile(logFile,'[STAGE_UNLOCK] ANALYZE -> EXPERIMENT\n');
-          }
+            ? 'discover_experiment rejected: '+acceptError+'. '+analysisPacketPrompt()
+            : 'Accepted discover_experiment ('+action.query+'). Remaining ANALYZE turns: '+analyzeTurnsRemaining+'. '+analysisPacketPrompt()});
+          if(analyzeTurnsRemaining<=0)
+            await closeAnalysis(stageLock.analysisProgress.pendingIds.length?'partial':'complete',
+              stageLock.analysisProgress.pendingIds.length?'analysis_turn_budget_exhausted':'');
           continue;
         }
         if((action.action==='plan_probe'||action.action==='verify_source') &&
