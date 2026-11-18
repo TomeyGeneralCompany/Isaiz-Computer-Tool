@@ -112,6 +112,10 @@ multi.observe({...secondPlan,action:'verify_source'},JSON.stringify({
 }));
 assert.equal(multi.snapshot().scenarioLedger.scenarios.length,2);
 multi.acceptedReview(multiPath,'Multiple.withdraw','solidity_sequence',
+  'review:case:'+'3'.repeat(64),false);
+assert.equal(multi.snapshot().scenarioLedger.scenarios.filter(s=>s.outcome==='rejected').length,0,
+  'Foreign case ID must never fall back to a different same-selector experiment');
+multi.acceptedReview(multiPath,'Multiple.withdraw','solidity_sequence',
   'review:case:'+'2'.repeat(64),false);
 const multiOutcomes=multi.snapshot().scenarioLedger.scenarios.map(s=>s.outcome);
 assert.deepEqual(multiOutcomes,['incomplete','rejected'],
