@@ -596,7 +596,10 @@ def run_probe(repository: Path, specification: dict, _dependency_round: int = 0)
                     detail=clean_probe_diagnostic(diagnostic, code)
             else:
                 detail=clean_probe_diagnostic(diagnostic, code)
-            return {'status':'probe_failed','behavior_observed':False,'exit_code':code,'detail':detail}
+            classification = ('preparation_initialization_failed'
+                if 'PREPARATION_INITIALIZATION_FAILED:' in detail else None)
+            return {'status':'probe_failed','behavior_observed':False,'exit_code':code,
+                    'classification':classification,'detail':detail}
         if hashlib.sha256(target.read_bytes()).hexdigest()!=source_hash: raise ValueError('Source changed during probe')
         if language == 'solidity' and compile_cache_file is not None and compile_cache_out.is_file():
             try:
