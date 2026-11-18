@@ -19,7 +19,7 @@ async function testCoverage(){
  lock.recordRead({path:sources[90].path,start:2,end:4,totalCharacters:6,text:'cd'});
  await lock.completeReading(async()=> 'abcdef');
  assert.equal(lock.currentStage,'ANALYZE');
- for(const source of sources)lock.noteAnalyzed(source.path,'complete');
+ for(const source of sources)lock.noteSourcePreclassified(source.path,'indexed-options-built');
  lock.completeAnalysis();assert.equal(lock.currentStage,'EXPERIMENT');
  console.log('91/91 full-index byte range coverage PASSED');
 }
