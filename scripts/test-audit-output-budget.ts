@@ -44,4 +44,19 @@ const corrections=Array.from({length:80},()=>({role:'user',content:'Rejected act
 const compacted=compactAuditContext([...largePinned,...corrections],usable);
 assert.ok(JSON.stringify(compacted).length<=usable);
 assert.equal(compacted.at(-1),corrections.at(-1));
+// Reproduce an oversized latest controller/tool exchange without increasing
+// model context or silently fabricating source coverage.
+const overPinned=[{role:'system',content:'s'.repeat(5250)},{role:'user',content:'task'}];
+const overRequest={role:'assistant',content:'read_file source-1/contract.sol'};
+const overTool={role:'user',content:'TOOL_RESULT '+JSON.stringify({
+  name:'read_file',output:JSON.stringify({start:0,end:6000,totalCharacters:6000,
+    nextOffset:null,text:'a'.repeat(6000)})
+})+'\\nTool result /no_think'};
+const over=compactAuditContext([...overPinned,overRequest,overTool],11663);
+assert.ok(JSON.stringify(over).length<=11663);
+assert.equal(over[2],overRequest,'The exact tool action must not be discarded');
+assert.match(over[3].content,/contextEvicted/);
+assert.doesNotMatch(over[3].content,/a{100}/,'Evicted source must not appear as fabricated evidence');
+assert.match(over[3].content,/Re-read the indexed source/);
+
 console.log('Production input/schema/controller/output allocation and repeated correction compaction PASSED');
