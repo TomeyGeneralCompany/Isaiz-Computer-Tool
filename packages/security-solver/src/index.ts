@@ -356,7 +356,8 @@ async function huntProgramImpl(
           "Program miss streak updated — next cooldown extended",
         );
       } else if (!huntSucceeded) {
-        log.warn({ programId: program.id }, "Hunt did not complete successfully — miss streak unchanged");
+        // The miss streak is tracked as machine state. Do not repeat an
+        // operator-facing non-actionable failure narration here.
       }
     } catch (finallyErr) {
       log.error({ err: finallyErr, programId: program.id }, "Failed to update hunt tracking in finally block");
