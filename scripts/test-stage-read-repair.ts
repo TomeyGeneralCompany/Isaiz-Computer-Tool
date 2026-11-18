@@ -10,6 +10,7 @@ import { normalizeNegativeHuntProse } from '../packages/security-solver/src/loca
 import { runLocalAudit } from '../packages/security-solver/src/local-ollama-runner';
 import { InvestigationWorkflow } from '../packages/security-solver/src/investigation-workflow';
 import { ControllerStageLock } from '../packages/security-solver/src/controller-stage-lock';
+import { compactAuditContextWithRequiredTail } from '../packages/security-solver/src/audit-context';
 
 const hash = (s: string) => createHash('sha256').update(s).digest('hex');
 
@@ -760,6 +761,22 @@ async function testReviewContextBudgetAndTruncationRetry() {
   }
 }
 
+
+// Force eviction of historical exchanges while retaining an immutable live task.
+function testRequiredControllerTailIsNotEvictable(){
+  const history=[{role:'system',content:'System task'},{role:'user',content:'Original task'},
+    ...Array.from({length:20},(_,i)=>({role:i%2?'assistant':'user',content:'Historical '+i+' '+ 'X'.repeat(1200)}))];
+  const active={role:'user',content:'CURRENT ANALYZE TASK leadId='+ 'a'.repeat(64)};
+  const result=compactAuditContextWithRequiredTail(history,4800,[active],0,1000);
+  assert.equal(result.requestMessages.at(-1)?.content,active.content);
+  assert.ok(result.history.length<history.length,'Historical exchanges must be compacted');
+  assert.ok(result.requestMessages.some(msg=>msg.content.includes(active.content)));
+  assert.ok(JSON.stringify(result.requestMessages).length<=4800);
+  assert.throws(()=>compactAuditContextWithRequiredTail(history,100,[active],0,0),
+    /CONTROLLER_REQUIRED_INSTRUCTION_EXCEEDS_CONTEXT_BUDGET/);
+  console.log('8a. Required controller instruction survives archive compaction PASSED');
+}
+testRequiredControllerTailIsNotEvictable();
 
 async function testActiveAnalysisPacketSurvivesCompactionAndRejection() {
   const root=await mkdtemp(join(tmpdir(),'lotus-analysis-handoff-'));
