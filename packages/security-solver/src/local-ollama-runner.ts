@@ -988,7 +988,7 @@ export async function runLocalAudit(
         constraints={action:['read_file'],path:[next]};
       }
       if(stageLock?.currentStage==='ANALYZE' && analyzeModelPending)
-        constraints={action:['assess_lead','defer_lead','request_source_context','discover_experiment','finalize_analysis']};
+        constraints={action:['assess_lead','defer_lead','request_source_context','discover_experiment','finalize_analysis','analysis_unavailable']};
       if(stageLock?.currentStage==='EXPERIMENT' && !workflow?.snapshot().pending)
         constraints={action:['plan_probe','probe_intent']};
       if(stageLock?.currentStage==='REVIEW'||stageLock?.currentStage==='REPORT')
@@ -2004,13 +2004,65 @@ export async function runLocalAudit(
           messages.push({role:"user",content:"That action is not available in the current task stage. Use the current response schema and controller progress. No tool was executed. /no_think"});
           continue;
         }
-        if(stageLock?.currentStage==='ANALYZE' && ['discover_experiment','finalize_analysis'].includes(action.action)){
+        if(stageLock?.currentStage==='ANALYZE' &&
+          ['assess_lead','defer_lead','request_source_context','discover_experiment','finalize_analysis','analysis_unavailable'].includes(action.action)){
+          if(action.action==='analysis_unavailable'){
+            await closeAnalysis('partial','model_transport_unavailable');
+            continue;
+          }
           if(action.action==='finalize_analysis'){
-            analyzeModelPending=false;
-            analyzeTurnsRemaining=0;
-            stageLock.completeAnalysis();
-            await appendFile(logFile,'[ANALYSIS_COMPLETE] '+JSON.stringify({candidates:stageLock.candidateCount,modelAdded:analyzeApprovedIds.size})+'\n');
-            await appendFile(logFile,'[STAGE_UNLOCK] ANALYZE -> EXPERIMENT\n');
+            const pending=stageLock.analysisProgress.pendingIds;
+            if(pending.length){
+              analyzeTurnsRemaining--;
+              await appendFile(logFile,'[ANALYSIS_FINALIZATION_REJECTED] '+
+                JSON.stringify({pendingIds:pending,remainingTurns:analyzeTurnsRemaining,
+                  reason:'source_backed_lead_assessments_missing'})+'\\n');
+              if(analyzeTurnsRemaining<=0)await closeAnalysis('partial','finalization_with_pending_leads');
+              else messages.push({role:'user',content:
+                'Cannot finalize while analysis lead IDs remain pending: '+JSON.stringify(pending)+
+                '. Assess or defer each lead with immutable leadId, source-grounded reasoning, and exact selector. '+
+                analysisPacketPrompt()});
+              continue;
+            }
+            await closeAnalysis('complete');
+            continue;
+          }
+          if(['assess_lead','defer_lead','request_source_context'].includes(action.action)){
+            analyzeTurnsRemaining--;
+            const packet=action.leadId?analysisPackets.get(action.leadId):undefined;
+            const selected=packet&&stageLock.analysisLeads.find(lead=>
+              lead.id===packet.id&&lead.state.kind==='pending');
+            let error='';
+            if(!packet||!selected||packet.path!==action.path||packet.selector!==action.query)
+              error='Unknown, previously assessed, or mismatched immutable lead ID and selector';
+            else if(action.action==='request_source_context'){
+              messages.push({role:'user',content:
+                'Indexed source context for lead '+packet.id+': '+JSON.stringify(packet).slice(0,2500)+
+                '. This is the bounded source excerpt, not execution evidence. /no_think'});
+              continue;
+            } else if(!action.answer.trim()||action.answer.trim().length<20)
+              error='Lead assessment needs at least 20 characters of specific source-grounded reasoning';
+            else if(action.action==='assess_lead'&&(!action.hypothesis?.trim()||action.hypothesis.trim().length<12))
+              error='assess_lead requires a falsifiable source-backed hypothesis';
+            if(error){
+              await appendFile(logFile,'[ANALYSIS_LEAD_REJECTED] '+JSON.stringify({
+                leadId:action.leadId,path:action.path,query:action.query,
+                error,remainingTurns:analyzeTurnsRemaining})+'\\n');
+              messages.push({role:'user',content:'Rejected lead assessment: '+error+'. '+analysisPacketPrompt()});
+            }else{
+              stageLock.recordLeadAssessment(packet!.id,{kind:'assessed',
+                sourceEvidence:[packet!.sourceEvidence],
+                hypothesis:action.action==='defer_lead'?'No supported executable property':action.hypothesis!,
+                disposition:action.action==='defer_lead'?'defer':'test',
+                reason:action.answer.trim().slice(0,700)},'model');
+              await appendFile(logFile,'['+(action.action==='defer_lead'?'ANALYSIS_LEAD_DEFERRED':'ANALYSIS_LEAD_ASSESSED')+'] '+
+                JSON.stringify({leadId:packet!.id,path:packet!.path,selector:packet!.selector,
+                  reason:action.answer.trim().slice(0,300),
+                  sourceEvidence:packet!.sourceEvidence})+'\\n');
+              messages.push({role:'user',content:analysisPacketPrompt()});
+            }
+            if(analyzeTurnsRemaining<=0)await closeAnalysis(stageLock.analysisProgress.pendingIds.length?'partial':'complete',
+              stageLock.analysisProgress.pendingIds.length?'analysis_turn_budget_exhausted':'');
             continue;
           }
           analyzeTurnsRemaining--;
