@@ -781,10 +781,15 @@ testRequiredControllerTailIsNotEvictable();
 async function testActiveAnalysisPacketSurvivesCompactionAndRejection() {
   const root=await mkdtemp(join(tmpdir(),'lotus-analysis-handoff-'));
   const path='source-1/contracts/Deposit.sol';
+  const secondPath='source-1/contracts/Withdraw.sol';
   const source='// SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;\ncontract Deposit {\n'+
     '  uint256 public total;\n'+
     '  function deposit(uint256 amount) external { total += amount; }\n'+
     '  function withdraw(uint256 amount) external { require(total >= amount); total -= amount; }\n'+
+    '}\n';
+  const secondSource='// SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;\ncontract Withdraw {\n'+
+    '  uint256 public balance;\n'+
+    '  function take(uint256 amount) external { require(balance >= amount); balance -= amount; }\n'+
     '}\n';
   const log=join(root,'analysis.log');
   let analysisRequests=0;
@@ -798,8 +803,8 @@ async function testActiveAnalysisPacketSurvivesCompactionAndRejection() {
     if(match){
       const packet=JSON.parse(match[1]);
       analysisRequests++;
-      assert.equal(packet.path,path);
-      assert.equal(packet.sourceSha256,hash(source));
+      assert.ok([path,secondPath].includes(packet.path));
+      assert.equal(packet.sourceSha256,hash(packet.path===path?source:secondSource));
       assert.match(packet.id,/^[a-f0-9]{64}$/);
       assert.match(packet.sourceCommit,/^[a-f0-9]{40}$/);
       assert.ok(packet.sourceEvidence.includes(packet.sourceSha256));
@@ -829,6 +834,7 @@ async function testActiveAnalysisPacketSurvivesCompactionAndRejection() {
   try{
     await mkdir(dirname(join(root,path)),{recursive:true});
     await writeFile(join(root,path),source);
+    await writeFile(join(root,secondPath),secondSource);
     execFileSync('git',['init','-q'],{cwd:root});
     execFileSync('git',['add','.'],{cwd:root});
     execFileSync('git',['-c','user.name=Test','-c','user.email=test@example.invalid',
@@ -848,8 +854,9 @@ async function testActiveAnalysisPacketSurvivesCompactionAndRejection() {
         log,30000,root,'mock',undefined,{
           productionWorkflow:true,controllerIndex:true,dynamicAllowance:true,
           maxTurns:30,numCtx:8192,numPredict:512,
-          initialSourcePaths:[path],
-          staticLeads:[{path,line:5,rule:'source-review',message:'Assess missing caller authority on deposit'}],
+          initialSourcePaths:[path,secondPath],
+          staticLeads:[{path,line:5,rule:'source-review',message:'Assess missing caller authority on deposit'},
+            {path:secondPath,line:5,rule:'source-review',message:'Assess missing caller authority on take'}],
           verifyPython:async()=>JSON.stringify({status:'behavior_not_observed',behavior_observed:false}),
           validateFinal:async()=>null,
         });
@@ -863,6 +870,9 @@ async function testActiveAnalysisPacketSurvivesCompactionAndRejection() {
       'Stage lock must reject premature analysis finalization');
     assert.ok(logText.includes('[ANALYSIS_LEAD_DEFERRED]'),
       'Controller must accept an evidence-grounded disposition');
+    assert.ok(analysisRequests>=3,'Must proceed to the next distinct pending lead');
+    assert.notEqual(received[1].leadId,received[2].leadId,
+      'Next request must select the next pending lead, not reassess the first');
     assert.ok(logText.includes('[ANALYSIS_REQUEST_BOUND]'),
       'Controller must certify identity and budget in the actual request');
     assert.ok(received.every(x=>x.chars<x.budget*3),
