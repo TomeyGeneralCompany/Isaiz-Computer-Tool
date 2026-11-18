@@ -46,6 +46,9 @@ export type SolidityPreparation=z.infer<typeof solidityPreparationSchema>;
 export const soliditySequenceSchema = z.object({constructorArgs:args,constructorValueWei:wei.optional(),deployment:deployment.optional(),preparation:solidityPreparationSchema.optional(),
   steps:z.array(z.discriminatedUnion("operation",[send,call,observe,ethBalance])).min(1).max(16)}).strict()
   .superRefine((s,ctx)=>{
+    for(const step of s.steps)
+      if(step.operation==="send" && step.requiredSetup && step.expectRevert)
+        ctx.addIssue({code:z.ZodIssueCode.custom,message:"A required successful setup cannot also expect a revert"});
     const deployed=new Set((s.preparation?.deployments||[]).map(d=>d.id));
     for(const step of s.steps){
       if("deploymentId" in step && step.deploymentId && !deployed.has(step.deploymentId))
