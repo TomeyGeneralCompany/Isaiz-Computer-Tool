@@ -1707,82 +1707,45 @@ function unprotectedFundDrainOrMintExperiment(
   return null;
 }
 
-function coreProtocolEntrypointExperiment(
+/** Source-only financial lead. A convenient getter or reverted transaction does
+ * not establish a security invariant. The model may propose a separately
+ * justified property and strict executable assertion during ANALYZE.
+ */
+type CoreProtocolLead={selector:string;sourceEvidence:SourceWitness[];unresolvedReason:string};
+function discoverCoreProtocolEntrypointLead(
   snapshot:SourceSnapshot,contract:any,method:string,
-  sources:ReadonlyMap<string,SourceSnapshot>,menu:readonly SolidityProbeDeclaration[]
-):{hypothesis:string;property:string;sequence:SoliditySequence;witnesses:SourceWitness[]}|null {
-  if(isTestOrMockPath(snapshot.path))return null;
-  if(!/^(?:deposit|withdraw|earlyWithdraw|topupDeposit|rolloverDeposit|mintVested|fund|claim|redeem|stake|unstake|borrow|repay|liquidate|swap|zap|rescue|skim)$/i.test(method))
+  sources:ReadonlyMap<string,SourceSnapshot>
+):CoreProtocolLead|null {
+  if(isTestOrMockPath(snapshot.path)||
+     !/^(?:deposit|withdraw|earlyWithdraw|topupDeposit|rolloverDeposit|mintVested|fund|claim|redeem|stake|unstake|borrow|repay|liquidate|swap|zap|rescue|skim)$/i.test(method))
     return null;
   const {chain}=resolveInheritance(snapshot,contract,sources);
   if(isAbstractContractNode(contract,chain))return null;
-  const members:any[]=contract.subNodes||[];
-  const fn=members.find(n=>n.type==='FunctionDefinition'&&n.name===method&&
-    ['public','external'].includes(n.visibility)&&!['view','pure'].includes(n.stateMutability||'')&&n.body);
+  const fn=(contract.subNodes||[]).find((n:any)=>n.type==='FunctionDefinition'&&
+    n.name===method&&['public','external'].includes(n.visibility)&&
+    !['view','pure'].includes(n.stateMutability||'')&&n.body);
   if(!fn)return null;
-  const params:any[]=fn.parameters||[];
-  if(params.length>4)return null;
-  const abiTypes:string[]=[];
-  for(const p of params){
-    const abi=canonicalAbiType(p.typeName);
-    if(!abi)return null;
-    abiTypes.push(abi);
-  }
-  const mockToken=findRepositoryMockToken(sources);
-  const setup=resolveFlexibleSetup(snapshot,contract,chain,sources,menu,mockToken,'$account0');
-  if(!setup)return null;
-  const fnSig=`${method}(${abiTypes.join(',')})`;
-  const callArgs:SolidityArgValue[]=[];
-  for(let i=0;i<params.length;i++){
-    const a=pickFlexibleArg(abiTypes[i],params[i].name||'',{ownerAccount:'$account1',tokenRef:mockToken?'$deployment:token':undefined,amount:'100'});
-    if(a===null)return null;
-    callArgs.push(a);
-  }
-  const hasBalanceOf=menu.some(m=>m.selector===`${contract.name}.balanceOf`&&m.operation==='call'&&m.inputs.length===1);
-  const hasTotalSupply=menu.some(m=>m.selector===`${contract.name}.totalSupply`&&m.operation==='call'&&m.inputs.length===0);
-  const authGetter=findAuthorityGetter(contract,chain,menu);
-  const steps:SoliditySequence['steps']=[];
-  if(setup.initSignature)steps.push({operation:'send',function:setup.initSignature,args:setup.initArgs,sender:0,requiredSetup:true});
-  if(setup.usesToken && mockToken){
-    if(mockToken.mintHasRecipient){
-      steps.push({operation:'send',deploymentId:'token',function:mockToken.mintSig,args:['$account1','10000'],sender:0});
-    } else {
-      steps.push({operation:'send',deploymentId:'token',function:mockToken.mintSig,args:['10000'],sender:1});
-    }
-    steps.push({operation:'send',deploymentId:'token',function:'approve(address,uint256)',args:['$contract','10000'],sender:1});
-    steps.push({operation:'observe',deploymentId:'token',function:'balanceOf(address)',args:['$contract']});
-  }
-  if(hasBalanceOf)steps.push({operation:'observe',function:'balanceOf(address)',args:['$account1']});
-  else if(hasTotalSupply)steps.push({operation:'observe',function:'totalSupply()',args:[]});
-  else if(authGetter)steps.push({operation:'observe',function:authGetter,args:[]});
-  else steps.push({operation:'eth_balance',account:'$contract'});
-
-  const sendValue=fn.stateMutability==='payable'?'1000000000000000':undefined;
-  steps.push({operation:'send',function:fnSig,args:callArgs,sender:1,...(sendValue?{valueWei:sendValue}:{})});
-
-  if(setup.usesToken && mockToken){
-    steps.push({operation:'observe',deploymentId:'token',function:'balanceOf(address)',args:['$contract']});
-  }
-  if(hasBalanceOf)steps.push({operation:'observe',function:'balanceOf(address)',args:['$account1']});
-  else if(hasTotalSupply)steps.push({operation:'observe',function:'totalSupply()',args:[]});
-  else if(authGetter)steps.push({operation:'observe',function:authGetter,args:[]});
-  else steps.push({operation:'eth_balance',account:'$contract'});
-
-  const preparation=setup.usesToken&&mockToken?{
-    deployments:[{id:'token',file:mockToken.snapshot.path,contract:mockToken.contractName,constructorArgs:mockToken.constructorArgs}],
-    operations:[],checks:[]
-  }:undefined;
-  return {
-    hypothesis:`Exploratory core DeFi entrypoint ${contract.name}.${method}: record bounded before/after state; no verified accounting or authorization invariant is asserted by this plan.`,
-    property:'exploratory core DeFi entrypoint state observation (inconclusive without a source-backed invariant)',
-    sequence:{
-      constructorArgs:setup.constructorArgs,
-      ...(setup.constructorValueWei?{constructorValueWei:setup.constructorValueWei}:{}),
-      ...(preparation?{preparation}:{}),
-      steps
-    },
-    witnesses:[witness(snapshot,fn,contract.name+'.'+method)]
-  };
+  return {selector:contract.name+'.'+method,
+    sourceEvidence:[witness(snapshot,fn,contract.name+'.'+method)],
+    unresolvedReason:'Financial entrypoint exists, but no source-derived prestate, valid fixture, predicted relation, and falsifier have been established'};
+}
+type SourceInvariant={
+  sourceSha256:string;target:string;propertyKind:
+    'authorization'|'conservation'|'supply-accounting'|'share-accounting'|
+    'interest-accrual'|'reentrancy-guard'|'other';
+  predictedRelation:string;falsifier:string;
+  preState:Array<{expression:string;readback:string}>;
+  postState:Array<{expression:string;readback:string}>;
+};
+/** Admission gate for later source-proven financial invariants. Until a
+ * descriptor has a concrete executable assertion, retain the candidate only
+ * as a lead rather than fabricate a security experiment.
+ */
+function constructCoreInvariantExperiment(invariant:SourceInvariant|null):SourceInvariant|null{
+  if(!invariant||!invariant.sourceSha256||!invariant.target||
+    !invariant.predictedRelation||!invariant.falsifier||
+    !invariant.preState.length||!invariant.postState.length)return null;
+  return invariant;
 }
 
 export function constructSolidityExperiments(input:ConstructionInput):ConstructionResult {
@@ -1845,12 +1808,15 @@ export function constructSolidityExperiments(input:ConstructionInput):Constructi
     const drainOrMintExp=unprotectedFundDrainOrMintExperiment(target,contract,method,indexed,input.declarations);
     if(drainOrMintExp)choices.push(drainOrMintExp);
   }
-  if(!choices.length) {
-    const defiExp=coreProtocolEntrypointExperiment(target,contract,method,indexed,input.declarations);
-    if(defiExp)choices.push(defiExp);
-  }
+  // The financial declaration remains a lead, not an executable security
+  // experiment until a validated, source-backed invariant is supplied.
+  const financialLead=!choices.length
+    ? discoverCoreProtocolEntrypointLead(target,contract,method,indexed):null;
+  void constructCoreInvariantExperiment;
   if(!choices.length)return {ok:false,code:'UNKNOWN_ASSERTION',
-    detail:'No source-grounded security setup and falsifiable assertion for '+input.targetSelector};
+    detail:financialLead
+      ? financialLead.unresolvedReason+' for '+financialLead.selector
+      : 'No source-grounded security setup and falsifiable assertion for '+input.targetSelector};
   const seen=new Set<string>(),out:PreparedSecurityExperiment[]=[];
   for(const c of choices) {
     const prereqs:PreparationPrerequisite[]=[];
