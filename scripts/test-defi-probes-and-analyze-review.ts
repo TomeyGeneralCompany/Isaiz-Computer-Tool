@@ -15,6 +15,7 @@ import {
 import { decodeAuditAction } from "../packages/security-solver/src/local-audit-protocol";
 import { runEvidenceOnlyReview } from "../packages/security-solver/src/evidence-only-review";
 import { rankSolidityStaticTargets } from "../packages/security-solver/src/local-static-leads";
+import { constructSolidityExperiments } from "../packages/security-solver/src/controller-solidity-experiment-planner";
 
 import {reconcileHuntReason,type HuntCoverageLedger} from '../packages/security-solver/src/local-program-flow';
 
@@ -210,12 +211,22 @@ contract PlainVault {
     [{ path: plainPath, content: plainSource, sha256: sha(plainSource) }],
     "a".repeat(40),
   );
-  const exploratoryDeposit = plainOpts.find(o => o.selector === "PlainVault.deposit");
-  assert.ok(exploratoryDeposit, "Plain deposit must be eligible for bounded exploration");
-  assert.match(exploratoryDeposit.probe.hypothesis, /Exploratory core DeFi entrypoint/);
-  assert.match(exploratoryDeposit.probe.hypothesis, /no verified accounting or authorization invariant/);
-  assert.ok(exploratoryDeposit.probe.sequence.steps.some(step => step.operation === "send"),
-    "Exploratory probe retains actual state-changing transaction execution");
+  assert.equal(plainOpts.some(o => o.selector === "PlainVault.deposit"), false,
+    "A plain deposit without a source-derived security assertion must not become an executable experiment");
+  const plainConstruction = constructSolidityExperiments({
+    repositoryCommit: "a".repeat(40),
+    targetPath: plainPath,
+    targetSelector: "PlainVault.deposit",
+    sources: [{ path: plainPath, content: plainSource, sha256: sha(plainSource) }],
+    declarations: [{ selector: "PlainVault.deposit", operation: "send", inputs: ["uint256"] }],
+  });
+  assert.equal(plainConstruction.ok, false,
+    "The source-backed planner must retain plain deposit as a lead instead of inventing an invariant");
+  if (!plainConstruction.ok) {
+    assert.equal(plainConstruction.code, "UNKNOWN_ASSERTION");
+    assert.match(plainConstruction.detail, /Financial entrypoint exists/);
+    assert.match(plainConstruction.detail, /no source-derived prestate/);
+  }
 }
 
 // 3. Queue prioritization & Tier-4 setter cap (>16 items, max 3 Tier-4 per path)
