@@ -800,8 +800,11 @@ export async function runLocalAudit(
           })+'\n');
         }
         const solLeads=(limits.staticLeads||[]).filter(l=>l.path.endsWith('.sol'));
-        const envAnalyzeTurns=Number(process.env.LOCAL_ANALYZE_MODEL_TURNS??4);
-        const maxAnalyzeTurns=Number.isSafeInteger(envAnalyzeTurns)&&envAnalyzeTurns>=0?Math.min(envAnalyzeTurns,12):4;
+        // Four Qwen turns were insufficient to correct even one rejected
+        // sequence. Preserve a configurable bounded window without treating
+        // an invalid schema attempt as a successful experiment.
+        const envAnalyzeTurns=Number(process.env.LOCAL_ANALYZE_MODEL_TURNS??24);
+        const maxAnalyzeTurns=Number.isSafeInteger(envAnalyzeTurns)&&envAnalyzeTurns>=0?Math.min(envAnalyzeTurns,200):24;
         const enableAnalyzeModel=structured && !!workflow &&
           process.env.LOCAL_MODEL_SOLIDITY_ANALYZE!=='false' && maxAnalyzeTurns>0 &&
           (process.env.LOCAL_MODEL_SOLIDITY_ANALYZE==='true' || solLeads.length>0 ||
@@ -817,7 +820,7 @@ export async function runLocalAudit(
             JSON.stringify(stagedPlans.slice(0,6).map(s=>({path:s.plan.path,query:s.plan.query})))+
             (solLeads.length?'. Static leads on Solidity files: '+JSON.stringify(solLeads.slice(0,8).map(l=>({path:l.path,line:l.line,rule:l.rule,severity:l.severity,msg:l.message.slice(0,100)}))):'')+
             (nonMockSolSummaries.length?'. Non-mock Solidity functions not yet queued: '+JSON.stringify(nonMockSolSummaries.slice(0,6)):'')+
-            '. Propose ONE targeted DeFi/static-lead experiment using {"action":"discover_experiment","path":"source-...sol","query":"Contract.function","answer":"solidity_sequence","hypothesis":"...","sequence":{"constructorArgs":[...],"steps":[...]}} OR respond with {"action":"finalize_analysis","path":"","query":"","answer":""} to start EXPERIMENT immediately. /no_think'});
+            '. Propose ONE source-backed targeted experiment. Return exactly {"action":"discover_experiment","path":"source-...sol","query":"Contract.function","answer":"solidity_sequence","hypothesis":"A falsifiable claim tied to inspected source","sequence":{"constructorArgs":[],"steps":[{"operation":"send","function":"method()","args":[],"sender":1},{"operation":"observe","function":"getter()","args":[]}]}}. Replace method/getter with real source-declared signatures. Allowed step operations: send, call (requires expect), observe, eth_balance (requires account). Each send/call/observe requires function and args; constructorArgs is always an array, even when empty. Include relevant preparation deployments and initial-state checks where needed. A generic state read is exploratory, not a tested security invariant. Do not guess function signatures or assertions. OR send {"action":"finalize_analysis","path":"","query":"","answer":""} only after assessing all relevant unqueued leads. /no_think'});
         } else {
           stageLock.completeAnalysis();
           await appendFile(logFile,'[ANALYSIS_COMPLETE] '+
@@ -1012,7 +1015,7 @@ export async function runLocalAudit(
         requestSchema={...requestSchema,
           properties:nextProps,
           required:[...new Set([...actionSchema.required,'result'])]};
-        await appendFile(logFile,'[FINAL_RESULT_REQUIRED] Recovery from empty final; evidence validation still required\n');
+        await appendFile(logFile,'[FINAL_SCHEMA_ACTIVATED] Typed result required for '+(stageLock?.currentStage||'recovery')+'; this is not a rejected model response\n');
       }
       const schemaExtra=Math.max(0,JSON.stringify(requestSchema).length-JSON.stringify(actionSchema).length);
       const controllerFacts=limits.progressNote?.() || '';
