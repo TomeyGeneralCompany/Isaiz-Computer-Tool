@@ -94,12 +94,40 @@ function normalize(v) {
   if(typeof v==='string'||typeof v==='boolean')return v;
   throw new Error('Unsupported ABI result');
 }
-async function runSequence(artifact, sequence, transport, preparationArtifacts={}) {
+async function runSequence(artifact, sequence, transport, preparationArtifacts={},metadata={}) {
   validateSequence(sequence);
   const {BrowserProvider, ContractFactory}=require('ethers');
   if(!artifact?.evm?.bytecode?.object || !/^[0-9a-fA-F]+$/.test(artifact.evm.bytecode.object))
     throw new Error('A deployable contract without unresolved library links is required');
   const provider=new BrowserProvider(transport,undefined,{cacheTimeout:-1,pollingInterval:10});
+  let runtimePhase='fixture_preparation';
+  let runtimeStepIndex=null;
+  const diagnosticError=(error)=>{
+    const cause=error instanceof Error?error:new Error(String(error));
+    const receipt=cause.receipt||null;
+    const status=receipt?.status;
+    const phase=runtimePhase;
+    const classification=phase==='target_deployment'?'target_deployment_failed':
+      phase==='fixture_initialization'?'preparation_initialization_failed':
+      phase==='fixture_deployment'?'preparation_deployment_failed':
+      phase==='fixture_preparation'?'preparation_precondition_failed':
+      phase==='target_action'?'target_execution_failed':'runtime_execution_failed';
+    cause.phase=phase;cause.classification=cause.classification||classification;
+    cause.diagnostics={
+      experimentId:metadata.experimentId||null,fixtureId:metadata.fixtureId||null,
+      sourceSha256:metadata.sourceSha256||null,file:metadata.file||null,
+      selector:metadata.selector||null,selectedFile:metadata.selectedFile||null,
+      contractName:metadata.contractName||null,compilerVersion:metadata.compilerVersion||null,
+      evmVersion:metadata.evmVersion||null,cacheHit:metadata.cacheHit??null,
+      bytecodeSha256:metadata.bytecodeSha256||null,
+      constructorTypes:metadata.constructorTypes||[],stepIndex:runtimeStepIndex,
+      receiptStatus:typeof status==='number'?status:null,
+      receiptTo:receipt?.to??null,
+      transactionHash:receipt?.hash||null,
+      gasUsed:receipt?.gasUsed?.toString?.()||null
+    };
+    return cause;
+  };
   try {
     const signers=await Promise.all([0,1,2].map(i=>provider.getSigner(i)));
     const accounts=await Promise.all(signers.map(s=>s.getAddress()));
@@ -123,6 +151,7 @@ async function runSequence(artifact, sequence, transport, preparationArtifacts={
     const preparation=sequence.preparation;
     if(preparation) {
       for(const d of preparation.deployments) {
+        runtimePhase='fixture_deployment';
         const depArtifact=preparationArtifacts[d.file]?.[d.contract];
         if(!depArtifact?.evm?.bytecode?.object ||
            !/^[a-fA-F0-9]+$/.test(depArtifact.evm.bytecode.object))
@@ -137,6 +166,7 @@ async function runSequence(artifact, sequence, transport, preparationArtifacts={
           sender:0,passed:true,gasUsed:receipt.gasUsed.toString(),purpose:'prepare '+d.id});
       }
       for(const op of preparation.operations) {
+        runtimePhase='fixture_initialization';
         const item=deployed.get(op.deploymentId);
         const fn=item.contract.connect(signers[op.sender]).getFunction(op.function);
         const fragment=fn.fragment;
@@ -159,6 +189,7 @@ async function runSequence(artifact, sequence, transport, preparationArtifacts={
           throw new Error('Preparation transaction expectation failed: '+op.id);
       }
       for(const check of preparation.checks) {
+        runtimePhase='fixture_precondition_check';
         const item=deployed.get(check.deploymentId);
         const fn=item.contract.connect(signers[check.sender]).getFunction(check.function);
         if(!['view','pure'].includes(fn.fragment.stateMutability))
@@ -170,6 +201,7 @@ async function runSequence(artifact, sequence, transport, preparationArtifacts={
           throw new Error('Preparation check failed: '+check.id);
       }
     }
+    runtimePhase='target_deployment';
     const latestBlock=await provider.getBlock('latest');
     const deployGasLimit=latestBlock?.gasLimit && latestBlock.gasLimit > 12000000n
       ? (latestBlock.gasLimit * 9n) / 10n
@@ -179,6 +211,7 @@ async function runSequence(artifact, sequence, transport, preparationArtifacts={
     const deployment=await contract.deploymentTransaction().wait();
     if(!deployment || deployment.status!==1)throw new Error('Constructor deployment failed');
     address=await contract.getAddress();
+    runtimePhase='target_action';
     const steps=[...setupSteps];
     // Only the explicitly generated ERC1155 test harness gets automatic setup.
     // These are actual mined transactions, recorded separately from the probe.
@@ -225,7 +258,9 @@ async function runSequence(artifact, sequence, transport, preparationArtifacts={
         }
       }
     }
+    let stepIndex=0;
     for(const step of sequence.steps) {
+      runtimeStepIndex=stepIndex++;runtimePhase=step.requiredSetup?'fixture_initialization':'target_action';
       if(step.operation==='eth_balance') {
         const targetAddr=resolve(step.account);
         const bal=await provider.getBalance(targetAddr);
@@ -274,9 +309,15 @@ async function runSequence(artifact, sequence, transport, preparationArtifacts={
       }
     }
     const observations={contract:address.toLowerCase(),accounts:accounts.map(a=>a.toLowerCase()),
-      deploymentGasUsed:deployment.gasUsed.toString(),steps};
+      deploymentGasUsed:deployment.gasUsed.toString(),steps,
+      diagnostics:{experimentId:metadata.experimentId||null,fixtureId:metadata.fixtureId||null,
+        sourceSha256:metadata.sourceSha256||null,bytecodeSha256:metadata.bytecodeSha256||null,
+        compilerVersion:metadata.compilerVersion||null,evmVersion:metadata.evmVersion||null,
+        selectedFile:metadata.selectedFile||null,contractName:metadata.contractName||null,
+        constructorTypes:metadata.constructorTypes||[]}};
     if(JSON.stringify(observations).length>64000)throw new Error('Sequence observations exceed 64KB');
     return observations;
-  } finally {provider.destroy();}
+  } catch(error) {throw diagnosticError(error);}
+  finally {provider.destroy();}
 }
 module.exports={validateSequence,runSequence};

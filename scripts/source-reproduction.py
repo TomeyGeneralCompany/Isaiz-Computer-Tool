@@ -586,9 +586,11 @@ def run_probe(repository: Path, specification: dict, _dependency_round: int = 0)
             # Ganache may print an optional native-module warning before the
             # actual TOMEY_ERROR. Keep the structured root cause first, rather
             # than truncating it behind unrelated compatibility chatter.
+            cause={}
             if language == 'solidity' and 'TOMEY_ERROR ' in diagnostic:
                 try:
-                    cause=json.loads(diagnostic.rsplit('TOMEY_ERROR ',1)[1])
+                    parsed=json.loads(diagnostic.rsplit('TOMEY_ERROR ',1)[1])
+                    if isinstance(parsed,dict): cause=parsed
                     detail=str(cause.get('detail','Solidity runtime failure'))[:1200]
                     if isinstance(cause.get('missingImports'),list) and cause['missingImports']:
                         detail+='; missing imports: '+repr(cause['missingImports'][:8])[:350]
@@ -596,10 +598,25 @@ def run_probe(repository: Path, specification: dict, _dependency_round: int = 0)
                     detail=clean_probe_diagnostic(diagnostic, code)
             else:
                 detail=clean_probe_diagnostic(diagnostic, code)
-            classification = ('preparation_initialization_failed'
-                if 'PREPARATION_INITIALIZATION_FAILED:' in detail else None)
+            classification = cause.get('classification')
+            phase = cause.get('phase')
+            if classification not in ('target_deployment_failed','preparation_deployment_failed',
+                                      'preparation_initialization_failed','preparation_precondition_failed',
+                                      'target_execution_failed','runtime_execution_failed'):
+                classification = ('preparation_initialization_failed'
+                    if 'PREPARATION_INITIALIZATION_FAILED:' in detail else None)
+            if not isinstance(phase,str) or len(phase)>60: phase=None
+            raw_diagnostics=cause.get('diagnostics')
+            diagnostics=raw_diagnostics if isinstance(raw_diagnostics,dict) else None
+            if diagnostics:
+                allowed={'experimentId','fixtureId','sourceSha256','file','selector','selectedFile',
+                         'contractName','compilerVersion','evmVersion','cacheHit','bytecodeSha256',
+                         'constructorTypes','stepIndex','receiptStatus','receiptTo',
+                         'transactionHash','gasUsed'}
+                diagnostics={key:value for key,value in diagnostics.items() if key in allowed}
             return {'status':'probe_failed','behavior_observed':False,'exit_code':code,
-                    'classification':classification,'detail':detail}
+                    'classification':classification,'phase':phase,'diagnostics':diagnostics,
+                    'detail':detail}
         if hashlib.sha256(target.read_bytes()).hexdigest()!=source_hash: raise ValueError('Source changed during probe')
         if language == 'solidity' and compile_cache_file is not None and compile_cache_out.is_file():
             try:

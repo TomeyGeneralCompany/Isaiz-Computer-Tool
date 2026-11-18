@@ -2,6 +2,7 @@
 // Fixed harness: never evaluates model-supplied JavaScript or Solidity snippets.
 const fs = require('node:fs');
 const path = require('node:path');
+const {createHash}=require('node:crypto');
 const { pathToFileURL } = require('node:url');
 const spec = JSON.parse(fs.readFileSync('/spec.json', 'utf8'));
 const control = 'TOMEY_CONTROL_' + spec.nonce;
@@ -13,7 +14,10 @@ process.stdout.write = () => true; // Target logging must not corrupt the protoc
 function emitError(error) {
   process.stderr.write('\nTOMEY_ERROR ' + JSON.stringify({
     detail: String(error && error.stack ? error.stack : error).slice(0, 2000),
-    missingImports: (error && error.missingImports) || []
+    missingImports: (error && error.missingImports) || [],
+    phase:error?.phase||null,
+    classification:error?.classification||null,
+    diagnostics:error?.diagnostics||null
   }));
   process.exitCode = 1;
 }
@@ -244,7 +248,19 @@ contract TomeyERC1155ProbeHarness is ERC1155Upgradeable {
   });
   await transport.request({method: 'eth_chainId', params: []});
   try {
-    if (sequenceMode) return await require('./solidity-sequence.cjs').runSequence(artifact, spec.sequence, transport, compiled.contracts || {});
+    if (sequenceMode) {
+      const fingerprint=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
+      const sourceSha256=createHash('sha256').update(sourceText).digest('hex');
+      const meta={experimentId:fingerprint([spec.file,spec.function,sourceSha256,spec.sequence]),
+        fixtureId:fingerprint([spec.file,sourceSha256,spec.sequence.constructorArgs,
+          spec.sequence.deployment||null,spec.sequence.preparation||null]),
+        file:spec.file,selector:spec.function,sourceSha256,selectedFile,contractName,
+        compilerVersion:solc.version(),cacheHit,evmVersion,
+        constructorTypes:artifact.abi.find(x=>x.type==='constructor')?.inputs?.map(x=>x.type)||[],
+        bytecodeSha256:createHash('sha256').update(artifact.evm.bytecode.object).digest('hex')};
+      return await require('./solidity-sequence.cjs').runSequence(
+        artifact,spec.sequence,transport,compiled.contracts||{},meta);
+    }
     const provider = new BrowserProvider(transport);
     const signer = await provider.getSigner();
     const contract = await new ContractFactory(artifact.abi, artifact.evm.bytecode.object, signer)

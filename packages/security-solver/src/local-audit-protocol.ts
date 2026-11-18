@@ -3,7 +3,7 @@ export const auditActionSchema = {
   type:"object", additionalProperties:false,
   properties:{
     action:{type:"string",enum:["read_file","list_files","search_files","outline_solidity","read_solidity","final"]},
-    result:{type:"object"}, hypothesis:{type:"string",maxLength:600}, sequence:{type:"object"}, offset:{type:"integer",minimum:0}, path:{type:"string"}, query:{type:"string"}, answer:{type:"string"},
+    result:{type:"object"}, hypothesis:{type:"string",maxLength:600}, sequence:{type:"object"}, leadId:{type:"string",pattern:"^[a-f0-9]{64}$"}, offset:{type:"integer",minimum:0}, path:{type:"string"}, query:{type:"string"}, answer:{type:"string"},
   },
   required:["action","path","query","answer"],
 };
@@ -20,14 +20,14 @@ If you identify a concrete candidate, include an optional hypothesis string (at 
 For a Solidity file, prefer outline_solidity then read_solidity; otherwise choose read_file with the exact filename supplied by the task.
 Do not repeat an identical read, list, or search. Follow nextOffset for unread pages; otherwise move to another relevant source or a supported probe. When enough evidence has been gathered, use: {"action":"final","path":"","query":"","answer":"your evidence-supported answer"}.
 `;
-export function decodeAuditAction(raw: string, allowProbe = false, allowAnalyze = false): {action:string;path:string;query:string;answer:string;offset?:number;sequence?:unknown;hypothesis?:string;result?:Record<string,unknown>} {
+export function decodeAuditAction(raw: string, allowProbe = false, allowAnalyze = false): {action:string;path:string;query:string;answer:string;offset?:number;sequence?:unknown;hypothesis?:string;leadId?:string;result?:Record<string,unknown>} {
   const value: unknown = JSON.parse(raw);
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Expected a JSON action object");
   const record = value as Record<string,unknown>;
   // Normalize unambiguous aliases only for probe/analyze actions. Keep every
   // required semantic field subject to the existing workflow validator.
   const isProbeAction=['probe_intent','plan_probe','verify_source','verify_python'].includes(String(record.action)) && allowProbe;
-  const isAnalyzeAction=['discover_experiment','finalize_analysis'].includes(String(record.action)) && allowAnalyze;
+  const isAnalyzeAction=['assess_lead','defer_lead','request_source_context','discover_experiment','finalize_analysis','analysis_unavailable'].includes(String(record.action)) && allowAnalyze;
   if(isProbeAction || isAnalyzeAction) {
     const aliases:Record<string,string[]> = {
       path:['file','source_path'], query:['function','method','selector'],
@@ -45,11 +45,12 @@ export function decodeAuditAction(raw: string, allowProbe = false, allowAnalyze 
     if(record.answer===undefined)record.answer='';
     if(['probe_intent','plan_probe','discover_experiment'].includes(String(record.action)) && record.hypothesis===undefined)record.hypothesis='';
   }
-  if (Object.keys(record).some(key=>!["action","path","query","answer","offset","sequence","hypothesis","result"].includes(key))
+  if (Object.keys(record).some(key=>!["action","path","query","answer","offset","sequence","hypothesis","leadId","result"].includes(key))
       || !["action","path","query","answer"].every(key=>typeof record[key] === "string")
-      || !["read_file","list_files","search_files","outline_solidity","read_solidity","final",...(allowProbe ? ["verify_source","verify_python","plan_probe","probe_intent","continue_inspection"] : []),...(allowAnalyze ? ["discover_experiment","finalize_analysis"] : [])].includes(String(record.action)))
+      || !["read_file","list_files","search_files","outline_solidity","read_solidity","final",...(allowProbe ? ["verify_source","verify_python","plan_probe","probe_intent","continue_inspection"] : []),...(allowAnalyze ? ["assess_lead","defer_lead","request_source_context","discover_experiment","finalize_analysis","analysis_unavailable"] : [])].includes(String(record.action)))
     throw new Error("Invalid read-only JSON action");
   if(record.hypothesis !== undefined && (typeof record.hypothesis !== "string" || record.hypothesis.length>600))throw new Error("Invalid hypothesis");
+  if(record.leadId !== undefined && (typeof record.leadId!=='string'||!/^[a-f0-9]{64}$/.test(record.leadId)))throw new Error('Invalid leadId');
   if (record.offset !== undefined && (!Number.isSafeInteger(record.offset) || Number(record.offset) < 0)) throw new Error("Invalid page offset");
   if ((record.path as string).length > 4096 || (record.query as string).length > 120)
     throw new Error("JSON action arguments exceed allowed bounds");

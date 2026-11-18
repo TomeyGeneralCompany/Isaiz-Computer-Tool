@@ -19,9 +19,9 @@ async function run(){
  await assert.rejects(lock.completeReading(async()=> 'altered'),/SOURCE_CHANGED/);
  await lock.completeReading(async p=>p.endsWith('A.sol')?'abcd':'ef');
  assert.equal(lock.currentStage,'ANALYZE');
- assert.throws(()=>lock.completeAnalysis(),/ANALYSIS_INCOMPLETE/);
- lock.noteAnalyzed('source-1/A.sol','complete');
- lock.noteAnalyzed('source-1/B.sol','complete');
+ assert.throws(()=>lock.completeAnalysis(),/ANALYSIS_PRECLASSIFICATION_INCOMPLETE/);
+ lock.noteSourcePreclassified('source-1/A.sol','indexed-options-built');
+ lock.noteSourcePreclassified('source-1/B.sol','indexed-options-built');
  assert.throws(()=>lock.assertActionAllowed('verify_source'),/STAGE_LOCKED/);
  lock.completeAnalysis();
  assert.equal(lock.currentStage,'EXPERIMENT');
@@ -35,6 +35,43 @@ async function run(){
  lock.review('A.suspect');lock.completeReviews();
  lock.completeReport(true);
  assert.equal(lock.currentStage,'COMPLETE');
+ // Source preclassification does not itself establish substantive model review.
+ const assessed=new ControllerStageLock();
+ const source='source-1/Analysis.sol',content='function deposit(uint256 amount) external {}';
+ assessed.completeIndex([{path:source,characters:content.length,sha256:hash(content)}]);
+ assessed.recordRead({path:source,start:0,end:content.length,totalCharacters:content.length,text:content});
+ await assessed.completeReading(async()=>content);
+ assessed.noteSourcePreclassified(source,'indexed-options-built');
+ const commit='a'.repeat(40),idA=hash('lead:A'),idB=hash('lead:B');
+ for(const [id,selector] of [[idA,'Analysis.deposit'],[idB,'Analysis.withdraw']]){
+   assessed.registerAnalysisLead({id,sourceCommit:commit,sourceSha256:hash(content),path:source,selector});
+ }
+ assert.throws(()=>assessed.completeAnalysis(),new RegExp(idA));
+ assert.equal(assessed.analysisProgress.pendingIds.length,2);
+ const cited=source+':0-'+content.length+':'+hash(content);
+ assessed.recordLeadAssessment(idA,{kind:'assessed',sourceEvidence:[cited],
+   hypothesis:'An unauthorized sender changes protected state',disposition:'test',
+   reason:'Controller inspected the exact declaration and authorized caller guard'},'model');
+ assert.throws(()=>assessed.completeAnalysis(),new RegExp(idB));
+ assessed.recordLeadAssessment(idB,{kind:'assessed',sourceEvidence:[cited],
+   hypothesis:'No testable property established',disposition:'defer',
+   reason:'No valid fixture for a full state transition is proven by source'},'model');
+ assert.equal(assessed.analysisProgress.deferred,1);
+ assessed.completeAnalysis();
+ assert.equal(assessed.recordedAnalysisCertificate?.modelAssessed,2);
+ assert.equal(assessed.recordedAnalysisCertificate?.status,'complete');
+ const unavailable=new ControllerStageLock();
+ unavailable.completeIndex([{path:source,characters:content.length,sha256:hash(content)}]);
+ unavailable.recordRead({path:source,start:0,end:content.length,totalCharacters:content.length,text:content});
+ await unavailable.completeReading(async()=>content);
+ unavailable.noteSourcePreclassified(source,'indexed-options-built');
+ unavailable.registerAnalysisLead({id:idA,sourceCommit:commit,sourceSha256:hash(content),path:source,selector:'Analysis.deposit'});
+ assert.throws(()=>unavailable.completeAnalysis(),/ANALYSIS_INCOMPLETE/);
+ unavailable.completeAnalysis('partial','qwen_model_unavailable_after_bounded_retries');
+ assert.equal(unavailable.recordedAnalysisCertificate?.pendingIds[0],idA);
+ assert.equal(unavailable.recordedAnalysisCertificate?.status,'partial');
+ assert.equal(unavailable.currentStage,'EXPERIMENT');
+
  const policyLock=new ControllerStageLock(true);
  policyLock.completeIndex([{path:'source-1/A.sol',characters:4,sha256:hash('abcd')}]);
  policyLock.registerAuditPolicy('policy');

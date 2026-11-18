@@ -2,10 +2,23 @@ import {ControllerSourceCoverage,type IndexedSource,type SourceRead} from './con
 import {createHash} from 'node:crypto';
 export type Stage='INDEX'|'READ'|'ANALYZE'|'EXPERIMENT'|'REVIEW'|'REPORT'|'COMPLETE';
 export type Outcome='observed'|'observation_only'|'not_observed'|'unsupported'|'incomplete'|'rejected';
+export type LeadDisposition='test'|'defer'|'no-testable-property';
+export type LeadAssessment={
+  id:string;sourceCommit:string;sourceSha256:string;path:string;selector:string;
+  state:
+   | {kind:'pending'}
+   | {kind:'assessed';sourceEvidence:string[];hypothesis:string;disposition:LeadDisposition;reason:string}
+   | {kind:'blocked';sourceEvidence:string[];missing:string[];reason:string};
+  assessedBy:'model'|'controller'|null;
+};
+export type AnalysisCertificate={
+  status:'complete'|'partial';reason:string;selected:number;assessed:number;deferred:number;blocked:number;
+  pendingIds:string[];sourcePreclassified:number;modelAssessed:number;
+};
 const actions:Record<Stage,ReadonlySet<string>>={
  INDEX:new Set(['index_source']),
  READ:new Set(['read_file','read_solidity','outline_solidity','search_files','list_files','continue_inspection']),
- ANALYZE:new Set(['discover_experiment','finalize_analysis']),
+ ANALYZE:new Set(['assess_lead','defer_lead','request_source_context','discover_experiment','finalize_analysis','analysis_unavailable']),
  EXPERIMENT:new Set(['plan_probe','probe_intent','verify_source','verify_python']),
  REVIEW:new Set(['independent_review']),
  REPORT:new Set(['final']),
@@ -17,7 +30,9 @@ export class ControllerStageLock {
  private candidates=new Map<string,Outcome|null>();
  private reviews=new Map<string,boolean>();
  private finalized=false;
- private analyzed=new Map<string,'complete'|'unsupported'>();
+ private sourcePreclassified=new Map<string,'indexed-options-built'|'source-unavailable'>();
+ private leads=new Map<string,LeadAssessment>();
+ private analysisCertificate:AnalysisCertificate|null=null;
  private policy:{sha256:string;characters:number;pages:Array<[number,number,string]>}|null=null;
  constructor(readonly auditPolicyRequired=false){}
  registerAuditPolicy(content:string):void {
@@ -100,17 +115,55 @@ export class ControllerStageLock {
    if(this.finalized||!id)throw new Error('DISCOVERY_CLOSED');
    if(!this.candidates.has(id))this.candidates.set(id,null);
  }
- noteAnalyzed(path:string,status:'complete'|'unsupported'){
-   if(this.stage!=='ANALYZE'||!this.coverage.hasIndexed(path)||this.analyzed.has(path))
-     throw new Error('INVALID_ANALYSIS_RECORD');
-   this.analyzed.set(path,status);
- }
- completeAnalysis(){
-   if(this.stage!=='ANALYZE'||this.analyzed.size!==this.coverage.count)
-     throw new Error('ANALYSIS_INCOMPLETE');
-   this.finalized=true;this.advance('ANALYZE','EXPERIMENT');
- }
- requireCandidate(id:string){
+ noteSourcePreclassified(path:string,status:'indexed-options-built'|'source-unavailable'){
+    if(this.stage!=='ANALYZE'||!this.coverage.hasIndexed(path)||this.sourcePreclassified.has(path))
+      throw new Error('INVALID_SOURCE_PRECLASSIFICATION');
+    this.sourcePreclassified.set(path,status);
+  }
+  registerAnalysisLead(lead:Omit<LeadAssessment,'state'|'assessedBy'>){
+    if(this.stage!=='ANALYZE'||!this.coverage.hasIndexed(lead.path)||
+      !/^[a-f0-9]{40}$/.test(lead.sourceCommit)||!/^[a-f0-9]{64}$/.test(lead.sourceSha256)||
+      !lead.id||!lead.selector||this.leads.has(lead.id))
+      throw new Error('INVALID_ANALYSIS_LEAD');
+    this.leads.set(lead.id,{...lead,state:{kind:'pending'},assessedBy:null});
+  }
+  get analysisLeads():LeadAssessment[]{return [...this.leads.values()].map(lead=>structuredClone(lead));}
+  get analysisProgress(){const leads=[...this.leads.values()];return {
+    selected:leads.length,assessed:leads.filter(x=>x.state.kind==='assessed').length,
+    deferred:leads.filter(x=>x.state.kind==='assessed'&&x.state.disposition==='defer').length,
+    blocked:leads.filter(x=>x.state.kind==='blocked').length,
+    pendingIds:leads.filter(x=>x.state.kind==='pending').map(x=>x.id),
+    modelAssessed:leads.filter(x=>x.assessedBy==='model').length
+  };}
+  recordLeadAssessment(id:string,assessment:Extract<LeadAssessment['state'],{kind:'assessed'|'blocked'}>,by:'model'|'controller'){
+    if(this.stage!=='ANALYZE')throw new Error('LEAD_ASSESSMENT_STAGE_CLOSED');
+    const lead=this.leads.get(id);
+    if(!lead||lead.state.kind!=='pending')throw new Error('LEAD_NOT_PENDING: '+id);
+    if(!assessment.reason.trim()||!assessment.sourceEvidence.length||
+      assessment.sourceEvidence.some(x=>!x.trim()||x.length>300))
+      throw new Error('LEAD_ASSESSMENT_EVIDENCE_REQUIRED: '+id);
+    if(assessment.kind==='assessed'&&!assessment.hypothesis.trim())
+      throw new Error('LEAD_ASSESSMENT_HYPOTHESIS_REQUIRED: '+id);
+    if(assessment.kind==='blocked'&&!assessment.missing.length)
+      throw new Error('LEAD_ASSESSMENT_MISSING_REQUIRED: '+id);
+    this.leads.set(id,{...lead,state:structuredClone(assessment),assessedBy:by});
+  }
+  analysisClosureCertificate(status:'complete'|'partial'='complete',reason=''):AnalysisCertificate{
+    const counts=this.analysisProgress;
+    return {status,reason,...counts,sourcePreclassified:this.sourcePreclassified.size};
+  }
+  get recordedAnalysisCertificate(){return this.analysisCertificate ? {...this.analysisCertificate,pendingIds:[...this.analysisCertificate.pendingIds]} : null;}
+  completeAnalysis(status:'complete'|'partial'='complete',reason=''){
+    if(this.stage!=='ANALYZE'||this.sourcePreclassified.size!==this.coverage.count)
+      throw new Error('ANALYSIS_PRECLASSIFICATION_INCOMPLETE');
+    const cert=this.analysisClosureCertificate(status,reason);
+    if(status==='complete'&&cert.pendingIds.length)
+      throw new Error('ANALYSIS_INCOMPLETE: pending lead IDs '+cert.pendingIds.join(','));
+    if(status==='partial'&&!reason.trim())throw new Error('ANALYSIS_PARTIAL_REASON_REQUIRED');
+    this.analysisCertificate=cert;
+    this.finalized=true;this.advance('ANALYZE','EXPERIMENT');
+  }
+  requireCandidate(id:string){
    this.assertActionAllowed('plan_probe');
    if(!this.candidates.has(id)||this.candidates.get(id)!==null)throw new Error('EXPERIMENT_NOT_QUEUED');
  }

@@ -39,6 +39,19 @@ export class InvestigationWorkflow {
   }
   readonly scenarios=new ControllerScenarioLedger();
   private scenarioMap=new Map<string,string>();
+  private scenarioIdsBySelector=new Map<string,Set<string>>();
+  private scenarioByPlan=new Map<string,string>();
+  private activeScenarioId:string|null=null;
+  private planKey(plan:{path:string;query:string;answer:string;hypothesis?:string;sequence?:unknown}){
+    return JSON.stringify([plan.path,plan.query,plan.answer,plan.hypothesis||'',plan.sequence??null]);
+  }
+  private scenarioForAction(action:Action):string|undefined{
+    const direct=this.scenarioByPlan.get(this.planKey(action));
+    if(direct)return direct;
+    const alternatives=this.scenarioIdsBySelector.get(this.scenarioKey(action.path,action.query,action.answer));
+    // A same-selector fallback is safe only if exactly one plan exists.
+    return alternatives?.size===1?[...alternatives][0]:undefined;
+  }
   // Per-case evidence is authoritative when two different experiments
   // exercise the same source function with different prepared sequences.
   private scenarioByCaseId=new Map<string,string>();
@@ -67,6 +80,10 @@ export class InvestigationWorkflow {
     const record=this.scenarios.register({id,path:plan.path,selector:plan.query,
       language,property,suspectedViolation:plan.hypothesis,falsification:falsifier});
     this.scenarioMap.set(key,id);
+    this.scenarioByPlan.set(this.planKey(plan),id);
+    const alternatives=this.scenarioIdsBySelector.get(key)||new Set<string>();
+    alternatives.add(id);
+    this.scenarioIdsBySelector.set(key,alternatives);
     if(record.phase==='discovered'){
       this.scenarios.record(id,{id:'source:initial',kind:'source',
         reference:sourceReference,observation:'Inspected declaration '+plan.query});
@@ -79,14 +96,16 @@ export class InvestigationWorkflow {
     }
   }
   preparedControllerPlan(path:string,query:string,kind:string){
-    const id=this.scenarioMap.get(this.scenarioKey(path,query,kind));
+    const id=this.activeScenarioId ||
+      (this.scenarioIdsBySelector.get(this.scenarioKey(path,query,kind))?.size===1
+       ? this.scenarioMap.get(this.scenarioKey(path,query,kind)):undefined);
     if(!id||this.scenarios.get(id)?.phase!=='preparing')return;
     this.scenarios.satisfy(id,'plan','controller-validated:'+kind+':'+query);
     // The verifier must resolve runtime dependencies and setup first.
     // A syntactically valid sequence alone must never make this READY.
   }
   private observeScenario(action:Action,output:string){
-    const id=this.scenarioMap.get(this.scenarioKey(action.path,action.query,action.answer));
+    const id=this.activeScenarioId || this.scenarioForAction(action);
     if(!id)return;
     const current=this.scenarios.get(id);
     if(current?.phase!=='preparing')return;
@@ -126,8 +145,12 @@ export class InvestigationWorkflow {
   }
   acceptedReview(path:string,query:string,kind:string,reference:string,positive:boolean){
     const caseId=reference.match(/[a-f0-9]{64}/)?.[0];
-    const id=(caseId && this.scenarioByCaseId.get(caseId)) ||
-      this.scenarioMap.get(this.scenarioKey(path,query,kind));
+    // A known case ID resolves to precisely one executed experiment.
+    // A foreign or stale case ID must never fall back to a same-selector plan.
+    const key=this.scenarioKey(path,query,kind);
+    const alternatives=this.scenarioIdsBySelector.get(key);
+    const id=caseId ? this.scenarioByCaseId.get(caseId) :
+      alternatives?.size===1 ? [...alternatives][0] : undefined;
     if(!id||this.scenarios.get(id)?.phase!=='reviewing')return;
     this.scenarios.record(id,{id:'review:independent',kind:'review',reference,
       observation:positive?'Validated positive case':'Validated negative case'});
@@ -378,7 +401,9 @@ export class InvestigationWorkflow {
   /** Explicitly close an orphaned selected scenario without claiming any
    * execution. Only the controller can issue this terminal disposition. */
   blockSelectedScenario(path:string,query:string,kind:string,reason:string){
-    const id=this.scenarioMap.get(this.scenarioKey(path,query,kind));
+    const alternatives=this.scenarioIdsBySelector.get(this.scenarioKey(path,query,kind));
+    const id=this.activeScenarioId ||
+      (alternatives?.size===1?[...alternatives][0]:undefined);
     if(!id)return;
     const scenario=this.scenarios.get(id);
     if(scenario?.phase!=='resolved')this.scenarios.finish(id,'incomplete',reason);
@@ -388,7 +413,7 @@ export class InvestigationWorkflow {
   abortPending(reason:string) {
     const pending=this.state.pending;
     if(!pending || !reason.trim())return null;
-    const id=this.scenarioMap.get(this.scenarioKey(pending.path,pending.query,pending.answer));
+    const id=this.activeScenarioId||this.scenarioForAction(pending);
     if(id) {
       const scenario=this.scenarios.get(id);
       if(scenario && scenario.phase!=='resolved')
@@ -397,13 +422,14 @@ export class InvestigationWorkflow {
     this.observations.push({path:pending.path,function:pending.query,
       kind:pending.answer,status:'controller_blocked'});
     this.state.tested.push(key(pending));
-    this.state.pending=null;
+    this.state.pending=null;this.activeScenarioId=null;
     this.recoveryProbe=null;
     this.feedback('Controller released an unexecutable plan: '+reason);
     return {path:pending.path,query:pending.query,kind:pending.answer};
   }
   plan(action:Action) {
     this.stageLock?.assertActionAllowed('plan_probe');
+    this.activeScenarioId=this.scenarioForAction(action)||null;
     this.preparedControllerPlan(action.path,action.query,action.answer);this.recoveryProbe=null;this.requiredProbePlanning=false;this.requiredProbeKind=null;this.requiredProbePlanningRejections=0;this.state.pending=action;this.duplicateProbeRejections=0;this.lastFeedback=''; }
   read(path:string) {
     this.stageLock?.assertActionAllowed('read_file');
@@ -417,7 +443,7 @@ export class InvestigationWorkflow {
       let result:any;try{result=JSON.parse(output);}catch{}
       this.observations.push({path:action.path,function:action.query,kind:action.answer,
         status:result?.status||'tool_error',...(typeof result?.evidenceFile==='string'?{evidenceFile:result.evidenceFile}:{}),...(typeof result?.behavior_observed==='boolean'?{behaviorObserved:result.behavior_observed}:{}),...(typeof result?.caseId==='string'?{caseId:result.caseId}: {})});
-      this.state.tested.push(key(action));this.state.pending=null;this.state.inspections=0;this.pageTurns=0;
+      this.state.tested.push(key(action));this.state.pending=null;this.activeScenarioId=null;this.state.inspections=0;this.pageTurns=0;
     } else {
       let page:any;try{page=JSON.parse(output);}catch{}
       // Only genuinely new source spans justify another continuation decision.

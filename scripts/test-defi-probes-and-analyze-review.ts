@@ -15,8 +15,33 @@ import {
 import { decodeAuditAction } from "../packages/security-solver/src/local-audit-protocol";
 import { runEvidenceOnlyReview } from "../packages/security-solver/src/evidence-only-review";
 import { rankSolidityStaticTargets } from "../packages/security-solver/src/local-static-leads";
+import { constructSolidityExperiments } from "../packages/security-solver/src/controller-solidity-experiment-planner";
+
+import {reconcileHuntReason,type HuntCoverageLedger} from '../packages/security-solver/src/local-program-flow';
 
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
+// #227 field evidence: 31 guarded negatives, 13 observation-only, 12
+// incomplete/failed; 56 selected, no observed positive. A model's reversed
+// word-order blanket-negative claim must not change any ledger disposition.
+{
+ const ledger:HuntCoverageLedger={
+   sourceIndexed:91,sourceRead:91,leadsSelected:6,leadsAssessedByModel:0,
+   leadsDeferred:0,leadsBlocked:0,experimentsSelected:56,experimentsExecuted:44,
+   supportedNegative:31,observationOnly:13,fixtureFailed:12,unsupported:0,
+   positiveObserved:0,verifiedFindings:0,unresolved:0,
+   sourceCoverage:'complete',analysisCoverage:'partial',experimentCoverage:'partial'
+ };
+ const actual='The controller has observed behavior_not_observed status for all candidate functions.';
+ const checked=reconcileHuntReason(actual,ledger);
+ assert.deepEqual(checked.contradictions,['blanket_negative_contradicts_partial_experiment_ledger']);
+ assert.match(checked.reason,/31 source-supported negative experiments/);
+ assert.match(checked.reason,/13 observation-only/);
+ assert.match(checked.reason,/12 failed\/incomplete fixtures/);
+ assert.match(checked.reason,/Model analysis partial/i);
+ assert.doesNotMatch(checked.reason,/negative status for all candidate functions/i);
+ assert.equal(reconcileHuntReason('31 supported negatives and 25 unresolved or inconclusive executions.',ledger).contradictions.length,0);
+}
+
 
 // 1. Validate soliditySequenceSchema eth_balance and deploymentId extensions
 {
@@ -186,12 +211,22 @@ contract PlainVault {
     [{ path: plainPath, content: plainSource, sha256: sha(plainSource) }],
     "a".repeat(40),
   );
-  const exploratoryDeposit = plainOpts.find(o => o.selector === "PlainVault.deposit");
-  assert.ok(exploratoryDeposit, "Plain deposit must be eligible for bounded exploration");
-  assert.match(exploratoryDeposit.probe.hypothesis, /Exploratory core DeFi entrypoint/);
-  assert.match(exploratoryDeposit.probe.hypothesis, /no verified accounting or authorization invariant/);
-  assert.ok(exploratoryDeposit.probe.sequence.steps.some(step => step.operation === "send"),
-    "Exploratory probe retains actual state-changing transaction execution");
+  assert.equal(plainOpts.some(o => o.selector === "PlainVault.deposit"), false,
+    "A plain deposit without a source-derived security assertion must not become an executable experiment");
+  const plainConstruction = constructSolidityExperiments({
+    repositoryCommit: "a".repeat(40),
+    targetPath: plainPath,
+    targetSelector: "PlainVault.deposit",
+    sources: [{ path: plainPath, content: plainSource, sha256: sha(plainSource) }],
+    declarations: [{ selector: "PlainVault.deposit", operation: "send", inputs: ["uint256"] }],
+  });
+  assert.equal(plainConstruction.ok, false,
+    "The source-backed planner must retain plain deposit as a lead instead of inventing an invariant");
+  if (!plainConstruction.ok) {
+    assert.equal(plainConstruction.code, "UNKNOWN_ASSERTION");
+    assert.match(plainConstruction.detail, /Financial entrypoint exists/);
+    assert.match(plainConstruction.detail, /no source-derived prestate/);
+  }
 }
 
 // 3. Queue prioritization & Tier-4 setter cap (>16 items, max 3 Tier-4 per path)
@@ -286,20 +321,26 @@ contract PlainVault {
 
     if (enumActions.includes("discover_experiment")) {
       sawAnalyzeActionPrompt = true;
+      const packetText=payload.messages.map((m:any)=>String(m.content||'')).join('\n');
+      const leadIdMatch=packetText.match(/"id":"([a-f0-9]{64})","path":"(source-[^"]+\.sol)","selector":"([^"]+)"/);
+      assert.ok(leadIdMatch,'A model action must be scoped to a source-hashed lead packet');
+      const [,leadId,leadPath,selector]=leadIdMatch;
+      const method=selector.split('.').at(-1);
       res.end(JSON.stringify({
         message: {
           role: "assistant",
           content: JSON.stringify({
             action: "discover_experiment",
-            path: "source-1/contracts/VaultA.sol",
-            query: "VaultA.customSwap",
+            leadId,
+            path: leadPath,
+            query: selector,
             answer: "solidity_sequence",
-            hypothesis: "Test custom model-proposed DeFi swap hypothesis.",
+            hypothesis: "An unauthorized sender must be rejected by the inspected owner guard.",
             sequence: {
               constructorArgs: [],
               steps: [
                 { operation: "observe", function: "owner()", args: [] },
-                { operation: "send", function: "customSwap(uint256)", args: ["10"], sender: 1 },
+                { operation: "send", function: method+"(uint256)", args: ["10"], sender: 1, expectRevert: true },
               ],
             },
           }),
@@ -370,7 +411,7 @@ contract PlainVault {
     await mkdir(join(repoDir, "contracts"), { recursive: true });
     await writeFile(
       join(repoDir, "contracts", "VaultA.sol"),
-      "pragma solidity 0.8.4;\ncontract VaultA {\n  address public owner;\n  constructor(){ owner = msg.sender; }\n  function deposit(uint256 a) external {}\n  function withdraw(uint256 a) external {}\n  function customSwap(uint256 a) external {}\n}\n",
+      "pragma solidity 0.8.4;\ncontract VaultA {\n  address public owner;\n  constructor(){ owner = msg.sender; }\n  function deposit(uint256 a) external {require(msg.sender == owner, \"owner\");}\n  function withdraw(uint256 a) external {}\n  function customSwap(uint256 a) external {}\n}\n",
     );
     await writeFile(
       join(repoDir, "contracts", "VaultB.sol"),
@@ -421,7 +462,8 @@ contract PlainVault {
     const parsedAnswer = JSON.parse(answer);
     assert.equal(parsedAnswer.findings.length, 0);
     assert.ok(sawAnalyzeActionPrompt, "Bounded ANALYZE window must invoke model with discover_experiment");
-    assert.ok(reviewCalls >= 1 && sawMultiContractSummary, "REVIEW stage must receive multi-contract anti-bias summary");
+    assert.ok(reviewCalls >= 1, "REVIEW stage must invoke the final-result model");
+    assert.ok(sawMultiContractSummary, "REVIEW must receive the controller evidence summary even with one executable experiment");
     const transcript = await readFile(auditLog, "utf8");
     assert.match(transcript, /\[ANALYSIS_MODEL_WINDOW_STARTED\]/);
     assert.match(transcript, /\[ANALYSIS_MODEL_EXPERIMENT_ADDED\]/);

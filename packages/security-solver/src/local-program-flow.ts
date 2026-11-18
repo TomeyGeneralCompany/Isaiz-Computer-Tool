@@ -64,6 +64,42 @@ export const huntSchema=z.object({findings:z.array(candidateSchema).max(8),
   if(value.outcome === "no_testable_candidate" && (value.findings.length || !value.reason))
     ctx.addIssue({code:z.ZodIssueCode.custom,message:"No-testable-candidate outcome requires a reason and zero findings"});
 });
+export type HuntCoverageLedger={
+  sourceIndexed:number;sourceRead:number;leadsSelected:number;leadsAssessedByModel:number;
+  leadsDeferred:number;leadsBlocked:number;experimentsSelected:number;experimentsExecuted:number;
+  supportedNegative:number;observationOnly:number;fixtureFailed:number;unsupported:number;
+  positiveObserved:number;verifiedFindings:number;unresolved:number;
+  sourceCoverage:'complete'|'partial';analysisCoverage:'complete'|'partial';
+  experimentCoverage:'complete'|'partial';
+};
+export function reconcileHuntReason(reason:string,ledger:HuntCoverageLedger):{
+  reason:string;contradictions:string[]
+}{
+  const contradictions:string[]=[];
+  const incomplete=ledger.observationOnly+ledger.fixtureFailed+ledger.unsupported+ledger.unresolved>0;
+  if(incomplete && (
+    /\ball\b[^.]{0,180}\b(?:behavior_not_observed|negative|falsified)\b/i.test(reason)||
+    /\b(?:behavior_not_observed|negative|falsified)\b[^.]{0,180}\b(?:all|every)\b/i.test(reason)||
+    /\b(?:every|all)\s+(?:candidate|function|hypothesis|experiment|probe)s?\b[^.]{0,150}\b(?:not observed|passed|failed to reproduce)\b/i.test(reason)||
+    /\b(?:no failed experiments|everything passed|all functions tested|none of the contracts vulnerable)\b/i.test(reason)
+  ))contradictions.push('blanket_negative_contradicts_partial_experiment_ledger');
+  if(ledger.experimentCoverage==='partial' &&
+    /\b(?:full|complete|exhaustive)\s+(?:experimental |experiment |hypothesis )?coverage\b/i.test(reason))
+    contradictions.push('complete_coverage_claim_contradicts_ledger');
+  if(!contradictions.length)return {reason,contradictions};
+  return {contradictions,reason:
+    ledger.sourceRead+'/'+ledger.sourceIndexed+' source files inspected; '+
+    ledger.experimentsSelected+' experiments selected; '+
+    ledger.supportedNegative+' source-supported negative experiments, '+
+    ledger.observationOnly+' observation-only, '+
+    ledger.fixtureFailed+' failed/incomplete fixtures, '+
+    ledger.unsupported+' unsupported, '+
+    ledger.positiveObserved+' observed behaviors, '+
+    ledger.verifiedFindings+' independently verified findings. '+
+    'Source inspection '+ledger.sourceCoverage+'; model analysis '+ledger.analysisCoverage+
+    '; experiment evidence '+ledger.experimentCoverage+
+    '. No vulnerability absence claim is supported by incomplete experiments.'};
+}
 const score=z.number().int().min(0).max(3);
 const reviewSchema=z.object({verdict:z.enum(["approve","reject"]),recommendation:z.enum(["submit","submit_cautiously","dont_submit"]),
   severity:severitySchema,confidence:confidenceSchema,ratingReason:z.string().min(40).max(2000),
@@ -111,6 +147,10 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
   let auditRecord:string|undefined;
   const investigationStartedAt=new Date().toISOString();
   let preparationFailure="Source preparation did not reach model inspection";
+  let analysisCertificate:import('./controller-stage-lock').AnalysisCertificate|null=null;
+  let experimentLedger:{selected:number;resolved:number;outcomes:{
+    observed:number;observation_only:number;not_observed:number;unsupported:number;incomplete:number;rejected:number;pending:number
+  }}|null=null;
   const acquisitionChecks:NonNullable<SecuritySolveResult["acquisitionChecks"]>=[];
   let capabilityChecks:SecuritySolveResult["capabilityChecks"];
   let captureStats:(() => {completedProbes:number;unsupportedProbes:number;failedProbes:number;eligibleFiles:number;inspectedFiles:number}) | undefined;
@@ -222,6 +262,36 @@ export async function runLocalProgramHunt(program:SecurityProgram,signal?:AbortS
         JSON.stringify({eligible:fullSourceIndex.eligibleFiles,indexed:fullSourceIndex.indexedFiles,
           skipped:fullSourceIndex.skipped.length,complete:fullSourceIndex.complete})+'\n');
     }
+    const coverageLedger=():HuntCoverageLedger=>{
+      const read=reads.inspectedPaths(eligiblePaths).length;
+      const counts=experimentLedger?.outcomes;
+      const cases=[...session.cases.values()];
+      const countStatus=(value:string)=>cases.filter(item=>item.result.status===value).length;
+      const supportedNegative=counts?.not_observed ?? countStatus('behavior_not_observed');
+      const observationOnly=counts?.observation_only ?? countStatus('observation_only');
+      const fixtureFailed=counts?.incomplete ?? session.failedProbes;
+      const unsupported=counts?.unsupported ?? session.unsupportedProbes;
+      const positiveObserved=counts?.observed ?? countStatus('behavior_observed');
+      const unresolved=counts?.pending??0;
+      const experimentsSelected=experimentLedger?.selected ??
+        (supportedNegative+observationOnly+fixtureFailed+unsupported+positiveObserved+unresolved);
+      const actualTotal=counts?Object.values(counts).reduce((a,b)=>a+b,0):experimentsSelected;
+      const consistent=actualTotal===experimentsSelected;
+      const sourceComplete=!!fullSourceIndex?.complete&&read===eligiblePaths.length;
+      const experimentComplete=sourceComplete&&consistent&&fixtureFailed===0&&unsupported===0&&
+        observationOnly===0&&unresolved===0;
+      return {sourceIndexed:eligiblePaths.length,sourceRead:read,
+        leadsSelected:analysisCertificate?.selected??0,
+        leadsAssessedByModel:analysisCertificate?.modelAssessed??0,
+        leadsDeferred:analysisCertificate?.deferred??0,
+        leadsBlocked:analysisCertificate?.blocked??0,
+        experimentsSelected,experimentsExecuted:supportedNegative+observationOnly+positiveObserved,
+        supportedNegative,observationOnly,fixtureFailed,unsupported,positiveObserved,
+        verifiedFindings:0,unresolved:unresolved+(consistent?0:Math.abs(actualTotal-experimentsSelected)),
+        sourceCoverage:sourceComplete?'complete':'partial',
+        analysisCoverage:analysisCertificate?.status==='complete'?'complete':'partial',
+        experimentCoverage:experimentComplete?'complete':'partial'};
+    };
     const controllerRankedPaths=fullSourceIndex?.rankedPaths||[];
     const selection=await prioritizeSourceCandidates(root,eligiblePaths,
       fullSourceIndex ? [...controllerRankedPaths.slice(0,96),...fallbackHints] : fallbackHints,
@@ -608,7 +678,10 @@ Do not claim production testing, JavaScript execution, file access or other effe
       process.env.LOCAL_OLLAMA_MODEL || "qwen3:4b",undefined,{
         onAllowance:async deadline=>writeSecuritySolverStatus({active:true,programId:program.id,programName:program.name,
           stage:"hunting",startedAt:statusStartedAt,timeoutMinutes:(deadline-Date.parse(statusStartedAt))/60000,pid:process.pid}),
-        signal,maxTurns,controllerIndex,finalSchema:z.toJSONSchema(huntSchema),productionWorkflow:true,dynamicAllowance:process.env.LOCAL_HUNT_DYNAMIC_ALLOWANCE !== "false",initialSourcePaths:["audit-policy.txt",...new Set([...sourceHints,...(fullSourceIndex?.rankedPaths||[]),...eligiblePaths])],initialSourceLocations:selection.locations,checkpointPath:join(checkpointDirectory,checkpointKey+".json"),numCtx:8192,numThreads:4,numPredict:getConfig().LOCAL_HUNT_NUM_PREDICT,onRead:(path,span)=>reads.add(path,span),
+        signal,maxTurns,controllerIndex,
+         onAnalysisCertificate:certificate=>{analysisCertificate=certificate;},
+         onExperimentLedger:ledger=>{experimentLedger=ledger;},
+         finalSchema:z.toJSONSchema(huntSchema),productionWorkflow:true,dynamicAllowance:process.env.LOCAL_HUNT_DYNAMIC_ALLOWANCE !== "false",initialSourcePaths:["audit-policy.txt",...new Set([...sourceHints,...(fullSourceIndex?.rankedPaths||[]),...eligiblePaths])],initialSourceLocations:selection.locations,checkpointPath:join(checkpointDirectory,checkpointKey+".json"),numCtx:8192,numThreads:4,numPredict:getConfig().LOCAL_HUNT_NUM_PREDICT,onRead:(path,span)=>reads.add(path,span),
         staticLeads:staticLeads.leads,
         progressNote:()=>((controllerPromotedCaseId?
           'CONTROLLER VERIFIED ENTRY CASE: '+controllerPromotedCaseId+' (prioritize this observed caller; do not substitute helper case).\n':'')+
@@ -1088,15 +1161,19 @@ Do not claim production testing, JavaScript execution, file access or other effe
               }
             }
             const value=huntSchema.parse(recovered);
-            // A completed source inventory is not proof that every executed
-            // experiment falsified its hypothesis. Reject precisely the claim
-            // disproved by the persisted per-experiment ledger.
-            const inconclusiveRecorded=[...session.cases.values()]
-              .some(record=>record.result.status==="observation_only");
-            if(value.findings.length===0 && value.reason &&
-               (inconclusiveRecorded || session.failedProbes>0 || session.unsupportedProbes>0) &&
-               /\ball\b[^.]{0,160}\b(?:behavior_not_observed|negative|falsified)\b/i.test(value.reason))
-              return "Final explanation contradicts recorded experimental outcomes: some probes were inconclusive or failed. Report each disposition accurately; never call all hypotheses falsified.";
+            // Only the stored source/lead/experiment ledgers may assert global
+            // coverage. Preserve the model's exact rejected prose in the audit
+            // stream, then replace contradictory counts deterministically.
+            if(value.reason){
+              const ledger=coverageLedger();
+              const checked=reconcileHuntReason(value.reason,ledger);
+              if(checked.contradictions.length){
+                await appendFile(logFile,'[FINAL_REASON_CONTRADICTS_LEDGER] '+
+                  JSON.stringify({original:value.reason,contradictions:checked.contradictions,
+                    corrected:checked.reason,ledger})+'\\n');
+                value.reason=checked.reason.slice(0,1000);
+              }
+            }
             // A real reproduced case cannot silently disappear because Qwen
             // returned a blank findings array. A supported negative judgment
             // must say what specific link, mitigation or applicability
@@ -1315,15 +1392,33 @@ Do not claim production testing, JavaScript execution, file access or other effe
       eligibleFiles:eligiblePaths.length,
       inspectedFiles:inspectedFileCount,
     };
+    const validatedCoverage=coverageLedger();
+    const coverageReconciled=validatedCoverage.experimentsSelected ===
+      validatedCoverage.supportedNegative+validatedCoverage.observationOnly+
+      validatedCoverage.fixtureFailed+validatedCoverage.unsupported+
+      validatedCoverage.positiveObserved+validatedCoverage.unresolved;
+    await appendFile(logFile,'[FINAL_COVERAGE_LEDGER] '+JSON.stringify({
+      ...validatedCoverage,coverageReconciled,
+      analysisCertificate,experimentLedger})+'\\n');
+    const factualCoverageDetail=
+      validatedCoverage.sourceRead+'/'+validatedCoverage.sourceIndexed+' source files read; '+
+      validatedCoverage.leadsAssessedByModel+'/'+validatedCoverage.leadsSelected+
+      ' model leads assessed; '+validatedCoverage.experimentsSelected+' experiments selected: '+
+      validatedCoverage.supportedNegative+' supported negatives, '+
+      validatedCoverage.observationOnly+' observation-only, '+
+      validatedCoverage.fixtureFailed+' incomplete/failed, '+
+      validatedCoverage.unsupported+' unsupported, '+
+      validatedCoverage.positiveObserved+' behavior observed, '+
+      validatedCoverage.unresolved+' unresolved. Model analysis '+
+      validatedCoverage.analysisCoverage+'; experiment evidence '+
+      validatedCoverage.experimentCoverage+'.';
+    const allCoverageComplete=experimentCoverageComplete &&
+      validatedCoverage.analysisCoverage==='complete' && coverageReconciled;
     if(parsed?.outcome === "no_testable_candidate")return {auditRecord,success:true,
-      coverage:experimentCoverageComplete?"completed":"partial",
+      coverage:allCoverageComplete?"completed":"partial",
       acquisitionChecks,capabilityChecks,...probeStats,
-      coverageDetail:fullIndexCoverageComplete
-        ? `${inspectedFileCount}/${eligiblePaths.length} source files inspected; ${session.completedProbes} supported probe executions; ${inconclusiveProbes} inconclusive; ${session.unsupportedProbes} unsupported; ${session.failedProbes} failed. `+
-          (experimentCoverageComplete?"Selected experiment dispositions complete. ":"Experiment evidence coverage incomplete. ")+
-          (parsed.reason||"")
-        : "Inspection incomplete: "+parsed.reason,
-      findings:[],rawOutput:answer};
+      coverageDetail:factualCoverageDetail,
+      findings:[],rawOutput:JSON.stringify(parsed)};
     if (session.blockedReason) throw new Error("Reproduction unavailable: " + session.blockedReason);
     if (!session.completedProbes) {
       coverage = incompleteProbeCoverage(session);
@@ -1355,7 +1450,9 @@ Do not claim production testing, JavaScript execution, file access or other effe
             entryProof:entryEvidenceFor(candidate.caseId)
           }))});
     }
-    return {auditRecord,success:true,coverage:fullIndexCoverageComplete?"completed":"partial",acquisitionChecks,capabilityChecks,...probeStats,coverageDetail:`${session.completedProbes} supported probes completed; ${session.unsupportedProbes} unsupported probes; ${session.failedProbes} failed probes`,findings,rawOutput:answer};
+    return {auditRecord,success:true,coverage:allCoverageComplete?"completed":"partial",
+      acquisitionChecks,capabilityChecks,...probeStats,coverageDetail:factualCoverageDetail,
+      findings,rawOutput:parsed?JSON.stringify(parsed):answer};
   }catch(error:any){preparationFailure=error.message || String(error);return {auditRecord,success:false,coverage,acquisitionChecks,capabilityChecks,...(captureStats?captureStats():{}),findings:[],rawOutput:"",error:signal.aborted ? "Local hunt cancelled by operator" : error.message || "Local hunt failed"};}
   finally {
     if(investigationLog) {

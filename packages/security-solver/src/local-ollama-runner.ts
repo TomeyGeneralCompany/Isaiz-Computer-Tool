@@ -1,5 +1,5 @@
 import {ControllerEvidenceArchive} from './controller-evidence-archive';
-import {ControllerStageLock,type Outcome} from './controller-stage-lock';
+import {ControllerStageLock,type Outcome,type AnalysisCertificate} from './controller-stage-lock';
 import {modelProfile} from './model-profile';
 import {normalizeForcedOutlineCursor} from './outline-cursor';
 import {z} from "zod";
@@ -25,7 +25,7 @@ import { readSourcePage, searchSourcePage, listSourcePage, pageOffset, type Read
 import { postOllamaChat } from "../../core/src/ollama-chat";
 import { auditActionSchema, auditProtocolPrompt, decodeAuditAction } from "./local-audit-protocol";
 import { readFile, realpath, appendFile, writeFile, rename, mkdtemp } from "node:fs/promises";
-import { resolve, relative, sep, join } from "node:path";
+import { resolve, relative, sep, join, dirname } from "node:path";
 import { createHash } from "node:crypto";
 import {execFileSync} from "node:child_process";
 
@@ -59,6 +59,9 @@ export interface LocalAuditLimits {
   /** Pre-read only authorized source pages for read-only independent review. */
   prefetchReadOnly?: boolean;
   onAllowance?: (deadline:number) => Promise<void>;
+  onAnalysisCertificate?: (certificate:AnalysisCertificate) => void;
+  onExperimentLedger?: (ledger:{selected:number;resolved:number;
+    outcomes:{observed:number;observation_only:number;not_observed:number;unsupported:number;incomplete:number;rejected:number;pending:number}})=>void;
   checkpointPath?: string;
   initialSourcePaths?: string[];
   initialSourceLocations?: Array<{path:string;offset:number}>;
@@ -246,9 +249,43 @@ export async function runLocalAudit(
   const stagedPlans:Array<{id:string;plan:{action:'plan_probe';path:string;query:string;answer:string;hypothesis:string;sequence?:unknown}}>=[];
   const stagedAttempted=new Set<string>();
   let activeStageCandidate:string|null=null;
+  const activeStagedPlanMatches=(path:string,query:string,kind:string,sequence?:unknown)=>{
+    if(!activeStageCandidate)return false;
+    const selected=stagedPlans.find(item=>item.id===activeStageCandidate);
+    return !!selected&&selected.plan.path===path&&selected.plan.query===query&&
+      selected.plan.answer===kind&&
+      JSON.stringify(selected.plan.sequence??null)===JSON.stringify(sequence??null);
+  };
   let analyzeModelPending=false;
   let analyzeTurnsRemaining=0;
   const analyzeApprovedIds=new Set<string>();
+  type AnalysisPacket={id:string;path:string;selector:string;sourceEvidence:string;sourceSha256:string;sourceCommit:string;sourceExcerpt:string;excerptStart:number;truncated:boolean};
+  const analysisPackets=new Map<string,AnalysisPacket>();
+  const nextAnalysisPacket=()=>stageLock?.analysisLeads.find(x=>x.state.kind==='pending');
+  const analysisPacketPrompt=()=>{
+    const next=nextAnalysisPacket();
+    if(!next)return 'All selected lead assessments have dispositions. Use finalize_analysis with path="", query="", answer="". /no_think';
+    const packet=analysisPackets.get(next.id);
+    if(!packet)return 'Lead packet missing. Report defer_lead with the given immutable lead ID and a concrete source evidence limitation. /no_think';
+    return 'Assess this source-grounded lead; exact immutable ID, source commit/hash, inspected excerpt and offset: '+
+      JSON.stringify(packet).slice(0,2300)+
+      '. Reply with {"action":"assess_lead","path":'+JSON.stringify(next.path)+
+      ',"query":'+JSON.stringify(next.selector)+',"leadId":'+JSON.stringify(next.id)+
+      ',"hypothesis":"falsifiable source-backed property","answer":"specific source-based reason","sequence":{}}'+
+      ' to record a testable property; use defer_lead with the same ID, hypothesis="none" and a specific answer explaining the missing fixture or invariant;'+
+      ' or discover_experiment with the SAME leadId and a valid complete solidity_sequence to validate and queue its hypothesis. '+
+      'Source excerpts are leads, not proof of exploitability. /no_think';
+  };
+  const closeAnalysis=async(status:'complete'|'partial',reason='')=>{
+    if(!stageLock||stageLock.currentStage!=='ANALYZE')return;
+    const cert=stageLock.analysisClosureCertificate(status,reason);
+    stageLock.completeAnalysis(status,reason);
+    limits.onAnalysisCertificate?.(cert);
+    analyzeModelPending=false;analyzeTurnsRemaining=0;
+    await appendFile(logFile,'['+(status==='complete'?'ANALYSIS_COMPLETE':'ANALYSIS_INCOMPLETE')+'] '+
+      JSON.stringify({...cert,candidates:stageLock.candidateCount,modelAdded:analyzeApprovedIds.size})+'\n');
+    await appendFile(logFile,'[STAGE_UNLOCK] ANALYZE -> EXPERIMENT\n');
+  };
   const hypotheses:Array<{turn:number;path:string;statement:string}>=[];
   const renew=async(turn:number)=>{
     const extension=allowance.extend(turn,Date.now());
@@ -261,7 +298,7 @@ export async function runLocalAudit(
       await limits.onAllowance?.(allowance.deadline);
     }
   };
-  const actionSchema = limits.verifyPython ? {...auditActionSchema,properties:{...auditActionSchema.properties,...(limits.finalSchema?{result:limits.finalSchema}:{}),sequence:{type:"object",properties:{
+  const actionSchema = limits.verifyPython ? {...auditActionSchema,properties:{...auditActionSchema.properties,...(limits.finalSchema?{result:limits.finalSchema}:{}),leadId:{type:"string",pattern:"^[a-f0-9]{64}$"},sequence:{type:"object",properties:{
       constructorArgs:{type:"array",items:{type:"string"}},
       constructor:{type:"array",items:{}},
       preparation:{type:"object"},
@@ -272,7 +309,7 @@ export async function runLocalAudit(
         expect:{type:"string"},expected:{},valueWei:{type:"string"}
       }}}
     },required:["steps"]},
-    action:{type:"string",enum:[...auditActionSchema.properties.action.enum,"verify_source","verify_python",...(workflow?["plan_probe","probe_intent","continue_inspection","discover_experiment","finalize_analysis"]:[])]}}} : {...auditActionSchema,properties:{...auditActionSchema.properties,...(limits.finalSchema?{result:limits.finalSchema}:{})}};
+    action:{type:"string",enum:[...auditActionSchema.properties.action.enum,"verify_source","verify_python",...(workflow?["plan_probe","probe_intent","continue_inspection","assess_lead","defer_lead","request_source_context","discover_experiment","finalize_analysis","analysis_unavailable"]:[])]}}} : {...auditActionSchema,properties:{...auditActionSchema.properties,...(limits.finalSchema?{result:limits.finalSchema}:{})}};
   const probePrompt = limits.verifyPython ? "\\nUse probe_intent with inspected path, exact query (or blank for a unique candidate), supported answer kind, hypothesis and optional sequence. The controller validates and executes the accepted request. Python top-level and exported JavaScript functions require one string input and string output. Java text probes support one text/byte argument. For Python and JavaScript stateful behavior, use python_sequence or javascript_sequence with a declarative factory (optional), constructor array and at least two steps {method,args,expected?}, all on the same object; state observations are not security findings. For Java methods with primitive/String args, use java_sequence with constructor args and method steps; calls share one instance. Do not use html_reflection for Java numeric/state methods. Solidity accepts state-changing sends and read assertions in a local EVM. Do not invent method names, expected values, or findings. " : "";
   const availableTools = limits.verifyPython ? [...tools,{type:"function",function:{
     name:"verify_source",description:probePrompt,parameters:{type:"object",
@@ -726,7 +763,7 @@ export async function runLocalAudit(
         let totalUnqueuedNonSetters=0;
         for(const path of [...new Set(limits.initialSourcePaths||[])].filter(p=>
           /^source-[0-9]+\/.+\.(?:sol|java|py|js|mjs|cjs)$/.test(p))){
-          let analyzed='complete' as 'complete'|'unsupported';
+          let sourceClassification='indexed-options-built' as 'indexed-options-built'|'source-unavailable';
           try {
             const full=await safePath(path),source=await readFile(full,'utf8');
             if(path.endsWith('.sol')){
@@ -778,11 +815,11 @@ export async function runLocalAudit(
               }
             }
           }catch(error){
-            analyzed='unsupported';
+            sourceClassification='source-unavailable';
             await appendFile(logFile,'[ANALYSIS_CANDIDATE_UNAVAILABLE] '+
               JSON.stringify({path,error:String(error).slice(0,240)})+'\n');
           }
-          stageLock.noteAnalyzed(path,analyzed);
+          stageLock.noteSourcePreclassified(path,sourceClassification);
         }
         if(solCandidateBuffer.length){
           const prioritized=prioritizeSolidityStagedPlans(solCandidateBuffer,limits.staticLeads||[]);
@@ -815,6 +852,42 @@ export async function runLocalAudit(
           return [{path:item.path,selector,sourceExcerpt:content.slice(start,Math.min(content.length,match.index+1100)),
             excerptStart:start,truncated:match.index+1100<content.length}];
         });
+        // Select a finite, evidence-backed Qwen lead batch, independently of
+        // the fully preserved source inventory and controller experiment queue.
+        // Derive the real acquired repository SHA from its checked-out source,
+        // not from a model guess or the LOTUS application commit.
+        const rankedUnqueued=[...nonMockSolSummaries].sort((a,b)=>{
+          const score=(item:typeof a)=>solLeads.filter(lead=>lead.path===item.path).length;
+          return score(b)-score(a);
+        });
+        for(const item of rankedUnqueued.slice(0,6)){
+          const selector=item.unqueuedNonSetters[0];
+          const content=accessibleSoliditySources.get(item.path);
+          if(!selector||!content)continue;
+          const full=await safePath(item.path);
+          let sourceCommit='';
+          try {sourceCommit=execFileSync('git',['-c','core.hooksPath=/dev/null','rev-parse','HEAD'],
+            {cwd:dirname(full),encoding:'utf8',timeout:5000}).trim();}
+          catch{}
+          if(!/^[a-f0-9]{40}$/.test(sourceCommit)){
+            await appendFile(logFile,'[ANALYSIS_LEAD_BLOCKED] '+JSON.stringify({
+              path:item.path,selector,reason:'acquired_repository_commit_unavailable'})+'\\n');
+            continue;
+          }
+          const method=selector.split('.').pop()||'';
+          const match=new RegExp('\\bfunction\\s+'+method.replace(/[^A-Za-z0-9_]/g,'')+'\\s*\\(').exec(content);
+          if(!match)continue;
+          const start=Math.max(0,match.index-160),end=Math.min(content.length,match.index+1100);
+          const sourceSha256=createHash('sha256').update(content).digest('hex');
+          const id=createHash('sha256').update(JSON.stringify([sourceCommit,sourceSha256,item.path,selector])).digest('hex');
+          const sourceEvidence=item.path+':'+start+'-'+end+':'+sourceSha256;
+          stageLock.registerAnalysisLead({id,sourceCommit,sourceSha256,path:item.path,selector});
+          analysisPackets.set(id,{id,path:item.path,selector,sourceCommit,sourceSha256,
+            sourceEvidence,sourceExcerpt:content.slice(start,end),excerptStart:start,truncated:end<content.length});
+          await appendFile(logFile,'[ANALYSIS_LEAD_SELECTED] '+JSON.stringify({
+            id,path:item.path,selector,sourceCommit,sourceSha256,sourceEvidence,
+            priority:solLeads.filter(lead=>lead.path===item.path).length})+'\\n');
+        }
         // Four Qwen turns were insufficient to correct even one rejected
         // sequence. Preserve a configurable bounded window without treating
         // an invalid schema attempt as a successful experiment.
@@ -829,28 +902,23 @@ export async function runLocalAudit(
           analyzeTurnsRemaining=maxAnalyzeTurns;
           await appendFile(logFile,'[ANALYSIS_MODEL_WINDOW_STARTED] '+JSON.stringify({
             maxAnalyzeTurns,solLeads:solLeads.length,nonMockSolFiles:nonMockSolSummaries.length,
-            totalUnqueuedNonSetters})+'\n');
+            totalUnqueuedNonSetters,selectedModelLeads:stageLock.analysisProgress.selected})+'\n');
           messages.push({role:'user',content:'ANALYZE STAGE (bounded hypothesis window, '+maxAnalyzeTurns+
             ' turn(s) max): Controller queued '+stagedPlans.length+' prioritized probes: '+
             JSON.stringify(stagedPlans.slice(0,6).map(s=>({path:s.plan.path,query:s.plan.query})))+
             (solLeads.length?'. Static leads on Solidity files: '+JSON.stringify(solLeads.slice(0,8).map(l=>({path:l.path,line:l.line,rule:l.rule,severity:l.severity,msg:l.message.slice(0,100)}))):'')+
             (nonMockSolSummaries.length?'. Non-mock Solidity functions not yet queued: '+JSON.stringify(nonMockSolSummaries.slice(0,6)):'')+
             (analysisSourcePackets.length?'. Exact source evidence for targeted planning: '+JSON.stringify(analysisSourcePackets).slice(0,5500):'')+
-            '. Propose ONE source-backed targeted experiment. Return exactly {"action":"discover_experiment","path":"source-...sol","query":"Contract.function","answer":"solidity_sequence","hypothesis":"A falsifiable claim tied to inspected source","sequence":{"constructorArgs":[],"steps":[{"operation":"send","function":"method()","args":[],"sender":1},{"operation":"observe","function":"getter()","args":[]}]}}. Replace method/getter with real source-declared signatures. Allowed step operations: send, call (requires expect), observe, eth_balance (requires account). Each send/call/observe requires function and args; constructorArgs is always an array, even when empty. Include relevant preparation deployments and initial-state checks where needed. A generic state read is exploratory, not a tested security invariant. Do not guess function signatures or assertions. OR send {"action":"finalize_analysis","path":"","query":"","answer":""} only after assessing all relevant unqueued leads. /no_think'});
+            '. Propose ONE source-backed targeted experiment. Return exactly {"action":"discover_experiment","path":"source-...sol","query":"Contract.function","answer":"solidity_sequence","hypothesis":"A falsifiable claim tied to inspected source","sequence":{"constructorArgs":[],"steps":[{"operation":"send","function":"method()","args":[],"sender":1},{"operation":"observe","function":"getter()","args":[]}]}}. Replace method/getter with real source-declared signatures. Allowed step operations: send, call (requires expect), observe, eth_balance (requires account). Each send/call/observe requires function and args; constructorArgs is always an array, even when empty. Include relevant preparation deployments and initial-state checks where needed. A generic state read is exploratory, not a tested security invariant. Do not guess function signatures or assertions. OR send {"action":"finalize_analysis","path":"","query":"","answer":""} only after assessing all selected lead IDs. '+analysisPacketPrompt()});
         } else {
-          stageLock.completeAnalysis();
-          await appendFile(logFile,'[ANALYSIS_COMPLETE] '+
-            JSON.stringify({candidates:stageLock.candidateCount})+'\n');
-          await appendFile(logFile,'[STAGE_UNLOCK] ANALYZE -> EXPERIMENT\n');
+          await closeAnalysis(stageLock.analysisProgress.pendingIds.length?'partial':'complete',
+            stageLock.analysisProgress.pendingIds.length?'model_analysis_disabled':'');
         }
         constraints=workflow?await workflow.constraints():constraints;
       }
       if(stageLock?.currentStage==='ANALYZE' && analyzeModelPending && analyzeTurnsRemaining<=0){
-        analyzeModelPending=false;
-        stageLock.completeAnalysis();
-        await appendFile(logFile,'[ANALYSIS_COMPLETE] '+JSON.stringify({
-          candidates:stageLock.candidateCount,modelAdded:analyzeApprovedIds.size})+'\n');
-        await appendFile(logFile,'[STAGE_UNLOCK] ANALYZE -> EXPERIMENT\n');
+        await closeAnalysis(stageLock.analysisProgress.pendingIds.length?'partial':'complete',
+          stageLock.analysisProgress.pendingIds.length?'analysis_turn_budget_exhausted':'');
         constraints=workflow?await workflow.constraints():constraints;
       }
       // A selected candidate which never reached the verifier must be
@@ -867,6 +935,8 @@ export async function runLocalAudit(
         stageLock.completedCount===stageLock.candidateCount &&
         !workflow?.snapshot().pending){
         stageLock.completeExperiments();
+        limits.onExperimentLedger?.({selected:stageLock.candidateCount,
+          resolved:stageLock.completedCount,outcomes:stageLock.outcomeCounts});
         await appendFile(logFile,'[EXPERIMENT_COMPLETE] '+
           JSON.stringify({resolved:stageLock.completedCount,outcomes:stageLock.outcomeCounts})+'\n');
         await appendFile(logFile,'[STAGE_UNLOCK] EXPERIMENT -> REVIEW\n');
@@ -924,7 +994,7 @@ export async function runLocalAudit(
         constraints={action:['read_file'],path:[next]};
       }
       if(stageLock?.currentStage==='ANALYZE' && analyzeModelPending)
-        constraints={action:['discover_experiment','finalize_analysis']};
+        constraints={action:['assess_lead','defer_lead','request_source_context','discover_experiment','finalize_analysis','analysis_unavailable']};
       if(stageLock?.currentStage==='EXPERIMENT' && !workflow?.snapshot().pending)
         constraints={action:['plan_probe','probe_intent']};
       if(stageLock?.currentStage==='REVIEW'||stageLock?.currentStage==='REPORT')
@@ -1100,7 +1170,10 @@ export async function runLocalAudit(
           progressMessages.push({role:'user',content:
             'Controller verified experiment ledger (runtime evidence, not report approval):\n'+
             JSON.stringify(observed).slice(0,1400)});
-        if(allObs.length>1){
+        // REVIEW requires accurate controller evidence even when the new
+        // invariant planner schedules only one (or zero) executable probes.
+        // A fixed two-observation gate would hide the experiment ledger.
+        {
           const statusCounts:Record<string,number>={};
           const contractsTested=new Set<string>();
           for(const o of allObs){
@@ -1116,7 +1189,9 @@ export async function runLocalAudit(
               ? 'Zero verified security behaviors across all tested contracts; report findings=[] unless independently verified runtime proof exists. Never fabricate a finding from static leads or negative traces.'
               : 'Evaluate all observed behaviors across tested contracts objectively; ignore unrelated files without verified behavior.'
           };
-          progressMessages.push({role:'user',content:
+          // Keep this bounded evidence summary before advisory progress and
+          // static scanner leads, which are discarded first under context pressure.
+          progressMessages.unshift({role:'user',content:
             'Controller multi-contract experiment summary:\n'+JSON.stringify(summary).slice(0,1200)});
         }
         const leadsSummary=(limits.staticLeads||[]).slice(0,8).map(l=>({
@@ -1648,7 +1723,13 @@ export async function runLocalAudit(
             } catch(error) {
               if(controller.signal.aborted)throw error;
               if(attempt===5){
-                if(stageLock?.currentStage==='ANALYZE' && analyzeModelPending)return {message:{role:'assistant',content:JSON.stringify({action:'finalize_analysis',path:'',query:'',answer:''})}};
+                if(stageLock?.currentStage==='ANALYZE' && analyzeModelPending){
+                  await appendFile(logFile,'[ANALYSIS_MODEL_UNAVAILABLE] '+JSON.stringify({
+                    turn:turn+1,attempts:attempt,reason:String(error).slice(0,200),
+                    pendingIds:stageLock.analysisProgress.pendingIds,retainedControllerMemory:true})+'\n');
+                  return {message:{role:'assistant',content:JSON.stringify({
+                    action:'analysis_unavailable',path:'',query:'',answer:'model_transport_retries_exhausted'})}};
+                }
                 throw error;
               }
               await appendFile(logFile,'[MODEL_REQUEST_RECOVERY] '+JSON.stringify({
@@ -1691,11 +1772,8 @@ export async function runLocalAudit(
                 'Do not repeat malformed output. /no_think'});
               continue;
             }
-            analyzeModelPending=false;
-            stageLock.completeAnalysis();
             await appendFile(logFile,'[ANALYSIS_MODEL_FALLBACK] '+JSON.stringify({reason:'invalid_json_budget_exhausted'})+'\n');
-            await appendFile(logFile,'[ANALYSIS_COMPLETE] '+JSON.stringify({candidates:stageLock.candidateCount,modelAdded:analyzeApprovedIds.size})+'\n');
-            await appendFile(logFile,'[STAGE_UNLOCK] ANALYZE -> EXPERIMENT\n');
+            await closeAnalysis('partial','invalid_json_budget_exhausted');
             continue;
           }
           if (result.done_reason === "length" && generationBudget < 4096) {
@@ -1905,7 +1983,7 @@ export async function runLocalAudit(
           continue;
         }
         if(stageLock && action.action==='verify_source' &&
-          activeStageCandidate!==JSON.stringify([action.path,action.query,action.answer])){
+          !activeStagedPlanMatches(action.path,action.query,action.answer,action.sequence)){
           await appendFile(logFile,'[STAGE_ACTION_REJECTED] '+JSON.stringify({
             stage:stageLock.currentStage,reason:'verifier_not_for_active_candidate'})+'\n');
           messages.push({role:'user',content:'The controller has not scheduled this verifier request. /no_think'});
@@ -1916,7 +1994,7 @@ export async function runLocalAudit(
           try {
             stageLock.assertActionAllowed(action.action);
             if(['plan_probe','probe_intent'].includes(action.action))
-              stageLock.requireCandidate(JSON.stringify([action.path,action.query,action.answer]));
+              stageLock.requireCandidate(activeStageCandidate||'');
           }catch(error){
             await appendFile(logFile,'[STAGE_ACTION_REJECTED] '+
               JSON.stringify({stage:stageLock.currentStage,action:action.action,error:String(error)})+'\n');
@@ -1929,30 +2007,87 @@ export async function runLocalAudit(
           if(stageLock?.currentStage==='ANALYZE' && analyzeModelPending){
             analyzeTurnsRemaining--;
             if(analyzeTurnsRemaining<=0){
-              analyzeModelPending=false;
-              stageLock.completeAnalysis();
               await appendFile(logFile,'[ANALYSIS_MODEL_FALLBACK] '+JSON.stringify({reason:'disallowed_action_budget_exhausted'})+'\n');
-              await appendFile(logFile,'[ANALYSIS_COMPLETE] '+JSON.stringify({candidates:stageLock.candidateCount,modelAdded:analyzeApprovedIds.size})+'\n');
-              await appendFile(logFile,'[STAGE_UNLOCK] ANALYZE -> EXPERIMENT\n');
+              await closeAnalysis('partial','disallowed_action_budget_exhausted');
               continue;
             }
           }
           messages.push({role:"user",content:"That action is not available in the current task stage. Use the current response schema and controller progress. No tool was executed. /no_think"});
           continue;
         }
-        if(stageLock?.currentStage==='ANALYZE' && ['discover_experiment','finalize_analysis'].includes(action.action)){
+        if(stageLock?.currentStage==='ANALYZE' &&
+          ['assess_lead','defer_lead','request_source_context','discover_experiment','finalize_analysis','analysis_unavailable'].includes(action.action)){
+          if(action.action==='analysis_unavailable'){
+            await closeAnalysis('partial','model_transport_unavailable');
+            continue;
+          }
           if(action.action==='finalize_analysis'){
-            analyzeModelPending=false;
-            analyzeTurnsRemaining=0;
-            stageLock.completeAnalysis();
-            await appendFile(logFile,'[ANALYSIS_COMPLETE] '+JSON.stringify({candidates:stageLock.candidateCount,modelAdded:analyzeApprovedIds.size})+'\n');
-            await appendFile(logFile,'[STAGE_UNLOCK] ANALYZE -> EXPERIMENT\n');
+            const pending=stageLock.analysisProgress.pendingIds;
+            if(pending.length){
+              analyzeTurnsRemaining--;
+              await appendFile(logFile,'[ANALYSIS_FINALIZATION_REJECTED] '+
+                JSON.stringify({pendingIds:pending,remainingTurns:analyzeTurnsRemaining,
+                  reason:'source_backed_lead_assessments_missing'})+'\\n');
+              if(analyzeTurnsRemaining<=0)await closeAnalysis('partial','finalization_with_pending_leads');
+              else messages.push({role:'user',content:
+                'Cannot finalize while analysis lead IDs remain pending: '+JSON.stringify(pending)+
+                '. Assess or defer each lead with immutable leadId, source-grounded reasoning, and exact selector. '+
+                analysisPacketPrompt()});
+              continue;
+            }
+            await closeAnalysis('complete');
+            continue;
+          }
+          if(['assess_lead','defer_lead','request_source_context'].includes(action.action)){
+            analyzeTurnsRemaining--;
+            const leadId=(action as typeof action & {leadId?:string}).leadId;
+            const packet=leadId?analysisPackets.get(leadId):undefined;
+            const selected=packet&&stageLock.analysisLeads.find(lead=>
+              lead.id===packet.id&&lead.state.kind==='pending');
+            let error='';
+            if(!packet||!selected||packet.path!==action.path||packet.selector!==action.query)
+              error='Unknown, previously assessed, or mismatched immutable lead ID and selector';
+            else if(action.action==='request_source_context'){
+              messages.push({role:'user',content:
+                'Indexed source context for lead '+packet.id+': '+JSON.stringify(packet).slice(0,2500)+
+                '. This is the bounded source excerpt, not execution evidence. /no_think'});
+              continue;
+            } else if(!action.answer.trim()||action.answer.trim().length<20)
+              error='Lead assessment needs at least 20 characters of specific source-grounded reasoning';
+            else if(action.action==='assess_lead'&&(!action.hypothesis?.trim()||action.hypothesis.trim().length<12))
+              error='assess_lead requires a falsifiable source-backed hypothesis';
+            if(error){
+              await appendFile(logFile,'[ANALYSIS_LEAD_REJECTED] '+JSON.stringify({
+                leadId:(action as typeof action & {leadId?:string}).leadId,path:action.path,query:action.query,
+                error,remainingTurns:analyzeTurnsRemaining})+'\\n');
+              messages.push({role:'user',content:'Rejected lead assessment: '+error+'. '+analysisPacketPrompt()});
+            }else{
+              stageLock.recordLeadAssessment(packet!.id,{kind:'assessed',
+                sourceEvidence:[packet!.sourceEvidence],
+                hypothesis:action.action==='defer_lead'?'No supported executable property':action.hypothesis!,
+                disposition:action.action==='defer_lead'?'defer':'test',
+                reason:action.answer.trim().slice(0,700)},'model');
+              await appendFile(logFile,'['+(action.action==='defer_lead'?'ANALYSIS_LEAD_DEFERRED':'ANALYSIS_LEAD_ASSESSED')+'] '+
+                JSON.stringify({leadId:packet!.id,path:packet!.path,selector:packet!.selector,
+                  reason:action.answer.trim().slice(0,300),
+                  sourceEvidence:packet!.sourceEvidence})+'\\n');
+              messages.push({role:'user',content:analysisPacketPrompt()});
+            }
+            if(analyzeTurnsRemaining<=0)await closeAnalysis(stageLock.analysisProgress.pendingIds.length?'partial':'complete',
+              stageLock.analysisProgress.pendingIds.length?'analysis_turn_budget_exhausted':'');
             continue;
           }
           analyzeTurnsRemaining--;
           let acceptError='';
           let acceptedId='';
-          if(!action.path.endsWith('.sol') || !(limits.initialSourcePaths||[]).includes(action.path)){
+          const proposedLeadId=(action as typeof action & {leadId?:string}).leadId;
+          const proposedLead=proposedLeadId?analysisPackets.get(proposedLeadId):undefined;
+          if(!proposedLead||proposedLead.path!==action.path||proposedLead.selector!==action.query||
+             stageLock.analysisLeads.find(x=>x.id===proposedLead.id)?.state.kind!=='pending')
+            acceptError='Model experiment requires a pending, source-verified immutable leadId matching path and selector.';
+          else if(!action.hypothesis?.trim() || action.hypothesis.trim().length<12)
+            acceptError='Model experiment requires a falsifiable source-backed hypothesis.';
+          else if(!action.path.endsWith('.sol') || !(limits.initialSourcePaths||[]).includes(action.path)){
             acceptError='discover_experiment requires an indexed workspace .sol path.';
           } else {
             try {
@@ -1964,10 +2099,12 @@ export async function runLocalAudit(
               if(!declared)acceptError='Undeclared Solidity Contract.function selector: '+action.query;
               else if(!parsedSeq.success)acceptError='Invalid solidity_sequence: '+parsedSeq.error.issues.map(i=>i.path.join('.')+': '+i.message).slice(0,4).join('; ');
               else if(!parsedSeq.data.steps.some(s=>s.operation!=='eth_balance'&&s.function.split('(')[0]===fnName))acceptError='Sequence steps must invoke '+fnName;
+              else if(!parsedSeq.data.steps.some(step=>step.operation==='call'||(step.operation==='send'&&step.expectRevert===true)))
+                acceptError='Security experiment requires a source-derived call assertion or expected revert, not only exploratory observations.';
               else {
                 const plan={action:'plan_probe' as const,path:action.path,query:action.query,
                   answer:'solidity_sequence',
-                  hypothesis:(action.hypothesis||'Model-proposed DeFi / static-lead security hypothesis.').slice(0,600),
+                  hypothesis:action.hypothesis!.slice(0,600),
                   sequence:parsedSeq.data};
                 // Distinct property/sequence pairs are separate experiments,
                 // even when they exercise the same source-declared function.
@@ -1985,8 +2122,13 @@ export async function runLocalAudit(
                   stageLock.discover(acceptedId);
                   stagedPlans.push({id:acceptedId,plan});
                   analyzeApprovedIds.add(acceptedId);
+                  stageLock.recordLeadAssessment(proposedLead!.id,{kind:'assessed',
+                    sourceEvidence:[proposedLead!.sourceEvidence],
+                    hypothesis:plan.hypothesis,disposition:'test',
+                    reason:'Accepted distinct source-derived assertion and schema-valid local experiment'},'model');
                   await appendFile(logFile,'[ANALYSIS_MODEL_EXPERIMENT_ADDED] '+JSON.stringify({
-                    path:action.path,selector:action.query,remainingTurns:analyzeTurnsRemaining})+'\n');
+                    leadId:proposedLead!.id,experimentId:acceptedId,path:action.path,
+                     selector:action.query,remainingTurns:analyzeTurnsRemaining})+'\n');
                 }
               }
             } catch(error) {
@@ -1997,14 +2139,11 @@ export async function runLocalAudit(
             JSON.stringify({path:action.path,selector:action.query,error:acceptError,
               remainingTurns:analyzeTurnsRemaining})+'\n');
           messages.push({role:'user',content:acceptError
-            ? 'discover_experiment rejected: '+acceptError+(analyzeTurnsRemaining>0?' Revise or send finalize_analysis. /no_think':' Budget exhausted; starting EXPERIMENT.')
-            : 'Accepted discover_experiment ('+action.query+'). Remaining ANALYZE turns: '+analyzeTurnsRemaining+'. Propose another or send finalize_analysis. /no_think'});
-          if(analyzeTurnsRemaining<=0){
-            analyzeModelPending=false;
-            stageLock.completeAnalysis();
-            await appendFile(logFile,'[ANALYSIS_COMPLETE] '+JSON.stringify({candidates:stageLock.candidateCount,modelAdded:analyzeApprovedIds.size})+'\n');
-            await appendFile(logFile,'[STAGE_UNLOCK] ANALYZE -> EXPERIMENT\n');
-          }
+            ? 'discover_experiment rejected: '+acceptError+'. '+analysisPacketPrompt()
+            : 'Accepted discover_experiment ('+action.query+'). Remaining ANALYZE turns: '+analyzeTurnsRemaining+'. '+analysisPacketPrompt()});
+          if(analyzeTurnsRemaining<=0)
+            await closeAnalysis(stageLock.analysisProgress.pendingIds.length?'partial':'complete',
+              stageLock.analysisProgress.pendingIds.length?'analysis_turn_budget_exhausted':'');
           continue;
         }
         if((action.action==='plan_probe'||action.action==='verify_source') &&
@@ -2636,10 +2775,11 @@ export async function runLocalAudit(
           if(stageLock){
             stageLock.assertActionAllowed(call.function.name);
             if(['verify_source','verify_python'].includes(call.function.name) &&
-              activeStageCandidate!==JSON.stringify([
+              !activeStagedPlanMatches(
                 String(call.function.arguments?.path||''),
                 String(call.function.arguments?.query||''),
-                String(call.function.arguments?.kind||'')]))
+                String(call.function.arguments?.kind||''),
+                call.function.arguments?.sequence))
               throw new Error('STAGE_LOCKED: VERIFIER_CANDIDATE_MISMATCH');
           }
           let path = String(call.function.arguments?.path ?? ".");
