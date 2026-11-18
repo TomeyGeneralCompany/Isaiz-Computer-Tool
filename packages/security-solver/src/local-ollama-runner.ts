@@ -1805,9 +1805,15 @@ export async function runLocalAudit(
         // The source controller owns the scenario; model assertions are ignored.
         if(workflow && action.path.endsWith('.sol') &&
            ['plan_probe','probe_intent'].includes(action.action)) {
-          const stagedId=JSON.stringify([action.path,action.query,'solidity_sequence']);
-          const approvedStaged=controllerAction && analyzeApprovedIds.has(stagedId)
-            ? stagedPlans.find(x=>x.id===stagedId)?.plan : null;
+          // The stage dispatcher already selected the exact experiment ID.
+          // Model-added plans include their hypothesis fingerprint, so
+          // reconstructing [path,selector,kind] loses their identity.
+          const activePlan=activeStageCandidate
+            ? stagedPlans.find(entry=>entry.id===activeStageCandidate) : undefined;
+          const approvedStaged=controllerAction && activePlan &&
+            analyzeApprovedIds.has(activePlan.id) &&
+            activePlan.plan.path===action.path && activePlan.plan.query===action.query
+            ? activePlan.plan : null;
           let grounded:ReturnType<typeof sourceGroundedSolidityProbe>=approvedStaged ? {
             hypothesis:approvedStaged.hypothesis,
             sequence:approvedStaged.sequence as any,
