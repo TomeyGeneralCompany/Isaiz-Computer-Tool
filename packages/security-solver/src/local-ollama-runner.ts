@@ -1680,10 +1680,20 @@ export async function runLocalAudit(
         try {action = decodeAuditAction(message.content,!!limits.verifyPython,stageLock?.currentStage==='ANALYZE');}
         catch {
           if(stageLock?.currentStage==='ANALYZE' && analyzeModelPending){
+            analyzeTurnsRemaining--;
+            await appendFile(logFile,'[ANALYSIS_EXPERIMENT_REJECTED] '+
+              JSON.stringify({reason:'invalid_json_action',remainingTurns:analyzeTurnsRemaining})+'\n');
+            if(analyzeTurnsRemaining>0) {
+              messages.push({role:'user',content:
+                'Your ANALYZE action was invalid JSON or did not satisfy the action schema. '+
+                'Use discover_experiment with a real Contract.function, constructorArgs array, '+
+                'and steps using operation=send/call/observe/eth_balance, or finalize_analysis after examining all candidates. '+
+                'Do not repeat malformed output. /no_think'});
+              continue;
+            }
             analyzeModelPending=false;
-            analyzeTurnsRemaining=0;
             stageLock.completeAnalysis();
-            await appendFile(logFile,'[ANALYSIS_MODEL_FALLBACK] '+JSON.stringify({reason:'invalid_json_action'})+'\n');
+            await appendFile(logFile,'[ANALYSIS_MODEL_FALLBACK] '+JSON.stringify({reason:'invalid_json_budget_exhausted'})+'\n');
             await appendFile(logFile,'[ANALYSIS_COMPLETE] '+JSON.stringify({candidates:stageLock.candidateCount,modelAdded:analyzeApprovedIds.size})+'\n');
             await appendFile(logFile,'[STAGE_UNLOCK] ANALYZE -> EXPERIMENT\n');
             continue;
@@ -1954,7 +1964,9 @@ export async function runLocalAudit(
                   hypothesis:(action.hypothesis||'Model-proposed DeFi / static-lead security hypothesis.').slice(0,600),
                   sequence:parsedSeq.data};
                 acceptedId=JSON.stringify([action.path,action.query,'solidity_sequence']);
-                if(!stagedPlans.some(x=>x.id===acceptedId)){
+                if(stagedPlans.some(x=>x.id===acceptedId)) {
+                  acceptError='Selected function already has a queued experiment. Choose an unqueued source-backed function; no model-added experiment was registered.';
+                } else {
                   stageLock.discover(acceptedId);
                   stagedPlans.push({id:acceptedId,plan});
                   analyzeApprovedIds.add(acceptedId);
