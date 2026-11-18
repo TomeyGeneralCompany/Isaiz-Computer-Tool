@@ -1541,7 +1541,7 @@ function reinitOrConstructorTakeoverExperiment(
     operations:[],checks:[]
   }:undefined;
   const steps:SoliditySequence['steps']=[
-    {operation:'send',function:setup0.initSignature,args:setup0.initArgs,sender:0},
+    {operation:'send',function:setup0.initSignature,args:setup0.initArgs,sender:0,requiredSetup:true},
     {operation:'call',function:authGetter,args:[],expect:'$account0'},
     {operation:'send',function:setup1.initSignature,args:setup1.initArgs,sender:1,expectRevert:true},
     {operation:'call',function:authGetter,args:[],expect:'$account0'}
