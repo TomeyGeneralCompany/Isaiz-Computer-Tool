@@ -800,6 +800,21 @@ export async function runLocalAudit(
           })+'\n');
         }
         const solLeads=(limits.staticLeads||[]).filter(l=>l.path.endsWith('.sol'));
+        // Supply an exact source excerpt for a candidate instead of asking the
+        // model to construct a fixture from six function names alone. The full
+        // verified source is already in the controller archive; excerpts are
+        // intentionally bounded for CPU-only Qwen context.
+        const analysisSourcePackets=nonMockSolSummaries.slice(0,4).flatMap(item=>{
+          const content=accessibleSoliditySources.get(item.path);
+          const selector=item.unqueuedNonSetters[0];
+          const method=selector?.split('.').at(-1);
+          if(!content||!method)return [];
+          const match=new RegExp('\\bfunction\\s+'+method.replace(/[^a-zA-Z0-9_]/g,'')+'\\s*\\(').exec(content);
+          if(!match)return [];
+          const start=Math.max(0,match.index-160);
+          return [{path:item.path,selector,sourceExcerpt:content.slice(start,Math.min(content.length,match.index+1100)),
+            excerptStart:start,truncated:match.index+1100<content.length}];
+        });
         // Four Qwen turns were insufficient to correct even one rejected
         // sequence. Preserve a configurable bounded window without treating
         // an invalid schema attempt as a successful experiment.
@@ -820,6 +835,7 @@ export async function runLocalAudit(
             JSON.stringify(stagedPlans.slice(0,6).map(s=>({path:s.plan.path,query:s.plan.query})))+
             (solLeads.length?'. Static leads on Solidity files: '+JSON.stringify(solLeads.slice(0,8).map(l=>({path:l.path,line:l.line,rule:l.rule,severity:l.severity,msg:l.message.slice(0,100)}))):'')+
             (nonMockSolSummaries.length?'. Non-mock Solidity functions not yet queued: '+JSON.stringify(nonMockSolSummaries.slice(0,6)):'')+
+            (analysisSourcePackets.length?'. Exact source evidence for targeted planning: '+JSON.stringify(analysisSourcePackets).slice(0,5500):'')+
             '. Propose ONE source-backed targeted experiment. Return exactly {"action":"discover_experiment","path":"source-...sol","query":"Contract.function","answer":"solidity_sequence","hypothesis":"A falsifiable claim tied to inspected source","sequence":{"constructorArgs":[],"steps":[{"operation":"send","function":"method()","args":[],"sender":1},{"operation":"observe","function":"getter()","args":[]}]}}. Replace method/getter with real source-declared signatures. Allowed step operations: send, call (requires expect), observe, eth_balance (requires account). Each send/call/observe requires function and args; constructorArgs is always an array, even when empty. Include relevant preparation deployments and initial-state checks where needed. A generic state read is exploratory, not a tested security invariant. Do not guess function signatures or assertions. OR send {"action":"finalize_analysis","path":"","query":"","answer":""} only after assessing all relevant unqueued leads. /no_think'});
         } else {
           stageLock.completeAnalysis();
@@ -1950,6 +1966,9 @@ export async function runLocalAudit(
               acceptError=String(error).slice(0,200);
             }
           }
+          if(acceptError)await appendFile(logFile,'[ANALYSIS_EXPERIMENT_REJECTED] '+
+            JSON.stringify({path:action.path,selector:action.query,error:acceptError,
+              remainingTurns:analyzeTurnsRemaining})+'\n');
           messages.push({role:'user',content:acceptError
             ? 'discover_experiment rejected: '+acceptError+(analyzeTurnsRemaining>0?' Revise or send finalize_analysis. /no_think':' Budget exhausted; starting EXPERIMENT.')
             : 'Accepted discover_experiment ('+action.query+'). Remaining ANALYZE turns: '+analyzeTurnsRemaining+'. Propose another or send finalize_analysis. /no_think'});
