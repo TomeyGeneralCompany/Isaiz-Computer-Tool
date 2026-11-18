@@ -294,7 +294,7 @@ export async function runLocalAudit(
       await limits.onAllowance?.(allowance.deadline);
     }
   };
-  const actionSchema = limits.verifyPython ? {...auditActionSchema,properties:{...auditActionSchema.properties,...(limits.finalSchema?{result:limits.finalSchema}:{}),sequence:{type:"object",properties:{
+  const actionSchema = limits.verifyPython ? {...auditActionSchema,properties:{...auditActionSchema.properties,...(limits.finalSchema?{result:limits.finalSchema}:{}),leadId:{type:"string",pattern:"^[a-f0-9]{64}$"},sequence:{type:"object",properties:{
       constructorArgs:{type:"array",items:{type:"string"}},
       constructor:{type:"array",items:{}},
       preparation:{type:"object"},
@@ -305,7 +305,7 @@ export async function runLocalAudit(
         expect:{type:"string"},expected:{},valueWei:{type:"string"}
       }}}
     },required:["steps"]},
-    action:{type:"string",enum:[...auditActionSchema.properties.action.enum,"verify_source","verify_python",...(workflow?["plan_probe","probe_intent","continue_inspection","discover_experiment","finalize_analysis"]:[])]}}} : {...auditActionSchema,properties:{...auditActionSchema.properties,...(limits.finalSchema?{result:limits.finalSchema}:{})}};
+    action:{type:"string",enum:[...auditActionSchema.properties.action.enum,"verify_source","verify_python",...(workflow?["plan_probe","probe_intent","continue_inspection","assess_lead","defer_lead","request_source_context","discover_experiment","finalize_analysis","analysis_unavailable"]:[])]}}} : {...auditActionSchema,properties:{...auditActionSchema.properties,...(limits.finalSchema?{result:limits.finalSchema}:{})}};
   const probePrompt = limits.verifyPython ? "\\nUse probe_intent with inspected path, exact query (or blank for a unique candidate), supported answer kind, hypothesis and optional sequence. The controller validates and executes the accepted request. Python top-level and exported JavaScript functions require one string input and string output. Java text probes support one text/byte argument. For Python and JavaScript stateful behavior, use python_sequence or javascript_sequence with a declarative factory (optional), constructor array and at least two steps {method,args,expected?}, all on the same object; state observations are not security findings. For Java methods with primitive/String args, use java_sequence with constructor args and method steps; calls share one instance. Do not use html_reflection for Java numeric/state methods. Solidity accepts state-changing sends and read assertions in a local EVM. Do not invent method names, expected values, or findings. " : "";
   const availableTools = limits.verifyPython ? [...tools,{type:"function",function:{
     name:"verify_source",description:probePrompt,parameters:{type:"object",
@@ -898,28 +898,23 @@ export async function runLocalAudit(
           analyzeTurnsRemaining=maxAnalyzeTurns;
           await appendFile(logFile,'[ANALYSIS_MODEL_WINDOW_STARTED] '+JSON.stringify({
             maxAnalyzeTurns,solLeads:solLeads.length,nonMockSolFiles:nonMockSolSummaries.length,
-            totalUnqueuedNonSetters})+'\n');
+            totalUnqueuedNonSetters,selectedModelLeads:stageLock.analysisProgress.selected})+'\n');
           messages.push({role:'user',content:'ANALYZE STAGE (bounded hypothesis window, '+maxAnalyzeTurns+
             ' turn(s) max): Controller queued '+stagedPlans.length+' prioritized probes: '+
             JSON.stringify(stagedPlans.slice(0,6).map(s=>({path:s.plan.path,query:s.plan.query})))+
             (solLeads.length?'. Static leads on Solidity files: '+JSON.stringify(solLeads.slice(0,8).map(l=>({path:l.path,line:l.line,rule:l.rule,severity:l.severity,msg:l.message.slice(0,100)}))):'')+
             (nonMockSolSummaries.length?'. Non-mock Solidity functions not yet queued: '+JSON.stringify(nonMockSolSummaries.slice(0,6)):'')+
             (analysisSourcePackets.length?'. Exact source evidence for targeted planning: '+JSON.stringify(analysisSourcePackets).slice(0,5500):'')+
-            '. Propose ONE source-backed targeted experiment. Return exactly {"action":"discover_experiment","path":"source-...sol","query":"Contract.function","answer":"solidity_sequence","hypothesis":"A falsifiable claim tied to inspected source","sequence":{"constructorArgs":[],"steps":[{"operation":"send","function":"method()","args":[],"sender":1},{"operation":"observe","function":"getter()","args":[]}]}}. Replace method/getter with real source-declared signatures. Allowed step operations: send, call (requires expect), observe, eth_balance (requires account). Each send/call/observe requires function and args; constructorArgs is always an array, even when empty. Include relevant preparation deployments and initial-state checks where needed. A generic state read is exploratory, not a tested security invariant. Do not guess function signatures or assertions. OR send {"action":"finalize_analysis","path":"","query":"","answer":""} only after assessing all relevant unqueued leads. /no_think'});
+            '. Propose ONE source-backed targeted experiment. Return exactly {"action":"discover_experiment","path":"source-...sol","query":"Contract.function","answer":"solidity_sequence","hypothesis":"A falsifiable claim tied to inspected source","sequence":{"constructorArgs":[],"steps":[{"operation":"send","function":"method()","args":[],"sender":1},{"operation":"observe","function":"getter()","args":[]}]}}. Replace method/getter with real source-declared signatures. Allowed step operations: send, call (requires expect), observe, eth_balance (requires account). Each send/call/observe requires function and args; constructorArgs is always an array, even when empty. Include relevant preparation deployments and initial-state checks where needed. A generic state read is exploratory, not a tested security invariant. Do not guess function signatures or assertions. OR send {"action":"finalize_analysis","path":"","query":"","answer":""} only after assessing all selected lead IDs. '+analysisPacketPrompt()});
         } else {
-          stageLock.completeAnalysis();
-          await appendFile(logFile,'[ANALYSIS_COMPLETE] '+
-            JSON.stringify({candidates:stageLock.candidateCount})+'\n');
-          await appendFile(logFile,'[STAGE_UNLOCK] ANALYZE -> EXPERIMENT\n');
+          await closeAnalysis(stageLock.analysisProgress.pendingIds.length?'partial':'complete',
+            stageLock.analysisProgress.pendingIds.length?'model_analysis_disabled':'');
         }
         constraints=workflow?await workflow.constraints():constraints;
       }
       if(stageLock?.currentStage==='ANALYZE' && analyzeModelPending && analyzeTurnsRemaining<=0){
-        analyzeModelPending=false;
-        stageLock.completeAnalysis();
-        await appendFile(logFile,'[ANALYSIS_COMPLETE] '+JSON.stringify({
-          candidates:stageLock.candidateCount,modelAdded:analyzeApprovedIds.size})+'\n');
-        await appendFile(logFile,'[STAGE_UNLOCK] ANALYZE -> EXPERIMENT\n');
+        await closeAnalysis(stageLock.analysisProgress.pendingIds.length?'partial':'complete',
+          stageLock.analysisProgress.pendingIds.length?'analysis_turn_budget_exhausted':'');
         constraints=workflow?await workflow.constraints():constraints;
       }
       // A selected candidate which never reached the verifier must be
@@ -993,7 +988,7 @@ export async function runLocalAudit(
         constraints={action:['read_file'],path:[next]};
       }
       if(stageLock?.currentStage==='ANALYZE' && analyzeModelPending)
-        constraints={action:['discover_experiment','finalize_analysis']};
+        constraints={action:['assess_lead','defer_lead','request_source_context','discover_experiment','finalize_analysis']};
       if(stageLock?.currentStage==='EXPERIMENT' && !workflow?.snapshot().pending)
         constraints={action:['plan_probe','probe_intent']};
       if(stageLock?.currentStage==='REVIEW'||stageLock?.currentStage==='REPORT')
