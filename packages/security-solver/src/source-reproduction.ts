@@ -133,7 +133,41 @@ export async function createProbeSession(program:SecurityProgram,workspace:strin
     });
     if(!repo) throw new Error("Probe file is not in an acquired source repository");
     const filePath=relative(repo.directory,file).split(sep).join("/");
-    const spec=sourceProbeSpecSchema.parse({file:filePath,function:functionName,kind,...(sequence ? {sequence} : {}),nonce:randomBytes(16).toString("hex")});
+    // The staged controller sees workspace paths (source-1/...), while the
+    // reproduction sandbox mounts the acquired repository itself at /repo.
+    // Normalize auxiliary preparation/deployment references at this trusted
+    // boundary, using the actual acquired repository rather than stripping an
+    // arbitrary prefix supplied by the model.
+    let runtimeSequence=sequence;
+    if(kind==="solidity_sequence" && sequence) {
+      const planned=structuredClone(sequence as SoliditySequence);
+      const normalizeSource=async(sourcePath:string):Promise<string>=>{
+        if(!sourcePath || sourcePath.startsWith("/") ||
+           sourcePath.split("/").some(part=>part==="."||part===".."))
+          throw new Error("Invalid preparation source path");
+        const workspaceCandidate=resolve(workspaceRoot,sourcePath);
+        const repoCandidate=resolve(repo.directory,sourcePath);
+        let candidate:string;
+        try {candidate=await realpath(workspaceCandidate);}
+        catch {candidate=await realpath(repoCandidate);}
+        const rel=relative(repo.directory,candidate);
+        if(!rel || rel===".." || rel.startsWith(".."+sep) || rel.startsWith(sep) ||
+           !rel.endsWith(".sol"))
+          throw new Error("Preparation source is outside selected Solidity repository");
+        return rel.split(sep).join("/");
+      };
+      try {
+        if(planned.deployment)planned.deployment.file=await normalizeSource(planned.deployment.file);
+        for(const dep of planned.preparation?.deployments||[])
+          dep.file=await normalizeSource(dep.file);
+      } catch(error) {
+        unsupportedProbes++;
+        return JSON.stringify({status:"unsupported_dependencies",behavior_observed:false,
+          detail:"Preparation source preflight failed: "+String(error).slice(0,500)});
+      }
+      runtimeSequence=planned;
+    }
+    const spec=sourceProbeSpecSchema.parse({file:filePath,function:functionName,kind,...(runtimeSequence ? {sequence:runtimeSequence} : {}),nonce:randomBytes(16).toString("hex")});
     if(!targetInExplicitScope(program.scopeSummary,repo.url+"/"+filePath))throw new Error("Probe is outside program scope");
     let commit: string;
     let sourceSha256: string;
