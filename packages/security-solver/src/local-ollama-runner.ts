@@ -1712,7 +1712,13 @@ export async function runLocalAudit(
             } catch(error) {
               if(controller.signal.aborted)throw error;
               if(attempt===5){
-                if(stageLock?.currentStage==='ANALYZE' && analyzeModelPending)return {message:{role:'assistant',content:JSON.stringify({action:'finalize_analysis',path:'',query:'',answer:''})}};
+                if(stageLock?.currentStage==='ANALYZE' && analyzeModelPending){
+                  await appendFile(logFile,'[ANALYSIS_MODEL_UNAVAILABLE] '+JSON.stringify({
+                    turn:turn+1,attempts:attempt,reason:String(error).slice(0,200),
+                    pendingIds:stageLock.analysisProgress.pendingIds,retainedControllerMemory:true})+'\n');
+                  return {message:{role:'assistant',content:JSON.stringify({
+                    action:'analysis_unavailable',path:'',query:'',answer:'model_transport_retries_exhausted'})}};
+                }
                 throw error;
               }
               await appendFile(logFile,'[MODEL_REQUEST_RECOVERY] '+JSON.stringify({
@@ -1755,11 +1761,8 @@ export async function runLocalAudit(
                 'Do not repeat malformed output. /no_think'});
               continue;
             }
-            analyzeModelPending=false;
-            stageLock.completeAnalysis();
             await appendFile(logFile,'[ANALYSIS_MODEL_FALLBACK] '+JSON.stringify({reason:'invalid_json_budget_exhausted'})+'\n');
-            await appendFile(logFile,'[ANALYSIS_COMPLETE] '+JSON.stringify({candidates:stageLock.candidateCount,modelAdded:analyzeApprovedIds.size})+'\n');
-            await appendFile(logFile,'[STAGE_UNLOCK] ANALYZE -> EXPERIMENT\n');
+            await closeAnalysis('partial','invalid_json_budget_exhausted');
             continue;
           }
           if (result.done_reason === "length" && generationBudget < 4096) {
@@ -1993,11 +1996,8 @@ export async function runLocalAudit(
           if(stageLock?.currentStage==='ANALYZE' && analyzeModelPending){
             analyzeTurnsRemaining--;
             if(analyzeTurnsRemaining<=0){
-              analyzeModelPending=false;
-              stageLock.completeAnalysis();
               await appendFile(logFile,'[ANALYSIS_MODEL_FALLBACK] '+JSON.stringify({reason:'disallowed_action_budget_exhausted'})+'\n');
-              await appendFile(logFile,'[ANALYSIS_COMPLETE] '+JSON.stringify({candidates:stageLock.candidateCount,modelAdded:analyzeApprovedIds.size})+'\n');
-              await appendFile(logFile,'[STAGE_UNLOCK] ANALYZE -> EXPERIMENT\n');
+              await closeAnalysis('partial','disallowed_action_budget_exhausted');
               continue;
             }
           }
