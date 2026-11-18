@@ -25,7 +25,7 @@ import { readSourcePage, searchSourcePage, listSourcePage, pageOffset, type Read
 import { postOllamaChat } from "../../core/src/ollama-chat";
 import { auditActionSchema, auditProtocolPrompt, decodeAuditAction } from "./local-audit-protocol";
 import { readFile, realpath, appendFile, writeFile, rename, mkdtemp } from "node:fs/promises";
-import { resolve, relative, sep, join } from "node:path";
+import { resolve, relative, sep, join, dirname } from "node:path";
 import { createHash } from "node:crypto";
 import {execFileSync} from "node:child_process";
 
@@ -256,6 +256,32 @@ export async function runLocalAudit(
   let analyzeModelPending=false;
   let analyzeTurnsRemaining=0;
   const analyzeApprovedIds=new Set<string>();
+  type AnalysisPacket={id:string;path:string;selector:string;sourceEvidence:string;sourceSha256:string;sourceCommit:string;sourceExcerpt:string;excerptStart:number;truncated:boolean};
+  const analysisPackets=new Map<string,AnalysisPacket>();
+  const nextAnalysisPacket=()=>stageLock?.analysisLeads.find(x=>x.state.kind==='pending');
+  const analysisPacketPrompt=()=>{
+    const next=nextAnalysisPacket();
+    if(!next)return 'All selected lead assessments have dispositions. Use finalize_analysis with path="", query="", answer="". /no_think';
+    const packet=analysisPackets.get(next.id);
+    if(!packet)return 'Lead packet missing. Report defer_lead with the given immutable lead ID and a concrete source evidence limitation. /no_think';
+    return 'Assess this source-grounded lead; exact immutable ID, source commit/hash, inspected excerpt and offset: '+
+      JSON.stringify(packet).slice(0,2300)+
+      '. Reply with {"action":"assess_lead","path":'+JSON.stringify(next.path)+
+      ',"query":'+JSON.stringify(next.selector)+',"leadId":'+JSON.stringify(next.id)+
+      ',"hypothesis":"falsifiable source-backed property","answer":"specific source-based reason","sequence":{}}'+
+      ' to record a testable property; use defer_lead with the same ID, hypothesis="none" and a specific answer explaining the missing fixture or invariant;'+
+      ' or discover_experiment with the SAME leadId and a valid complete solidity_sequence to validate and queue its hypothesis. '+
+      'Source excerpts are leads, not proof of exploitability. /no_think';
+  };
+  const closeAnalysis=async(status:'complete'|'partial',reason='')=>{
+    if(!stageLock||stageLock.currentStage!=='ANALYZE')return;
+    const cert=stageLock.analysisClosureCertificate(status,reason);
+    stageLock.completeAnalysis(status,reason);
+    analyzeModelPending=false;analyzeTurnsRemaining=0;
+    await appendFile(logFile,'['+(status==='complete'?'ANALYSIS_COMPLETE':'ANALYSIS_INCOMPLETE')+'] '+
+      JSON.stringify({...cert,candidates:stageLock.candidateCount,modelAdded:analyzeApprovedIds.size})+'\n');
+    await appendFile(logFile,'[STAGE_UNLOCK] ANALYZE -> EXPERIMENT\n');
+  };
   const hypotheses:Array<{turn:number;path:string;statement:string}>=[];
   const renew=async(turn:number)=>{
     const extension=allowance.extend(turn,Date.now());
