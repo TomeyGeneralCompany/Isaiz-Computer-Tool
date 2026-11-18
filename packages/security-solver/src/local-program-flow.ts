@@ -1161,15 +1161,19 @@ Do not claim production testing, JavaScript execution, file access or other effe
               }
             }
             const value=huntSchema.parse(recovered);
-            // A completed source inventory is not proof that every executed
-            // experiment falsified its hypothesis. Reject precisely the claim
-            // disproved by the persisted per-experiment ledger.
-            const inconclusiveRecorded=[...session.cases.values()]
-              .some(record=>record.result.status==="observation_only");
-            if(value.findings.length===0 && value.reason &&
-               (inconclusiveRecorded || session.failedProbes>0 || session.unsupportedProbes>0) &&
-               /\ball\b[^.]{0,160}\b(?:behavior_not_observed|negative|falsified)\b/i.test(value.reason))
-              return "Final explanation contradicts recorded experimental outcomes: some probes were inconclusive or failed. Report each disposition accurately; never call all hypotheses falsified.";
+            // Only the stored source/lead/experiment ledgers may assert global
+            // coverage. Preserve the model's exact rejected prose in the audit
+            // stream, then replace contradictory counts deterministically.
+            if(value.reason){
+              const ledger=coverageLedger();
+              const checked=reconcileHuntReason(value.reason,ledger);
+              if(checked.contradictions.length){
+                await appendFile(logFile,'[FINAL_REASON_CONTRADICTS_LEDGER] '+
+                  JSON.stringify({original:value.reason,contradictions:checked.contradictions,
+                    corrected:checked.reason,ledger})+'\\n');
+                value.reason=checked.reason.slice(0,1000);
+              }
+            }
             // A real reproduced case cannot silently disappear because Qwen
             // returned a blank findings array. A supported negative judgment
             // must say what specific link, mitigation or applicability
