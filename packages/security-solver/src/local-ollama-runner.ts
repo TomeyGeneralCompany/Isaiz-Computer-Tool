@@ -1170,7 +1170,10 @@ export async function runLocalAudit(
           progressMessages.push({role:'user',content:
             'Controller verified experiment ledger (runtime evidence, not report approval):\n'+
             JSON.stringify(observed).slice(0,1400)});
-        if(allObs.length>1){
+        // REVIEW requires accurate controller evidence even when the new
+        // invariant planner schedules only one (or zero) executable probes.
+        // A fixed two-observation gate would hide the experiment ledger.
+        {
           const statusCounts:Record<string,number>={};
           const contractsTested=new Set<string>();
           for(const o of allObs){
@@ -1186,7 +1189,9 @@ export async function runLocalAudit(
               ? 'Zero verified security behaviors across all tested contracts; report findings=[] unless independently verified runtime proof exists. Never fabricate a finding from static leads or negative traces.'
               : 'Evaluate all observed behaviors across tested contracts objectively; ignore unrelated files without verified behavior.'
           };
-          progressMessages.push({role:'user',content:
+          // Keep this bounded evidence summary before advisory progress and
+          // static scanner leads, which are discarded first under context pressure.
+          progressMessages.unshift({role:'user',content:
             'Controller multi-contract experiment summary:\n'+JSON.stringify(summary).slice(0,1200)});
         }
         const leadsSummary=(limits.staticLeads||[]).slice(0,8).map(l=>({
