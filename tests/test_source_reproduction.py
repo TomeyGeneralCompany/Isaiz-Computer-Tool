@@ -620,7 +620,9 @@ contract Vault is Authority {
         self.assertEqual(result.get('classification'),'preparation_initialization_failed')
         self.assertEqual(result.get('phase'),'fixture_initialization')
         self.assertIsInstance(result.get('diagnostics'),dict)
-        self.assertRegex(result['diagnostics']['experimentId'],r'^[a-f0-9]{64}
+        self.assertRegex(result['diagnostics']['experimentId'],r'^[a-f0-9]{64}$')
+        self.assertRegex(result['diagnostics']['sourceSha256'],r'^[a-f0-9]{64}$')
+        self.assertFalse(result['behavior_observed'])
 
     def test_invalid_setup_does_not_become_a_finding(self):
         sequence=self.sequence();sequence['constructorArgs']=[]
