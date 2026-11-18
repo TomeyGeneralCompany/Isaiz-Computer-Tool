@@ -116,6 +116,36 @@ export async function readSourceCase(id:string,program:SecurityProgram):Promise<
   if(!record.result.behavior_observed)throw new Error("An observation-only sequence is not verified security evidence");
   return record;
 }
+/** Resolve only authorized, existing Solidity preparation source paths to
+ * paths relative to the acquired repository mounted read-only at /repo.
+ * Expose this boundary for deterministic regression tests.
+ */
+export async function normalizeSolidityPreparationPaths(
+  workspaceRoot:string,repositoryRoot:string,sequence:SoliditySequence
+):Promise<SoliditySequence> {
+  const planned=structuredClone(sequence);
+  const repository=await realpath(repositoryRoot);
+  const normalizeSource=async(sourcePath:string):Promise<string>=>{
+    if(!sourcePath || sourcePath.startsWith("/") ||
+       sourcePath.split("/").some(part=>part==="."||part===".."))
+      throw new Error("Invalid preparation source path");
+    const workspaceCandidate=resolve(workspaceRoot,sourcePath);
+    const repoCandidate=resolve(repository,sourcePath);
+    let candidate:string;
+    try {candidate=await realpath(workspaceCandidate);}
+    catch {candidate=await realpath(repoCandidate);}
+    const rel=relative(repository,candidate);
+    if(!rel || rel===".." || rel.startsWith(".."+sep) || rel.startsWith(sep) ||
+       !rel.endsWith(".sol"))
+      throw new Error("Preparation source is outside selected Solidity repository");
+    return rel.split(sep).join("/");
+  };
+  if(planned.deployment)planned.deployment.file=await normalizeSource(planned.deployment.file);
+  for(const dep of planned.preparation?.deployments||[])
+    dep.file=await normalizeSource(dep.file);
+  return planned;
+}
+
 export async function createProbeSession(program:SecurityProgram,workspace:string,repositories:ProbeRepository[],signal?:AbortSignal) {
   await mkdir(caseDirectory(),{recursive:true,mode:0o700});
   const cases = new Map<string,SourceCase>();
@@ -140,32 +170,13 @@ export async function createProbeSession(program:SecurityProgram,workspace:strin
     // arbitrary prefix supplied by the model.
     let runtimeSequence=sequence;
     if(kind==="solidity_sequence" && sequence) {
-      const planned=structuredClone(sequence as SoliditySequence);
-      const normalizeSource=async(sourcePath:string):Promise<string>=>{
-        if(!sourcePath || sourcePath.startsWith("/") ||
-           sourcePath.split("/").some(part=>part==="."||part===".."))
-          throw new Error("Invalid preparation source path");
-        const workspaceCandidate=resolve(workspaceRoot,sourcePath);
-        const repoCandidate=resolve(repo.directory,sourcePath);
-        let candidate:string;
-        try {candidate=await realpath(workspaceCandidate);}
-        catch {candidate=await realpath(repoCandidate);}
-        const rel=relative(repo.directory,candidate);
-        if(!rel || rel===".." || rel.startsWith(".."+sep) || rel.startsWith(sep) ||
-           !rel.endsWith(".sol"))
-          throw new Error("Preparation source is outside selected Solidity repository");
-        return rel.split(sep).join("/");
-      };
       try {
-        if(planned.deployment)planned.deployment.file=await normalizeSource(planned.deployment.file);
-        for(const dep of planned.preparation?.deployments||[])
-          dep.file=await normalizeSource(dep.file);
+        runtimeSequence=await normalizeSolidityPreparationPaths(workspaceRoot,repo.directory,sequence as SoliditySequence);
       } catch(error) {
         unsupportedProbes++;
         return JSON.stringify({status:"unsupported_dependencies",behavior_observed:false,
           detail:"Preparation source preflight failed: "+String(error).slice(0,500)});
       }
-      runtimeSequence=planned;
     }
     const spec=sourceProbeSpecSchema.parse({file:filePath,function:functionName,kind,...(runtimeSequence ? {sequence:runtimeSequence} : {}),nonce:randomBytes(16).toString("hex")});
     if(!targetInExplicitScope(program.scopeSummary,repo.url+"/"+filePath))throw new Error("Probe is outside program scope");
