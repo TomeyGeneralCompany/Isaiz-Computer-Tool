@@ -462,7 +462,8 @@ contract PlainVault {
     const parsedAnswer = JSON.parse(answer);
     assert.equal(parsedAnswer.findings.length, 0);
     assert.ok(sawAnalyzeActionPrompt, "Bounded ANALYZE window must invoke model with discover_experiment");
-    assert.ok(reviewCalls >= 1 && sawMultiContractSummary, "REVIEW stage must receive multi-contract anti-bias summary");
+    assert.ok(reviewCalls >= 1, "REVIEW stage must invoke the final-result model");
+    assert.ok(sawMultiContractSummary, "REVIEW must receive the controller evidence summary even with one executable experiment");
     const transcript = await readFile(auditLog, "utf8");
     assert.match(transcript, /\[ANALYSIS_MODEL_WINDOW_STARTED\]/);
     assert.match(transcript, /\[ANALYSIS_MODEL_EXPERIMENT_ADDED\]/);
