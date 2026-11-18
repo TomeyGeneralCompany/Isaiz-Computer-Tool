@@ -1392,15 +1392,33 @@ Do not claim production testing, JavaScript execution, file access or other effe
       eligibleFiles:eligiblePaths.length,
       inspectedFiles:inspectedFileCount,
     };
+    const validatedCoverage=coverageLedger();
+    const coverageReconciled=validatedCoverage.experimentsSelected ===
+      validatedCoverage.supportedNegative+validatedCoverage.observationOnly+
+      validatedCoverage.fixtureFailed+validatedCoverage.unsupported+
+      validatedCoverage.positiveObserved+validatedCoverage.unresolved;
+    await appendFile(logFile,'[FINAL_COVERAGE_LEDGER] '+JSON.stringify({
+      ...validatedCoverage,coverageReconciled,
+      analysisCertificate,experimentLedger})+'\\n');
+    const factualCoverageDetail=
+      validatedCoverage.sourceRead+'/'+validatedCoverage.sourceIndexed+' source files read; '+
+      validatedCoverage.leadsAssessedByModel+'/'+validatedCoverage.leadsSelected+
+      ' model leads assessed; '+validatedCoverage.experimentsSelected+' experiments selected: '+
+      validatedCoverage.supportedNegative+' supported negatives, '+
+      validatedCoverage.observationOnly+' observation-only, '+
+      validatedCoverage.fixtureFailed+' incomplete/failed, '+
+      validatedCoverage.unsupported+' unsupported, '+
+      validatedCoverage.positiveObserved+' behavior observed, '+
+      validatedCoverage.unresolved+' unresolved. Model analysis '+
+      validatedCoverage.analysisCoverage+'; experiment evidence '+
+      validatedCoverage.experimentCoverage+'.';
+    const allCoverageComplete=experimentCoverageComplete &&
+      validatedCoverage.analysisCoverage==='complete' && coverageReconciled;
     if(parsed?.outcome === "no_testable_candidate")return {auditRecord,success:true,
-      coverage:experimentCoverageComplete?"completed":"partial",
+      coverage:allCoverageComplete?"completed":"partial",
       acquisitionChecks,capabilityChecks,...probeStats,
-      coverageDetail:fullIndexCoverageComplete
-        ? `${inspectedFileCount}/${eligiblePaths.length} source files inspected; ${session.completedProbes} supported probe executions; ${inconclusiveProbes} inconclusive; ${session.unsupportedProbes} unsupported; ${session.failedProbes} failed. `+
-          (experimentCoverageComplete?"Selected experiment dispositions complete. ":"Experiment evidence coverage incomplete. ")+
-          (parsed.reason||"")
-        : "Inspection incomplete: "+parsed.reason,
-      findings:[],rawOutput:answer};
+      coverageDetail:factualCoverageDetail,
+      findings:[],rawOutput:JSON.stringify(parsed)};
     if (session.blockedReason) throw new Error("Reproduction unavailable: " + session.blockedReason);
     if (!session.completedProbes) {
       coverage = incompleteProbeCoverage(session);
@@ -1432,7 +1450,9 @@ Do not claim production testing, JavaScript execution, file access or other effe
             entryProof:entryEvidenceFor(candidate.caseId)
           }))});
     }
-    return {auditRecord,success:true,coverage:fullIndexCoverageComplete?"completed":"partial",acquisitionChecks,capabilityChecks,...probeStats,coverageDetail:`${session.completedProbes} supported probes completed; ${session.unsupportedProbes} unsupported probes; ${session.failedProbes} failed probes`,findings,rawOutput:answer};
+    return {auditRecord,success:true,coverage:allCoverageComplete?"completed":"partial",
+      acquisitionChecks,capabilityChecks,...probeStats,coverageDetail:factualCoverageDetail,
+      findings,rawOutput:parsed?JSON.stringify(parsed):answer};
   }catch(error:any){preparationFailure=error.message || String(error);return {auditRecord,success:false,coverage,acquisitionChecks,capabilityChecks,...(captureStats?captureStats():{}),findings:[],rawOutput:"",error:signal.aborted ? "Local hunt cancelled by operator" : error.message || "Local hunt failed"};}
   finally {
     if(investigationLog) {
