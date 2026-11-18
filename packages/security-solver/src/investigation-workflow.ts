@@ -39,6 +39,7 @@ export class InvestigationWorkflow {
   }
   readonly scenarios=new ControllerScenarioLedger();
   private scenarioMap=new Map<string,string>();
+  private scenarioIdsBySelector=new Map<string,Set<string>>();
   // Per-case evidence is authoritative when two different experiments
   // exercise the same source function with different prepared sequences.
   private scenarioByCaseId=new Map<string,string>();
@@ -67,6 +68,9 @@ export class InvestigationWorkflow {
     const record=this.scenarios.register({id,path:plan.path,selector:plan.query,
       language,property,suspectedViolation:plan.hypothesis,falsification:falsifier});
     this.scenarioMap.set(key,id);
+    const alternatives=this.scenarioIdsBySelector.get(key)||new Set<string>();
+    alternatives.add(id);
+    this.scenarioIdsBySelector.set(key,alternatives);
     if(record.phase==='discovered'){
       this.scenarios.record(id,{id:'source:initial',kind:'source',
         reference:sourceReference,observation:'Inspected declaration '+plan.query});
@@ -126,8 +130,12 @@ export class InvestigationWorkflow {
   }
   acceptedReview(path:string,query:string,kind:string,reference:string,positive:boolean){
     const caseId=reference.match(/[a-f0-9]{64}/)?.[0];
-    const id=(caseId && this.scenarioByCaseId.get(caseId)) ||
-      this.scenarioMap.get(this.scenarioKey(path,query,kind));
+    // A known case ID resolves to precisely one executed experiment.
+    // A foreign or stale case ID must never fall back to a same-selector plan.
+    const key=this.scenarioKey(path,query,kind);
+    const alternatives=this.scenarioIdsBySelector.get(key);
+    const id=caseId ? this.scenarioByCaseId.get(caseId) :
+      alternatives?.size===1 ? [...alternatives][0] : undefined;
     if(!id||this.scenarios.get(id)?.phase!=='reviewing')return;
     this.scenarios.record(id,{id:'review:independent',kind:'review',reference,
       observation:positive?'Validated positive case':'Validated negative case'});
