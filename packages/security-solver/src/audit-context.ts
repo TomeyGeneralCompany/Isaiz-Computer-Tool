@@ -77,12 +77,10 @@ export function compactAuditContext(messages:AuditMessage[],budget:number,progre
     // silently truncate source or imply that omitted evidence was examined.
     const latest=groups.at(-1);
     if(latest){
-      const original=JSON.stringify(latest);
       latest.splice(0,latest.length,{role:'user',content:
-        'CONTEXT_EXCHANGE_EVICTED: The most recent oversized exchange was stored in the durable investigation archive (sha256='+ 
-        // Identifiers come from the controller archive, not model claims.
-        'unavailable-in-active-context). No evidence or instruction from that exchange is currently available to the model. '+
-        'Follow current controller constraints. Re-read the specific indexed source page or recorded experiment evidence before relying on it. /no_think'});
+        'CONTEXT_EXCHANGE_EVICTED: The most recent oversized exchange is unavailable in active model context. '+
+        'Its original is preserved by the controller audit archive. Do not assume its evidence or instructions are still in context. '+
+        'Follow the current controller constraints and re-read indexed source or recorded evidence before relying on it. /no_think'});
       result=[...pinned,...notes,...groups.flat()];
       if(JSON.stringify(result).length>budget) {
         // The note is optional; pinned instructions still govern any retry.
@@ -90,7 +88,6 @@ export function compactAuditContext(messages:AuditMessage[],budget:number,progre
         result=[...pinned,...notes,{role:'user',content:
           'CONTEXT_EXCHANGE_EVICTED: Previous oversized exchange archived. Re-read required evidence and follow current stage constraints. /no_think'}];
       }
-      void original;
     }
   }
   if(JSON.stringify(result).length>budget)throw new Error("Audit pinned instructions and controller reserve exceed context budget (budget="+budget+")");
