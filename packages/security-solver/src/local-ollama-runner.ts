@@ -759,7 +759,7 @@ export async function runLocalAudit(
         let totalUnqueuedNonSetters=0;
         for(const path of [...new Set(limits.initialSourcePaths||[])].filter(p=>
           /^source-[0-9]+\/.+\.(?:sol|java|py|js|mjs|cjs)$/.test(p))){
-          let analyzed='complete' as 'complete'|'unsupported';
+          let sourceClassification='indexed-options-built' as 'indexed-options-built'|'source-unavailable';
           try {
             const full=await safePath(path),source=await readFile(full,'utf8');
             if(path.endsWith('.sol')){
@@ -811,11 +811,11 @@ export async function runLocalAudit(
               }
             }
           }catch(error){
-            analyzed='unsupported';
+            sourceClassification='source-unavailable';
             await appendFile(logFile,'[ANALYSIS_CANDIDATE_UNAVAILABLE] '+
               JSON.stringify({path,error:String(error).slice(0,240)})+'\n');
           }
-          stageLock.noteAnalyzed(path,analyzed);
+          stageLock.noteSourcePreclassified(path,sourceClassification);
         }
         if(solCandidateBuffer.length){
           const prioritized=prioritizeSolidityStagedPlans(solCandidateBuffer,limits.staticLeads||[]);
@@ -848,6 +848,42 @@ export async function runLocalAudit(
           return [{path:item.path,selector,sourceExcerpt:content.slice(start,Math.min(content.length,match.index+1100)),
             excerptStart:start,truncated:match.index+1100<content.length}];
         });
+        // Select a finite, evidence-backed Qwen lead batch, independently of
+        // the fully preserved source inventory and controller experiment queue.
+        // Derive the real acquired repository SHA from its checked-out source,
+        // not from a model guess or the LOTUS application commit.
+        const rankedUnqueued=[...nonMockSolSummaries].sort((a,b)=>{
+          const score=(item:typeof a)=>solLeads.filter(lead=>lead.path===item.path).length;
+          return score(b)-score(a);
+        });
+        for(const item of rankedUnqueued.slice(0,6)){
+          const selector=item.unqueuedNonSetters[0];
+          const content=accessibleSoliditySources.get(item.path);
+          if(!selector||!content)continue;
+          const full=await safePath(item.path);
+          let sourceCommit='';
+          try {sourceCommit=execFileSync('git',['-c','core.hooksPath=/dev/null','rev-parse','HEAD'],
+            {cwd:dirname(full),encoding:'utf8',timeout:5000}).trim();}
+          catch{}
+          if(!/^[a-f0-9]{40}$/.test(sourceCommit)){
+            await appendFile(logFile,'[ANALYSIS_LEAD_BLOCKED] '+JSON.stringify({
+              path:item.path,selector,reason:'acquired_repository_commit_unavailable'})+'\\n');
+            continue;
+          }
+          const method=selector.split('.').pop()||'';
+          const match=new RegExp('\\\\bfunction\\\\s+'+method.replace(/[^A-Za-z0-9_]/g,'')+'\\\\s*\\\\(').exec(content);
+          if(!match)continue;
+          const start=Math.max(0,match.index-160),end=Math.min(content.length,match.index+1100);
+          const sourceSha256=createHash('sha256').update(content).digest('hex');
+          const id=createHash('sha256').update(JSON.stringify([sourceCommit,sourceSha256,item.path,selector])).digest('hex');
+          const sourceEvidence=item.path+':'+start+'-'+end+':'+sourceSha256;
+          stageLock.registerAnalysisLead({id,sourceCommit,sourceSha256,path:item.path,selector});
+          analysisPackets.set(id,{id,path:item.path,selector,sourceCommit,sourceSha256,
+            sourceEvidence,sourceExcerpt:content.slice(start,end),excerptStart:start,truncated:end<content.length});
+          await appendFile(logFile,'[ANALYSIS_LEAD_SELECTED] '+JSON.stringify({
+            id,path:item.path,selector,sourceCommit,sourceSha256,sourceEvidence,
+            priority:solLeads.filter(lead=>lead.path===item.path).length})+'\\n');
+        }
         // Four Qwen turns were insufficient to correct even one rejected
         // sequence. Preserve a configurable bounded window without treating
         // an invalid schema attempt as a successful experiment.
