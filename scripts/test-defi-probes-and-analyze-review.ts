@@ -310,20 +310,26 @@ contract PlainVault {
 
     if (enumActions.includes("discover_experiment")) {
       sawAnalyzeActionPrompt = true;
+      const packetText=payload.messages.map((m:any)=>String(m.content||'')).join('\n');
+      const leadIdMatch=packetText.match(/"id":"([a-f0-9]{64})","path":"(source-[^"]+\\.sol)","selector":"([^"]+)"/);
+      assert.ok(leadIdMatch,'A model action must be scoped to a source-hashed lead packet');
+      const [,leadId,leadPath,selector]=leadIdMatch;
+      const method=selector.split('.').at(-1);
       res.end(JSON.stringify({
         message: {
           role: "assistant",
           content: JSON.stringify({
             action: "discover_experiment",
-            path: "source-1/contracts/VaultA.sol",
-            query: "VaultA.customSwap",
+            leadId,
+            path: leadPath,
+            query: selector,
             answer: "solidity_sequence",
-            hypothesis: "Test custom model-proposed DeFi swap hypothesis.",
+            hypothesis: "An unauthorized sender must be rejected by the inspected owner guard.",
             sequence: {
               constructorArgs: [],
               steps: [
                 { operation: "observe", function: "owner()", args: [] },
-                { operation: "send", function: "customSwap(uint256)", args: ["10"], sender: 1 },
+                { operation: "send", function: method+"(uint256)", args: ["10"], sender: 1, expectRevert: true },
               ],
             },
           }),
@@ -394,7 +400,7 @@ contract PlainVault {
     await mkdir(join(repoDir, "contracts"), { recursive: true });
     await writeFile(
       join(repoDir, "contracts", "VaultA.sol"),
-      "pragma solidity 0.8.4;\ncontract VaultA {\n  address public owner;\n  constructor(){ owner = msg.sender; }\n  function deposit(uint256 a) external {}\n  function withdraw(uint256 a) external {}\n  function customSwap(uint256 a) external {}\n}\n",
+      "pragma solidity 0.8.4;\ncontract VaultA {\n  address public owner;\n  constructor(){ owner = msg.sender; }\n  function deposit(uint256 a) external {require(msg.sender == owner, "owner");}\n  function withdraw(uint256 a) external {}\n  function customSwap(uint256 a) external {}\n}\n",
     );
     await writeFile(
       join(repoDir, "contracts", "VaultB.sol"),
