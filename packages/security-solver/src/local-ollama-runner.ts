@@ -1963,9 +1963,18 @@ export async function runLocalAudit(
                   answer:'solidity_sequence',
                   hypothesis:(action.hypothesis||'Model-proposed DeFi / static-lead security hypothesis.').slice(0,600),
                   sequence:parsedSeq.data};
-                acceptedId=JSON.stringify([action.path,action.query,'solidity_sequence']);
-                if(stagedPlans.some(x=>x.id===acceptedId)) {
-                  acceptError='Selected function already has a queued experiment. Choose an unqueued source-backed function; no model-added experiment was registered.';
+                // Distinct property/sequence pairs are separate experiments,
+                // even when they exercise the same source-declared function.
+                const modelFingerprint=createHash('sha256').update(
+                  JSON.stringify([plan.hypothesis,parsedSeq.data])).digest('hex');
+                acceptedId=JSON.stringify([action.path,action.query,'solidity_sequence',modelFingerprint]);
+                const duplicate=stagedPlans.some(entry=>entry.id===acceptedId ||
+                  (entry.plan.path===action.path && entry.plan.query===action.query &&
+                   entry.plan.answer==='solidity_sequence' &&
+                   entry.plan.hypothesis===plan.hypothesis &&
+                   JSON.stringify(entry.plan.sequence)===JSON.stringify(parsedSeq.data)));
+                if(duplicate) {
+                  acceptError='Identical experiment already queued; propose a distinct source-backed hypothesis/sequence. No new experiment was registered.';
                 } else {
                   stageLock.discover(acceptedId);
                   stagedPlans.push({id:acceptedId,plan});
