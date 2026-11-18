@@ -639,31 +639,3 @@ contract Vault is Authority {
 
 if __name__ == "__main__":
     unittest.main()
-)
-        self.assertRegex(result['diagnostics']['sourceSha256'],r'^[a-f0-9]{64}
-
-    def test_invalid_setup_does_not_become_a_finding(self):
-        sequence=self.sequence();sequence['constructorArgs']=[]
-        result=self.run_sequence(sequence)
-        self.assertEqual(result['status'],'probe_failed',result)
-        self.assertFalse(result['behavior_observed'])
-        sequence=self.sequence();sequence['steps'][1]['args']=['not a number'];sequence['steps'][1]['expectRevert']=True
-        self.assertEqual(self.run_sequence(sequence)['status'],'probe_failed')
-
-
-if __name__ == "__main__":
-    unittest.main()
-)
-        self.assertFalse(result['behavior_observed'])
-
-    def test_invalid_setup_does_not_become_a_finding(self):
-        sequence=self.sequence();sequence['constructorArgs']=[]
-        result=self.run_sequence(sequence)
-        self.assertEqual(result['status'],'probe_failed',result)
-        self.assertFalse(result['behavior_observed'])
-        sequence=self.sequence();sequence['steps'][1]['args']=['not a number'];sequence['steps'][1]['expectRevert']=True
-        self.assertEqual(self.run_sequence(sequence)['status'],'probe_failed')
-
-
-if __name__ == "__main__":
-    unittest.main()
