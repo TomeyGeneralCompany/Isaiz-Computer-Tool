@@ -871,7 +871,7 @@ export async function runLocalAudit(
             continue;
           }
           const method=selector.split('.').pop()||'';
-          const match=new RegExp('\\\\bfunction\\\\s+'+method.replace(/[^A-Za-z0-9_]/g,'')+'\\\\s*\\\\(').exec(content);
+          const match=new RegExp('\\bfunction\\s+'+method.replace(/[^A-Za-z0-9_]/g,'')+'\\s*\\(').exec(content);
           if(!match)continue;
           const start=Math.max(0,match.index-160),end=Math.min(content.length,match.index+1100);
           const sourceSha256=createHash('sha256').update(content).digest('hex');
