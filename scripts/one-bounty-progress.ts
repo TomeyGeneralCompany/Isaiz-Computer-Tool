@@ -31,7 +31,7 @@ export function isLiveTelemetryLine(line:string):boolean {
  */
 export function latestModelLifecycleEvent(text:string):'started'|'received'|null {
   let latest:'started'|'received'|null=null;
-  const pattern=/\\[OLLAMA\\] turn \\d+(?:\\/\\d+)?: (request started|response received)/g;
+  const pattern=/\[OLLAMA\] turn \d+(?:\/\d+)?: (request started|response received)/g;
   for(const match of text.matchAll(pattern))
     latest=match[1]==='request started'?'started':'received';
   return latest;
