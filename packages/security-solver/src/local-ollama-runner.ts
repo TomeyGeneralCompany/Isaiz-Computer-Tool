@@ -1293,6 +1293,9 @@ export async function runLocalAudit(
       const historyNotes=[...hypotheses.slice(-2).map(h=>"Unverified hypothesis: "+JSON.stringify(h)),...events.slice(-4)];
       const assembled=compactAuditContextWithRequiredTail(
         messages,messageBudget,requiredTail,schemaExtra,workflow?3000:0,historyNotes);
+      // Preserve the original per-turn tool-output fitting budget for every
+      // later read, final-validation, and verifier response on this turn.
+      const exchangeBudget=assembled.historyBudget;
       await archiveEvictedExchanges(beforeCompaction,assembled.history);
       messages=assembled.history;
       const started=Date.now();
