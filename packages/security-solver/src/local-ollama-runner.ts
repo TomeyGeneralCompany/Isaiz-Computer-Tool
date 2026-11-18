@@ -2035,7 +2035,8 @@ export async function runLocalAudit(
           }
           if(['assess_lead','defer_lead','request_source_context'].includes(action.action)){
             analyzeTurnsRemaining--;
-            const packet=(action as typeof action & {leadId?:string}).leadId?analysisPackets.get((action as typeof action & {leadId?:string}).leadId):undefined;
+            const leadId=(action as typeof action & {leadId?:string}).leadId;
+            const packet=leadId?analysisPackets.get(leadId):undefined;
             const selected=packet&&stageLock.analysisLeads.find(lead=>
               lead.id===packet.id&&lead.state.kind==='pending');
             let error='';
