@@ -871,7 +871,7 @@ export async function runLocalAudit(
           catch{}
           if(!/^[a-f0-9]{40}$/.test(sourceCommit)){
             await appendFile(logFile,'[ANALYSIS_LEAD_BLOCKED] '+JSON.stringify({
-              path:item.path,selector,reason:'acquired_repository_commit_unavailable'})+'\\n');
+              path:item.path,selector,reason:'acquired_repository_commit_unavailable'})+'\n');
             continue;
           }
           const method=selector.split('.').pop()||'';
@@ -886,7 +886,7 @@ export async function runLocalAudit(
             sourceEvidence,sourceExcerpt:content.slice(start,end),excerptStart:start,truncated:end<content.length});
           await appendFile(logFile,'[ANALYSIS_LEAD_SELECTED] '+JSON.stringify({
             id,path:item.path,selector,sourceCommit,sourceSha256,sourceEvidence,
-            priority:solLeads.filter(lead=>lead.path===item.path).length})+'\\n');
+            priority:solLeads.filter(lead=>lead.path===item.path).length})+'\n');
         }
         // Four Qwen turns were insufficient to correct even one rejected
         // sequence. Preserve a configurable bounded window without treating
@@ -2027,7 +2027,7 @@ export async function runLocalAudit(
               analyzeTurnsRemaining--;
               await appendFile(logFile,'[ANALYSIS_FINALIZATION_REJECTED] '+
                 JSON.stringify({pendingIds:pending,remainingTurns:analyzeTurnsRemaining,
-                  reason:'source_backed_lead_assessments_missing'})+'\\n');
+                  reason:'source_backed_lead_assessments_missing'})+'\n');
               if(analyzeTurnsRemaining<=0)await closeAnalysis('partial','finalization_with_pending_leads');
               else messages.push({role:'user',content:
                 'Cannot finalize while analysis lead IDs remain pending: '+JSON.stringify(pending)+
@@ -2059,7 +2059,7 @@ export async function runLocalAudit(
             if(error){
               await appendFile(logFile,'[ANALYSIS_LEAD_REJECTED] '+JSON.stringify({
                 leadId:(action as typeof action & {leadId?:string}).leadId,path:action.path,query:action.query,
-                error,remainingTurns:analyzeTurnsRemaining})+'\\n');
+                error,remainingTurns:analyzeTurnsRemaining})+'\n');
               messages.push({role:'user',content:'Rejected lead assessment: '+error+'. '+analysisPacketPrompt()});
             }else{
               stageLock.recordLeadAssessment(packet!.id,{kind:'assessed',
@@ -2070,7 +2070,7 @@ export async function runLocalAudit(
               await appendFile(logFile,'['+(action.action==='defer_lead'?'ANALYSIS_LEAD_DEFERRED':'ANALYSIS_LEAD_ASSESSED')+'] '+
                 JSON.stringify({leadId:packet!.id,path:packet!.path,selector:packet!.selector,
                   reason:action.answer.trim().slice(0,300),
-                  sourceEvidence:packet!.sourceEvidence})+'\\n');
+                  sourceEvidence:packet!.sourceEvidence})+'\n');
               messages.push({role:'user',content:analysisPacketPrompt()});
             }
             if(analyzeTurnsRemaining<=0)await closeAnalysis(stageLock.analysisProgress.pendingIds.length?'partial':'complete',
