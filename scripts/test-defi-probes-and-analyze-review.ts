@@ -400,7 +400,7 @@ contract PlainVault {
     await mkdir(join(repoDir, "contracts"), { recursive: true });
     await writeFile(
       join(repoDir, "contracts", "VaultA.sol"),
-      "pragma solidity 0.8.4;\ncontract VaultA {\n  address public owner;\n  constructor(){ owner = msg.sender; }\n  function deposit(uint256 a) external {require(msg.sender == owner, "owner");}\n  function withdraw(uint256 a) external {}\n  function customSwap(uint256 a) external {}\n}\n",
+      "pragma solidity 0.8.4;\ncontract VaultA {\n  address public owner;\n  constructor(){ owner = msg.sender; }\n  function deposit(uint256 a) external {require(msg.sender == owner, \"owner\");}\n  function withdraw(uint256 a) external {}\n  function customSwap(uint256 a) external {}\n}\n",
     );
     await writeFile(
       join(repoDir, "contracts", "VaultB.sol"),
