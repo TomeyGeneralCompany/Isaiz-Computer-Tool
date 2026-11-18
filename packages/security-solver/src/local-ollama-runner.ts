@@ -1,5 +1,5 @@
 import {ControllerEvidenceArchive} from './controller-evidence-archive';
-import {ControllerStageLock,type Outcome} from './controller-stage-lock';
+import {ControllerStageLock,type Outcome,type AnalysisCertificate} from './controller-stage-lock';
 import {modelProfile} from './model-profile';
 import {normalizeForcedOutlineCursor} from './outline-cursor';
 import {z} from "zod";
@@ -59,6 +59,9 @@ export interface LocalAuditLimits {
   /** Pre-read only authorized source pages for read-only independent review. */
   prefetchReadOnly?: boolean;
   onAllowance?: (deadline:number) => Promise<void>;
+  onAnalysisCertificate?: (certificate:AnalysisCertificate) => void;
+  onExperimentLedger?: (ledger:{selected:number;resolved:number;
+    outcomes:{observed:number;observation_only:number;not_observed:number;unsupported:number;incomplete:number;rejected:number;pending:number}})=>void;
   checkpointPath?: string;
   initialSourcePaths?: string[];
   initialSourceLocations?: Array<{path:string;offset:number}>;
@@ -277,6 +280,7 @@ export async function runLocalAudit(
     if(!stageLock||stageLock.currentStage!=='ANALYZE')return;
     const cert=stageLock.analysisClosureCertificate(status,reason);
     stageLock.completeAnalysis(status,reason);
+    limits.onAnalysisCertificate?.(cert);
     analyzeModelPending=false;analyzeTurnsRemaining=0;
     await appendFile(logFile,'['+(status==='complete'?'ANALYSIS_COMPLETE':'ANALYSIS_INCOMPLETE')+'] '+
       JSON.stringify({...cert,candidates:stageLock.candidateCount,modelAdded:analyzeApprovedIds.size})+'\n');
@@ -931,6 +935,8 @@ export async function runLocalAudit(
         stageLock.completedCount===stageLock.candidateCount &&
         !workflow?.snapshot().pending){
         stageLock.completeExperiments();
+        limits.onExperimentLedger?.({selected:stageLock.candidateCount,
+          resolved:stageLock.completedCount,outcomes:stageLock.outcomeCounts});
         await appendFile(logFile,'[EXPERIMENT_COMPLETE] '+
           JSON.stringify({resolved:stageLock.completedCount,outcomes:stageLock.outcomeCounts})+'\n');
         await appendFile(logFile,'[STAGE_UNLOCK] EXPERIMENT -> REVIEW\n');
