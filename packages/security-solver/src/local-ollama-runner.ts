@@ -2035,7 +2035,7 @@ export async function runLocalAudit(
           }
           if(['assess_lead','defer_lead','request_source_context'].includes(action.action)){
             analyzeTurnsRemaining--;
-            const packet=action.leadId?analysisPackets.get(action.leadId):undefined;
+            const packet=(action as typeof action & {leadId?:string}).leadId?analysisPackets.get((action as typeof action & {leadId?:string}).leadId):undefined;
             const selected=packet&&stageLock.analysisLeads.find(lead=>
               lead.id===packet.id&&lead.state.kind==='pending');
             let error='';
@@ -2052,7 +2052,7 @@ export async function runLocalAudit(
               error='assess_lead requires a falsifiable source-backed hypothesis';
             if(error){
               await appendFile(logFile,'[ANALYSIS_LEAD_REJECTED] '+JSON.stringify({
-                leadId:action.leadId,path:action.path,query:action.query,
+                leadId:(action as typeof action & {leadId?:string}).leadId,path:action.path,query:action.query,
                 error,remainingTurns:analyzeTurnsRemaining})+'\\n');
               messages.push({role:'user',content:'Rejected lead assessment: '+error+'. '+analysisPacketPrompt()});
             }else{
@@ -2074,7 +2074,7 @@ export async function runLocalAudit(
           analyzeTurnsRemaining--;
           let acceptError='';
           let acceptedId='';
-          const proposedLead=action.leadId?analysisPackets.get(action.leadId):undefined;
+          const proposedLead=(action as typeof action & {leadId?:string}).leadId?analysisPackets.get((action as typeof action & {leadId?:string}).leadId):undefined;
           if(!proposedLead||proposedLead.path!==action.path||proposedLead.selector!==action.query||
              stageLock.analysisLeads.find(x=>x.id===proposedLead.id)?.state.kind!=='pending')
             acceptError='Model experiment requires a pending, source-verified immutable leadId matching path and selector.';
