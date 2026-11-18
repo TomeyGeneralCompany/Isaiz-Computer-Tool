@@ -40,7 +40,20 @@ export const sourceProbeSpecSchema = z.object({file:z.string().min(1).max(4096),
   });
 // ERC1155 reproduction may insert mined mint/approval prerequisite transactions
 // before a requested send. They are recorded as setup, never as vulnerability evidence.
+const fixtureDiagnosticsSchema=z.object({
+  experimentId:digest.nullish(),fixtureId:digest.nullish(),sourceSha256:digest.nullish(),
+  file:z.string().max(4096).nullish(),selector:z.string().max(160).nullish(),
+  selectedFile:z.string().max(4096).nullish(),contractName:z.string().max(128).nullish(),
+  compilerVersion:z.string().max(128).nullish(),evmVersion:z.string().max(64).nullish(),
+  cacheHit:z.boolean().nullish(),bytecodeSha256:digest.nullish(),
+  constructorTypes:z.array(z.string().max(128)).max(16).optional(),
+  stepIndex:z.number().int().min(0).max(64).nullish(),
+  receiptStatus:z.number().int().min(0).max(1).nullish(),
+  receiptTo:z.string().max(128).nullish(),
+  transactionHash:z.string().max(128).nullish(),gasUsed:z.string().max(64).nullish()
+}).strict();
 export const sequenceObservations = z.object({contract:z.string(),accounts:z.array(z.string()).length(3),deploymentGasUsed:z.string(),
+  diagnostics:fixtureDiagnosticsSchema.optional(),
   steps:z.array(z.discriminatedUnion("operation",[
     z.object({operation:z.literal("call"),deploymentId:z.string().optional(),function:z.string(),sender:z.number(),actual:z.unknown(),expected:z.unknown(),passed:z.boolean()}),
     z.object({operation:z.literal("observe"),deploymentId:z.string().optional(),function:z.string(),sender:z.number(),actual:z.unknown()}),
@@ -53,7 +66,7 @@ const polyglotSequenceObservations=z.object({factory:z.string().nullable(),steps
   operation:z.literal("call"),function:z.string(),actual:z.unknown(),
   expected:z.unknown().optional(),passed:z.boolean()
 })).min(2).max(12)});
-const resultSchema = z.object({status:z.string(),behavior_observed:z.boolean(),classification:z.string().nullish(),source_sha256:digest.optional(),
+const resultSchema = z.object({status:z.string(),behavior_observed:z.boolean(),classification:z.string().nullish(),phase:z.string().max(60).nullish(),diagnostics:fixtureDiagnosticsSchema.nullish(),source_sha256:digest.optional(),
   kind:z.string().optional(),observations:z.union([z.object({control_input:z.string(),control_output:z.string(),attack_input:z.string(),attack_output:z.string(),
     entry_control_url:z.string().optional(),entry_attack_url:z.string().optional(),
     entry_selector:z.string().optional(),entry_parameter:z.string().optional()}),sequenceObservations,javaSequenceObservations,polyglotSequenceObservations]).optional(),
@@ -163,6 +176,9 @@ export async function createProbeSession(program:SecurityProgram,workspace:strin
     });
     if(!repo) throw new Error("Probe file is not in an acquired source repository");
     const filePath=relative(repo.directory,file).split(sep).join("/");
+    // Check authorized target scope before reading auxiliary fixture sources.
+    if(!targetInExplicitScope(program.scopeSummary,repo.url+"/"+filePath))
+      throw new Error("Probe is outside program scope");
     // The staged controller sees workspace paths (source-1/...), while the
     // reproduction sandbox mounts the acquired repository itself at /repo.
     // Normalize auxiliary preparation/deployment references at this trusted
@@ -179,7 +195,6 @@ export async function createProbeSession(program:SecurityProgram,workspace:strin
       }
     }
     const spec=sourceProbeSpecSchema.parse({file:filePath,function:functionName,kind,...(runtimeSequence ? {sequence:runtimeSequence} : {}),nonce:randomBytes(16).toString("hex")});
-    if(!targetInExplicitScope(program.scopeSummary,repo.url+"/"+filePath))throw new Error("Probe is outside program scope");
     let commit: string;
     let sourceSha256: string;
     let result: z.infer<typeof resultSchema>;
