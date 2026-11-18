@@ -5,7 +5,7 @@
  */
 import 'dotenv/config';
 import {mkdirSync, writeFileSync, readdirSync, statSync, readFileSync, openSync, readSync, closeSync} from 'node:fs';
-import {advanceBountyProgress,consumeTelemetryChunk,idleBountyExpired,pickLatestProgressEvent,type BountyProgress} from './one-bounty-progress';
+import {advanceBountyProgress,consumeTelemetryChunk,idleBountyExpired,latestModelLifecycleEvent,pickLatestProgressEvent,type BountyProgress} from './one-bounty-progress';
 import {join, resolve} from 'node:path';
 import {eq} from 'drizzle-orm';
 import {ensureOneBountyLocalModel} from './one-bounty-settings';
@@ -140,8 +140,10 @@ async function main() {
         }
         const latest=pickLatestProgressEvent(delta);
         if(latest){lastProgressNote=latest;lastProgressEventAt=Date.now();}
-        if(/\[OLLAMA\][^\n]*request started/.test(delta))modelRequestAt=Date.now();
-        if(/\[OLLAMA\][^\n]*response received/.test(delta))modelRequestAt=0;
+        // Preserve chronological lifecycle order when a single poll contains both events.
+        const lifecycle=latestModelLifecycleEvent(delta);
+        if(lifecycle==='started')modelRequestAt=Date.now();
+        else if(lifecycle==='received')modelRequestAt=0;
       }
     }
     if(flushTail&&pendingTelemetryRemainder.trim()){
