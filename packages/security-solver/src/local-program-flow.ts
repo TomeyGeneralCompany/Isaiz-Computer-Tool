@@ -1088,6 +1088,15 @@ Do not claim production testing, JavaScript execution, file access or other effe
               }
             }
             const value=huntSchema.parse(recovered);
+            // A completed source inventory is not proof that every executed
+            // experiment falsified its hypothesis. Reject precisely the claim
+            // disproved by the persisted per-experiment ledger.
+            const inconclusiveRecorded=[...session.cases.values()]
+              .some(record=>record.result.status==="observation_only");
+            if(value.findings.length===0 && value.reason &&
+               (inconclusiveRecorded || session.failedProbes>0 || session.unsupportedProbes>0) &&
+               /\ball\b[^.]{0,160}\b(?:behavior_not_observed|negative|falsified)\b/i.test(value.reason))
+              return "Final explanation contradicts recorded experimental outcomes: some probes were inconclusive or failed. Report each disposition accurately; never call all hypotheses falsified.";
             // A real reproduced case cannot silently disappear because Qwen
             // returned a blank findings array. A supported negative judgment
             // must say what specific link, mitigation or applicability
@@ -1294,6 +1303,11 @@ Do not claim production testing, JavaScript execution, file access or other effe
       eligiblePaths.length>0 &&
       inspectedFileCount===eligiblePaths.length &&
       session.completedProbes>0;
+    const inconclusiveProbes=[...session.cases.values()]
+      .filter(record=>record.result.status==="observation_only").length;
+    const experimentCoverageComplete=fullIndexCoverageComplete &&
+      session.failedProbes===0 && session.unsupportedProbes===0 &&
+      inconclusiveProbes===0;
     const probeStats={
       completedProbes:session.completedProbes,
       unsupportedProbes:session.unsupportedProbes,
@@ -1302,10 +1316,12 @@ Do not claim production testing, JavaScript execution, file access or other effe
       inspectedFiles:inspectedFileCount,
     };
     if(parsed?.outcome === "no_testable_candidate")return {auditRecord,success:true,
-      coverage:fullIndexCoverageComplete?"completed":"partial",
+      coverage:experimentCoverageComplete?"completed":"partial",
       acquisitionChecks,capabilityChecks,...probeStats,
       coverageDetail:fullIndexCoverageComplete
-        ? `${session.completedProbes} supported probes completed; ${session.unsupportedProbes} unsupported probes; ${session.failedProbes} failed probes; ${inspectedFileCount}/${eligiblePaths.length} files inspected`+(parsed.reason?`; ${parsed.reason}`:"")
+        ? `${inspectedFileCount}/${eligiblePaths.length} source files inspected; ${session.completedProbes} supported probe executions; ${inconclusiveProbes} inconclusive; ${session.unsupportedProbes} unsupported; ${session.failedProbes} failed. `+
+          (experimentCoverageComplete?"Selected experiment dispositions complete. ":"Experiment evidence coverage incomplete. ")+
+          (parsed.reason||"")
         : "Inspection incomplete: "+parsed.reason,
       findings:[],rawOutput:answer};
     if (session.blockedReason) throw new Error("Reproduction unavailable: " + session.blockedReason);
