@@ -35,6 +35,20 @@ const sha = (s: string) => createHash("sha256").update(s).digest("hex");
     ],
   });
   assert.ok(valid.success, "Valid eth_balance + deploymentId sequence should parse");
+  const requiredSetup = soliditySequenceSchema.safeParse({
+    constructorArgs: [],steps:[
+      {operation:"send",function:"initialize()",args:[],sender:0,requiredSetup:true},
+      {operation:"observe",function:"owner()",args:[]}
+    ]
+  });
+  assert.ok(requiredSetup.success, "A required successful initializer must be accepted");
+  const contradictorySetup = soliditySequenceSchema.safeParse({
+    constructorArgs: [],steps:[
+      {operation:"send",function:"initialize()",args:[],sender:0,requiredSetup:true,expectRevert:true},
+      {operation:"observe",function:"owner()",args:[]}
+    ]
+  });
+  assert.ok(!contradictorySetup.success, "Setup cannot require both success and revert");
 
   const invalidRef = soliditySequenceSchema.safeParse({
     constructorArgs: [],
