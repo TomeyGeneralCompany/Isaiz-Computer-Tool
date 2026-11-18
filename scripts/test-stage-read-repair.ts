@@ -798,6 +798,11 @@ async function testActiveAnalysisPacketSurvivesCompactionAndRejection() {
       res.end(JSON.stringify({message:{role:'assistant',content:JSON.stringify(answer)}}));
       return;
     }
+    if(active.includes('All selected lead assessments have dispositions')){
+      res.end(JSON.stringify({message:{role:'assistant',content:JSON.stringify({
+        action:'finalize_analysis',path:'',query:'',answer:''})}}));
+      return;
+    }
     res.end(JSON.stringify({message:{role:'assistant',content:JSON.stringify({
       action:'final',path:'',query:'',answer:'',
       result:{findings:[],outcome:'no_testable_candidate',
