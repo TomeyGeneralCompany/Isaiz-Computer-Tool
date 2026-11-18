@@ -39,6 +39,9 @@ export class InvestigationWorkflow {
   }
   readonly scenarios=new ControllerScenarioLedger();
   private scenarioMap=new Map<string,string>();
+  // Per-case evidence is authoritative when two different experiments
+  // exercise the same source function with different prepared sequences.
+  private scenarioByCaseId=new Map<string,string>();
   private sourceEvidence=new Map<string,string[]>();
   recordSourceEvidence(path:string,id:string){
     if(!this.readPaths.has(path)||!/^[a-f0-9]{64}$/.test(id))
@@ -53,14 +56,14 @@ export class InvestigationWorkflow {
   private scenarioKey(path:string,query:string,kind:string){
     return JSON.stringify([path,query,kind]);
   }
-  registerControllerPlan(plan:{path:string;query:string;answer:string;hypothesis:string},
+  registerControllerPlan(plan:{path:string;query:string;answer:string;hypothesis:string;sequence?:unknown},
     sourceReference:string,property:string,falsifier:string) {
     if(!this.readPaths.has(plan.path))throw new Error('Source not inspected');
     if(!sourceReference || !property || !falsifier)throw new Error('Ungrounded controller scenario');
     const language=plan.path.endsWith('.sol')?'solidity':
       plan.path.endsWith('.java')?'java':plan.path.endsWith('.py')?'python':'javascript';
     const key=this.scenarioKey(plan.path,plan.query,plan.answer);
-    const id=createHash('sha256').update(key).digest('hex');
+    const id=createHash('sha256').update(JSON.stringify([key,plan.hypothesis,plan.sequence??null])).digest('hex');
     const record=this.scenarios.register({id,path:plan.path,selector:plan.query,
       language,property,suspectedViolation:plan.hypothesis,falsification:falsifier});
     this.scenarioMap.set(key,id);
@@ -105,6 +108,8 @@ export class InvestigationWorkflow {
     }
     const reference=String(result.caseId||result.evidenceFile||
       'runtime:'+action.path+':'+action.query+':'+status);
+    if(typeof result.caseId==='string' && /^[a-f0-9]{64}$/.test(result.caseId))
+      this.scenarioByCaseId.set(result.caseId,id);
     this.scenarios.satisfy(id,'runtime',reference);
     this.scenarios.transition(id,'ready','Verifier confirmed dependency and fixture preparation');
     this.scenarios.transition(id,'executing','Execute source-grounded isolated experiment');
@@ -120,7 +125,9 @@ export class InvestigationWorkflow {
         : 'Inconclusive isolated experiment disposition: '+status);
   }
   acceptedReview(path:string,query:string,kind:string,reference:string,positive:boolean){
-    const id=this.scenarioMap.get(this.scenarioKey(path,query,kind));
+    const caseId=reference.match(/[a-f0-9]{64}/)?.[0];
+    const id=(caseId && this.scenarioByCaseId.get(caseId)) ||
+      this.scenarioMap.get(this.scenarioKey(path,query,kind));
     if(!id||this.scenarios.get(id)?.phase!=='reviewing')return;
     this.scenarios.record(id,{id:'review:independent',kind:'review',reference,
       observation:positive?'Validated positive case':'Validated negative case'});
