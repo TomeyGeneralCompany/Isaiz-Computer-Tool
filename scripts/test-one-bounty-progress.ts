@@ -3,6 +3,7 @@ import {
   advanceBountyProgress,
   consumeTelemetryChunk,
   idleBountyExpired,
+  latestModelLifecycleEvent,
   pickLatestProgressEvent,
   type BountyProgress
 } from './one-bounty-progress';
@@ -74,5 +75,23 @@ assert.equal(
   pickLatestProgressEvent('raw line without any telemetry tag'),
   ''
 );
+
+// ANALYZE stage disposition and recovery events must not disappear from CI output.
+const analysis=consumeTelemetryChunk('',
+  '[ANALYSIS_LEAD_SELECTED] {"id":"lead-1"}\\n'+
+  '[ANALYSIS_FINALIZATION_REJECTED] {"reason":"source_backed_lead_assessments_missing"}\\n'+
+  '[OLLAMA] turn 246/280: request started\\n');
+assert.equal(analysis.lines.length,3);
+assert.ok(analysis.lines[0].startsWith('[ANALYSIS_LEAD_SELECTED]'));
+assert.ok(analysis.lines[1].startsWith('[ANALYSIS_FINALIZATION_REJECTED]'));
+assert.equal(latestModelLifecycleEvent(
+  '[OLLAMA] turn 245: response received in 293504ms\\n'+
+  '[ANALYSIS_FINALIZATION_REJECTED] {"remainingTurns":23}\\n'+
+  '[OLLAMA] turn 246/280: request started\\n'), 'started',
+  'Later request start must not be erased by prior response in a batched log poll');
+assert.equal(latestModelLifecycleEvent(
+  '[OLLAMA] turn 245/280: request started\\n'+
+  '[OLLAMA] turn 245: response received in 293504ms\\n'), 'received');
+assert.equal(latestModelLifecycleEvent('[ANALYSIS_LEAD_ASSESSED] {}\\n'), null);
 
 console.log('Progress-based one-bounty timeout checks PASSED');
