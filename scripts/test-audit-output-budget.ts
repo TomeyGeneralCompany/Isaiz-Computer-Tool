@@ -49,8 +49,8 @@ assert.equal(compacted.at(-1),corrections.at(-1));
 const overPinned=[{role:'system',content:'s'.repeat(5250)},{role:'user',content:'task'}];
 const overRequest={role:'assistant',content:'read_file source-1/contract.sol'};
 const overTool={role:'user',content:'TOOL_RESULT '+JSON.stringify({
-  name:'read_file',output:JSON.stringify({start:0,end:6000,totalCharacters:6000,
-    nextOffset:null,text:'a'.repeat(6000)})
+  name:'read_file',output:JSON.stringify({start:0,end:7000,totalCharacters:7000,
+    nextOffset:null,text:'a'.repeat(7000)})
 })+'\\nTool result /no_think'};
 const over=compactAuditContext([...overPinned,overRequest,overTool],11663);
 assert.ok(JSON.stringify(over).length<=11663);
