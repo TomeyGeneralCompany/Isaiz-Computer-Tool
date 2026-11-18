@@ -16,7 +16,31 @@ import { decodeAuditAction } from "../packages/security-solver/src/local-audit-p
 import { runEvidenceOnlyReview } from "../packages/security-solver/src/evidence-only-review";
 import { rankSolidityStaticTargets } from "../packages/security-solver/src/local-static-leads";
 
+import {reconcileHuntReason,type HuntCoverageLedger} from '../packages/security-solver/src/local-program-flow';
+
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
+// #227 field evidence: 31 guarded negatives, 13 observation-only, 12
+// incomplete/failed; 56 selected, no observed positive. A model's reversed
+// word-order blanket-negative claim must not change any ledger disposition.
+{
+ const ledger:HuntCoverageLedger={
+   sourceIndexed:91,sourceRead:91,leadsSelected:6,leadsAssessedByModel:0,
+   leadsDeferred:0,leadsBlocked:0,experimentsSelected:56,experimentsExecuted:44,
+   supportedNegative:31,observationOnly:13,fixtureFailed:12,unsupported:0,
+   positiveObserved:0,verifiedFindings:0,unresolved:0,
+   sourceCoverage:'complete',analysisCoverage:'partial',experimentCoverage:'partial'
+ };
+ const actual='The controller has observed behavior_not_observed status for all candidate functions.';
+ const checked=reconcileHuntReason(actual,ledger);
+ assert.deepEqual(checked.contradictions,['blanket_negative_contradicts_partial_experiment_ledger']);
+ assert.match(checked.reason,/31 source-supported negative experiments/);
+ assert.match(checked.reason,/13 observation-only/);
+ assert.match(checked.reason,/12 failed\/incomplete fixtures/);
+ assert.match(checked.reason,/Model analysis partial/i);
+ assert.doesNotMatch(checked.reason,/negative status for all candidate functions/i);
+ assert.equal(reconcileHuntReason('31 supported negatives and 25 unresolved or inconclusive executions.',ledger).contradictions.length,0);
+}
+
 
 // 1. Validate soliditySequenceSchema eth_balance and deploymentId extensions
 {
