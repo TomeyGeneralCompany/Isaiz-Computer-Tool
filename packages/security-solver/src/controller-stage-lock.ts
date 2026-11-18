@@ -12,7 +12,7 @@ export type LeadAssessment={
   assessedBy:'model'|'controller'|null;
 };
 export type AnalysisCertificate={
-  status:'complete'|'partial';reason:string;selected:number;assessed:number;blocked:number;
+  status:'complete'|'partial';reason:string;selected:number;assessed:number;deferred:number;blocked:number;
   pendingIds:string[];sourcePreclassified:number;modelAssessed:number;
 };
 const actions:Record<Stage,ReadonlySet<string>>={
@@ -130,6 +130,7 @@ export class ControllerStageLock {
   get analysisLeads():LeadAssessment[]{return [...this.leads.values()].map(lead=>structuredClone(lead));}
   get analysisProgress(){const leads=[...this.leads.values()];return {
     selected:leads.length,assessed:leads.filter(x=>x.state.kind==='assessed').length,
+    deferred:leads.filter(x=>x.state.kind==='assessed'&&x.state.disposition==='defer').length,
     blocked:leads.filter(x=>x.state.kind==='blocked').length,
     pendingIds:leads.filter(x=>x.state.kind==='pending').map(x=>x.id),
     modelAssessed:leads.filter(x=>x.assessedBy==='model').length
