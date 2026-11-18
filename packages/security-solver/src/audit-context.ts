@@ -69,7 +69,31 @@ export function compactAuditContext(messages:AuditMessage[],budget:number,progre
       }
     }
   }
-  if(JSON.stringify(result).length>budget)throw new Error("Latest audit exchange exceeds the context budget; narrow the probe output (budget="+budget+", pinned="+JSON.stringify(pinned).length+", latest="+JSON.stringify(groups.at(-1)).length+")");
+  if(JSON.stringify(result).length>budget){
+    // A standalone model action or controller correction can itself be larger
+    // than the remaining window, even after old exchanges and TOOL_RESULT
+    // payloads have been evicted. The caller records *all* replaced messages
+    // in its append-only exchange archive before inference proceeds. Do not
+    // silently truncate source or imply that omitted evidence was examined.
+    const latest=groups.at(-1);
+    if(latest){
+      const original=JSON.stringify(latest);
+      latest.splice(0,latest.length,{role:'user',content:
+        'CONTEXT_EXCHANGE_EVICTED: The most recent oversized exchange was stored in the durable investigation archive (sha256='+ 
+        // Identifiers come from the controller archive, not model claims.
+        'unavailable-in-active-context). No evidence or instruction from that exchange is currently available to the model. '+
+        'Follow current controller constraints. Re-read the specific indexed source page or recorded experiment evidence before relying on it. /no_think'});
+      result=[...pinned,...notes,...groups.flat()];
+      if(JSON.stringify(result).length>budget) {
+        // The note is optional; pinned instructions still govern any retry.
+        groups.pop();
+        result=[...pinned,...notes,{role:'user',content:
+          'CONTEXT_EXCHANGE_EVICTED: Previous oversized exchange archived. Re-read required evidence and follow current stage constraints. /no_think'}];
+      }
+      void original;
+    }
+  }
+  if(JSON.stringify(result).length>budget)throw new Error("Audit pinned instructions and controller reserve exceed context budget (budget="+budget+")");
   return result;
 }
 export function auditCheckpoint(events:string[]):string {
