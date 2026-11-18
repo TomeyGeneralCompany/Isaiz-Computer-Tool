@@ -311,7 +311,7 @@ contract PlainVault {
     if (enumActions.includes("discover_experiment")) {
       sawAnalyzeActionPrompt = true;
       const packetText=payload.messages.map((m:any)=>String(m.content||'')).join('\n');
-      const leadIdMatch=packetText.match(/"id":"([a-f0-9]{64})","path":"(source-[^"]+\\.sol)","selector":"([^"]+)"/);
+      const leadIdMatch=packetText.match(/"id":"([a-f0-9]{64})","path":"(source-[^"]+\.sol)","selector":"([^"]+)"/);
       assert.ok(leadIdMatch,'A model action must be scoped to a source-hashed lead packet');
       const [,leadId,leadPath,selector]=leadIdMatch;
       const method=selector.split('.').at(-1);
