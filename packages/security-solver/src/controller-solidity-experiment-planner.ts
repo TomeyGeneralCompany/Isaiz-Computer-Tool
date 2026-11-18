@@ -1321,7 +1321,8 @@ function privilegedPrimitiveGuardExperiment(
 
 
 function isTestOrMockPath(path:string):boolean {
-  return /(?:^|\/)?(?:mocks?|tests?|__tests__|fixtures|interfaces)(?:\/|$)/i.test(path) || /Mock\.sol$/i.test(path);
+  return /(?:^|\/)?(?:mocks?|tests?|__tests__|fixtures|interfaces)(?:\/|$)/i.test(path) ||
+    /(?:Mock|Test)\.sol$/i.test(path) || /\/(?:Dummy|Echidna)[A-Za-z0-9_]*\.sol$/i.test(path);
 }
 
 function isAbstractContractNode(contract:any,chain:readonly ContractEntry[]=[]):boolean {
