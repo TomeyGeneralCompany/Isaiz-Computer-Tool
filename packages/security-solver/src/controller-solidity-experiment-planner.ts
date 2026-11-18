@@ -776,7 +776,7 @@ function broadenedAuthorizationExperiment(
 
   const baseSteps:SoliditySequence['steps']=[];
   if(setup.initSignature){
-    baseSteps.push({operation:'send',function:setup.initSignature,args:setup.initArgs,sender:0});
+    baseSteps.push({operation:'send',function:setup.initSignature,args:setup.initArgs,sender:0,requiredSetup:true});
   }
   if(setup.kind==='owner'){
     baseSteps.push({operation:'call',function:'owner()',args:[],expect:'$account0'});
@@ -1169,7 +1169,7 @@ function authorityTransferExperiment(
   }
 
   const baseSteps:SoliditySequence['steps']=[];
-  if(setup.initSignature)baseSteps.push({operation:'send',function:setup.initSignature,args:setup.initArgs,sender:0});
+  if(setup.initSignature)baseSteps.push({operation:'send',function:setup.initSignature,args:setup.initArgs,sender:0,requiredSetup:true});
   if(setup.kind==='owner')baseSteps.push({operation:'call',function:'owner()',args:[],expect:'$account0'});
   else baseSteps.push({operation:'call',function:'hasRole(bytes32,address)',args:[ZERO_BYTES32,'$account0'],expect:true});
 
@@ -1257,7 +1257,7 @@ function privilegedPrimitiveGuardExperiment(
   if(!setup)return null;
 
   const baseSteps:SoliditySequence['steps']=[];
-  if(setup.initSignature)baseSteps.push({operation:'send',function:setup.initSignature,args:setup.initArgs,sender:0});
+  if(setup.initSignature)baseSteps.push({operation:'send',function:setup.initSignature,args:setup.initArgs,sender:0,requiredSetup:true});
   const authorityCheck:SoliditySequence['steps'][number]=setup.kind==='owner'
     ? {operation:'call',function:'owner()',args:[],expect:'$account0'}
     : {operation:'call',function:'hasRole(bytes32,address)',args:[ZERO_BYTES32,'$account0'],expect:true};
@@ -1597,7 +1597,7 @@ function unprotectedFundDrainOrMintExperiment(
           operations:[],checks:[]
         }:undefined;
         const steps:SoliditySequence['steps']=[];
-        if(setup.initSignature)steps.push({operation:'send',function:setup.initSignature,args:setup.initArgs,sender:0});
+        if(setup.initSignature)steps.push({operation:'send',function:setup.initSignature,args:setup.initArgs,sender:0,requiredSetup:true});
         if(hasBalanceOf)steps.push({operation:'observe',function:'balanceOf(address)',args:['$account2']});
         if(hasTotalSupply)steps.push({operation:'observe',function:'totalSupply()',args:[]});
         steps.push({operation:'send',function:fnSig,args,sender:1,expectRevert:true});
@@ -1636,7 +1636,7 @@ function unprotectedFundDrainOrMintExperiment(
             operations:[],checks:[]
           }:undefined;
           const steps:SoliditySequence['steps']=[];
-          if(setup.initSignature)steps.push({operation:'send',function:setup.initSignature,args:setup.initArgs,sender:0});
+          if(setup.initSignature)steps.push({operation:'send',function:setup.initSignature,args:setup.initArgs,sender:0,requiredSetup:true});
           if(!setup.constructorValueWei&&payableFundFn){
             steps.push({operation:'send',function:`${payableFundFn.name}()`,args:[],sender:0,valueWei:'1000000000000000'});
           }
@@ -1675,7 +1675,7 @@ function unprotectedFundDrainOrMintExperiment(
       }
       if(ok){
         const steps:SoliditySequence['steps']=[];
-        if(setup.initSignature)steps.push({operation:'send',function:setup.initSignature,args:setup.initArgs,sender:0});
+        if(setup.initSignature)steps.push({operation:'send',function:setup.initSignature,args:setup.initArgs,sender:0,requiredSetup:true});
         if(mockToken.mintHasRecipient){
           steps.push({operation:'send',deploymentId:'token',function:mockToken.mintSig,args:['$contract','1000'],sender:0});
         } else {
@@ -1741,7 +1741,7 @@ function coreProtocolEntrypointExperiment(
   const hasTotalSupply=menu.some(m=>m.selector===`${contract.name}.totalSupply`&&m.operation==='call'&&m.inputs.length===0);
   const authGetter=findAuthorityGetter(contract,chain,menu);
   const steps:SoliditySequence['steps']=[];
-  if(setup.initSignature)steps.push({operation:'send',function:setup.initSignature,args:setup.initArgs,sender:0});
+  if(setup.initSignature)steps.push({operation:'send',function:setup.initSignature,args:setup.initArgs,sender:0,requiredSetup:true});
   if(setup.usesToken && mockToken){
     if(mockToken.mintHasRecipient){
       steps.push({operation:'send',deploymentId:'token',function:mockToken.mintSig,args:['$account1','10000'],sender:0});
