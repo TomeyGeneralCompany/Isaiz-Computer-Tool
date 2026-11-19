@@ -19,7 +19,7 @@ import { AuditAllowance } from "./audit-allowance";
 import { AuditNavigation } from "./audit-navigation";
 import {controllerOwnedNextAction,canonicalSourceNavigationAction} from "./controller-next-action";
 import { SoliditySourceIndex } from "./solidity-source-index";
-import { allocateAuditContext, compactAuditContext, auditCheckpoint, fitAuditToolOutput, latestAuditExchangeStart } from "./audit-context";
+import { allocateAuditContext, compactAuditContext, compactAuditContextWithRequiredTail, auditCheckpoint, fitAuditToolOutput, latestAuditExchangeStart } from "./audit-context";
 import { soliditySequenceSchema, soliditySequenceJsonSchema, type SoliditySequence } from "./solidity-sequence";
 import { readSourcePage, searchSourcePage, listSourcePage, pageOffset, type ReadSpan } from "./source-inspection";
 import { postOllamaChat } from "../../core/src/ollama-chat";
@@ -262,19 +262,34 @@ export async function runLocalAudit(
   type AnalysisPacket={id:string;path:string;selector:string;sourceEvidence:string;sourceSha256:string;sourceCommit:string;sourceExcerpt:string;excerptStart:number;truncated:boolean};
   const analysisPackets=new Map<string,AnalysisPacket>();
   const nextAnalysisPacket=()=>stageLock?.analysisLeads.find(x=>x.state.kind==='pending');
-  const analysisPacketPrompt=()=>{
+  // Current controller instruction is reconstructed from stage-owned state for
+  // every inference, not carried as disposable conversational history.
+  const analysisPacketPrompt=(excerptChars=1200)=>{
     const next=nextAnalysisPacket();
     if(!next)return 'All selected lead assessments have dispositions. Use finalize_analysis with path="", query="", answer="". /no_think';
     const packet=analysisPackets.get(next.id);
-    if(!packet)return 'Lead packet missing. Report defer_lead with the given immutable lead ID and a concrete source evidence limitation. /no_think';
-    return 'Assess this source-grounded lead; exact immutable ID, source commit/hash, inspected excerpt and offset: '+
-      JSON.stringify(packet).slice(0,2300)+
-      '. Reply with {"action":"assess_lead","path":'+JSON.stringify(next.path)+
-      ',"query":'+JSON.stringify(next.selector)+',"leadId":'+JSON.stringify(next.id)+
-      ',"hypothesis":"falsifiable source-backed property","answer":"specific source-based reason","sequence":{}}'+
-      ' to record a testable property; use defer_lead with the same ID, hypothesis="none" and a specific answer explaining the missing fixture or invariant;'+
-      ' or discover_experiment with the SAME leadId and a valid complete solidity_sequence to validate and queue its hypothesis. '+
-      'Source excerpts are leads, not proof of exploitability. /no_think';
+    if(!packet || packet.id!==next.id || packet.path!==next.path ||
+       packet.selector!==next.selector || packet.sourceCommit!==next.sourceCommit ||
+       packet.sourceSha256!==next.sourceSha256)
+      throw new Error('ANALYSIS_ACTIVE_PACKET_MISSING_OR_MISMATCHED: '+next.id);
+    const usedChars=Math.max(0,Math.min(packet.sourceExcerpt.length,Math.floor(excerptChars)));
+    // All identity fields remain intact. Only the source excerpt can be bounded;
+    // the original span and hash remain available in controller evidence.
+    const evidence={id:packet.id,path:packet.path,selector:packet.selector,
+      sourceCommit:packet.sourceCommit,sourceSha256:packet.sourceSha256,
+      sourceEvidence:packet.sourceEvidence,excerptStart:packet.excerptStart,
+      sourceExcerpt:packet.sourceExcerpt.slice(0,usedChars),
+      excerptTruncated:packet.truncated||packet.sourceExcerpt.length>usedChars};
+    return 'CURRENT ANALYZE TASK: Assess this pending source-grounded lead before finalizing. '+
+      'Controller-verified identity and bounded source excerpt: '+JSON.stringify(evidence)+
+      '. Reply using assess_lead with action, exact path, exact query (selector), exact leadId, '+
+      'falsifiable hypothesis, and source-specific answer; or defer_lead with that identity '+
+      'and concrete missing fixture/invariant in answer. '+
+      'Use request_source_context when the bounded excerpt is insufficient. '+
+      'discover_experiment is permitted only with the SAME pending leadId and a '+
+      'source-derived, schema-valid solidity_sequence with an asserted security invariant. '+
+      'Do not finalize_analysis while any lead remains pending. '+
+      'This excerpt is source evidence, not proof of exploitability. /no_think';
   };
   const closeAnalysis=async(status:'complete'|'partial',reason='')=>{
     if(!stageLock||stageLock.currentStage!=='ANALYZE')return;
@@ -903,13 +918,14 @@ export async function runLocalAudit(
           await appendFile(logFile,'[ANALYSIS_MODEL_WINDOW_STARTED] '+JSON.stringify({
             maxAnalyzeTurns,solLeads:solLeads.length,nonMockSolFiles:nonMockSolSummaries.length,
             totalUnqueuedNonSetters,selectedModelLeads:stageLock.analysisProgress.selected})+'\n');
-          messages.push({role:'user',content:'ANALYZE STAGE (bounded hypothesis window, '+maxAnalyzeTurns+
-            ' turn(s) max): Controller queued '+stagedPlans.length+' prioritized probes: '+
-            JSON.stringify(stagedPlans.slice(0,6).map(s=>({path:s.plan.path,query:s.plan.query})))+
-            (solLeads.length?'. Static leads on Solidity files: '+JSON.stringify(solLeads.slice(0,8).map(l=>({path:l.path,line:l.line,rule:l.rule,severity:l.severity,msg:l.message.slice(0,100)}))):'')+
-            (nonMockSolSummaries.length?'. Non-mock Solidity functions not yet queued: '+JSON.stringify(nonMockSolSummaries.slice(0,6)):'')+
-            (analysisSourcePackets.length?'. Exact source evidence for targeted planning: '+JSON.stringify(analysisSourcePackets).slice(0,5500):'')+
-            '. Propose ONE source-backed targeted experiment. Return exactly {"action":"discover_experiment","path":"source-...sol","query":"Contract.function","answer":"solidity_sequence","hypothesis":"A falsifiable claim tied to inspected source","sequence":{"constructorArgs":[],"steps":[{"operation":"send","function":"method()","args":[],"sender":1},{"operation":"observe","function":"getter()","args":[]}]}}. Replace method/getter with real source-declared signatures. Allowed step operations: send, call (requires expect), observe, eth_balance (requires account). Each send/call/observe requires function and args; constructorArgs is always an array, even when empty. Include relevant preparation deployments and initial-state checks where needed. A generic state read is exploratory, not a tested security invariant. Do not guess function signatures or assertions. OR send {"action":"finalize_analysis","path":"","query":"","answer":""} only after assessing all selected lead IDs. '+analysisPacketPrompt()});
+          // Historical stage overview is advisory/evictable. The authoritative
+          // current lead and source excerpt are delivered anew with every call.
+          messages.push({role:'user',content:'ANALYZE STAGE: You have '+maxAnalyzeTurns+
+            ' bounded model turns. Assess or defer the controller-selected pending lead, '+
+            'using its immutable leadId, exact selector, verified source and a specific reason. '+
+            'Propose discover_experiment only with a source-grounded invariant and a valid '+
+            'solidity_sequence. Do not finalize while any selected lead is pending. '+
+            'The next pending lead and its bounded evidence appear in the current controller task. /no_think'});
         } else {
           await closeAnalysis(stageLock.analysisProgress.pendingIds.length?'partial':'complete',
             stageLock.analysisProgress.pendingIds.length?'model_analysis_disabled':'');
@@ -1227,7 +1243,13 @@ export async function runLocalAudit(
         const latestStart=latestAuditExchangeStart(messages);
         const floorMessages=latestStart<messages.length ? [...messages.slice(0,2),...messages.slice(latestStart)] : messages.slice(0,2);
         const floorSize=JSON.stringify(floorMessages).length;
-        const maxControllerSpace=Math.max(0,messageBudget-floorSize);
+        // Keep room for a minimum useful current lead excerpt even before
+        // optional progress messages are trimmed.
+        const requiredAnalysisFloor=stageLock?.currentStage==='ANALYZE' && analyzeModelPending
+          ? JSON.stringify([{role:'user',content:analysisPacketPrompt(
+              Math.min(420,nextAnalysisPacket()?.id ? analysisPackets.get(nextAnalysisPacket()!.id)?.sourceExcerpt.length||0 : 0))}]).length+2
+          : 0;
+        const maxControllerSpace=Math.max(0,messageBudget-floorSize-requiredAnalysisFloor);
         while(progressMessages.length>1 && JSON.stringify(progressMessages).length+schemaExtra>maxControllerSpace) {
           progressMessages.pop();
         }
@@ -1239,28 +1261,76 @@ export async function runLocalAudit(
         }
       }
       const progressSize=progressMessages.length ? JSON.stringify(progressMessages).length : 0;
-      // Reserve controller space when producing tool output too, including the
-      // next stage's note. Otherwise a fitted result can overflow on the next turn.
-      const exchangeBudget=messageBudget-Math.max(progressSize+schemaExtra,workflow?3000:0);
+      // Live ANALYZE instructions are request-local. The compactor continues
+      // archiving historical exchanges but cannot evict this required tail.
+      const activeAnalysisLead=stageLock?.currentStage==='ANALYZE' && analyzeModelPending
+        ? nextAnalysisPacket() : undefined;
+      const activeAnalysisPacket=activeAnalysisLead
+        ? analysisPackets.get(activeAnalysisLead.id) : undefined;
+      let activeAnalyzeInstruction:Message|null=null;
+      if(stageLock?.currentStage==='ANALYZE' && analyzeModelPending){
+        const sourceLength=activeAnalysisPacket?.sourceExcerpt.length||0;
+        const minimumExcerpt=Math.min(420,sourceLength);
+        const pinnedChars=JSON.stringify(messages.slice(0,2)).length;
+        const reservedTailChars=Math.max(progressSize+schemaExtra,workflow?3000:0);
+        const maxInstructionChars=messageBudget-pinnedChars-reservedTailChars-120;
+        const makeInstruction=(n:number):Message=>({role:'user',content:analysisPacketPrompt(n)});
+        if(JSON.stringify([makeInstruction(minimumExcerpt)]).length+2>maxInstructionChars)
+          throw new Error('ANALYSIS_ACTIVE_INSTRUCTION_EXCEEDS_CONTEXT_BUDGET');
+        // Binary search the largest excerpt fitting the actual remaining
+        // character reservation, without cropping identity fields or JSON.
+        let low=minimumExcerpt,high=sourceLength;
+        while(low<high){
+          const mid=Math.ceil((low+high)/2);
+          if(JSON.stringify([makeInstruction(mid)]).length+2<=maxInstructionChars)low=mid;
+          else high=mid-1;
+        }
+        activeAnalyzeInstruction=makeInstruction(low);
+      }
+      const requiredTail:Message[]=[...progressMessages,
+        ...(activeAnalyzeInstruction?[activeAnalyzeInstruction]:[])];
       const beforeCompaction=messages;
-      const compacted=compactAuditContext(messages,exchangeBudget,[...hypotheses.slice(-2).map(h=>"Unverified hypothesis: "+JSON.stringify(h)),...events.slice(-4)]);
-      await archiveEvictedExchanges(beforeCompaction,compacted);
-      messages=compacted;
-      const started = Date.now();
+      const historyNotes=[...hypotheses.slice(-2).map(h=>"Unverified hypothesis: "+JSON.stringify(h)),...events.slice(-4)];
+      const assembled=compactAuditContextWithRequiredTail(
+        messages,messageBudget,requiredTail,schemaExtra,workflow?3000:0,historyNotes);
+      // Preserve the original per-turn tool-output fitting budget for every
+      // later read, final-validation, and verifier response on this turn.
+      const exchangeBudget=assembled.historyBudget;
+      await archiveEvictedExchanges(beforeCompaction,assembled.history);
+      messages=assembled.history;
+      const started=Date.now();
       const profile=modelProfile(workflow?.snapshot().stage);
       const hasObservedBehavior=!!workflow?.snapshot().observations.some(o=>o.status==='behavior_observed');
       const turnGenerationLimit=(stageLock?.currentStage==='REVIEW' && !profile.think && structured && workflow && !!limits.finalSchema && !hasObservedBehavior && !invalidFinalFormats)
         ? Math.min(generationBudget,512)
         : generationBudget;
-      await appendFile(logFile, `[OLLAMA] turn ${turn+1}/${allowance.turns}: request started; model=${model}; context=${limits.numCtx ?? "server-default"}; generation_limit=${turnGenerationLimit}; protocol=${protocol}\n`);
+      await appendFile(logFile, `[OLLAMA] turn ${turn+1}/${allowance.turns}: request started; model=${model}; context=${limits.numCtx ?? "server-default"}; generation_limit=${turnGenerationLimit}; protocol=${protocol}\\n`);
       let lastProgressLog=0;
       const onProgress=(progress:{contentCharacters:number;thinkingCharacters:number;toolCalls:number})=>{
         if(Date.now()-lastProgressLog<15000)return;
         lastProgressLog=Date.now();
-        void appendFile(logFile,"[MODEL_PROGRESS] "+JSON.stringify({turn:turn+1,elapsedMs:Date.now()-started,...progress})+"\n").catch(()=>{});
+        void appendFile(logFile,"[MODEL_PROGRESS] "+JSON.stringify({turn:turn+1,elapsedMs:Date.now()-started,...progress})+"\\n").catch(()=>{});
       };
-      const turnMessages=progressMessages.length ? [...messages,...progressMessages] : messages;
-      const requestMessages=profile.think ? turnMessages.map(m=>({...m,content:m.content.replaceAll('/no_think','')})) : turnMessages;
+      const requestMessages=profile.think
+        ? assembled.requestMessages.map(m=>({...m,content:m.content.replaceAll('/no_think','')}))
+        : assembled.requestMessages;
+      const requestChars=JSON.stringify(requestMessages).length+schemaExtra;
+      if(requestChars>messageBudget)
+        throw new Error('MODEL_REQUEST_EXCEEDS_CONTEXT_BUDGET: '+requestChars+'/'+messageBudget);
+      if(activeAnalyzeInstruction){
+        const last=requestMessages.at(-1)?.content||'';
+        if(activeAnalysisLead && (!activeAnalysisPacket ||
+          ![activeAnalysisLead.id,activeAnalysisLead.path,activeAnalysisLead.selector,
+            activeAnalysisLead.sourceCommit,activeAnalysisLead.sourceSha256,
+            activeAnalysisPacket.sourceEvidence].every(value=>last.includes(value))))
+          throw new Error('ANALYSIS_REQUEST_MISSING_ACTIVE_LEAD_EVIDENCE');
+        await appendFile(logFile,'[ANALYSIS_REQUEST_BOUND] '+JSON.stringify({
+          turn:turn+1,leadId:activeAnalysisLead?.id||null,
+          sourceEvidence:activeAnalysisPacket?.sourceEvidence||null,
+          activeInstructionChars:activeAnalyzeInstruction.content.length,
+          requestChars,messageBudget,context:settings.numCtx,
+          pending:stageLock?.analysisProgress.pendingIds.length})+'\\n');
+      }
       // The graph has already specified the exact next read/verification.
       // Execute it rather than spending a Qwen turn asking for known arguments.
       const fullIndexMode=!!workflow && (limits.controllerIndex ?? (process.env.LOCAL_CONTROLLER_FULL_SOURCE_INDEX==='true'));

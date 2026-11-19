@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { mkdirSync, rmSync } from 'node:fs';
@@ -9,6 +10,7 @@ import { normalizeNegativeHuntProse } from '../packages/security-solver/src/loca
 import { runLocalAudit } from '../packages/security-solver/src/local-ollama-runner';
 import { InvestigationWorkflow } from '../packages/security-solver/src/investigation-workflow';
 import { ControllerStageLock } from '../packages/security-solver/src/controller-stage-lock';
+import { compactAuditContextWithRequiredTail } from '../packages/security-solver/src/audit-context';
 
 const hash = (s: string) => createHash('sha256').update(s).digest('hex');
 
@@ -758,6 +760,131 @@ async function testReviewContextBudgetAndTruncationRetry() {
     await rm(root, { recursive: true, force: true });
   }
 }
+
+
+// Force eviction of historical exchanges while retaining an immutable live task.
+function testRequiredControllerTailIsNotEvictable(){
+  const history=[{role:'system',content:'System task'},{role:'user',content:'Original task'},
+    ...Array.from({length:20},(_,i)=>({role:i%2?'assistant':'user',content:'Historical '+i+' '+ 'X'.repeat(1200)}))];
+  const active={role:'user',content:'CURRENT ANALYZE TASK leadId='+ 'a'.repeat(64)};
+  const result=compactAuditContextWithRequiredTail(history,4800,[active],0,1000);
+  assert.equal(result.requestMessages.at(-1)?.content,active.content);
+  assert.ok(result.history.length<history.length,'Historical exchanges must be compacted');
+  assert.ok(result.requestMessages.some(msg=>msg.content.includes(active.content)));
+  assert.ok(JSON.stringify(result.requestMessages).length<=4800);
+  assert.throws(()=>compactAuditContextWithRequiredTail(history,100,[active],0,0),
+    /CONTROLLER_REQUIRED_INSTRUCTION_EXCEEDS_CONTEXT_BUDGET/);
+  console.log('8a. Required controller instruction survives archive compaction PASSED');
+}
+testRequiredControllerTailIsNotEvictable();
+
+async function testActiveAnalysisPacketSurvivesCompactionAndRejection() {
+  const root=await mkdtemp(join(tmpdir(),'lotus-analysis-handoff-'));
+  const path='source-1/contracts/Deposit.sol';
+  const secondPath='source-1/contracts/Withdraw.sol';
+  const source='// SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;\ncontract Deposit {\n'+
+    '  uint256 public total;\n'+
+    '  function deposit(uint256 amount) external { total += amount; }\n'+
+    '  function withdraw(uint256 amount) external { require(total >= amount); total -= amount; }\n'+
+    '}\n';
+  const secondSource='// SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;\ncontract Withdraw {\n'+
+    '  uint256 public balance;\n'+
+    '  function take(uint256 amount) external { require(balance >= amount); balance -= amount; }\n'+
+    '}\n';
+  const log=join(root,'analysis.log');
+  let analysisRequests=0;
+  const received:Array<{leadId:string;sourceEvidence:string;chars:number;budget:number}>=[];
+  const server=createServer(async(req,res)=>{
+    let raw='';
+    for await(const chunk of req)raw+=chunk;
+    const body=JSON.parse(raw);
+    const active=(body.messages as Array<{content:string}>).at(-1)?.content||'';
+    const match=active.match(/Controller-verified identity and bounded source excerpt: (\{.*?\})\. Reply using/);
+    if(match){
+      const packet=JSON.parse(match[1]);
+      analysisRequests++;
+      assert.ok([path,secondPath].includes(packet.path));
+      assert.equal(packet.sourceSha256,hash(packet.path===path?source:secondSource));
+      assert.match(packet.id,/^[a-f0-9]{64}$/);
+      assert.match(packet.sourceCommit,/^[a-f0-9]{40}$/);
+      assert.ok(packet.sourceEvidence.includes(packet.sourceSha256));
+      assert.ok(packet.sourceExcerpt.includes('function'));
+      received.push({leadId:packet.id,sourceEvidence:packet.sourceEvidence,
+        chars:JSON.stringify(body.messages).length,
+        budget:body.options.num_ctx});
+      const answer=analysisRequests===1
+        ? {action:'finalize_analysis',path:'',query:'',answer:''}
+        : {action:'defer_lead',path:packet.path,query:packet.selector,leadId:packet.id,
+            answer:'The source alone does not establish a defensible unauthorized-caller invariant or complete executable fixture.',
+            hypothesis:'none'};
+      res.end(JSON.stringify({message:{role:'assistant',content:JSON.stringify(answer)}}));
+      return;
+    }
+    if(active.includes('All selected lead assessments have dispositions')){
+      res.end(JSON.stringify({message:{role:'assistant',content:JSON.stringify({
+        action:'finalize_analysis',path:'',query:'',answer:''})}}));
+      return;
+    }
+    res.end(JSON.stringify({message:{role:'assistant',content:JSON.stringify({
+      action:'final',path:'',query:'',answer:'',
+      result:{findings:[],outcome:'no_testable_candidate',
+        reason:'No supported executable security property was demonstrated.'}
+    })}}));
+  });
+  try{
+    await mkdir(dirname(join(root,path)),{recursive:true});
+    await writeFile(join(root,path),source);
+    await writeFile(join(root,secondPath),secondSource);
+    execFileSync('git',['init','-q'],{cwd:root});
+    execFileSync('git',['add','.'],{cwd:root});
+    execFileSync('git',['-c','user.name=Test','-c','user.email=test@example.invalid',
+      'commit','-qm','Fixture'],{cwd:root});
+    await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));
+    const port=(server.address() as any).port;
+    await withEnv({
+      AUTOHACK_OLLAMA_URL:'http://127.0.0.1:'+port+'/api/chat',
+      LOCAL_OLLAMA_TOOL_PROTOCOL:'json',
+      LOCAL_CONTROLLER_FULL_SOURCE_INDEX:'true',
+      LOCAL_CONTROLLER_OWNED_ACTIONS:'true',
+      AUTOHACK_AUTO_SOURCE_PREFETCH:'false',
+      LOCAL_MODEL_SOLIDITY_ANALYZE:'true',
+      LOCAL_ANALYZE_MODEL_TURNS:'4',
+    },async()=>{
+      await runLocalAudit('Inspect these source contracts. '+'Historical notes: '+'A'.repeat(2400),
+        log,30000,root,'mock',undefined,{
+          productionWorkflow:true,controllerIndex:true,dynamicAllowance:true,
+          maxTurns:30,numCtx:8192,numPredict:512,
+          initialSourcePaths:[path,secondPath],
+          staticLeads:[{path,line:5,rule:'source-review',message:'Assess missing caller authority on deposit'},
+            {path:secondPath,line:5,rule:'source-review',message:'Assess missing caller authority on take'}],
+          verifyPython:async()=>JSON.stringify({status:'behavior_not_observed',behavior_observed:false}),
+          validateFinal:async()=>null,
+        });
+    });
+    const logText=await readFile(log,'utf8');
+    assert.ok(analysisRequests>=2,
+      'Premature final must be rejected and active packet resent for the next request');
+    assert.equal(received[0].leadId,received[1].leadId,
+      'Immutable pending lead must survive first rejected action');
+    assert.ok(logText.includes('[ANALYSIS_FINALIZATION_REJECTED]'),
+      'Stage lock must reject premature analysis finalization');
+    assert.ok(logText.includes('[ANALYSIS_LEAD_DEFERRED]'),
+      'Controller must accept an evidence-grounded disposition');
+    assert.ok(analysisRequests>=3,'Must proceed to the next distinct pending lead');
+    assert.notEqual(received[1].leadId,received[2].leadId,
+      'Next request must select the next pending lead, not reassess the first');
+    assert.ok(logText.includes('[ANALYSIS_REQUEST_BOUND]'),
+      'Controller must certify identity and budget in the actual request');
+    assert.ok(received.every(x=>x.chars<x.budget*3),
+      'Actual messages must fit 8192-token approximate character reservation');
+    console.log('8. ANALYZE packet retained across compaction and rejected final PASSED');
+  }finally{
+    server.closeAllConnections();server.close();
+    await rm(root,{recursive:true,force:true});
+  }
+}
+
+await testActiveAnalysisPacketSurvivesCompactionAndRejection();
 
 await testReviewStageStrictResultAndLoopRecovery();
 await testReviewContextBudgetAndTruncationRetry();

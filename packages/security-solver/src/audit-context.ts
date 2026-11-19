@@ -93,6 +93,26 @@ export function compactAuditContext(messages:AuditMessage[],budget:number,progre
   if(JSON.stringify(result).length>budget)throw new Error("Audit pinned instructions and controller reserve exceed context budget (budget="+budget+")");
   return result;
 }
+/** Keep a current controller instruction out of the evictable historical tier.
+ * Required tail messages are appended AFTER compaction; they never enter
+ * the archival history and cannot be replaced by CONTEXT_EXCHANGE_EVICTED.
+ * Count the output schema adjustment and pre-existing controller reservation.
+ */
+export function compactAuditContextWithRequiredTail(
+  history:AuditMessage[],messageBudget:number,requiredTail:AuditMessage[],
+  schemaExtra:number,controllerReserve:number,notes:string[]=[]
+):{history:AuditMessage[];requestMessages:AuditMessage[];historyBudget:number} {
+  const tailChars=requiredTail.length?JSON.stringify(requiredTail).length+1:0;
+  const historyBudget=messageBudget-Math.max(tailChars+schemaExtra,controllerReserve);
+  if(historyBudget<=JSON.stringify(history.slice(0,2)).length)
+    throw new Error('CONTROLLER_REQUIRED_INSTRUCTION_EXCEEDS_CONTEXT_BUDGET');
+  const kept=compactAuditContext(history,historyBudget,notes);
+  const requestMessages=[...kept,...requiredTail];
+  if(JSON.stringify(requestMessages).length+schemaExtra>messageBudget)
+    throw new Error('CONTROLLER_REQUEST_EXCEEDS_CONTEXT_BUDGET');
+  return {history:kept,requestMessages,historyBudget};
+}
+
 export function auditCheckpoint(events:string[]):string {
   return JSON.stringify({version:1,notes:events.slice(-12),instruction:"Re-read evidence and rerun probes before reporting. These are progress notes, not evidence."});
 }
