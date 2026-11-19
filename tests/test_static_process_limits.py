@@ -61,5 +61,18 @@ class StaticScannerProcessLimitTests(unittest.TestCase):
                       setter.call_args_list)
 
 
+    def test_slither_limits_allow_wasm_solc_virtual_memory(self):
+        with patch.object(static, 'scanner_nproc_limit', return_value=234), \
+             patch.object(static.resource, 'getrlimit', return_value=(static.resource.RLIM_INFINITY, static.resource.RLIM_INFINITY)), \
+             patch.object(static.resource, 'setrlimit') as setter:
+            static.limits(slither=True)
+        self.assertIn(call(static.resource.RLIMIT_CPU, (90, 90)), setter.call_args_list)
+        self.assertIn(call(static.resource.RLIMIT_AS, (32 * 1024**3, 32 * 1024**3)), setter.call_args_list)
+
+    def test_slither_as_limit_never_exceeds_inherited_limit(self):
+        with patch.object(static.resource, 'getrlimit', return_value=(16 * 1024**3, 16 * 1024**3)):
+            self.assertEqual(static.scanner_as_limit(slither=True), 16 * 1024**3)
+
+
 if __name__ == '__main__':
     unittest.main()

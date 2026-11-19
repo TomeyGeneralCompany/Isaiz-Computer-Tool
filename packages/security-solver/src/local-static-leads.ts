@@ -9,7 +9,7 @@ const exec=promisify(execFile);
 const MAX_SLITHER_TARGETS=6;
 const COLLECT_SLITHER_LIMIT=24;
 const SLITHER_BATCH_SIZE=8;
-const excludedSolidityPath=/(?:^|\/)(?:mocks?|test|tests|__tests__|fixtures|vendor|node_modules)(?:\/|$)|Mock\.sol$/i;
+const excludedSolidityPath=/(?:^|\/)(?:mocks?|tests?|__tests__|fixtures|vendor|node_modules|echidna)(?:\/|$)|(?:Mock|Tests?)\.sol$|(?:^|\/)(?:Dummy|Echidna)[A-Za-z0-9_]*\.sol$/i;
 const coreContractTerms=/(?:core|vaults?|pools?|markets?|lending|staking|bridge|router|exchange|vesting|minter|treasury|strategy|controller|settlement|liquidation|oracle|escrow|rewards?|deposit|interest|zap)/i;
 
 /**

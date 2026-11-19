@@ -11,6 +11,8 @@ import {
   controllerGroundedSolidityOptions,
   prioritizeSolidityStagedPlans,
   runLocalAudit,
+  sanitizeOllamaFormatSchema,
+  solidityProbeBasePriority,
 } from "../packages/security-solver/src/local-ollama-runner";
 import { decodeAuditAction } from "../packages/security-solver/src/local-audit-protocol";
 import { runEvidenceOnlyReview } from "../packages/security-solver/src/evidence-only-review";
@@ -321,6 +323,11 @@ contract PlainVault {
 
     if (enumActions.includes("discover_experiment")) {
       sawAnalyzeActionPrompt = true;
+      const fmtJson = JSON.stringify(payload.format || {});
+      assert.doesNotMatch(fmtJson, /"(?:minLength|maxLength|pattern)"/, "ANALYZE format must strip GBNF-exploding constraints");
+      assert.equal(payload.format?.properties?.result, undefined, "ANALYZE format must omit final result schema");
+      assert.ok(Array.isArray(payload.format?.properties?.leadId?.enum) && payload.format.properties.leadId.enum.length === 1,
+        "ANALYZE format must pin leadId to exact pending enum instead of 64-char regex");
       const packetText=payload.messages.map((m:any)=>String(m.content||'')).join('\n');
       const leadIdMatch=packetText.match(/"id":"([a-f0-9]{64})","path":"(source-[^"]+\.sol)","selector":"([^"]+)"/);
       assert.ok(leadIdMatch,'A model action must be scoped to a source-hashed lead packet');
@@ -351,6 +358,9 @@ contract PlainVault {
 
     if (enumActions.length === 1 && enumActions[0] === "final") {
       reviewCalls++;
+      const fmtJson = JSON.stringify(payload.format || {});
+      assert.doesNotMatch(fmtJson, /"(?:minLength|maxLength|pattern)"/, "REVIEW format must strip GBNF-exploding constraints");
+      assert.equal(payload.format?.properties?.leadId, undefined, "REVIEW final-only format must omit leadId");
       if (payload.messages.some((m: any) => String(m.content || "").includes("Controller multi-contract experiment summary"))) {
         sawMultiContractSummary = true;
       }
@@ -477,6 +487,90 @@ contract PlainVault {
     else process.env.LOCAL_OLLAMA_KEEP_ALIVE = prevKeepAlive;
     delete process.env.LOCAL_ANALYZE_MODEL_TURNS;
     await rm(tmp, { recursive: true, force: true });
+  }
+}
+
+
+// 7. Regression tests for #232: GBNF schema sanitization, hypothesis priority tiers, .isContract() binding, Echidna/Dummy exclusions
+{
+  const sanitized = sanitizeOllamaFormatSchema({
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      leadId: { type: "string", pattern: "^[a-f0-9]{64}$" },
+      reason: { type: "string", minLength: 20, maxLength: 600 },
+      findings: { type: "array", maxItems: 0 },
+    },
+    required: ["findings", "reason"],
+  });
+  assert.equal(sanitized.properties.leadId.pattern, undefined);
+  assert.equal(sanitized.properties.reason.minLength, undefined);
+  assert.equal(sanitized.properties.reason.maxLength, undefined);
+  assert.equal(sanitized.properties.findings.maxItems, 0);
+  assert.deepEqual(sanitized.required, ["findings", "reason"]);
+
+  assert.equal(solidityProbeBasePriority("Unauthorized caller must not mint NFTs via NFT.mint; authorized owner may."), 100);
+  assert.equal(solidityProbeBasePriority("Unauthorized caller ($account1) must not extract ETH from Vault via sweep."), 100);
+  assert.equal(solidityProbeBasePriority("Unauthorized caller must not re-initialize Market.initialize once initialized; initial owner authority must remain deployer ($account0)."), 40);
+  assert.equal(solidityProbeBasePriority("Non-owner must not pause MPHConverter via MPHConverter.pause; owner may."), 40);
+  assert.equal(solidityProbeBasePriority("Unauthorized caller must not transfer Vault ownership via transferOwnership."), 40);
+  assert.equal(solidityProbeBasePriority("Unauthorized caller must not update fee via FeeModel.setFee; authorized owner may."), 10);
+
+  const ranked = rankSolidityStaticTargets([
+    "source-1/contracts/EchidnaDepositWithdrawTest.sol",
+    "source-1/contracts/rewards/DummyMPHMinter.sol",
+    "source-1/contracts/echidna/Harness.sol",
+    "source-1/contracts/VaultTests.sol",
+    "source-1/contracts/DInterest.sol",
+  ], "source-1");
+  assert.deepEqual(ranked, ["contracts/DInterest.sol"], "Echidna, Dummy, and *Test(s) Solidity files must be excluded");
+
+  const marketSource = `// SPDX-License-Identifier: MIT
+pragma solidity 0.8.4;
+library AddressUpgradeable { function isContract(address account) internal view returns (bool) { return account.code.length > 0; } }
+abstract contract OwnableUpgradeable {
+  address private _owner;
+  modifier onlyOwner() { require(msg.sender == _owner, "owner"); _; }
+  function __Ownable_init() internal { _owner = msg.sender; }
+  function owner() public view returns (address) { return _owner; }
+}
+contract MarketWithContractGuards is OwnableUpgradeable {
+  using AddressUpgradeable for address;
+  address public cToken;
+  address public rewards;
+  address public stablecoin;
+  bool private initialized;
+  modifier initializer() { require(!initialized, "init"); initialized = true; _; }
+  function initialize(address _cToken, address _rewards, address _stablecoin) external initializer {
+    __Ownable_init();
+    require(_cToken.isContract() && _rewards.isContract() && _stablecoin.isContract(), "not contract");
+    cToken = _cToken;
+    rewards = _rewards;
+    stablecoin = _stablecoin;
+  }
+  function setRewards(address _rewards) external onlyOwner {
+    require(_rewards.isContract(), "not contract");
+    rewards = _rewards;
+  }
+}
+`;
+  const marketPlan = constructSolidityExperiments({
+    repositoryCommit: "0123456789abcdef0123456789abcdef01234567",
+    targetPath: "source-1/contracts/MarketWithContractGuards.sol",
+    targetSelector: "MarketWithContractGuards.setRewards",
+    sources: [{ path: "source-1/contracts/MarketWithContractGuards.sol", content: marketSource, sha256: sha(marketSource) }],
+    declarations: [
+      { kind: "function", name: "initialize", contract: "MarketWithContractGuards", visibility: "external", line: 17, params: "address _cToken, address _rewards, address _stablecoin", modifiers: ["initializer"] },
+      { kind: "function", name: "setRewards", contract: "MarketWithContractGuards", visibility: "external", line: 24, params: "address _rewards", modifiers: ["onlyOwner"] },
+      { kind: "function", name: "owner", contract: "MarketWithContractGuards", visibility: "public", line: 8, params: "", mutability: "view" },
+      { kind: "function", name: "rewards", contract: "MarketWithContractGuards", visibility: "public", line: 13, params: "", mutability: "view" },
+    ],
+  });
+  assert.equal(marketPlan.ok, true, "MarketWithContractGuards plan must succeed");
+  if (marketPlan.ok) {
+    const initStep = marketPlan.experiments[0].sequence.steps.find(step => step.operation === "send" && step.function.startsWith("initialize("));
+    assert.ok(initStep, "Plan must include initialize setup step");
+    assert.deepEqual(initStep.args, ["$contract", "$contract", "$contract"], ".isContract() initialize params must resolve to $contract");
   }
 }
 

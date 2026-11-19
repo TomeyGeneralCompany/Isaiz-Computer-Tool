@@ -51,13 +51,86 @@ def scanner_nproc_limit():
     return desired
 
 
-def limits():
-    resource.setrlimit(resource.RLIMIT_CPU, (45, 45))
-    resource.setrlimit(resource.RLIMIT_AS, (2 * 1024**3, 2 * 1024**3))
+def scanner_as_limit(slither=False):
+    """Node.js + WASM solc reserves >2 GiB virtual address space; bound safely."""
+    desired = (32 if slither else 2) * 1024**3
+    soft, hard = resource.getrlimit(resource.RLIMIT_AS)
+    for inherited in (soft, hard):
+        if inherited != resource.RLIM_INFINITY:
+            desired = min(desired, inherited)
+    return desired
+
+
+def limits(slither=False):
+    cpu_seconds = 90 if slither else 45
+    resource.setrlimit(resource.RLIMIT_CPU, (cpu_seconds, cpu_seconds))
+    as_limit = scanner_as_limit(slither=slither) if slither else 2 * 1024**3
+    resource.setrlimit(resource.RLIMIT_AS, (as_limit, as_limit))
     resource.setrlimit(resource.RLIMIT_FSIZE, (8 * 1024**2, 8 * 1024**2))
     nproc = scanner_nproc_limit()
     resource.setrlimit(resource.RLIMIT_NPROC, (nproc, nproc))
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+
+
+def _prepare_slither_locked_imports(repository, source, sol_targets):
+    """Materialize locked npm Solidity imports needed by Slither targets."""
+    lock_path = repository / 'package-lock.json'
+    if not lock_path.is_file() or lock_path.is_symlink():
+        return
+    try:
+        if lock_path.stat().st_size > 4 * 1024 * 1024:
+            return
+        lock = json.loads(lock_path.read_bytes())
+    except (OSError, ValueError):
+        return
+    packages = lock.get('packages')
+    if lock.get('lockfileVersion') not in (2, 3) or not isinstance(packages, dict):
+        return
+    locked_pkgs = [k[13:] for k in packages if isinstance(k, str) and k.startswith('node_modules/') and k[13:]]
+    if not locked_pkgs:
+        return
+    visited = set()
+    queue = list(sol_targets[:24])
+    raw_imports = set()
+    import_re = re.compile(r'^\s*import\s+(?:[^"\';]*?\s+from\s+)?["\']([^"\']+)["\']\s*;', re.M)
+    while queue and len(visited) < 256:
+        rel = queue.pop(0)
+        if rel in visited:
+            continue
+        visited.add(rel)
+        f = source / rel
+        if not f.is_file():
+            continue
+        try:
+            text = f.read_text(errors='replace')[:256000]
+        except OSError:
+            continue
+        for imp in import_re.findall(text):
+            if imp.startswith('.'):
+                try:
+                    resolved = (f.parent / imp).resolve()
+                    if resolved.is_relative_to(source) and resolved.is_file():
+                        sub_rel = resolved.relative_to(source).as_posix()
+                        if sub_rel not in visited:
+                            queue.append(sub_rel)
+                except OSError:
+                    continue
+            else:
+                raw_imports.add(imp)
+    missing = []
+    for imp in sorted(raw_imports):
+        if (repository / 'node_modules' / imp).is_file():
+            continue
+        if any(imp == pkg or imp.startswith(pkg + '/') for pkg in locked_pkgs):
+            missing.append(imp)
+    if not missing:
+        return
+    try:
+        sys.path.insert(0, str(ROOT / 'scripts'))
+        from source_dependencies import prepare_dependencies
+        prepare_dependencies(repository, missing[:64])
+    except Exception:
+        return
 
 
 def detect_solc_pkg(source_text):
@@ -170,6 +243,21 @@ def analyze(repository, engine, target=None, targets=None):
             '--ro-bind', str(runtime), str(runtime),
             '--ro-bind', str(source), '/repo',
         ]
+        if engine == 'slither':
+            pre_targets = []
+            if targets is not None:
+                if isinstance(targets, str):
+                    try:
+                        parsed = json.loads(targets)
+                        if isinstance(parsed, list):
+                            pre_targets = [t for t in parsed if isinstance(t, str)]
+                    except ValueError:
+                        pre_targets = []
+                elif isinstance(targets, (list, tuple)):
+                    pre_targets = [t for t in targets if isinstance(t, str)]
+            elif target:
+                pre_targets = [target]
+            _prepare_slither_locked_imports(repository, source, pre_targets)
         # Bind untracked node_modules / lib from repository for Solidity import resolution
         for dep_dir_name in ('node_modules', 'lib'):
             dep_dir = repository / dep_dir_name
@@ -202,7 +290,7 @@ def analyze(repository, engine, target=None, targets=None):
                     out.seek(0)
                     raw = out.read(8 * 1024**2)
                     err.seek(0)
-                    diagnostic = err.read(1000).decode('utf-8', errors='replace')
+                    diagnostic = err.read(1000).decode('utf-8', errors='replace').strip() or raw[:1000].decode('utf-8', errors='replace').strip()
                     try:
                         data = json.loads(raw)
                     except ValueError:
@@ -312,11 +400,11 @@ def analyze(repository, engine, target=None, targets=None):
             ]
             try:
                 with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
-                    run = subprocess.run(command, stdout=out, stderr=err, timeout=45, preexec_fn=limits)
+                    run = subprocess.run(command, stdout=out, stderr=err, timeout=45, preexec_fn=lambda: limits(slither=True))
                     out.seek(0)
                     raw = out.read(8 * 1024**2)
                     err.seek(0)
-                    diagnostic = err.read(1000).decode('utf-8', errors='replace')
+                    diagnostic = err.read(1000).decode('utf-8', errors='replace').strip() or raw[:1000].decode('utf-8', errors='replace').strip()
                     try:
                         data = json.loads(raw)
                     except ValueError:

@@ -188,12 +188,13 @@ contract TomeyERC1155ProbeHarness is ERC1155Upgradeable {
     }
   } catch {}
   if (!compiled) {
-    const totalCompileChars = Object.values(compileSources).reduce((sum, entry) => sum + (entry?.content?.length || 0), 0);
-    const initialCompilerSettings = (sequenceMode && !spec.compilerSettings?.optimizer && totalCompileChars > 60000)
-      ? { ...(spec.compilerSettings || {}), optimizer: { enabled: true, runs: 200 } }
-      : spec.compilerSettings;
-    compiled = compileWith(initialCompilerSettings);
-    const errors = (compiled.errors || []).filter(e => e.severity === 'error');
+    compiled = compileWith(spec.compilerSettings);
+    let errors = (compiled.errors || []).filter(e => e.severity === 'error');
+    if (errors.length && sequenceMode && !spec.compilerSettings?.optimizer &&
+        errors.some(e => /stack too deep/i.test(String(e.formattedMessage || e.message || '')))) {
+      compiled = compileWith({ ...(spec.compilerSettings || {}), optimizer: { enabled: true, runs: 200 } });
+      errors = (compiled.errors || []).filter(e => e.severity === 'error');
+    }
     if (errors.length) {
       const error = new Error(errors.map(e => e.formattedMessage).join('\n').slice(0, 2000));
       error.missingImports = [...missingImports];
@@ -210,18 +211,9 @@ contract TomeyERC1155ProbeHarness is ERC1155Upgradeable {
   if (candidates.length !== 1) throw new Error(sequenceMode ? 'Select one deployable contract and public/external function using Contract.function' : 'Select one deployable contract with a view/pure string -> string function using Contract.function');
   if (sequenceMode && (!contractName || !spec.sequence.steps.some(step=>typeof step.function==='string' && step.function.split('(')[0]===functionName))) throw new Error('Sequence must exercise the selected Contract.function');
   let artifact = candidates[0][1];
-  if (!cacheHit && sequenceMode && !spec.compilerSettings?.optimizer && artifact.evm.bytecode.object.length > 49152) {
-    const totalCompileChars = Object.values(compileSources).reduce((sum, entry) => sum + (entry?.content?.length || 0), 0);
-    if (totalCompileChars <= 60000) {
-      const optimized = compileWith({...(spec.compilerSettings || {}), optimizer: {enabled: true, runs: 200}});
-      const optErrors = (optimized.errors || []).filter(e => e.severity === 'error');
-      const optCandidate = !optErrors.length ? optimized.contracts?.[selectedFile]?.[candidates[0][0]] : null;
-      if (optCandidate?.evm?.bytecode?.object && optCandidate.evm.bytecode.object.length < artifact.evm.bytecode.object.length) {
-        compiled = optimized;
-        artifact = optCandidate;
-      }
-    }
-  }
+  // In sequenceMode, Ganache runs with allowUnlimitedContractSize: true and a
+  // 30M block gas limit, so unoptimized >24KB bytecode deploys directly without
+  // spending 4-5x CPU optimizing large contracts inside WASM solc.
   if (!cacheHit) {
     try {
       if (fs.existsSync('/compile-cache-out.json')) {
