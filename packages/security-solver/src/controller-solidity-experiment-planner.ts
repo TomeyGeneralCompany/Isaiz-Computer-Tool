@@ -401,7 +401,8 @@ function verifySafeSetupStatements(
   const paramSet=new Set(paramBinding.keys());
   const foundConstraints=collectParamConstraints(fnNode.body,paramSet);
   for(const [p,cs] of foundConstraints){
-    let existing=constraints.get(p);if(!existing){existing=new Set();constraints.set(p,existing);}
+    const boundKey=localBindings.get(p)||p;
+    let existing=constraints.get(boundKey);if(!existing){existing=new Set();constraints.set(boundKey,existing);}
     for(const c of cs)existing.add(c);
   }
   for(const stmt of statements){
@@ -1389,9 +1390,10 @@ interface MockTokenInfo {
 }
 
 function findRepositoryMockToken(sources:ReadonlyMap<string,SourceSnapshot>):MockTokenInfo|null {
+  const exactMockName=/(?:^|\/)(?:ERC20Mock|MockERC20|MockToken|TestToken)\.sol$/i;
   const candidates=[...sources.values()].filter(s=>
     s.path.endsWith('.sol') && /(?:ERC20Mock|MockERC20|MockToken|TestToken)/i.test(s.path)
-  );
+  ).sort((a,b)=>Number(exactMockName.test(b.path))-Number(exactMockName.test(a.path))||a.path.localeCompare(b.path));
   const pool=candidates.length ? candidates : [...sources.values()].filter(s=>s.path.endsWith('.sol'));
   for(const s of pool){
     let ast:any;

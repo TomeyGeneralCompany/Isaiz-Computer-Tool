@@ -98,11 +98,29 @@ export interface LocalAuditLimits {
  * The existing role-mutation constructor remains the first-class fallback.
  * A missing/unverifiable source revision never permits a new scenario.
  */
+/**
+ * Strip JSON Schema keywords that cause llama.cpp/Ollama GBNF grammar compilation
+ * to explode on CPU (e.g. large minLength/maxLength repetitions and 64-char hex
+ * regex patterns). Structural types, enums, required keys, additionalProperties,
+ * and maxItems remain intact; runtime Zod/protocol validators still enforce exact
+ * string bounds and regex formats after decoding.
+ */
+export function sanitizeOllamaFormatSchema<T>(schema:T):T {
+  if(Array.isArray(schema))return schema.map(item=>sanitizeOllamaFormatSchema(item)) as unknown as T;
+  if(!schema || typeof schema!=="object")return schema;
+  const out:Record<string,unknown>={};
+  for(const [key,value] of Object.entries(schema as Record<string,unknown>)) {
+    if(key==="minLength" || key==="maxLength" || key==="pattern" || key==="$schema" || key==="additionalItems")continue;
+    out[key]=sanitizeOllamaFormatSchema(value);
+  }
+  return out as T;
+}
+
 export function solidityProbeBasePriority(hypothesis:string):number {
-  if(/role mutation|re-initialization takeover|initializer takeover|unauthorized (?:eth|erc20) extraction|unguarded .*minting|privileged primitive authorization|\b(?:selfdestruct|delegatecall)\b/i.test(hypothesis))
+  if(/role mutation|re-initialization takeover|initializer takeover|unauthorized (?:eth|erc20) extraction|extract (?:eth|held erc20)|unguarded .*minting|must not mint\b|privileged primitive authorization|\b(?:selfdestruct|delegatecall)\b/i.test(hypothesis))
     return 100;
-  if(/core defi entrypoint/i.test(hypothesis))return 70;
-  if(/re-initialization guard|authority transfer|authority renunciation|accesscontrol role grant/i.test(hypothesis))
+  if(/core (?:defi|protocol) entrypoint/i.test(hypothesis))return 70;
+  if(/re-initialization guard|must not re-initialize\b|authority transfer|must not transfer .*ownership|authority renunciation|must not renounce\b|accesscontrol role grant|must not grant\b|must not (?:pause|unpause)\b/i.test(hypothesis))
     return 40;
   return 10;
 }
@@ -1072,6 +1090,17 @@ export async function runLocalAudit(
       if(constraints?.action?.some(action=>!actionSchema.properties.action.enum.includes(action)))throw new Error("Task requested an unavailable action");
       let requestSchema:Record<string,any>=constraints ? {...actionSchema,properties:{...actionSchema.properties,
         ...Object.fromEntries(Object.entries(constraints).map(([key,values])=>[key,{type:"string",enum:values}]))}} : actionSchema;
+      if(structured && stageLock?.currentStage==='ANALYZE' && analyzeModelPending) {
+        const analyzeProps:Record<string,any>={...requestSchema.properties};
+        delete analyzeProps.result;
+        delete analyzeProps.offset;
+        const pendingLeadIds=stageLock.analysisProgress.pendingIds;
+        const activeLead=nextAnalysisPacket();
+        if(activeLead?.id)analyzeProps.leadId={type:'string',enum:[activeLead.id]};
+        else if(pendingLeadIds.length)analyzeProps.leadId={type:'string',enum:pendingLeadIds};
+        else analyzeProps.leadId={type:'string'};
+        requestSchema={...requestSchema,properties:analyzeProps};
+      }
       if(structured && !requireInvestigationAfterEmpty && limits.finalSchema && (emptyFinals>=1 || invalidReviewFinals>=2 || invalidFinalFormats>=1 || !!workflow?.snapshot().verifiedEvidenceFocus || stageLock?.currentStage==='REVIEW' || stageLock?.currentStage==='REPORT') &&
          (!constraints?.action || constraints.action.includes('final'))) {
         // Qwen3:4b sometimes returns a valid "final" action with both answer=""
@@ -1113,7 +1142,9 @@ export async function runLocalAudit(
           delete nextProps.sequence;
           delete nextProps.offset;
           delete nextProps.hypothesis;
+          delete nextProps.leadId;
         }
+        nextProps.result=sanitizeOllamaFormatSchema(strictResult);
         requestSchema={...requestSchema,
           properties:nextProps,
           required:[...new Set([...actionSchema.required,'result'])]};
@@ -1768,7 +1799,7 @@ export async function runLocalAudit(
           // observations and completed probes remain unchanged.
           const endpoint=process.env.AUTOHACK_OLLAMA_URL || "http://127.0.0.1:11434/api/chat";
           const request={ model, stream: false, think: profile.think, messages:requestMessages,
-          ...(structured ? {format:requestSchema} : {tools:availableTools}),
+          ...(structured ? {format:sanitizeOllamaFormatSchema(requestSchema)} : {tools:availableTools}),
           keep_alive:process.env.LOCAL_OLLAMA_KEEP_ALIVE||"30m",
           options: { num_predict:turnGenerationLimit,
             ...(limits.numCtx === undefined ? {} : {num_ctx:settings.numCtx}),
@@ -1799,6 +1830,13 @@ export async function runLocalAudit(
                     pendingIds:stageLock.analysisProgress.pendingIds,retainedControllerMemory:true})+'\n');
                   return {message:{role:'assistant',content:JSON.stringify({
                     action:'analysis_unavailable',path:'',query:'',answer:'model_transport_retries_exhausted'})}};
+                }
+                if(stageLock?.currentStage==='REVIEW' && stageLock.candidateCount>0 && stageLock.outcomeCounts.observed===0){
+                  await appendFile(logFile,'[REVIEW_MODEL_UNAVAILABLE] '+JSON.stringify({
+                    turn:turn+1,attempts:attempt,reason:String(error).slice(0,200),
+                    outcomes:stageLock.outcomeCounts,retainedControllerMemory:true})+'\n');
+                  return {message:{role:'assistant',content:JSON.stringify({
+                    action:'final',path:'',query:'',answer:''})}};
                 }
                 throw error;
               }

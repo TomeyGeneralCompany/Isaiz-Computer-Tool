@@ -73,12 +73,14 @@ rules:
     languages: [solidity]
     severity: WARNING
     message: Inspect initialize/init functions for missing initializer modifier or caller restrictions.
-    pattern-either:
-      - pattern: |
-          function initialize(...) external {
-            ...
-          }
-      - pattern: |
-          function initialize(...) public {
-            ...
-          }
+    patterns:
+      - pattern-either:
+          - pattern: |
+              function initialize(...) external {
+                ...
+              }
+          - pattern: |
+              function initialize(...) public {
+                ...
+              }
+      - pattern-not-regex: '(?s)^function\s+initialize\s*\([^)]*\)[^{]*\b(?:initializer|reinitializer|onlyOwner|onlyRole|onlyAdmin|onlyGovernance)\b'

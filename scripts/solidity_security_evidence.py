@@ -154,7 +154,7 @@ def _unauthorized_value_extraction_observed(
     if len(accounts) != 3 or len(steps) < 3:
         return False, ""
     rel = file.as_posix()
-    if re.search(r"(?:^|/)(?:mocks?|tests?|__tests__|fixtures)(?:/|$)|Mock\.sol$", rel, re.I):
+    if re.search(r"(?:^|/)(?:mocks?|tests?|__tests__|fixtures|echidna)(?:/|$)|(?:Mock|Tests?)\.sol$|(?:^|/)(?:Dummy|Echidna)[A-Za-z0-9_]*\.sol$", rel, re.I):
         return False, ""
     fn_name = selector.split(".")[-1]
     try:
@@ -280,7 +280,7 @@ def _unguarded_dangerous_primitive_observed(file: Path, selector: str, data: dic
     if len(data.get("accounts") or []) != 3 or not steps:
         return False, ""
     rel = file.as_posix()
-    if re.search(r"(?:^|/)(?:mocks?|tests?|__tests__|fixtures)(?:/|$)|Mock\.sol$", rel, re.I):
+    if re.search(r"(?:^|/)(?:mocks?|tests?|__tests__|fixtures|echidna)(?:/|$)|(?:Mock|Tests?)\.sol$|(?:^|/)(?:Dummy|Echidna)[A-Za-z0-9_]*\.sol$", rel, re.I):
         return False, ""
     fn_name = selector.split(".")[-1]
     try:

@@ -257,7 +257,7 @@ def clean_probe_diagnostic(diagnostic: str, code: int) -> str:
 
 
 def limits(node=False, java=False, solidity=False):
-    cpu_seconds = 60 if solidity else 25 if node else 15
+    cpu_seconds = 180 if solidity else 25 if node else 15
     resource.setrlimit(resource.RLIMIT_CPU,(cpu_seconds,cpu_seconds))
     resource.setrlimit(resource.RLIMIT_AS,((32 if node else 4 if java else 1)*1024**3,)*2)
     resource.setrlimit(resource.RLIMIT_FSIZE,(1024**2,1024**2))
@@ -538,7 +538,7 @@ def run_probe(repository: Path, specification: dict, _dependency_round: int = 0)
         with (work/'stdout').open('wb') as output,(work/'stderr').open('wb') as error:
             process=subprocess.Popen(command,stdout=output,stderr=error,env={'PATH':'/usr/bin:/bin'},
                                      start_new_session=True,preexec_fn=lambda: limits(language in ('javascript','solidity'),language == 'java',language == 'solidity'))
-            try: code=process.wait(timeout=55 if language == 'solidity' else 25)
+            try: code=process.wait(timeout=120 if language == 'solidity' else 25)
             except subprocess.TimeoutExpired:
                 os.killpg(process.pid,signal.SIGKILL);process.wait()
                 return {'status':'timeout','behavior_observed':False}
