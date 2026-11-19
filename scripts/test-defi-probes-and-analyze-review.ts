@@ -543,13 +543,13 @@ contract MarketWithContractGuards is OwnableUpgradeable {
   modifier initializer() { require(!initialized, "init"); initialized = true; _; }
   function initialize(address _cToken, address _rewards, address _stablecoin) external initializer {
     __Ownable_init();
-    require(_cToken.isContract() && _rewards.isContract() && _stablecoin.isContract(), "not contract");
+    require(_cToken.isContract() && _stablecoin.isContract() && _rewards != address(0), "invalid");
     cToken = _cToken;
     rewards = _rewards;
     stablecoin = _stablecoin;
   }
   function setRewards(address _rewards) external onlyOwner {
-    require(_rewards.isContract(), "not contract");
+    require(_rewards != address(0), "zero");
     rewards = _rewards;
   }
 }
@@ -560,17 +560,17 @@ contract MarketWithContractGuards is OwnableUpgradeable {
     targetSelector: "MarketWithContractGuards.setRewards",
     sources: [{ path: "source-1/contracts/MarketWithContractGuards.sol", content: marketSource, sha256: sha(marketSource) }],
     declarations: [
-      { kind: "function", name: "initialize", contract: "MarketWithContractGuards", visibility: "external", line: 17, params: "address _cToken, address _rewards, address _stablecoin", modifiers: ["initializer"] },
-      { kind: "function", name: "setRewards", contract: "MarketWithContractGuards", visibility: "external", line: 24, params: "address _rewards", modifiers: ["onlyOwner"] },
-      { kind: "function", name: "owner", contract: "MarketWithContractGuards", visibility: "public", line: 8, params: "", mutability: "view" },
-      { kind: "function", name: "rewards", contract: "MarketWithContractGuards", visibility: "public", line: 13, params: "", mutability: "view" },
+      { selector: "MarketWithContractGuards.initialize", operation: "send", inputs: ["address", "address", "address"] },
+      { selector: "MarketWithContractGuards.setRewards", operation: "send", inputs: ["address"] },
+      { selector: "MarketWithContractGuards.owner", operation: "call", inputs: [] },
+      { selector: "MarketWithContractGuards.rewards", operation: "call", inputs: [] },
     ],
   });
   assert.equal(marketPlan.ok, true, "MarketWithContractGuards plan must succeed");
   if (marketPlan.ok) {
     const initStep = marketPlan.experiments[0].sequence.steps.find(step => step.operation === "send" && step.function.startsWith("initialize("));
     assert.ok(initStep, "Plan must include initialize setup step");
-    assert.deepEqual(initStep.args, ["$contract", "$contract", "$contract"], ".isContract() initialize params must resolve to $contract");
+    assert.deepEqual(initStep.args, ["$contract", "$account2", "$contract"], ".isContract() initialize params must resolve to $contract");
   }
 }
 
